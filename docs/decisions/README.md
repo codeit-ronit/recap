@@ -3,7 +3,7 @@
 An **architecture decision record (ADR)** is a short note about one important design choice:
 the situation that forced it (*context*), what was chosen (*decision*), what it costs and
 what it gains (*consequences*), and what else was considered (*alternatives*). Together,
-these notes explain why RECAP V1 looks the way it does.
+these notes explain why RECAP looks the way it does.
 
 | ADR | Decision | Status | In one line |
 |---|---|---|---|
@@ -14,6 +14,8 @@ these notes explain why RECAP V1 looks the way it does.
 | [0005](0005-central-safety-gateway-and-executor.md) | One central safety gateway, and the controller as the only executor | accepted | One gateway judges every call from trusted config; reversible fixes need an exact single-use approval; destructive actions are always denied. |
 | [0006](0006-simulated-environment-for-v1.md) | Use a deterministic simulated environment for V1 | accepted | A five-service shop that runs offline in seconds, can be broken safely, and is labeled "simulated" everywhere. |
 | [0007](0007-replaceable-environment-adapter.md) | Make the target environment a replaceable adapter | accepted | Infrastructure sits behind `TargetEnvironment`; SREGym or Kubernetes can replace the simulator, and a test proves the swap's wiring. |
+| [0008](0008-pinned-versions-with-a-constraints-file.md) | Pin exact package versions with a constraints file | accepted | `constraints.txt` fixes every Python package to the version the suite last passed with; CI and bootstrap install with `-c`. |
+| [0009](0009-audit-findings-as-strict-xfail-tests.md) | Reproduce every audit finding as a strict xfail test before fixing it | accepted | 43 reproductions and 11 guards; a fix turns its test green and removes the mark in the same change. |
 
 ## How the decisions fit together
 
@@ -24,6 +26,8 @@ these notes explain why RECAP V1 looks the way it does.
   call passes the gateway, and only the controller executes a fix.
 - **0007** keeps the target system swappable, so the work above carries over to real
   infrastructure.
+- **0008 and 0009** are the rules of the next phase: reproducible installs, and no audit
+  finding is fixed without a test that failed first.
 
 The [threat model](../threat-model.md) builds on 0004, 0005 and 0007. It lists every threat
 V1 defends against, where the defense lives in the code, and the test that proves it.
@@ -31,7 +35,7 @@ V1 defends against, where the defense lives in the code, and the test that prove
 ## Two kinds of status
 
 - **ADR status** says whether a decision is current: `proposed`, `accepted`, `superseded by
-  ADR NNNN` or `deprecated`. All seven ADRs above are `accepted`.
+  ADR NNNN` or `deprecated`. All ADRs above are `accepted`.
 - **Feature status**, used across the documentation, says how real a part is:
   *implemented* (works in V1 and is tested), *simulated* (works only against the simulator,
   or stands in for something real), *adapter only* (an interface or optional bridge exists,

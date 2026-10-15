@@ -8,6 +8,7 @@ answer follow-up questions in an interview.
 The file has two parts. **Part 1** (below) explains how RECAP works: how to study the code, one
 real incident followed through the code, the 17 architecture components, and three appendices.
 **Part 2** is a glossary of the terms used here; it follows Part 1 in this same file.
+**Part 3** follows the next phase (M0 onwards), which hardens V1 after an independent audit.
 
 Every number in Part 1 comes from the code, the files in [`configs/`](../configs/), the real demo
 transcripts, or the evaluation report in
@@ -49,6 +50,7 @@ decision records in [`decisions/`](decisions/README.md).
 - [Appendix B: Milestones](#appendix-b-milestones)
 - [Appendix C: Interview practice and what to study next](#appendix-c-interview-practice-and-what-to-study-next)
 - [Part 2 — Concepts glossary (28 terms)](#part-2--concepts-glossary)
+- [Part 3 — The next phase, milestone by milestone](#part-3--the-next-phase-milestone-by-milestone)
 
 ### Before you start: what V1 is, honestly
 
@@ -4081,3 +4083,67 @@ Adaptive routing beat always-single on all three costs, with the same recovery. 
 **Interview question:** "How would you cut the cost of an LLM-based version without hurting recovery?"
 
 **Model answer:** "Measure first: real tokens and cost per *verified* recovery, on a fixed evaluation. Then use the levers RECAP already has. Route most incidents to one agent and escalate only on verifier signals. Keep context packs small and ranked. Reuse verified memory to skip broad investigation on familiar incidents. Stop at budget limits instead of looping. After that I'd add model cascades and cache the unchanging system prompt. Any change has to leave the safety and recovery numbers unchanged."
+
+## Part 3 — The next phase, milestone by milestone
+
+V1 was audited independently, and the next phase fixes what the audit found before any real
+LLM is connected. Each milestone adds one section here: what changed, why, what flows in and
+out, the code to read, the tradeoffs, a command to reproduce it and an interview-style
+explanation. Measured results are in [`status.md`](status.md).
+
+### M0 — Baseline and audit reproduction
+
+**What changed.** Nothing in RECAP's behaviour. M0 measured the starting point, pinned
+versions, and turned every confirmed audit finding into a test that fails today.
+
+**Why.** A fix without a test that failed first proves nothing: it may be aimed at the wrong
+layer. That is exactly how the context-loss bug survived V1. The scripted provider reads the
+full structured evidence (`Evidence.data`), so every test passed, but an LLM would only read
+the packed text (`ContextPack.items[].text`), which had lost every ERROR line.
+
+**Inputs → outputs.**
+
+- In: the V1 code at commit `ad382e6`, the audit report, the simulator scenarios.
+- Out: [`docs/status.md`](status.md) (baseline counts and the reproduced failures),
+  [`constraints.txt`](../constraints.txt) (exact versions), seven `test_audit_*.py` files
+  with 43 strict-xfail reproductions and 11 guards, and
+  [`docs/provider-options.md`](provider-options.md) (free inference research, no API calls).
+
+**Important code paths to read.**
+
+- [`tests/adversarial/test_audit_context_survival.py`](../tests/adversarial/test_audit_context_survival.py):
+  `llm_text()` joins exactly what a prompt would show, and `Recorder` drives the real
+  gateway with a canned MCP transport.
+- [`tests/adversarial/test_audit_executor_authority.py`](../tests/adversarial/test_audit_executor_authority.py):
+  `sandbox_facts()` reads the world through the environment itself, so a test can prove
+  that a refused write changed nothing.
+- [`tests/adversarial/test_audit_oracle_isolation.py`](../tests/adversarial/test_audit_oracle_isolation.py):
+  a sentinel oracle reports a made-up service; if that name ever reaches a provider request
+  or prompt, oracle data leaked.
+
+**Strict xfail in one paragraph.** `@pytest.mark.xfail(strict=True)` means "this test is
+expected to fail". While the bug exists, the suite stays green. When a fix makes the test
+pass, pytest reports `XPASS(strict)` as a failure, which forces whoever fixed it to remove
+the mark in the same change. Run `pytest --runxfail` to see the real failures.
+
+**Tradeoffs.** End-to-end reproductions are slower (the suite went from 30 s to 54 s), and
+strict xfail can hide a test that crashes for an unrelated reason; the `--runxfail` check
+guards against that. See [ADR 0009](decisions/0009-audit-findings-as-strict-xfail-tests.md)
+and, for version pinning, [ADR 0008](decisions/0008-pinned-versions-with-a-constraints-file.md).
+
+**Reproduce it.**
+
+```bash
+.venv/bin/python -m pytest -o addopts="" -q                       # 792 passed, 1 skipped, 43 xfailed
+.venv/bin/python -m pytest -o addopts="" -q --runxfail tests/adversarial/test_audit_*.py tests/e2e/test_audit_*.py
+```
+
+**Interview question:** "How did you make sure your security fixes actually fixed something?"
+
+**Model answer:** "Before touching the code, I wrote a test for every audit finding that
+asserts the correct behaviour, for example 'a write sent straight to the MCP server without
+an approval is refused and changes nothing in the sandbox', and checked that it failed on
+the current code for the right reason. Those tests are strict xfails, so the suite stays green
+while the bug exists, and the fix has to remove the mark when the test starts passing. I also
+kept guard tests next to them, such as 'an approved rollback still reaches the sandbox', so
+a fix couldn't simply switch the feature off."

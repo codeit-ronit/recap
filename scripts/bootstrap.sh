@@ -4,13 +4,14 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# constraints.txt pins every package to the exact version the test suite last passed with.
 if command -v uv >/dev/null 2>&1; then
   uv venv .venv --python 3.11
-  uv pip install --python .venv/bin/python -e ".[dev]"
+  uv pip install --python .venv/bin/python -c constraints.txt -e ".[dev]"
 else
   python3 -m venv .venv
   .venv/bin/pip install --upgrade pip
-  .venv/bin/pip install -e ".[dev]"
+  .venv/bin/pip install -c constraints.txt -e ".[dev]"
 fi
 
 if command -v npm >/dev/null 2>&1; then
