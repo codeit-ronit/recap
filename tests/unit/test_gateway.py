@@ -338,9 +338,14 @@ async def test_huge_text_is_hard_capped(settings: Settings) -> None:
     )
     evidence = kit.evidence.get(result.evidence_id)
     assert len(evidence.content) == limits.max_output_chars + len(TRUNCATION_MARK)
-    assert evidence.content.endswith(TRUNCATION_MARK)
+    # The cap keeps the beginning AND the end (the newest part of chronological output),
+    # with the mark where the middle was cut (audit finding 2.1).
+    assert evidence.content.count(TRUNCATION_MARK) == 1
+    assert evidence.content.startswith('{"service":"checkout"')
+    assert evidence.content.endswith('"total_matched":1,"truncated":false}')
     message = evidence.data["lines"][0]["message"]
     assert len(message) == limits.max_output_chars + len(TRUNCATION_MARK)
+    assert message.endswith(" #0")  # a long string keeps its end too
     assert result.truncated and "truncated" in evidence.flags
 
 
@@ -398,7 +403,7 @@ async def test_redaction_runs_before_the_output_bounds(settings: Settings) -> No
         "get_service_logs", {"service": "checkout"}, AgentRole.TELEMETRY
     )
     message = kit.evidence.get(result.evidence_id).data["lines"][0]["message"]
-    assert result.truncated and message.endswith(TRUNCATION_MARK)
+    assert result.truncated and TRUNCATION_MARK in message
     assert PASSWORD[:4] not in message  # the length cap falls inside the password
 
 

@@ -12,23 +12,30 @@ see tokens.py), never real tokenizer counts.
 
 How a pack is built:
   1. Candidates   evidence (in run order), doc chunks (by rank), memory hits (by similarity).
+                  Evidence is shown as a structured summary (recap/context/summaries.py):
+                  newest errors, counts, metric extremes, times relative to the alert.
   2. Safety       text that looks like a prompt injection keeps its flag and is prefixed
                   with UNTRUSTED_PREFIX, so a reader treats it as data, not instructions.
   3. Ranking      0.5 * query-term overlap + 0.2 * recency + kind prior
                   + 0.2 if the item mentions a focus service (named by the verifier or by
-                  an earlier fix attempt; never by the recovery oracle).
-  4. Compaction   an item over `max_item_tokens` keeps its beginning plus a pointer
-                  "...[compacted; full record: <id>]" back to the original.
-  5. Selection    greedy by score while the budget allows. Everything left out is listed
-                  in `dropped_ids`, never silently lost.
+                  an earlier fix attempt; never by the recovery oracle)
+                  + 1.0 for priority items (what a diagnosis rests on or contradicts it).
+  4. Compaction   an item over `max_item_tokens` keeps its beginning AND its end, with a
+                  pointer "...[compacted; full record: <id>]..." in the middle. Tool output
+                  is chronological, so cutting only the end would drop the newest lines.
+  5. Selection    pinned items first (e.g. the runbook for the diagnosed mechanism), then
+                  greedy by score while the budget allows. Everything left out is listed in
+                  `dropped_ids`, never silently lost.
 """
 
 from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Sequence
+from datetime import datetime
 from typing import Literal, NamedTuple
 
+from recap.context.summaries import render_for_agents
 from recap.context.tokens import CHARS_PER_TOKEN, estimate_tokens
 from recap.core.models import (
     ActionRecord,
@@ -94,25 +101,33 @@ class ContextPacker:
         max_tokens: int,
         focus_services: Sequence[str] = (),
         priority_ids: Sequence[str] = (),
+        pinned_ids: Sequence[str] = (),
     ) -> ContextPack:
         """Rank every candidate, compact long ones and keep the best that fit `max_tokens`.
 
-        `priority_ids` are packed first (e.g. the evidence a diagnosis cites and evidence
-        that contradicts a hypothesis), so a tight budget never hides them.
+        `priority_ids` rank above everything else (e.g. the evidence a diagnosis cites and
+        evidence that contradicts a hypothesis), so a tight budget does not hide them.
+        `pinned_ids` are packed before any ranking is considered at all (e.g. the runbook
+        chunk for the diagnosed mechanism); they still have to fit the budget.
 
         The packer takes the provider-facing views (AgentIncident, AgentMemoryHit), so it
         cannot put a scenario label into a pack even by mistake.
         """
         query = _query_terms(incident, focus_services)
         focus_words = [_words(service) for service in focus_services]  # one set per service
+        item_chars = self.max_item_tokens * CHARS_PER_TOKEN  # room for one item's text
         drafts = _unique(
-            [*_evidence_drafts(evidence), *_doc_drafts(docs), *_memory_drafts(memories)]
+            [
+                *_evidence_drafts(evidence, incident.created_at, item_chars),
+                *_doc_drafts(docs),
+                *_memory_drafts(memories),
+            ]
         )
         priority = set(priority_ids)
         full = [_to_item(draft, query, focus_words, draft.item_id in priority) for draft in drafts]
         items = [self._compact(item) for item in full]
         budget = max(0, max_tokens)
-        chosen = _select(items, budget)
+        chosen = _select(items, budget, set(pinned_ids))
         packed = [item for item in items if item.item_id in chosen]
         return ContextPack(
             items=packed,  # stays in readable order: evidence, docs by rank, memories
@@ -123,14 +138,21 @@ class ContextPacker:
         )
 
     def _compact(self, item: ContextItem) -> ContextItem:
-        """Shorten an oversized item: keep its beginning and point to the full record."""
+        """Shorten an oversized item: keep its beginning and its end, point to the full record.
+
+        Two thirds of the room go to the beginning (headers, first facts) and one third to
+        the end, because tool output is chronological and its newest lines come last.
+        Keeping only the beginning was audit finding 2.1: every ERROR line was lost.
+        """
         if item.token_estimate <= self.max_item_tokens:
             return item
-        pointer = f" ...[compacted; full record: {item.item_id}]"
+        pointer = f" ...[compacted; full record: {item.item_id}]... "
         # The pointer counts against the cap, so a compacted item never costs more than
         # max_item_tokens and is always smaller than the original.
         keep = max(0, self.max_item_tokens * CHARS_PER_TOKEN - len(pointer))
-        text = item.text[:keep].rstrip() + pointer
+        head = keep * 2 // 3
+        tail = keep - head
+        text = item.text[:head].rstrip() + pointer + item.text[len(item.text) - tail :].lstrip()
         return item.model_copy(
             update={"text": text, "token_estimate": estimate_tokens(text), "compacted": True}
         )
@@ -139,15 +161,18 @@ class ContextPacker:
 # --- candidates ---------------------------------------------------------------------------
 
 
-def _evidence_drafts(evidence: Sequence[Evidence]) -> list[_Draft]:
-    """Evidence in run order; later observations count as more recent."""
+def _evidence_drafts(
+    evidence: Sequence[Evidence], incident_time: datetime, max_chars: int
+) -> list[_Draft]:
+    """Evidence in run order (later observations count as more recent), as summaries."""
     last = len(evidence) - 1
     return [
         _Draft(
             item_id=item.id,
             kind="evidence",
             source_ref=item.source_ref,
-            text=item.content,
+            # A summary fitted to one item's room; the raw record stays in the registry.
+            text=render_for_agents(item, incident_time, max_chars),
             trust_level=item.trust_level,
             flags=tuple(item.flags),
             recency=position / last if last > 0 else 1.0,
@@ -277,13 +302,14 @@ def _words(text: str) -> set[str]:
 # --- selection ----------------------------------------------------------------------------
 
 
-def _select(items: Sequence[ContextItem], budget: int) -> set[str]:
-    """Greedy by score (ties by ID): take every item that still fits in the budget."""
+def _select(items: Sequence[ContextItem], budget: int, pinned: set[str]) -> set[str]:
+    """Pinned items first, then greedy by score (ties by ID): take every item that still fits."""
     chosen: set[str] = set()
     if budget <= 0:
         return chosen
     used = 0
-    for item in sorted(items, key=lambda item: (-item.score, item.item_id)):
+    order = sorted(items, key=lambda item: (item.item_id not in pinned, -item.score, item.item_id))
+    for item in order:
         # An item that does not fit is skipped, but smaller ones after it may still fit.
         if used + item.token_estimate <= budget:
             chosen.add(item.item_id)

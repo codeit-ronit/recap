@@ -438,16 +438,32 @@ def _bound(value: Any, limits: PolicyLimits, key: str | None = None) -> tuple[An
         items = [_bound(item, limits) for item in value]
         return [v for v, _ in items], cut or any(c for _, c in items)
     if isinstance(value, str) and len(value) > limits.max_output_chars:
-        return value[: limits.max_output_chars] + TRUNCATION_MARK, True
+        return _head_and_tail(value, limits.max_output_chars), True
     return value, False
 
 
 def _render(data: dict[str, Any], max_chars: int) -> tuple[str, bool]:
-    """Compact JSON text of the data (what an LLM would read), hard-capped at max_chars."""
+    """Compact JSON text of the data (the raw record), hard-capped at max_chars.
+
+    Providers read a structured summary of `data` instead (recap/context/summaries.py);
+    this text is the evidence's raw record for the registry, the dashboard and audits.
+    """
     text = json.dumps(data, ensure_ascii=False, separators=(",", ":"), default=str)
     if len(text) <= max_chars:
         return text, False
-    return text[:max_chars] + TRUNCATION_MARK, True
+    return _head_and_tail(text, max_chars), True
+
+
+def _head_and_tail(text: str, max_chars: int) -> str:
+    """Keep the start and the end of a long text, with TRUNCATION_MARK where the middle was.
+
+    Tool output is often chronological (oldest first), so keeping only the beginning would
+    throw away the newest lines, the ones that explain an incident (audit finding 2.1).
+    Two thirds of the room go to the beginning, one third to the end.
+    """
+    head = max_chars * 2 // 3
+    tail = max_chars - head
+    return text[:head] + TRUNCATION_MARK + text[len(text) - tail :]
 
 
 def _excerpt(content: str, patterns: list[str], width: int = 80) -> str:

@@ -39,9 +39,10 @@ Every test checks only what an LLM would be shown: the text of the packed items.
   as essential (`priority_ids`, for example evidence that contradicts a hypothesis) must
   still win a tight pack budget.
 
-The reproducing tests are marked xfail(strict=True) until milestone M1 fixes the gateway
-and the packer. "strict" means pytest reports a failure as soon as they start passing, so
-the marks get removed together with the fix.
+Status: these tests were strict xfails in M0 (they failed on the V1 code). M1 fixed the
+packer (structured summaries from recap/context/summaries.py; compaction keeps the head and
+the tail) and the gateway (its text cap keeps the head and the tail), so they now pass and
+stay as regression tests.
 """
 
 from __future__ import annotations
@@ -307,11 +308,6 @@ def incident_for(scenario_id: str, alert: AlertSignal) -> Incident:
 # --- 1. a long log whose errors are at the end --------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUDIT-2.1: gateway cap and packer compaction keep only the oldest log lines; "
-    "fixed in M1",
-)
 async def test_an_error_at_the_end_of_a_long_log_reaches_the_llm(settings: Settings) -> None:
     """60 INFO lines, then 5 ERROR lines: the newest ERROR (the marker) is visible after packing."""
     recorder = Recorder(settings, CHECKOUT_INCIDENT)
@@ -332,9 +328,6 @@ async def test_an_error_at_the_end_of_a_long_log_reaches_the_llm(settings: Setti
 # --- 2. real simulator logs ---------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="AUDIT-2.1: packer compaction keeps only the oldest log lines; fixed in M1"
-)
 @pytest.mark.parametrize(("scenario_id", "service"), AUDITED)
 async def test_the_newest_error_in_real_simulator_logs_reaches_the_llm(
     settings: Settings, tmp_path: Path, scenario_id: str, service: str
@@ -352,10 +345,6 @@ async def test_the_newest_error_in_real_simulator_logs_reaches_the_llm(
     assert shows(text, newest_error(logs.lines)), error_report(text, logs.lines)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUDIT-2.1: the gateway's 6000-char output cap keeps only the oldest lines; fixed in M1",
-)
 @pytest.mark.parametrize(("scenario_id", "service"), AUDITED)
 async def test_a_wide_log_query_keeps_its_newest_error_even_with_room_to_spare(
     settings: Settings, tmp_path: Path, scenario_id: str, service: str
@@ -380,10 +369,6 @@ async def test_a_wide_log_query_keeps_its_newest_error_even_with_room_to_spare(
 # --- 3. a long metric series whose spike is at the end ------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUDIT-2.1: packer compaction keeps only the oldest metric points; fixed in M1",
-)
 async def test_the_peak_and_latest_value_of_a_long_metric_series_reach_the_llm(
     settings: Settings,
 ) -> None:
@@ -422,10 +407,6 @@ class PackRecordingProvider(DeterministicProvider):
         return await super().propose_mitigation(request)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUDIT-2.1: in a real run the packed inventory logs show no ERROR line; fixed in M1",
-)
 async def test_a_real_run_shows_its_provider_the_newest_inventory_error(
     settings: Settings,
 ) -> None:

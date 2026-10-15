@@ -167,8 +167,11 @@ def test_long_items_are_compacted_with_a_pointer_to_the_full_record() -> None:
 
     [item] = pack.items
     assert item.compacted
-    assert item.text.endswith(f" ...[compacted; full record: {original.id}]")
+    # The beginning AND the end survive (the newest lines of a log come last), with the
+    # pointer to the full record in the middle (audit finding 2.1).
+    assert f" ...[compacted; full record: {original.id}]... " in item.text
     assert item.text.startswith("ERROR checkout request timed out")
+    assert item.text.endswith(content[-40:])  # the newest lines
     assert item.token_estimate == estimate_tokens(item.text) <= 100
     assert pack.tokens_before == original.token_estimate > pack.tokens_after
     assert registry.get(original.id).content == content  # the registry keeps the original
@@ -379,3 +382,53 @@ def test_priority_ids_are_packed_first_even_on_a_tight_budget() -> None:
         priority_ids=[key.id],
     )
     assert pack.ids() == [key.id]
+
+
+def test_pinned_items_are_packed_before_anything_else() -> None:
+    """The runbook for the diagnosed mechanism is pinned, so higher-scoring evidence cannot
+    push it out of a crowded proposal pack (the fix would fall back to a blind restart)."""
+    registry = EvidenceRegistry("run-pin0000001", "inc-1")
+    evidence = [
+        add_tool_evidence(registry, "checkout", f"checkout HTTP 5xx ratio above SLO, call {i}")
+        for i in range(4)
+    ]
+    runbook = make_doc("runbook-bad-deployment#remediation-1", 1)
+    everything = build(evidence, docs=[runbook])
+    sizes = {item.item_id: item.token_estimate for item in everything.items}
+    budget = sizes[runbook.chunk.chunk_id] + sizes[evidence[0].id]  # room for two items
+
+    plain = build(evidence, budget, docs=[runbook])
+    pinned = build(evidence, budget, docs=[runbook], pinned_ids=[runbook.chunk.chunk_id])
+
+    assert runbook.chunk.chunk_id in plain.dropped_ids  # the evidence outranks it...
+    assert runbook.chunk.chunk_id in pinned.ids("doc")  # ...unless it is pinned
+    assert pinned.tokens_after <= budget
+
+
+def test_tool_evidence_is_shown_as_a_summary_and_the_registry_keeps_the_raw_record() -> None:
+    registry = EvidenceRegistry("run-sum0000002", "inc-1")
+    lines = [
+        {
+            "timestamp": f"2026-03-14T09:5{i}:00Z",
+            "level": "ERROR",
+            "service": "checkout",
+            "message": "NullPointerException in PricingClient (version=v2.4.1)",
+        }
+        for i in range(5)
+    ]
+    data = {"service": "checkout", "lines": lines, "total_matched": 5}
+    raw = registry.add(
+        source_type=SourceType.TOOL,
+        source_ref="mcp:get_service_logs(service=checkout)",
+        content=str(data),
+        data=data,
+        tool_name="get_service_logs",
+    )
+
+    [item] = build(registry.all()).items
+
+    assert item.text.startswith("Logs of checkout: 5 lines returned, 09:50 to 09:54")
+    assert (
+        "09:50-09:54 ×5 ERROR NullPointerException in PricingClient (version=v2.4.1)" in item.text
+    )
+    assert registry.get(raw.id).content == str(data)  # the raw record is unchanged

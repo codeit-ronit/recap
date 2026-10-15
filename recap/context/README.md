@@ -14,7 +14,8 @@ the provider allowed to see, and how much of it?* RECAP keeps two things apart:
 |---|---|
 | `evidence.py` | `EvidenceRegistry`: append-only store of a run's observations. `tool_source_ref(...)` builds canonical refs like `mcp:get_service_logs(service=checkout)`. |
 | `tokens.py` | `estimate_tokens(text)`: a deterministic estimate of about 4 characters per token. |
-| `packer.py` | `ContextPacker.build(...)`: flags, ranks, compacts and selects candidates into a `ContextPack` that fits a token budget. |
+| `summaries.py` | `render_for_agents(evidence, incident_time, max_chars)`: the structured summary a provider reads for one tool result (newest errors, counts, first-error time, metric extremes, times relative to the alert). |
+| `packer.py` | `ContextPacker.build(...)`: summarizes, flags, ranks, compacts and selects candidates into a `ContextPack` that fits a token budget. |
 
 ## Where it is used
 
@@ -28,8 +29,8 @@ cannot pay for it, the run stops as BUDGET_EXHAUSTED; the pack is never shrunk t
 
 ```
 EvidenceRegistry.all() ─┐
-RAG chunks (ranked)  ───┼──► ContextPacker.build(max_tokens, focus_services, priority_ids) ──► ContextPack
-memory hits          ───┘
+RAG chunks (ranked)  ───┼──► ContextPacker.build(max_tokens, focus_services, priority_ids, pinned_ids) ──► ContextPack
+memory hits (views)  ───┘
 ```
 
 `priority_ids` is evidence that must not be crowded out. For the proposal pack, the
@@ -37,9 +38,24 @@ controller passes the evidence the diagnosis cites and any evidence that contrad
 checked hypothesis. Later investigation rounds keep the contradicting evidence visible
 (`AgentHarness.priority_ids`).
 
+`pinned_ids` are packed before any ranking is considered. The controller pins the
+retrieved runbook chunks whose `Mechanism:` hint matches the diagnosis, so a crowded
+proposal pack can never drop the runbook and push the fix into a blind restart.
+
+The packer receives the provider-facing views `AgentIncident` and `AgentMemoryHit`
+(recap/core/models.py), which have no field for a scenario ID or label.
+
 ## How a pack is built
 
-1. **Candidates.** Evidence keeps the run's order. Doc chunks are ordered by retrieval rank and
+1. **Candidates.** Evidence keeps the run's order and is shown as a **summary**
+   (`summaries.py`), not as raw JSON. A log result becomes its line and level counts, the
+   time of the first ERROR relative to the alert, the newest ERROR/WARN lines (repeats
+   collapsed as `×k`) and the most frequent message shapes. A metric becomes its first, min,
+   max and latest value, the largest jump and the share of its limit. Health, deployments,
+   events, services, rollback plans and action outcomes get one short line each. A summary
+   is fitted into one item's room by showing fewer entries, so the newest ones are never
+   the part that is cut. Unknown tools and data of an unexpected shape are shown raw.
+   Doc chunks are ordered by retrieval rank and
    labeled `[title > heading]` on their own line, so hint lines like `Mechanism: ...` still
    start a line for `recap/knowledge/hints.py`. Memory hits are ordered by similarity and
    rendered as one line. A repeated ID is packed once.
@@ -55,22 +71,43 @@ checked hypothesis. Later investigation rounds keep the contradicting evidence v
    | relevance | `0.5 ×` share of query words found in the item (query = incident service, affected services, focus services, symptom words of 3+ characters) |
    | recency | `0.2 ×` position in the run (oldest evidence 0, newest 1; docs and memories 0.5) |
    | kind prior | evidence `0.3`, doc `0.25`, memory `0.2` (live observations first) |
-   | focus bonus | `+0.2` if the item mentions a service the verifier asked to look at |
+   | focus bonus | `+0.2` if the item mentions a focus service (named by the verifier or by an earlier fix attempt; never by the recovery oracle) |
    | priority bonus | `+1.0` if the item is in `priority_ids`, so it ranks above everything else and is packed first |
 
 4. **Compaction.** An item over `max_item_tokens` (400 by default, `configs/budget.yaml`) keeps
-   its beginning and ends with ` ...[compacted; full record: <id>]`. The pointer is counted
-   inside the cap, so a compacted item is never bigger than the cap or than its original.
-   The cap must be at least 32 tokens, which leaves room for the pointer plus real text.
-5. **Selection.** Greedy by score (ties by ID) while the total fits `max_tokens`. An item that
-   does not fit is skipped, but smaller ones after it can still fit. Whatever is left out
-   is listed in `dropped_ids`. A budget of 0 or less gives an empty pack.
+   its beginning (two thirds of the room) **and its end** (one third), with
+   ` ...[compacted; full record: <id>]... ` in the middle. Tool output is chronological, so
+   keeping only the beginning would drop the newest lines (audit finding 2.1: V1 lost every
+   ERROR line this way). The pointer is counted inside the cap, so a compacted item is never
+   bigger than the cap or than its original. The cap must be at least 32 tokens.
+5. **Selection.** Pinned items first, then greedy by score (ties by ID) while the total fits
+   `max_tokens`. An item that does not fit is skipped, but smaller ones after it can still
+   fit. Whatever is left out is listed in `dropped_ids`. A budget of 0 or less gives an empty
+   pack.
 6. **Order.** The packed items are returned in a readable, stable order: evidence, then docs,
    then memories. The same inputs always give the same pack.
 
 ## A real example
 
-Seven candidates with a 520-token budget (output of `ContextPacker().build(...)`):
+A log result as a provider sees it (from a real run of `test-inventory-bad-release`):
+
+```
+Logs of inventory: 39 lines returned, 06:55 to 07:55
+levels: 18 ERROR, 21 INFO
+first ERROR: 07:38 (17 min before the alert): IndexOutOfBoundsException in StockReservation.allocate (version=v3.4.0)
+newest ERROR/WARN lines (newest last):
+  07:38-07:55 ×18 ERROR IndexOutOfBoundsException in StockReservation.allocate (version=v3.4.0)
+most frequent messages:
+  21× INFO GET /api/inventory/stock # in #ms
+  18× ERROR IndexOutOfBoundsException in StockReservation.allocate (version=v3.4.0)
+raw evidence: ev-1acc54-002
+```
+
+In V1 the same evidence reached the provider as the first ~1,600 characters of its raw
+JSON, which held only INFO lines.
+
+Seven candidates with a 520-token budget (a V1-era example of ranking and selection; the
+evidence texts are plain strings, so they are shown as they are):
 
 ```
 budget 520 | tokens_before 923 | tokens_after 511 | dropped ['ep-7c1d2e3f4a']
@@ -99,12 +136,14 @@ answer key and evaluation bookkeeping, and showing them to an agent would leak t
 - Token counts are **estimates** (`len(text) / 4`), not tokenizer counts. Real LLM providers
   report actual usage separately (see `recap/telemetry/usage.py`).
 - Relevance is word overlap, not semantic similarity.
-- Compaction is truncation plus a pointer, not summarization. It keeps the beginning of an
-  item, so the newest lines of a long log can be cut.
+- Summaries are deterministic extraction, not model-written summarization. They report what
+  was observed, never a diagnosis, and know only RECAP's observation models.
+- Compaction (for the rare item that is still too long) is head-and-tail truncation plus a
+  pointer; the middle of such an item is not visible.
 - The injection scan is a pattern matcher, not production-grade protection.
 
 ## Upgrade path
 
 A real tokenizer when an LLM provider is active, embedding-based relevance, model-written
-summaries for compaction (keeping the pointer), and per-role packs (telemetry vs
+summaries of whole trajectories (keeping the pointers), and per-role packs (telemetry vs
 infrastructure).

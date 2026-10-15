@@ -192,11 +192,6 @@ async def test_a_half_working_fix_is_followed_by_a_separately_investigated_secon
     assert set(record.proposals[-1].evidence_ids) & fresh
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUDIT-2.1: a full proposal pack drops the runbook the diagnosis needs, so the "
-    "policy falls back to a blind restart; fixed in M1",
-)
 async def test_the_runbook_for_the_diagnosis_reaches_the_proposal(
     settings: Settings, tmp_path: Path
 ) -> None:

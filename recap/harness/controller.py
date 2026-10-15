@@ -440,6 +440,9 @@ class IncidentController:
 
         target = best.target_service
         priority = [*best.supporting_evidence_ids, *_contradicting_ids(report)]
+        # The runbook chunks that recommend a fix for the diagnosed mechanism are pinned:
+        # a crowded pack must never drop them, or the fix falls back to a blind restart.
+        pinned = _runbooks_for(best, self.record.retrieved_docs)
         # Providers get label-free views: no scenario ID, no evaluation labels.
         incident = self.incident.agent_view()
         memories = [hit.agent_view() for hit in self.record.memory_hits]
@@ -451,6 +454,7 @@ class IncidentController:
             max_tokens=self.settings.budget.context.pack_tokens,
             focus_services=[target] if target else [],
             priority_ids=priority,
+            pinned_ids=pinned,
         )
         self.budget.charge_step()
         self.budget.charge_tokens(pack.tokens_after)
@@ -464,6 +468,7 @@ class IncidentController:
                 "items": pack.ids(),
                 "dropped": pack.dropped_ids,
                 "priority": priority,
+                "pinned": pinned,
                 "estimate": True,
             },
         )
@@ -946,6 +951,16 @@ def _retry_focus(
     # Only service targets: a namespace-wide action has no service to look at again.
     services = [proposal.target] if registry.target_arg(proposal.action) == "service" else []
     return list(dict.fromkeys([*services, *report.focus_services]))
+
+
+def _runbooks_for(best: Hypothesis, docs: list[RetrievedChunk]) -> list[str]:
+    """IDs of retrieved runbook chunks that recommend an action for the diagnosed mechanism."""
+    mechanism = best.mechanism.value
+    return [
+        doc.chunk.chunk_id
+        for doc in docs
+        if any(hint.mechanism == mechanism for hint in parse_action_hints(doc.chunk.text))
+    ]
 
 
 def _contradicting_ids(report: VerificationReport) -> list[str]:
