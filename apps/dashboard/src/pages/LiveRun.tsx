@@ -358,6 +358,41 @@ function LiveFacts({ events }: { events: TraceEvent[] }) {
   );
 }
 
+/** POST /runs/{id}/cancel (operator only). A pending approval request expires with the run. */
+function CancelRunButton({ runId }: { runId: string }) {
+  const [state, setState] = useState<"idle" | "sending" | "sent">("idle");
+  const [error, setError] = useState<string | null>(null);
+  async function cancel() {
+    setState("sending");
+    setError(null);
+    try {
+      await api.cancelRun(runId);
+      setState("sent");
+    } catch (err) {
+      setError(toApiError(err).message);
+      setState("idle");
+    }
+  }
+  return (
+    <>
+      <button
+        type="button"
+        className="btn btn-reject"
+        disabled={state !== "idle"}
+        title="Stops the run; nothing is executed afterwards"
+        onClick={() => void cancel()}
+      >
+        <Icon name="stop" size={14} /> {state === "sent" ? "Cancelling…" : "Cancel run"}
+      </button>
+      {error ? (
+        <span className="small operator-warn" role="alert">
+          {error}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
 function RunPanel({ runId, system, onNewRun }: { runId: string; system: SystemSummary | undefined; onNewRun: () => void }) {
   const stream = useRunEvents(runId);
   const events = stream.events;
@@ -422,9 +457,12 @@ function RunPanel({ runId, system, onNewRun }: { runId: string; system: SystemSu
           </span>
         }
         actions={
-          <button type="button" className="btn" onClick={onNewRun}>
-            <Icon name="play" size={14} /> New run
-          </button>
+          <span className="chip-row">
+            {live ? <CancelRunButton runId={runId} /> : null}
+            <button type="button" className="btn" onClick={onNewRun}>
+              <Icon name="play" size={14} /> New run
+            </button>
+          </span>
         }
       >
         <StateStepper states={states} running={live} />

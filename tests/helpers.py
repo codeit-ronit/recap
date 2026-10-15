@@ -1,4 +1,4 @@
-"""Shared test helpers for code that writes to an environment directly.
+"""Shared test helpers: authorized writes to an environment, and the API operator token.
 
 Since M1 the write boundary is enforced by the environment itself (audit finding 2.5): a
 write needs a capability signed by the key the controller bound after reset. `authorize`
@@ -20,6 +20,9 @@ from recap.safety.capabilities import CapabilityIssuer
 from recap.tools.actions import to_environment_action
 
 TEST_INCIDENT = "inc-test"
+# The operator token the `settings` fixture configures for the API (tests/conftest.py).
+OPERATOR_TOKEN = "test-operator-token-0123456789"
+OPERATOR_HEADERS = {"Authorization": f"Bearer {OPERATOR_TOKEN}"}
 
 
 def issuer_for(environment: TargetEnvironment) -> CapabilityIssuer:

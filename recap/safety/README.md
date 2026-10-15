@@ -9,7 +9,8 @@ proposal's self-declared `risk_level`, tool descriptions and server annotations 
 | File | What it does |
 |---|---|
 | `policy.py` | `PolicyEngine` — ALLOW / APPROVAL_REQUIRED / DENY with rule IDs. |
-| `approvals.py` | `ApprovalStore` (SQLite) + approval channels (auto / console / external). |
+| `approvals.py` | `ApprovalStore` (SQLite): the approval state machine, single use, the append-only decision log; approval channels (auto / console / external). |
+| `capabilities.py` | `CapabilityIssuer` and `verify_capability`: signed, single-use, short-lived permission for one exact write, checked by the environment itself. |
 | `injection.py` | Pattern-based prompt-injection **flagging** for untrusted text. |
 | `redteam.py` | `PromptInjectedProvider` — a deliberately compromised planner (red team only). |
 
@@ -63,8 +64,26 @@ An approval is never general consent. It allows **one** action, once:
   SQL update (`... WHERE consumed_at IS NULL`), so it cannot be replayed even if the call fails.
 * **Re-read from the store** right before execution, so a forged or edited `Approval` object
   held by the caller has no effect.
-* Every channel records its decision through `ApprovalStore.decide`, which checks the digest,
-  that the request is still pending, and that it has not expired.
+* Every channel records its decision through `ApprovalStore.decide`, which checks the digest
+  and that the request has not expired.
+* **"No" wins until the action runs** (audit finding 2.4). An approval is accepted only for a
+  pending request. A rejection is accepted for a pending request **and** for an approved one
+  whose approval was not used yet (a *revocation*: the gateway's later attempt to use it is
+  refused). After a rejection nothing more is accepted; after the action ran, a rejection is
+  refused ("already executed"). V1 let a separate API approval override the operator's `n`.
+* **Atomic across processes.** Every transition is a compare-and-swap inside one SQLite
+  `BEGIN IMMEDIATE` transaction, so the API server and the CLI sharing `data/recap.db` are
+  serialized: a revocation and the gateway's use of the approval can never both win.
+* **Append-only decision log.** `approval_events` records every request, approval,
+  rejection, revocation, expiry, use and refused attempt with who, when and why
+  (`ApprovalStore.events(proposal_id)`, `GET /approvals/{id}/events`). SQLite triggers make
+  the database itself refuse to update or delete an entry.
+* **Who decided** is the authenticated operator for the API (`operator:<name>`, from the
+  bearer token; see `apps/api/auth.py`), `console-user` for the terminal and
+  `auto-approver[simulation]` for the simulation-only auto-approver.
+* **The write boundary checks it too.** After consuming the approval, the gateway signs a
+  single-use capability for exactly the approved action (`capabilities.py`); the environment
+  refuses any write without one (audit finding 2.5).
 
 | Channel | Who decides | Notes |
 |---|---|---|

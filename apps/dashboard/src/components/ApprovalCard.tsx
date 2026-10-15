@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { api, toApiError } from "../api";
 import { fmtArgs, fmtCountdown, fmtDateTime, riskTone, shortDigest, tsMs } from "../format";
-import { hrefFor, useNow } from "../hooks";
+import { SIGN_IN_HINT } from "../auth";
+import { hrefFor, useNow, useOperatorToken } from "../hooks";
 import type { Approval, ApprovalRequest } from "../types";
 import { Chip, Mono } from "./Badge";
 import { KeyValues } from "./Card";
@@ -11,8 +12,6 @@ import { JsonView } from "./JsonView";
 type Outcome =
   | { ok: true; approval: Approval }
   | { ok: false; status: number; message: string; attempt: string };
-
-const ACTOR = "dashboard-user";
 
 /** Flip the last hex digit: a digest for a *different* proposal than the one shown. */
 function tamper(digest: string): string {
@@ -24,6 +23,10 @@ function tamper(digest: string): string {
  * A pending approval for ONE exact proposal. Approve/Reject POST
  * /approvals/{proposal_id} with the proposal's digest; the server refuses (409) any
  * digest that does not match, an expired request, or a second decision.
+ *
+ * Deciding needs the operator token (sign in, top right). The approver the server records
+ * is the signed-in operator, never a name the browser sends. A rejection also revokes an
+ * approval that was not used yet: "no" wins until the action runs.
  */
 export function ApprovalCard({
   request,
@@ -38,6 +41,7 @@ export function ApprovalCard({
   const [busy, setBusy] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const now = useNow(1000);
+  const signedIn = useOperatorToken() !== null;
   const p = request.proposal;
   const expired = tsMs(request.expires_at) <= now;
   const decided = outcome?.ok === true;
@@ -49,7 +53,6 @@ export function ApprovalCard({
       const approval = await api.decideApproval(request.proposal_id, {
         decision,
         proposal_digest: tampered ? tamper(request.proposal_digest) : request.proposal_digest,
-        actor: ACTOR,
       });
       setOutcome({ ok: true, approval });
       onDecided?.(approval);
@@ -148,11 +151,18 @@ export function ApprovalCard({
         ]}
       />
 
+      {signedIn ? null : (
+        <div className="approval-response tone-warn" role="note">
+          <Icon name="key" size={15} />
+          <div>{SIGN_IN_HINT}</div>
+        </div>
+      )}
+
       <div className="approval-buttons">
         <button
           type="button"
           className="btn btn-approve"
-          disabled={!!busy || decided || expired}
+          disabled={!!busy || decided || expired || !signedIn}
           onClick={() => void send("approved")}
         >
           <Icon name="check" size={15} /> {busy === "approve" ? "Approving…" : "Approve this exact action"}
@@ -160,7 +170,7 @@ export function ApprovalCard({
         <button
           type="button"
           className="btn btn-reject"
-          disabled={!!busy || decided || expired}
+          disabled={!!busy || decided || expired || !signedIn}
           onClick={() => void send("rejected")}
         >
           <Icon name="x" size={15} /> {busy === "reject" ? "Rejecting…" : "Reject"}
@@ -168,7 +178,7 @@ export function ApprovalCard({
         <button
           type="button"
           className="btn btn-ghost btn-small"
-          disabled={!!busy || decided || expired}
+          disabled={!!busy || decided || expired || !signedIn}
           title="Sends a digest for a different proposal. The server must refuse it with 409; the request stays pending."
           onClick={() => void send("approved", true)}
         >

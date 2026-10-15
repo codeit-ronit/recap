@@ -8,6 +8,7 @@ Exit code 0 means the whole stack (API -> controller -> MCP -> simulator -> orac
 
 from __future__ import annotations
 
+import secrets
 import sys
 import tempfile
 import time
@@ -17,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # allow running wi
 
 from fastapi.testclient import TestClient
 
+from apps.api.auth import OperatorAuth
 from apps.api.main import create_app
 from recap.core.config import load_settings
 from recap.runtime import Runtime
@@ -25,7 +27,12 @@ from recap.runtime import Runtime
 def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         runtime = Runtime(load_settings(data_dir=Path(tmp)))
-        with TestClient(create_app(runtime)) as client:
+        # A throwaway operator token, sent like the dashboard sends it after sign-in, and
+        # requests addressed to localhost (the API refuses other host names).
+        token = secrets.token_urlsafe(32)
+        app = create_app(runtime, auth=OperatorAuth(token))
+        headers = {"Authorization": f"Bearer {token}"}
+        with TestClient(app, base_url="http://localhost", headers=headers) as client:
             assert client.get("/health").json()["status"] == "ok"
             run_id = client.post(
                 "/incidents/run",

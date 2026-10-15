@@ -26,6 +26,7 @@ from recap.core.ids import utcnow
 from recap.core.models import IncidentState, RunConfig, RunRecord, TraceEvent
 from recap.runtime import Runtime
 from recap.telemetry.tracer import TraceCategory
+from tests.helpers import OPERATOR_HEADERS
 
 TRAIN_LINE = "  train  train-checkout-bad-release         RESOLVED"
 
@@ -62,7 +63,7 @@ def committed_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[st
 
 
 def test_an_unknown_configuration_name_is_a_400_and_starts_nothing(settings: Settings) -> None:
-    with TestClient(create_app(Runtime(settings))) as client:
+    with TestClient(create_app(Runtime(settings)), headers=OPERATOR_HEADERS) as client:
         response = client.post("/evals/run", json={"configs": ["nope"]})
         assert response.status_code == 400
         assert "nope" in response.json()["detail"]
@@ -72,7 +73,7 @@ def test_an_unknown_configuration_name_is_a_400_and_starts_nothing(settings: Set
 def test_results_show_the_committed_report_until_this_server_runs_one(
     settings: Settings, committed_report: dict[str, Any]
 ) -> None:
-    with TestClient(create_app(Runtime(settings))) as client:
+    with TestClient(create_app(Runtime(settings)), headers=OPERATOR_HEADERS) as client:
         body = client.get("/evals/results").json()
     assert body == {"running": False, "progress": [], "report": committed_report, "error": None}
 
@@ -87,7 +88,7 @@ def test_a_failed_evaluation_reports_its_error_instead_of_an_older_report(
         raise RuntimeError("simulator crashed")
 
     monkeypatch.setattr(service, "run_evaluation", failing_evaluation)
-    with TestClient(create_app(Runtime(settings))) as client:
+    with TestClient(create_app(Runtime(settings)), headers=OPERATOR_HEADERS) as client:
         assert client.post("/evals/run", json={}).status_code == 202
         body = wait_for(lambda: finished_results(client))
     assert body == {
@@ -126,7 +127,7 @@ def test_results_follow_this_servers_evaluation_while_it_runs_and_when_it_is_don
         return report
 
     monkeypatch.setattr(service, "run_evaluation", slow_evaluation)
-    with TestClient(create_app(Runtime(settings))) as client:
+    with TestClient(create_app(Runtime(settings)), headers=OPERATOR_HEADERS) as client:
         try:
             started = client.post("/evals/run", json={"configs": ["baseline_single"]})
             assert started.json()["status"] == "started"
@@ -155,7 +156,7 @@ def test_a_run_from_another_process_is_external_until_it_reaches_a_terminal_stat
     runtime = Runtime(settings)
     save_run(runtime, "run-cli-waiting", IncidentState.AWAITING_APPROVAL)
     save_run(runtime, "run-cli-done", IncidentState.RESOLVED)
-    with TestClient(create_app(runtime)) as client:
+    with TestClient(create_app(runtime), headers=OPERATOR_HEADERS) as client:
         assert client.get("/runs/run-cli-waiting").json()["status"] == "external"
         assert client.get("/runs/run-cli-done").json()["status"] == "finished"
         assert client.get("/runs/run-nope").status_code == 404
@@ -190,8 +191,8 @@ async def test_the_stream_of_an_external_run_ends_after_its_stored_events(
 def test_the_health_label_says_simulated_only_for_a_simulated_environment(
     settings: Settings,
 ) -> None:
-    with TestClient(create_app(Runtime(settings))) as client:
+    with TestClient(create_app(Runtime(settings)), headers=OPERATOR_HEADERS) as client:
         assert client.get("/health").json()["label"] == "SIMULATED LOCAL ENVIRONMENT · V1"
     sregym = settings.model_copy(update={"environment": EnvironmentConfig(kind="sregym")})
-    with TestClient(create_app(Runtime(sregym))) as client:
+    with TestClient(create_app(Runtime(sregym)), headers=OPERATOR_HEADERS) as client:
         assert client.get("/health").json()["label"] == "LIVE ENVIRONMENT (sregym) · V1"

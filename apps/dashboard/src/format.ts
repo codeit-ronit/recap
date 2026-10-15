@@ -860,3 +860,21 @@ export function describeEvent(e: TraceEvent): EventLine {
     }
   }
 }
+
+/** Tone of an approval decision-log entry: a "no", a revocation or a refusal stands out. */
+export function approvalEventTone(kind: string): Tone {
+  switch (kind) {
+    case "approved":
+      return "ok";
+    case "consumed":
+      return "accent";
+    case "rejected":
+    case "revoked":
+      return "bad";
+    case "expired":
+    case "refused":
+      return "warn";
+    default:
+      return "neutral";
+  }
+}

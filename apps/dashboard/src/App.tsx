@@ -4,6 +4,7 @@ import { api } from "./api";
 import { BackendHint, ErrorBoundary } from "./components/EmptyState";
 import { Icon } from "./components/Icon";
 import type { IconName } from "./components/Icon";
+import { OperatorSignIn } from "./components/OperatorSignIn";
 import { environmentBadge, providerLabel } from "./format";
 import { hrefFor, usePolling, useHashRoute } from "./hooks";
 import type { PageId, PageProps } from "./hooks";
@@ -147,6 +148,7 @@ export default function App() {
               {waiting} approval{waiting === 1 ? "" : "s"} waiting
             </a>
           ) : null}
+          <OperatorSignIn />
           <span className={online ? "api-status ok" : "api-status bad"} role="status">
             <span className="api-dot" aria-hidden="true" />
             {online ? `API online${health.data ? ` · ${health.data.environment}` : ""}` : health.loading ? "API: checking…" : "API offline"}

@@ -22,9 +22,10 @@ How these tests reproduce it
 3. A guard that already passes: two processes racing to use ONE approval -> exactly one
    succeeds, because single use is enforced inside SQLite.
 
-Tests 1 and 2 are marked xfail(strict=True) until the fix lands in M1. They fail today for
-the reason above; strict=True makes pytest report an error as soon as they start passing,
-so the marker is removed together with the fix.
+Status: tests 1 and 2 were strict xfails in M0. M1 fixed the store: a rejection now also
+revokes an approval that was not used yet ("no" wins until the action runs), every
+transition is a compare-and-swap inside one SQLite write transaction, and every step is
+written to an append-only decision log. They now pass and stay as regression tests.
 """
 
 from __future__ import annotations
@@ -122,10 +123,6 @@ def run_in_another_process(code: str, *args: str) -> str:
 # --- 1. the console "n" after another party's approval ----------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUDIT-2.4: a console 'n' after an API approval still runs the rollback; fixed in M1",
-)
 async def test_an_operator_no_stops_the_run_even_if_someone_else_approved_first(
     settings: Settings,
 ) -> None:
@@ -171,10 +168,6 @@ async def test_an_operator_no_stops_the_run_even_if_someone_else_approved_first(
 # --- 2. cross-process: a later rejection must win --------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUDIT-2.4: a rejection cannot override another process's approval; fixed in M1",
-)
 def test_a_rejection_overrides_an_approval_written_by_another_process(tmp_path: Path) -> None:
     """Another process approved first; the later rejection in this process must still win."""
     db = tmp_path / "recap.db"  # one SQLite file shared by both processes

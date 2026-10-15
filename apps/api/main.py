@@ -10,6 +10,11 @@ labels which kind it is.
 No endpoint executes an action directly. Clients can start simulated runs (optionally with
 the simulation auto-approver) and evaluations, and approve or reject one exact proposal;
 the controller executes approved actions through the safety gateway.
+
+Security (audit finding 2.4, see apps/api/auth.py): every state-changing endpoint needs the
+operator's bearer token, and the approver recorded is the authenticated operator, never a
+client-supplied name. Only requests for this machine's loopback host names are served, and
+unsafe requests from a browser page on another origin are refused.
 """
 
 from __future__ import annotations
@@ -17,14 +22,22 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from apps.api.auth import (
+    UNSAFE_METHODS,
+    Operator,
+    OperatorAuth,
+    allowed_hosts_from_environment,
+    origin_allowed,
+)
 from apps.api.service import RunManager
 from recap import __version__
 from recap.core.errors import ApprovalError, ConfigError
@@ -42,27 +55,53 @@ class RunRequest(BaseModel):
 
 
 class ApprovalRequestBody(BaseModel):
+    """A decision on one exact proposal. Who decided comes from the credential, not the body."""
+
+    model_config = ConfigDict(extra="forbid")  # e.g. an "actor" field is refused, not ignored
+
     decision: Literal["approved", "rejected"]
     proposal_digest: str  # must match the exact proposal the human reviewed
-    actor: str = "dashboard-user"
 
 
 class EvalRequest(BaseModel):
     configs: list[str] | None = None
 
 
-def create_app(runtime: Runtime | None = None) -> FastAPI:
-    """Build the API. Tests pass their own Runtime (temporary data directory)."""
+def require_operator(request: Request) -> Operator:
+    """Dependency of every state-changing endpoint: the caller must be the operator (else 401)."""
+    auth: OperatorAuth = request.app.state.auth
+    return auth.check(request)
+
+
+# `who: OperatorRequired` in an endpoint's parameters makes it operator-only.
+OperatorRequired = Annotated[Operator, Depends(require_operator)]
+
+
+def create_app(
+    runtime: Runtime | None = None,
+    *,
+    auth: OperatorAuth | None = None,
+    allowed_hosts: list[str] | None = None,
+) -> FastAPI:
+    """Build the API. Tests pass their own Runtime (temporary data directory).
+
+    `auth` defaults to the operator token from the environment or the data directory (see
+    apps/api/auth.py); `allowed_hosts` defaults to RECAP_ALLOWED_HOSTS or the loopback names.
+    """
+    hosts = allowed_hosts or allowed_hosts_from_environment()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.manager = RunManager(runtime)
+        app.state.auth = auth or OperatorAuth.from_environment(
+            app.state.manager.runtime.settings.paths.data_dir
+        )
         yield
 
     app = FastAPI(
         title="RECAP API",
         version=__version__,
-        description="RECAP V1 backend.",
+        description="RECAP backend.",
         lifespan=lifespan,
     )
     app.add_middleware(
@@ -72,8 +111,27 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
+    @app.middleware("http")
+    async def refuse_foreign_origins(request: Request, call_next: Any) -> Response:
+        """A browser page on another host may not change anything here (anti CSRF)."""
+        if request.method in UNSAFE_METHODS and not origin_allowed(
+            request.headers.get("origin"), hosts
+        ):
+            return JSONResponse({"detail": "cross-origin request refused"}, status_code=403)
+        return await call_next(request)
+
+    # Outermost: a request addressed to any other host name (DNS rebinding) gets 400.
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)
+
     def manager(request: Request) -> RunManager:
         return request.app.state.manager
+
+    # --- session ----------------------------------------------------------------------------
+
+    @app.get("/auth/session")
+    def session(who: OperatorRequired) -> dict[str, str]:
+        """Who the token belongs to (the dashboard's sign-in check)."""
+        return {"operator": who.name, "actor": who.actor}
 
     # --- system ---------------------------------------------------------------------------
 
@@ -100,7 +158,9 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
     # --- incident runs ----------------------------------------------------------------------
 
     @app.post("/incidents/run", status_code=202)
-    async def run_incident(body: RunRequest, request: Request) -> dict[str, str]:
+    async def run_incident(
+        body: RunRequest, request: Request, who: OperatorRequired
+    ) -> dict[str, str]:
         # async: starting a background task needs the server's event loop (sync endpoints
         # run in a worker thread that has none).
         mgr = manager(request)
@@ -141,6 +201,16 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
             "error": mgr.errors.get(run_id),
         }
 
+    @app.post("/runs/{run_id}/cancel", status_code=202)
+    async def cancel_run(run_id: str, request: Request, who: OperatorRequired) -> dict[str, str]:
+        """Stop a run this server is running. A pending approval request expires with it."""
+        mgr = manager(request)
+        if mgr.status(run_id) == "unknown":
+            raise HTTPException(404, f"unknown run '{run_id}'")
+        if not mgr.cancel(run_id):
+            raise HTTPException(409, f"run '{run_id}' is not running in this server")
+        return {"run_id": run_id, "status": "cancelling"}
+
     @app.get("/runs/{run_id}/events")
     def run_events(run_id: str, request: Request, after_seq: int = 0) -> list[dict[str, Any]]:
         events = manager(request).runtime.events.list_events(run_id, after_seq)
@@ -161,11 +231,30 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
     def pending_approvals(request: Request) -> list[dict[str, Any]]:
         return [r.model_dump(mode="json") for r in manager(request).runtime.approvals.pending()]
 
+    @app.get("/approvals/events")
+    def recent_approval_events(request: Request, limit: int = 50) -> list[dict[str, Any]]:
+        """The newest entries of the append-only decision log, across all proposals."""
+        events = manager(request).runtime.approvals.recent_events(max(1, min(limit, 500)))
+        return [e.model_dump(mode="json") for e in events]
+
+    @app.get("/approvals/{proposal_id}/events")
+    def approval_events(proposal_id: str, request: Request) -> list[dict[str, Any]]:
+        """The full decision log of one proposal: requested, decided, used or refused."""
+        events = manager(request).runtime.approvals.events(proposal_id)
+        return [e.model_dump(mode="json") for e in events]
+
     @app.post("/approvals/{proposal_id}")
     def decide_approval(
-        proposal_id: str, body: ApprovalRequestBody, request: Request
+        proposal_id: str,
+        body: ApprovalRequestBody,
+        request: Request,
+        who: OperatorRequired,
     ) -> dict[str, Any]:
-        """Approve or reject ONE proposal. The digest must match exactly; approvals expire."""
+        """Approve or reject ONE proposal. The digest must match exactly; approvals expire.
+
+        A rejection also revokes an approval that was not used yet: "no" wins until the
+        action has run. The approver recorded is the authenticated operator.
+        """
         approvals = manager(request).runtime.approvals
         if approvals.get_request(proposal_id) is None:
             raise HTTPException(404, f"no approval request for proposal '{proposal_id}'")
@@ -174,7 +263,7 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
                 proposal_id,
                 decision=body.decision,
                 proposal_digest=body.proposal_digest,
-                actor=body.actor,
+                actor=who.actor,
             )
         except ApprovalError as exc:
             raise HTTPException(409, str(exc)) from exc
@@ -211,7 +300,9 @@ def create_app(runtime: Runtime | None = None) -> FastAPI:
     # --- evaluations --------------------------------------------------------------------------
 
     @app.post("/evals/run", status_code=202)
-    async def run_evals(body: EvalRequest, request: Request) -> dict[str, Any]:
+    async def run_evals(
+        body: EvalRequest, request: Request, who: OperatorRequired
+    ) -> dict[str, Any]:
         try:
             return manager(request).start_evaluation(body.configs)
         except ConfigError as exc:

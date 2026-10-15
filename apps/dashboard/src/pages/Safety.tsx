@@ -9,6 +9,7 @@ import { RunScope } from "../components/RunPicker";
 import { DataTable } from "../components/Table";
 import {
   actionResultTone,
+  approvalEventTone,
   arr,
   fmtArgs,
   fmtDateTime,
@@ -22,7 +23,7 @@ import {
 } from "../format";
 import { hrefFor, usePolling, useRunSelection } from "../hooks";
 import type { PageProps } from "../hooks";
-import type { InjectionPayload, PolicyPayload, ProposalPayload, RunSummaryPayload, TraceEvent } from "../types";
+import type { ApprovalEvent, InjectionPayload, PolicyPayload, ProposalPayload, RunSummaryPayload, TraceEvent } from "../types";
 
 /** Static documentation of the policy rule ids that appear in decisions (not metrics). */
 const POLICY_RULES: [string, string][] = [
@@ -57,6 +58,65 @@ function RuleIds({ ids }: { ids: string[] }) {
         </Chip>
       ))}
     </span>
+  );
+}
+
+/** Rows of the append-only approval decision log (who requested, decided, used or was refused). */
+function DecisionLogTable({ events, empty }: { events: ApprovalEvent[]; empty: string }) {
+  return (
+    <DataTable
+      rows={events}
+      rowKey={(e) => String(e.event_id)}
+      rowClassName={(e) => (["rejected", "revoked", "refused"].includes(e.kind) ? "row-bad" : undefined)}
+      empty={empty}
+      columns={[
+        { key: "at", header: "At", nowrap: true, render: (e) => fmtDateTime(e.at) },
+        { key: "proposal", header: "Proposal", nowrap: true, render: (e) => <Mono>{e.proposal_id}</Mono> },
+        { key: "kind", header: "Event", render: (e) => <Chip tone={approvalEventTone(e.kind)}>{e.kind}</Chip> },
+        { key: "actor", header: "Who", render: (e) => <Mono>{e.actor}</Mono> },
+        { key: "detail", header: "Detail", render: (e) => <span className="reason">{e.detail || "—"}</span> },
+      ]}
+    />
+  );
+}
+
+/** The newest entries of the decision log across all runs (GET /approvals/events). */
+function RecentDecisions() {
+  const recent = usePolling(() => api.recentApprovalEvents(30), 5000, []);
+  return (
+    <Card
+      title="Approval decision log"
+      subtitle="GET /approvals/events — append-only (the database refuses to change or delete an entry); the approver is the signed-in operator"
+      flush
+    >
+      {recent.error && !recent.data ? (
+        <ErrorState error={recent.error} />
+      ) : !recent.data ? (
+        <Loading />
+      ) : (
+        <DecisionLogTable events={recent.data} empty="No approval has been requested yet." />
+      )}
+    </Card>
+  );
+}
+
+/** The decision log of every proposal one run made. */
+function RunDecisionLog({ proposalIds }: { proposalIds: string[] }) {
+  const log = usePolling(
+    proposalIds.length ? async () => (await Promise.all(proposalIds.map((id) => api.approvalEvents(id)))).flat() : null,
+    null,
+    [proposalIds.join(",")],
+  );
+  return (
+    <Card title="Decision log for this run" subtitle="GET /approvals/{proposal_id}/events — every request, decision, use and refusal, in order" flush>
+      {log.error && !log.data ? (
+        <ErrorState error={log.error} />
+      ) : proposalIds.length && !log.data ? (
+        <Loading />
+      ) : (
+        <DecisionLogTable events={log.data ?? []} empty="This run asked for no approval." />
+      )}
+    </Card>
   );
 }
 
@@ -261,6 +321,8 @@ function SafetyView({ runId, running }: { runId: string; running: boolean }) {
         </Card>
       </div>
 
+      <RunDecisionLog proposalIds={record.proposals.map((p) => p.proposal_id)} />
+
       <Card title="Mitigation attempts" subtitle="record.actions — denied, rejected and expired actions are shown in red" flush>
         <DataTable
           rows={record.actions}
@@ -319,6 +381,7 @@ export function SafetyPage({ route }: PageProps) {
         description="Every tool call passes a trusted policy at the gateway. Reads are allowed, reversible writes need an exact approval, destructive actions are always denied — no matter what a model, log or runbook says."
       />
       <PendingApprovals />
+      <RecentDecisions />
       <div className="section-head">
         <h2 className="section-title">Audit a run</h2>
         <span className="muted">Verdicts, proposals, approvals and injection flags recorded for one run</span>

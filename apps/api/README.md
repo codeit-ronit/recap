@@ -8,21 +8,41 @@ The API is a thin layer over `recap.runtime.Runtime`. Incidents run as backgroun
 tasks (`service.py: RunManager`); their trace events are stored in SQLite and also pushed to
 an in-process hub that powers the live server-sent-events stream.
 
+## Signing in (operator token)
+
+Everything that changes state needs `Authorization: Bearer <operator token>`
+([auth.py](auth.py)). On first start the server generates a token, saves it to
+`data/operator-token` (readable by your user only) and prints it once; paste it into the
+dashboard's **Sign in** box (top right). Set `RECAP_OPERATOR_TOKEN` to choose your own and
+`RECAP_OPERATOR_NAME` for the name decisions are recorded under (`operator:<name>`).
+Reads, including the live event stream, need no token. The server answers only requests
+addressed to `localhost`, `127.0.0.1` or `[::1]` (`RECAP_ALLOWED_HOSTS` to change that; other
+names get 400, which stops DNS-rebinding attacks), and refuses a state-changing request from
+a browser page on another host (403).
+
+```bash
+curl -H "Authorization: Bearer $(cat data/operator-token)" http://127.0.0.1:8000/auth/session
+```
+
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/health` | liveness + environment `label`: `SIMULATED LOCAL ENVIRONMENT · V1` for a simulated environment, otherwise `LIVE ENVIRONMENT (<kind>) · V1` |
 | GET | `/system` | which implementation is plugged into each interface (environment adapter, transport, provider, retriever, router, policy, verifier, oracle, sinks) |
 | GET | `/scenarios` | available scenarios (ground-truth fields are for evaluation only; agents never see them) |
-| POST | `/incidents/run` | `{scenario_id, config}` → starts a run, returns `run_id` (202) |
+| GET | `/auth/session` | **operator** · who the token belongs to (`{operator, actor}`); 401 without a valid token |
+| POST | `/incidents/run` | **operator** · `{scenario_id, config}` → starts a run, returns `run_id` (202) |
+| POST | `/runs/{id}/cancel` | **operator** · cancels a run this server is running (202); its pending approval request expires; 404 unknown, 409 not running here |
 | GET | `/runs`, `/runs/{id}` | run summaries / full checkpoint + evidence + `status` (below) |
 | GET | `/runs/{id}/events` | stored trace events (`?after_seq=`) |
 | GET | `/runs/{id}/stream` | **SSE**: replays stored events; for a run this server is running, then live ones until `run.summary` |
 | GET | `/approvals/pending` | proposals waiting for a human |
-| POST | `/approvals/{proposal_id}` | `{decision, proposal_digest, actor}` — approve/reject ONE exact proposal; wrong digest, expired or already-decided → 409 |
+| POST | `/approvals/{proposal_id}` | **operator** · `{decision, proposal_digest}` — approve/reject ONE exact proposal; the approver recorded is the signed-in operator (an `actor` field is refused with 422). A rejection also revokes an approval that was not used yet; approving after a rejection, deciding an expired request, or rejecting after the action ran → 409 |
+| GET | `/approvals/{proposal_id}/events` | the proposal's append-only decision log (requested, approved, rejected, revoked, expired, consumed, refused) |
+| GET | `/approvals/events` | the newest decision-log entries across all proposals (`?limit=`) |
 | GET | `/memory` | experience episodes (`?partition=demo\|train`) |
 | GET | `/knowledge/search?q=` | BM25 search with citations, parsed action hints and injection flags |
 | GET | `/knowledge/docs` | all knowledge chunks |
-| POST | `/evals/run` | `{configs?}` → start the evaluation protocol in the background; an unknown configuration name → 400 |
+| POST | `/evals/run` | **operator** · `{configs?}` → start the evaluation protocol in the background; an unknown configuration name → 400 |
 | GET | `/evals/results` | `{running, progress, report, error}` for the evaluation this server started (below) |
 
 ## Run status
@@ -49,6 +69,10 @@ reported as the `error`).
 
 ## Safety notes
 
+- State-changing endpoints are **operator-only** (bearer token, constant-time check), and the
+  approver identity comes from the credential, never from the request body. This is a
+  single-operator scheme for a local prototype: a shared deployment needs real user accounts,
+  roles and TLS.
 - There is **no endpoint that executes an action directly**. Clients can start simulated runs
   (optionally with the simulation auto-approver) and evaluations, and approve or reject one
   exact proposal. Approving only records a decision bound to that proposal's digest; the

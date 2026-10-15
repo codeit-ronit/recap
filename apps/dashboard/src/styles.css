@@ -2496,3 +2496,52 @@ select:focus {
     scroll-behavior: auto !important;
   }
 }
+
+/* --- operator sign-in (topbar) --------------------------------------------------------- */
+.operator {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.operator-name {
+  font-family: var(--mono);
+  color: var(--ok-text);
+}
+.operator-warn {
+  color: var(--warn-text);
+}
+.operator-form {
+  position: absolute;
+  top: 40px;
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(340px, calc(100vw - 32px));
+  padding: 12px;
+  border: 1px solid var(--border-2);
+  border-radius: 10px;
+  background: var(--panel-2);
+  white-space: normal;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+.input {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+.input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

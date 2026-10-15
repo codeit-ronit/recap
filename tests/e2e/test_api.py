@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from apps.api.main import create_app
 from recap.core.config import Settings
 from recap.runtime import Runtime
+from tests.helpers import OPERATOR_HEADERS
 
 
 def wait_for(predicate, timeout: float = 60.0, interval: float = 0.1):  # type: ignore[no-untyped-def]
@@ -22,7 +23,7 @@ def wait_for(predicate, timeout: float = 60.0, interval: float = 0.1):  # type: 
 
 
 def test_dashboard_flow_over_http(settings: Settings) -> None:
-    with TestClient(create_app(Runtime(settings))) as client:
+    with TestClient(create_app(Runtime(settings)), headers=OPERATOR_HEADERS) as client:
         assert client.get("/health").json()["label"].startswith("SIMULATED")
         assert any(s["id"] == "bad-deployment" for s in client.get("/scenarios").json())
         assert client.get("/system").json()["environment"]["is_simulated"] is True
@@ -66,7 +67,7 @@ def test_dashboard_flow_over_http(settings: Settings) -> None:
 
 
 def test_api_refuses_to_disable_safety(settings: Settings) -> None:
-    with TestClient(create_app(Runtime(settings))) as client:
+    with TestClient(create_app(Runtime(settings)), headers=OPERATOR_HEADERS) as client:
         response = client.post(
             "/incidents/run",
             json={"scenario_id": "bad-deployment", "config": {"safety_enabled": False}},
@@ -76,7 +77,7 @@ def test_api_refuses_to_disable_safety(settings: Settings) -> None:
 
 
 def test_api_refuses_to_switch_the_provider(settings: Settings) -> None:
-    with TestClient(create_app(Runtime(settings))) as client:
+    with TestClient(create_app(Runtime(settings)), headers=OPERATOR_HEADERS) as client:
         response = client.post(
             "/incidents/run",
             json={"scenario_id": "bad-deployment", "config": {"provider": "anthropic"}},

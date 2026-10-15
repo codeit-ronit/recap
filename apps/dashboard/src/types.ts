@@ -511,10 +511,35 @@ export interface RunStartResponse {
   status: string;
 }
 
+/** POST /approvals/{id}. Who decided is taken from the operator token, never from the body. */
 export interface ApprovalDecisionBody {
   decision: "approved" | "rejected";
   proposal_digest: string;
+}
+
+export type ApprovalEventKind = "requested" | "approved" | "rejected" | "revoked" | "expired" | "consumed" | "refused";
+
+/** One entry of the append-only approval decision log (GET /approvals/{id}/events). */
+export interface ApprovalEvent {
+  event_id: number;
+  proposal_id: string;
+  kind: ApprovalEventKind;
   actor: string;
+  at: string;
+  proposal_digest: string;
+  detail: string;
+}
+
+/** GET /auth/session: the signed-in operator. */
+export interface SessionInfo {
+  operator: string;
+  actor: string;
+}
+
+/** POST /runs/{id}/cancel. */
+export interface CancelResponse {
+  run_id: string;
+  status: string;
 }
 
 export interface ActionHint {

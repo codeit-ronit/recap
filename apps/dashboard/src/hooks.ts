@@ -1,9 +1,11 @@
 /**
- * Small React hooks: hash routing, polling, the live run event stream, and run selection.
+ * Small React hooks: hash routing, polling, the live run event stream, run selection and
+ * the operator sign-in state.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, openRunStream, toApiError } from "./api";
+import { getToken, onTokenChange } from "./auth";
 import type { ApiError } from "./api";
 import type { RunSummary, SystemSummary, TraceEvent } from "./types";
 
@@ -390,4 +392,11 @@ export function useRunSelection(route: Route): RunSelection {
   }, []);
 
   return { runId, runs, select };
+}
+
+/** The operator token of this tab (null when signed out); re-renders on sign-in and sign-out. */
+export function useOperatorToken(): string | null {
+  const [token, setTokenState] = useState<string | null>(getToken);
+  useEffect(() => onTokenChange(setTokenState), []);
+  return token;
 }

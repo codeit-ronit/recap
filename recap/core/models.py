@@ -482,6 +482,27 @@ class Approval(Contract):
     consumed_at: datetime | None = None
 
 
+ApprovalEventKind = Literal[
+    "requested", "approved", "rejected", "revoked", "expired", "consumed", "refused"
+]
+
+
+class ApprovalEvent(Contract):
+    """One entry of the append-only approval decision log: who did what to which proposal.
+
+    `revoked` is a rejection that overrode an approval before the action ran; `refused`
+    records an attempt the store turned down (a late, stale, forged or replayed decision).
+    """
+
+    event_id: int
+    proposal_id: str
+    kind: ApprovalEventKind
+    actor: str
+    at: datetime
+    proposal_digest: str = ""
+    detail: str = ""
+
+
 # ======================================================================================
 # 6. Mitigation & recovery
 # ======================================================================================

@@ -8,12 +8,17 @@
  *   - prod (`npm run build`): "", because FastAPI serves the built app and the API from
  *     the same origin (API routes at the root)
  *   - VITE_API_URL overrides both.
+ *
+ * State-changing calls carry the operator token (src/auth.ts); a 401 means "sign in".
  */
 
+import { SIGN_IN_HINT, authHeaders } from "./auth";
 import type {
   Approval,
   ApprovalDecisionBody,
+  ApprovalEvent,
   ApprovalRequest,
+  CancelResponse,
   EvalResults,
   EvalStartResponse,
   ExperienceEpisode,
@@ -26,6 +31,7 @@ import type {
   RunStartResponse,
   RunSummary,
   ScenarioInfo,
+  SessionInfo,
   SystemSummary,
   TraceEvent,
 } from "./types";
@@ -91,6 +97,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       headers: {
         Accept: "application/json",
         ...(init?.body ? { "Content-Type": "application/json" } : {}),
+        ...authHeaders(), // the operator token, when signed in (reads do not need it)
         ...(init?.headers ?? {}),
       },
     });
@@ -113,7 +120,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const offline = [502, 503, 504].includes(response.status) || (response.status === 500 && !text);
     const message = offline
       ? "Cannot reach the RECAP API."
-      : (detailMessage(body) ?? `${response.status} ${response.statusText}`);
+      : response.status === 401
+        ? SIGN_IN_HINT
+        : (detailMessage(body) ?? `${response.status} ${response.statusText}`);
     throw new ApiError(message, response.status, path, body, offline);
   }
   return body as T;
@@ -132,8 +141,17 @@ export const api = {
     request<TraceEvent[]>(`/runs/${enc(runId)}/events?after_seq=${afterSeq}`),
   startRun: (body: RunRequest) =>
     request<RunStartResponse>("/incidents/run", { method: "POST", body: JSON.stringify(body) }),
+  cancelRun: (runId: string) =>
+    request<CancelResponse>(`/runs/${enc(runId)}/cancel`, { method: "POST" }),
+
+  /** Who a token belongs to; `token` checks a token before it is saved (the sign-in box). */
+  session: (token?: string) =>
+    request<SessionInfo>("/auth/session", token ? { headers: authHeaders(token) } : undefined),
 
   pendingApprovals: () => request<ApprovalRequest[]>("/approvals/pending"),
+  approvalEvents: (proposalId: string) =>
+    request<ApprovalEvent[]>(`/approvals/${enc(proposalId)}/events`),
+  recentApprovalEvents: (limit = 30) => request<ApprovalEvent[]>(`/approvals/events?limit=${limit}`),
   decideApproval: (proposalId: string, body: ApprovalDecisionBody) =>
     request<Approval>(`/approvals/${enc(proposalId)}`, {
       method: "POST",

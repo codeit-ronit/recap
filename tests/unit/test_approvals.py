@@ -311,3 +311,157 @@ async def test_external_channel_leaves_the_decision_to_the_api(store: ApprovalSt
     request = store.create_request(make_proposal(), run_id="run-1", ttl_seconds=900)
     await ExternalApprovalChannel().notify(request)
     assert store.get_request("prop-1").status == ApprovalStatus.PENDING
+
+
+# --- "no" wins until the action runs, and every step is logged (audit finding 2.4) ----------
+
+
+def reject(store: ApprovalStore, proposal: MitigationProposal, actor: str = "bob"):
+    return store.decide(
+        proposal.proposal_id, decision="rejected", proposal_digest=proposal.digest(), actor=actor
+    )
+
+
+def test_a_rejection_revokes_an_approval_that_was_not_used_yet(store: ApprovalStore) -> None:
+    proposal = make_proposal()
+    store.create_request(proposal, run_id="run-1", ttl_seconds=900)
+    approval = approve(store, proposal)
+
+    revoked = reject(store, proposal)
+
+    assert revoked.approval_id == approval.approval_id and revoked.decision == "rejected"
+    assert revoked.actor == "bob"
+    assert store.get_request("prop-1").status == ApprovalStatus.REJECTED
+    with pytest.raises(ApprovalError, match="rejected approval cannot be used"):
+        store.consume(approval.approval_id)  # the gateway can no longer use it
+
+
+def test_a_rejection_after_the_action_ran_is_refused(store: ApprovalStore) -> None:
+    proposal = make_proposal()
+    store.create_request(proposal, run_id="run-1", ttl_seconds=900)
+    approval = approve(store, proposal)
+    store.consume(approval.approval_id)
+
+    with pytest.raises(ApprovalError, match="already executed"):
+        reject(store, proposal)
+    assert store.get_request("prop-1").status == ApprovalStatus.APPROVED  # history is not rewritten
+
+
+def test_no_approval_is_accepted_after_a_rejection(store: ApprovalStore) -> None:
+    proposal = make_proposal()
+    store.create_request(proposal, run_id="run-1", ttl_seconds=900)
+    reject(store, proposal)
+
+    with pytest.raises(ApprovalError, match="not pending"):
+        approve(store, proposal)
+    with pytest.raises(ApprovalError, match="not pending"):
+        reject(store, proposal)  # deciding twice is refused too
+
+
+def test_the_decision_log_records_every_step_including_refusals(store: ApprovalStore) -> None:
+    proposal = make_proposal()
+    store.create_request(proposal, run_id="run-1", ttl_seconds=900)
+    approval = approve(store, proposal)
+    with pytest.raises(ApprovalError):
+        store.decide("prop-1", decision="approved", proposal_digest="f" * 64, actor="mallory")
+    reject(store, proposal)
+    with pytest.raises(ApprovalError):
+        store.consume(approval.approval_id)
+
+    log = store.events("prop-1")
+
+    assert [(e.kind, e.actor) for e in log] == [
+        ("requested", "recap"),
+        ("approved", "alice"),
+        ("refused", "mallory"),  # wrong digest
+        ("revoked", "bob"),
+        ("refused", "recap"),  # the gateway's attempt to use the revoked approval
+    ]
+    assert "digest mismatch" in log[2].detail
+    assert "overrides the approval by alice" in log[3].detail
+    assert [e.event_id for e in store.recent_events(limit=2)] == [log[4].event_id, log[3].event_id]
+
+
+def test_the_decision_log_cannot_be_changed_or_deleted(tmp_path: Path) -> None:
+    import sqlite3
+
+    db = tmp_path / "recap.db"
+    store = ApprovalStore(db)
+    store.create_request(make_proposal(), run_id="run-1", ttl_seconds=900)
+
+    raw = sqlite3.connect(db)
+    with pytest.raises(sqlite3.DatabaseError, match="append-only"):
+        raw.execute("UPDATE approval_events SET actor = 'someone else'")
+    with pytest.raises(sqlite3.DatabaseError, match="append-only"):
+        raw.execute("DELETE FROM approval_events")
+    raw.close()
+    assert [e.kind for e in store.events("prop-1")] == ["requested"]
+
+
+def test_an_expired_request_is_logged(store: ApprovalStore) -> None:
+    proposal = make_proposal()
+    request = store.create_request(proposal, run_id="run-1", ttl_seconds=60)
+    with pytest.raises(ApprovalError, match="expired"):
+        approve(store, proposal, now=request.requested_at + timedelta(seconds=61))
+
+    assert [e.kind for e in store.events("prop-1")] == ["requested", "expired", "refused"]
+
+
+def test_two_processes_racing_revoke_against_consume_end_consistent(tmp_path: Path) -> None:
+    """Whichever wins, the action ran exactly when the approval was used, never both ways."""
+    import subprocess
+    import sys
+
+    db = tmp_path / "recap.db"
+    store = ApprovalStore(db)
+    proposal = make_proposal()
+    store.create_request(proposal, run_id="run-1", ttl_seconds=900)
+    approval = approve(store, proposal)
+    code = """
+import sys
+from recap.core.errors import ApprovalError
+from recap.safety.approvals import ApprovalStore
+db, what, approval_id, digest = sys.argv[1:]
+store = ApprovalStore(db)
+print("ready", flush=True)
+sys.stdin.readline()
+try:
+    if what == "consume":
+        store.consume(approval_id)
+    else:
+        store.decide("prop-1", decision="rejected", proposal_digest=digest, actor="console-user")
+    print("won")
+except ApprovalError as exc:
+    print(f"lost: {exc}")
+"""
+    root = Path(__file__).resolve().parents[2]
+    racers = [
+        subprocess.Popen(
+            [sys.executable, "-c", code, str(db), what, approval.approval_id, proposal.digest()],
+            cwd=root,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        for what in ("consume", "revoke")
+    ]
+    try:
+        for racer in racers:
+            assert racer.stdout is not None and racer.stdout.readline().strip() == "ready"
+        for racer in racers:
+            racer.stdin.write("go\n")  # type: ignore[union-attr]
+            racer.stdin.flush()  # type: ignore[union-attr]
+        consume_out, revoke_out = (r.communicate(timeout=60)[0].strip() for r in racers)
+    finally:
+        for racer in racers:
+            if racer.poll() is None:
+                racer.kill()
+
+    # Exactly one side wins, and the stored state agrees with the winner.
+    assert sorted(o.split(":")[0] for o in (consume_out, revoke_out)) == ["lost", "won"]
+    stored = store.get_approval(approval.approval_id)
+    assert stored is not None
+    if consume_out == "won":
+        assert stored.consumed_at is not None and "already executed" in revoke_out
+    else:
+        assert stored.decision == "rejected" and stored.consumed_at is None

@@ -7,11 +7,27 @@ by this store, so every channel goes through the same rules:
 
   * an approval names one incident, one proposal and that proposal's digest
     (a fingerprint of action + target + params), so it cannot authorize anything else;
-  * it expires, and it can be consumed only once (single use, enforced in SQL);
-  * a decision for a different digest, a non-pending request or an expired request
-    raises ApprovalError;
+  * it expires, and it can be consumed only once (single use);
+  * an explicit "no" wins until the action has run: a rejection is accepted while the
+    request is pending AND after an approval that was not used yet (a revocation), and
+    after a rejection no approval is accepted any more (audit finding 2.4: V1 let a
+    separate API approval override the operator's "n");
   * `expire()` ends a pending request early (e.g. its run was cancelled while waiting):
     the waiter returns None and a later "yes" is refused.
+
+The state machine of one request:
+
+    pending --approve--> approved --consume (the gateway, right before the write)--> used
+       |                    |
+       +--reject-->  rejected  <--reject (revocation; refused once the approval was used)
+       |
+       +--expire / timeout--> expired
+
+Every transition is a compare-and-swap inside ONE SQLite write transaction (BEGIN
+IMMEDIATE takes the write lock before anything is read), so two processes that share the
+database file (the API server and the CLI, say) are serialized and can never both win.
+Every step, including each refused attempt, is appended to `approval_events`, a decision
+log that the database itself refuses to update or delete (triggers).
 
 The gateway re-reads the approval from this store right before executing, so an
 approval object held by the caller can never be stale or forged.
@@ -24,7 +40,7 @@ import contextlib
 import sqlite3
 import threading
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
@@ -34,6 +50,8 @@ from recap.core.errors import ApprovalError, ConfigError
 from recap.core.ids import new_id, utcnow
 from recap.core.models import (
     Approval,
+    ApprovalEvent,
+    ApprovalEventKind,
     ApprovalRequest,
     ApprovalStatus,
     EnvironmentInfo,
@@ -42,6 +60,8 @@ from recap.core.models import (
 
 Decision = Literal["approved", "rejected"]
 PENDING, EXPIRED = ApprovalStatus.PENDING.value, ApprovalStatus.EXPIRED.value
+APPROVED, REJECTED = ApprovalStatus.APPROVED.value, ApprovalStatus.REJECTED.value
+SYSTEM_ACTOR = "recap"  # the store or the controller itself (expiry, single use)
 
 # A waiter also re-reads the database this often, so a decision written by another
 # process (e.g. the API server) is noticed even without an in-process wake-up.
@@ -61,7 +81,7 @@ CREATE TABLE IF NOT EXISTS approval_requests (
 CREATE TABLE IF NOT EXISTS approvals (
     approval_id     TEXT PRIMARY KEY,
     incident_id     TEXT NOT NULL,
-    proposal_id     TEXT NOT NULL UNIQUE,  -- at most one decision per proposal
+    proposal_id     TEXT NOT NULL UNIQUE,  -- the current decision for a proposal: at most one
     proposal_digest TEXT NOT NULL,
     scope           TEXT NOT NULL,
     decision        TEXT NOT NULL,
@@ -70,14 +90,29 @@ CREATE TABLE IF NOT EXISTS approvals (
     expires_at      TEXT NOT NULL,
     consumed_at     TEXT
 );
+CREATE TABLE IF NOT EXISTS approval_events (
+    event_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    proposal_id     TEXT NOT NULL,
+    kind            TEXT NOT NULL,
+    actor           TEXT NOT NULL,
+    at              TEXT NOT NULL,
+    proposal_digest TEXT NOT NULL,
+    detail          TEXT NOT NULL
+);
+-- The decision log is append-only: the database refuses to change or delete an entry.
+CREATE TRIGGER IF NOT EXISTS approval_events_no_update BEFORE UPDATE ON approval_events
+    BEGIN SELECT RAISE(ABORT, 'approval events are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS approval_events_no_delete BEFORE DELETE ON approval_events
+    BEGIN SELECT RAISE(ABORT, 'approval events are append-only'); END;
 """
 _INSERT_REQUEST = """INSERT INTO approval_requests VALUES (:proposal_id, :run_id, :incident_id,
     :proposal_digest, :status, :requested_at, :expires_at, :proposal_json)"""
 _INSERT_APPROVAL = """INSERT INTO approvals VALUES (:approval_id, :incident_id, :proposal_id,
     :proposal_digest, :scope, :decision, :actor, :decided_at, :expires_at, :consumed_at)"""
-_SET_STATUS_IF_PENDING = (
-    "UPDATE approval_requests SET status = ? WHERE proposal_id = ? AND status = ?"
-)
+_INSERT_EVENT = """INSERT INTO approval_events (proposal_id, kind, actor, at, proposal_digest,
+    detail) VALUES (?, ?, ?, ?, ?, ?)"""
+# Compare-and-swap: move a request from one status to another, or do nothing.
+_MOVE_STATUS = "UPDATE approval_requests SET status = ? WHERE proposal_id = ? AND status = ?"
 
 
 class ApprovalStore:
@@ -113,7 +148,10 @@ class ApprovalStore:
         )
         row = request.model_dump(mode="json", exclude={"proposal"})
         try:
-            self._write(_INSERT_REQUEST, {**row, "proposal_json": proposal.model_dump_json()})
+            with self._transaction() as conn:
+                conn.execute(_INSERT_REQUEST, {**row, "proposal_json": proposal.model_dump_json()})
+                detail = f"run {run_id}; expires {request.expires_at.isoformat()}"
+                _event(conn, request.proposal_id, "requested", SYSTEM_ACTOR, now, row, detail)
         except sqlite3.IntegrityError as exc:
             raise ApprovalError(f"a request for proposal {proposal.proposal_id} exists") from exc
         return request
@@ -145,43 +183,112 @@ class ApprovalStore:
         actor: str,
         now: datetime | None = None,
     ) -> Approval:
-        """Record a human (or auto-approver) decision on one pending request."""
-        now = now or utcnow()
-        request = self._load_request(proposal_id)
-        if request is None:
-            raise ApprovalError(f"unknown proposal {proposal_id!r}")
-        if proposal_digest != request.proposal_digest:
-            raise ApprovalError("approval is for a different proposal (digest mismatch)")
-        if request.status != ApprovalStatus.PENDING:
-            raise ApprovalError(f"approval request is {request.status.value}, not pending")
-        if now >= request.expires_at:
-            self.expire(proposal_id)
-            raise ApprovalError("approval request expired before a decision was made")
+        """Record a human (or auto-approver) decision on one request.
 
+        Approve: only a pending request. Reject: a pending request, or an approved one whose
+        approval was not used yet (a revocation: "no" wins until the action runs). Anything
+        else raises ApprovalError, and the refused attempt is still written to the log.
+        """
+        now = now or utcnow()
+        with self._transaction() as conn:
+            outcome = self._decide(conn, proposal_id, decision, proposal_digest, actor, now)
+        if isinstance(outcome, str):
+            raise ApprovalError(outcome)
+        self._wake(proposal_id)
+        return outcome
+
+    def _decide(
+        self,
+        conn: sqlite3.Connection,
+        proposal_id: str,
+        decision: Decision,
+        digest: str,
+        actor: str,
+        now: datetime,
+    ) -> Approval | str:
+        """The decision inside the write transaction: an Approval, or the refusal reason."""
+        attempt = {"proposal_digest": digest}
+        row = conn.execute(
+            "SELECT * FROM approval_requests WHERE proposal_id = ?", (proposal_id,)
+        ).fetchone()
+        if row is None:
+            return _refuse(
+                conn, proposal_id, actor, now, attempt, f"unknown proposal {proposal_id!r}"
+            )
+        if digest != row["proposal_digest"]:
+            reason = "approval is for a different proposal (digest mismatch)"
+            return _refuse(conn, proposal_id, actor, now, attempt, reason)
+        status = row["status"]
+        if status == PENDING and now >= datetime.fromisoformat(row["expires_at"]):
+            conn.execute(_MOVE_STATUS, (EXPIRED, proposal_id, PENDING))
+            _event(conn, proposal_id, "expired", SYSTEM_ACTOR, now, attempt, "no decision in time")
+            reason = "approval request expired before a decision was made"
+            return _refuse(conn, proposal_id, actor, now, attempt, reason)
+        if status == PENDING:
+            return self._record(conn, row, decision, actor, now)
+        if status == APPROVED and decision == "rejected":
+            return self._revoke(conn, row, actor, now)
+        return _refuse(
+            conn, proposal_id, actor, now, attempt, f"approval request is {status}, not pending"
+        )
+
+    def _record(
+        self,
+        conn: sqlite3.Connection,
+        request: sqlite3.Row,
+        decision: Decision,
+        actor: str,
+        now: datetime,
+    ) -> Approval:
+        """pending -> approved | rejected, with the decision row and its log entry."""
         approval = Approval(
             approval_id=new_id("apr"),
-            incident_id=request.incident_id,
-            proposal_id=proposal_id,
-            proposal_digest=request.proposal_digest,
+            incident_id=request["incident_id"],
+            proposal_id=request["proposal_id"],
+            proposal_digest=request["proposal_digest"],
             decision=decision,
             actor=actor,
             decided_at=now,
-            expires_at=request.expires_at,
+            expires_at=datetime.fromisoformat(request["expires_at"]),
         )
-        with self._lock, self._conn:
-            # The status guard makes "decide once" hold even if two deciders race.
-            moved = self._conn.execute(_SET_STATUS_IF_PENDING, (decision, proposal_id, PENDING))
-            if moved.rowcount != 1:
-                raise ApprovalError("approval request was decided or expired concurrently")
-            self._conn.execute(_INSERT_APPROVAL, approval.model_dump(mode="json"))
-        self._wake(proposal_id)
+        # We hold the write lock, so the swap cannot fail; checking keeps the rule explicit.
+        moved = conn.execute(_MOVE_STATUS, (decision, approval.proposal_id, PENDING))
+        if moved.rowcount != 1:  # pragma: no cover - impossible under BEGIN IMMEDIATE
+            raise ApprovalError("approval request was decided or expired concurrently")
+        conn.execute(_INSERT_APPROVAL, approval.model_dump(mode="json"))
+        _event(conn, approval.proposal_id, decision, actor, now, request, "")
         return approval
+
+    def _revoke(
+        self, conn: sqlite3.Connection, request: sqlite3.Row, actor: str, now: datetime
+    ) -> Approval | str:
+        """approved -> rejected while the approval is unused: an explicit "no" wins."""
+        proposal_id = request["proposal_id"]
+        current = conn.execute(
+            "SELECT * FROM approvals WHERE proposal_id = ?", (proposal_id,)
+        ).fetchone()
+        if current is None or current["consumed_at"] is not None:
+            reason = "the approved action was already executed; a rejection can no longer stop it"
+            return _refuse(conn, proposal_id, actor, now, request, reason)
+        conn.execute(_MOVE_STATUS, (REJECTED, proposal_id, APPROVED))
+        conn.execute(
+            "UPDATE approvals SET decision = ?, actor = ?, decided_at = ? "
+            "WHERE proposal_id = ? AND consumed_at IS NULL",
+            (REJECTED, actor, now.isoformat(), proposal_id),
+        )
+        detail = f"overrides the approval by {current['actor']} before it was used"
+        _event(conn, proposal_id, "revoked", actor, now, request, detail)
+        approval = Approval.model_validate(dict(current))
+        return approval.model_copy(
+            update={"decision": "rejected", "actor": actor, "decided_at": now}
+        )
 
     async def wait_for_decision(self, proposal_id: str, timeout_seconds: float) -> Approval | None:
         """Wait for a decision; None if the request expires first.
 
         It expires on timeout (this call then marks it EXPIRED), when its own time is up,
-        or when `expire()` is called.
+        or when `expire()` is called. The returned approval is the store's current decision,
+        so a revocation that happened before the wait ended is already in it.
         """
         loop = asyncio.get_running_loop()
         event = asyncio.Event()
@@ -212,7 +319,15 @@ class ApprovalStore:
         approve the request afterwards. The status guard keeps a decision that was already
         recorded, even one that races with this call.
         """
-        if self._write(_SET_STATUS_IF_PENDING, (EXPIRED, proposal_id, PENDING)):
+        now = utcnow()
+        with self._transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM approval_requests WHERE proposal_id = ?", (proposal_id,)
+            ).fetchone()
+            moved = conn.execute(_MOVE_STATUS, (EXPIRED, proposal_id, PENDING)).rowcount
+            if moved:
+                _event(conn, proposal_id, "expired", SYSTEM_ACTOR, now, row, "no decision in time")
+        if moved:
             self._wake(proposal_id)
 
     # --- approvals -----------------------------------------------------------------------
@@ -223,30 +338,65 @@ class ApprovalStore:
         return Approval.model_validate(dict(row)) if row else None
 
     def consume(self, approval_id: str, now: datetime | None = None) -> Approval:
-        """Use an approval once. Raises ApprovalError if it is unusable or already used."""
+        """Use an approval once, right before the write. Raises ApprovalError if unusable.
+
+        Checked and marked in one transaction: the approval must still be the current
+        "approved" decision of an approved request, unexpired and unused.
+        """
         now = now or utcnow()
-        approval = self.get_approval(approval_id)
-        if approval is None:
-            raise ApprovalError(f"unknown approval {approval_id!r}")
-        if approval.decision != "approved":
-            raise ApprovalError("a rejected approval cannot be used")
-        if now >= approval.expires_at:
-            raise ApprovalError("approval expired")
-        # "consumed_at IS NULL" in the WHERE clause makes single use atomic in SQLite.
-        used = self._write(
-            "UPDATE approvals SET consumed_at = ? WHERE approval_id = ? AND consumed_at IS NULL",
-            (now.isoformat(), approval_id),
-        )
-        if used != 1:
-            raise ApprovalError(f"approval {approval_id} was already used (single use)")
-        return approval.model_copy(update={"consumed_at": now})
+        with self._transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM approvals WHERE approval_id = ?", (approval_id,)
+            ).fetchone()
+            reason = _unusable(conn, row, approval_id, now)
+            if reason is not None:
+                if row is not None:  # an unknown ID has no proposal to log against
+                    _refuse(conn, row["proposal_id"], SYSTEM_ACTOR, now, row, reason)
+            else:
+                conn.execute(
+                    "UPDATE approvals SET consumed_at = ? WHERE approval_id = ? "
+                    "AND consumed_at IS NULL",
+                    (now.isoformat(), approval_id),
+                )
+                _event(conn, row["proposal_id"], "consumed", SYSTEM_ACTOR, now, row, "")
+        if reason is not None:
+            raise ApprovalError(reason)
+        return Approval.model_validate(dict(row)).model_copy(update={"consumed_at": now})
 
     def approvals_for(self, incident_id: str) -> list[Approval]:
         """Every decision recorded for an incident, oldest first."""
         sql = "SELECT * FROM approvals WHERE incident_id = ? ORDER BY rowid"
         return [Approval.model_validate(dict(row)) for row in self._read(sql, (incident_id,))]
 
+    # --- the decision log ------------------------------------------------------------------
+
+    def events(self, proposal_id: str) -> list[ApprovalEvent]:
+        """The full decision log of one proposal, oldest first."""
+        sql = "SELECT * FROM approval_events WHERE proposal_id = ? ORDER BY event_id"
+        return [ApprovalEvent.model_validate(dict(row)) for row in self._read(sql, (proposal_id,))]
+
+    def recent_events(self, limit: int = 50) -> list[ApprovalEvent]:
+        """The newest `limit` log entries across all proposals, newest first."""
+        sql = "SELECT * FROM approval_events ORDER BY event_id DESC LIMIT ?"
+        return [ApprovalEvent.model_validate(dict(row)) for row in self._read(sql, (limit,))]
+
     # --- helpers -------------------------------------------------------------------------
+
+    @contextlib.contextmanager
+    def _transaction(self) -> Iterator[sqlite3.Connection]:
+        """One write transaction that takes SQLite's write lock BEFORE reading anything.
+
+        That is what turns every read-check-write below into a compare-and-swap that holds
+        across processes: a second process waits (up to the busy timeout) until we commit.
+        """
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield self._conn
+            except BaseException:
+                self._conn.rollback()
+                raise
+            self._conn.commit()
 
     def _load_request(self, proposal_id: str) -> ApprovalRequest | None:
         row = self._read_one(
@@ -277,10 +427,53 @@ class ApprovalStore:
         rows = self._read(sql, params)
         return rows[0] if rows else None
 
-    def _write(self, sql: str, params: tuple[Any, ...] | dict[str, Any]) -> int:
-        """Run one statement in its own transaction; returns the number of rows changed."""
-        with self._lock, self._conn:
-            return self._conn.execute(sql, params).rowcount
+
+def _unusable(
+    conn: sqlite3.Connection, row: sqlite3.Row | None, approval_id: str, now: datetime
+) -> str | None:
+    """Why an approval cannot be used right now, or None if it can (inside the transaction)."""
+    if row is None:
+        return f"unknown approval {approval_id!r}"
+    if row["decision"] != APPROVED:
+        return "a rejected approval cannot be used"
+    if row["consumed_at"] is not None:
+        return f"approval {approval_id} was already used (single use)"
+    if now >= datetime.fromisoformat(row["expires_at"]):
+        return "approval expired"
+    request = conn.execute(
+        "SELECT status FROM approval_requests WHERE proposal_id = ?", (row["proposal_id"],)
+    ).fetchone()
+    if request is None or request["status"] != APPROVED:
+        status = request["status"] if request else "missing"
+        return f"the approval request is {status}, so the approval cannot be used"
+    return None
+
+
+def _event(
+    conn: sqlite3.Connection,
+    proposal_id: str,
+    kind: ApprovalEventKind,
+    actor: str,
+    at: datetime,
+    source: sqlite3.Row | dict[str, Any] | None,
+    detail: str,
+) -> None:
+    """Append one entry to the decision log (inside the caller's transaction)."""
+    digest = str(source["proposal_digest"]) if source is not None else ""
+    conn.execute(_INSERT_EVENT, (proposal_id, kind, actor, at.isoformat(), digest, detail))
+
+
+def _refuse(
+    conn: sqlite3.Connection,
+    proposal_id: str,
+    actor: str,
+    at: datetime,
+    source: sqlite3.Row | dict[str, Any] | None,
+    reason: str,
+) -> str:
+    """Log a refused attempt and return its reason (the caller raises after committing)."""
+    _event(conn, proposal_id, "refused", actor, at, source, reason)
+    return reason
 
 
 def _open(db_path: Path | str | None) -> sqlite3.Connection:

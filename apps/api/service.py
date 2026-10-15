@@ -65,6 +65,18 @@ class RunManager:
         self.tasks[run_id] = task
         return run_id
 
+    def cancel(self, run_id: str) -> bool:
+        """Cancel a run this server is running; False if it is not running here.
+
+        The controller ends a cancelled run as FAILED ("run cancelled") and expires a
+        pending approval request, so nobody can approve it afterwards.
+        """
+        task = self.tasks.get(run_id)
+        if task is None or task.done():
+            return False
+        task.cancel()
+        return True
+
     def _remember_error(self, run_id: str, task: asyncio.Task[RunRecord]) -> None:
         if not task.cancelled() and task.exception() is not None:
             self.errors[run_id] = f"{type(task.exception()).__name__}: {task.exception()}"

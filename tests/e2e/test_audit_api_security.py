@@ -21,9 +21,10 @@ setup does not depend on the run endpoint, which must itself start refusing anon
 callers). The tests assert only on HTTP status codes and on what ends up stored, never on
 how the future login works (a token, a session cookie, ...), so the fix is free to choose.
 
-Every test is marked xfail(strict=True) until the fix lands in M1: each fails today for
-the reason above, and strict=True makes pytest report an error as soon as it passes, so
-the marker is removed together with the fix.
+Status: these tests were strict xfails in M0. M1 added operator authentication (a bearer
+token on every state-changing endpoint, the approver taken from the credential), a trusted
+host check and an origin check (apps/api/auth.py). They now pass and stay as regression
+tests; tests/e2e/test_api_security.py covers the signed-in side.
 """
 
 from __future__ import annotations
@@ -71,10 +72,6 @@ def approve_anonymously(
 # --- 4. approving needs credentials ---------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUDIT-2.4: POST /approvals accepts decisions without credentials; fixed in M1",
-)
 def test_an_approval_without_credentials_is_refused(settings: Settings) -> None:
     """POST /approvals/{id} with no credentials is refused and records nothing."""
     runtime = Runtime(settings)
@@ -92,10 +89,6 @@ def test_an_approval_without_credentials_is_refused(settings: Settings) -> None:
 # --- 5. the approver identity is not whatever the client typed ------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUDIT-2.4: the body field 'actor' is stored as the approver identity; fixed in M1",
-)
 def test_the_actor_field_in_the_body_never_becomes_the_approver_identity(
     settings: Settings,
 ) -> None:
@@ -112,10 +105,6 @@ def test_the_actor_field_in_the_body_never_becomes_the_approver_identity(
 # --- 6. only our own host name is served ------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUDIT-2.4: no trusted-host check, so DNS rebinding reaches the API; fixed in M1",
-)
 def test_a_request_for_a_foreign_host_name_is_refused(settings: Settings) -> None:
     """A request whose Host header names another site (DNS rebinding) is refused."""
     with TestClient(create_app(Runtime(settings))) as client:
@@ -128,10 +117,6 @@ def test_a_request_for_a_foreign_host_name_is_refused(settings: Settings) -> Non
 # --- 7. starting work needs credentials -------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUDIT-2.4: POST /incidents/run starts runs without credentials; fixed in M1",
-)
 def test_starting_a_run_without_credentials_is_refused(settings: Settings) -> None:
     """POST /incidents/run with no credentials is refused and starts no run."""
     with TestClient(create_app(Runtime(settings))) as client:
@@ -146,10 +131,6 @@ def test_starting_a_run_without_credentials_is_refused(settings: Settings) -> No
     assert started == {}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUDIT-2.4: POST /evals/run starts evaluations without credentials; fixed in M1",
-)
 def test_starting_an_evaluation_without_credentials_is_refused(
     settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -11,13 +11,22 @@ from pathlib import Path
 import pytest
 
 from recap.core.config import Settings, load_settings
+from tests.helpers import OPERATOR_TOKEN
 
 
 @pytest.fixture
 def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
-    """Real configs/ settings, but with data written under a temp dir and zero latency."""
+    """Real configs/ settings, but with data written under a temp dir and zero latency.
+
+    For the API: FastAPI's TestClient addresses requests to the host "testserver", so that
+    name is allowed next to the loopback names, and a known operator token is configured
+    (tests/helpers.py: OPERATOR_HEADERS). Tests that send no token still get 401.
+    """
     monkeypatch.delenv("RECAP_PROVIDER", raising=False)
     monkeypatch.setenv("RECAP_TOOL_LATENCY_MS", "0")
+    monkeypatch.setenv("RECAP_ALLOWED_HOSTS", "localhost,127.0.0.1,[::1],testserver")
+    monkeypatch.setenv("RECAP_OPERATOR_TOKEN", OPERATOR_TOKEN)
+    monkeypatch.delenv("RECAP_OPERATOR_NAME", raising=False)
     loaded = load_settings(data_dir=tmp_path / "data")
     options = dict(loaded.environment.options, write_latency_ms=0)
     return loaded.model_copy(
