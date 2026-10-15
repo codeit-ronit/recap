@@ -33,6 +33,12 @@ on a healthy service, and forged "upstream payment call failed" lines clear the 
 release, so RECAP restarted the wrong service. Platform signals come from the platform
 itself (the orchestrator, the metrics pipeline), so they are much harder to fake.
 
+Epochs: after a fix, `remediated` (service -> environment time of the last executed fix on
+it) makes the verifier ignore STATE observations of that service from before the fix: OOM
+kills, memory, health snapshots, error-rate points and log lines, and blame toward it. A
+restart clears memory pressure, so the OOM kills it ended must not re-support the old
+diagnosis (audit finding 2.6). History stays: deployments and when errors first began.
+
 One contradiction rejects a claim; a missing piece leaves it INSUFFICIENT. The best claim is
 a SUPPORTED bad_deployment or resource_pressure, preferring the deepest root cause (the
 service other services' upstream errors point at), then more evidence, then live over memory.
@@ -105,10 +111,19 @@ class EvidenceVerifier:
     name = "evidence-rule-verifier-v1"
 
     def verify(
-        self, findings: Sequence[AgentFinding], registry: EvidenceRegistry, incident: Incident
+        self,
+        findings: Sequence[AgentFinding],
+        registry: EvidenceRegistry,
+        incident: Incident,
+        *,
+        remediated: Mapping[str, datetime] | None = None,
     ) -> VerificationReport:
-        """Check every hypothesis against ALL evidence of this run and pick the best one."""
-        observed = _Observations(registry.all())
+        """Check every hypothesis against ALL evidence of this run and pick the best one.
+
+        `remediated` maps a service to the environment time of the last fix executed on it;
+        its state observations from before that time no longer count (see "Epochs" above).
+        """
+        observed = _Observations(registry.all(), remediated)
         proposed = [h for finding in findings for h in finding.hypotheses]
         # Observation timestamps are UTC once parsed; the alert time may still be naive.
         alert_time = signals.as_utc(incident.created_at)
@@ -172,7 +187,11 @@ class _Observations:
     UTC), so the rules below can compare timestamps from different tools directly.
     """
 
-    def __init__(self, evidence: Iterable[Evidence]) -> None:
+    def __init__(
+        self, evidence: Iterable[Evidence], remediated: Mapping[str, datetime] | None = None
+    ) -> None:
+        # service -> UTC time of the last fix on it: older state observations are stale.
+        self.remediated = {s: signals.as_utc(at) for s, at in (remediated or {}).items()}
         self.deployments: list[tuple[str, DeploymentRecord]] = []
         self.logs: list[tuple[str, LogQueryResult]] = []
         self.metrics: list[tuple[str, MetricSeries]] = []
@@ -194,6 +213,11 @@ class _Observations:
             elif isinstance(parsed, HealthSnapshot):
                 self.health.append((item.id, parsed))
 
+    def fresh(self, service: str, moment: datetime) -> bool:
+        """True if an observation of `service` at `moment` is newer than its last fix."""
+        fixed_at = self.remediated.get(service)
+        return fixed_at is None or moment > fixed_at
+
     def release(self, service: str, version: str | None) -> tuple[str, DeploymentRecord] | None:
         """The newest deployment of `service` (of `version`, when given) and its evidence ID."""
         found = [
@@ -204,7 +228,17 @@ class _Observations:
         return max(found, key=lambda pair: pair[1].deployed_at, default=None)
 
     def series(self, service: str, metric: str) -> list[tuple[str, MetricSeries]]:
+        """Every `metric` series of `service`, whole (history: used for error onsets)."""
         return [(eid, s) for eid, s in self.metrics if s.service == service and s.metric == metric]
+
+    def fresh_series(self, service: str, metric: str) -> list[tuple[str, MetricSeries]]:
+        """The same series, keeping only points newer than the service's last fix (state)."""
+        found = []
+        for eid, series in self.series(service, metric):
+            points = [point for point in series.points if self.fresh(service, point.timestamp)]
+            if points:
+                found.append((eid, series.model_copy(update={"points": points})))
+        return found
 
     def log_ids(self, service: str) -> list[str]:
         return [eid for eid, result in self.logs if result.service == service]
@@ -218,12 +252,22 @@ class _Observations:
                     unique.setdefault((line.timestamp, line.level, line.message), (eid, line))
         return sorted(unique.values(), key=lambda pair: pair[1].timestamp)
 
+    def fresh_lines(self, service: str) -> list[tuple[str, LogLine]]:
+        """`service`'s log lines newer than its last fix (all of them if it was never fixed)."""
+        return [(eid, ln) for eid, ln in self.lines(service) if self.fresh(service, ln.timestamp)]
+
     def upstream_errors(self, service: str) -> list[tuple[str, str]]:
-        """(evidence ID, dependency) for each ERROR line of `service` saying 'upstream D failed'."""
+        """(evidence ID, dependency) for each ERROR line of `service` saying 'upstream D failed'.
+
+        Only fresh lines count, and blame toward D only if it is newer than D's last fix: a
+        dependency that was just fixed cannot be blamed with lines written before the fix.
+        """
         found = []
-        for eid, line in self.lines(service):
+        for eid, line in self.fresh_lines(service):
             dependency = signals.upstream_dependency(line.message)
-            if line.level == "ERROR" and dependency and dependency != service:
+            if line.level != "ERROR" or not dependency or dependency == service:
+                continue
+            if self.fresh(dependency, line.timestamp):
                 found.append((eid, dependency))
         return found
 
@@ -250,8 +294,12 @@ class _Observations:
         point above it. One unhealthy observation, or none at all, gives [].
         """
         threshold = signals.ERROR_RATE_THRESHOLD
-        snapshots = [(eid, s) for eid, s in self.health if s.service == service]
-        rates = self.series(service, "error_rate")
+        snapshots = [
+            (eid, s)
+            for eid, s in self.health
+            if s.service == service and self.fresh(service, s.observed_at)
+        ]
+        rates = self.fresh_series(service, "error_rate")
         if not snapshots and not rates:
             return []
         for _, snapshot in snapshots:
@@ -267,7 +315,11 @@ class _Observations:
         unique: dict[tuple[datetime, str, str], ClusterEvent] = {}
         for _, _, listing in self.events:
             for event in listing.events:
-                if event.service == service and event.reason in signals.OOM_EVENT_REASONS:
+                if (
+                    event.service == service
+                    and event.reason in signals.OOM_EVENT_REASONS
+                    and self.fresh(service, event.timestamp)  # a fix ended the older kills
+                ):
                     unique.setdefault((event.timestamp, event.reason, event.object), event)
         return list(unique.values())
 
@@ -278,7 +330,7 @@ class _Observations:
     def memory(self, service: str) -> _Memory | None:
         """Peak memory of `service` relative to its container limit, if it was measured."""
         peak, limit, evidence_ids = 0.0, 0.0, []
-        for eid, series in self.series(service, "memory_mb"):
+        for eid, series in self.fresh_series(service, "memory_mb"):
             if series.limit and series.points:  # a ratio needs a known limit
                 evidence_ids.append(eid)
                 limit = series.limit
@@ -412,6 +464,15 @@ def _bad_deployment(check: _Check, observed: _Observations, alert_time: datetime
             V2_TIMING, f"no deployment evidence shows {named} being deployed", [check.target]
         )
     else:
+        newest = observed.release(check.target, None)
+        if newest is not None and newest[1].deployed_at > release[1].deployed_at:
+            # e.g. a rollback already replaced the release: it cannot cause the errors now.
+            replaced = (
+                f"{check.target} no longer runs {release[1].version}: {newest[1].version} was "
+                f"deployed {_when(newest[1].deployed_at, alert_time)}"
+            )
+            check.contradict(V2_TIMING, replaced, [newest[0]])
+            return
         _deploy_timing(check, observed, release, alert_time)
     _upstream_dominance(check, observed)
 
@@ -498,7 +559,7 @@ def _upstream_dominance(check: _Check, observed: _Observations) -> None:
         message = f"no log evidence for {service}: errors from its dependencies are not ruled out"
         check.lack(V2_UPSTREAM, message, [service])
         return
-    errors = sum(1 for _, line in observed.lines(service) if line.level == "ERROR")
+    errors = sum(1 for _, line in observed.fresh_lines(service) if line.level == "ERROR")
     upstream = _discount_healthy_blame(check, observed, observed.upstream_errors(service))
     counted = f"{len(upstream)} of {errors} ERROR lines of {service}"
     if len(upstream) < UPSTREAM_SHARE * errors or not upstream:
@@ -541,7 +602,9 @@ def _resource_pressure(check: _Check, observed: _Observations) -> None:
     oom_events = observed.oom_events(service)
     memory = observed.memory(service)
     near_limit = memory is not None and memory.peak >= signals.MEMORY_PRESSURE_RATIO
-    oom_lines = [eid for eid, ln in observed.lines(service) if signals.is_oom_message(ln.message)]
+    oom_lines = [
+        eid for eid, ln in observed.fresh_lines(service) if signals.is_oom_message(ln.message)
+    ]
     if oom_events:
         check.ok(V3, f"{len(oom_events)} OOMKilled/BackOff events for {service}")
     if memory is not None and near_limit:

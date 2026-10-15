@@ -98,7 +98,9 @@
       "restart",
       "delete_namespace"
     ],
-    "description": "Deterministic local simulation of a five-service shop (state in a per-run SQLite file). No real cluster is involved."
+    "description": "Deterministic local simulation of a five-service shop (state in a per-run SQLite file). No real cluster is involved.",
+    "stabilization_timeout_seconds": 0.0,
+    "stabilization_poll_seconds": 2.0
   },
   "provider": "deterministic-scripted-policy",
   "strategies": [

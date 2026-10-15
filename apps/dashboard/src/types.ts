@@ -88,6 +88,9 @@ export interface EnvironmentInfo {
   is_simulated: boolean;
   supported_actions: string[];
   description: string;
+  /** How long a fix may take to settle on a live target before the oracle's verdict counts (0 for the simulator). */
+  stabilization_timeout_seconds: number;
+  stabilization_poll_seconds: number;
 }
 
 export interface ScenarioInfo {

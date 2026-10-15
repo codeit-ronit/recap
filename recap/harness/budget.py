@@ -76,6 +76,10 @@ class BudgetTracker:
 
     # --- reporting -------------------------------------------------------------------------
 
+    def remaining_seconds(self) -> float:
+        """Wall-clock time left before max_elapsed_seconds (approval waits excluded)."""
+        return max(0.0, self.budget.max_elapsed_seconds - self.elapsed_seconds())
+
     def remaining_tool_calls(self) -> int:
         return max(0, self.budget.max_tool_calls - self.tool_calls)
 

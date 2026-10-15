@@ -30,7 +30,8 @@ needs adapted conventions (or an LLM provider), allowlists and runbooks.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import TYPE_CHECKING, ClassVar, Protocol, runtime_checkable
 
 from recap.core.models import (
@@ -227,8 +228,16 @@ class Verifier(Protocol):
     name: str
 
     def verify(
-        self, findings: Sequence[AgentFinding], registry: EvidenceRegistry, incident: Incident
-    ) -> VerificationReport: ...
+        self,
+        findings: Sequence[AgentFinding],
+        registry: EvidenceRegistry,
+        incident: Incident,
+        *,
+        remediated: Mapping[str, datetime] | None = None,
+    ) -> VerificationReport:
+        """Judge the findings. `remediated` maps a service to the environment time of the
+        last fix executed on it: its state observations from before then no longer count."""
+        ...
 
     def check_proposal(
         self, proposal: MitigationDraft, report: VerificationReport, registry: EvidenceRegistry

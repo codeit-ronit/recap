@@ -104,6 +104,9 @@ class SimulatedEnvironment(TargetEnvironment):
                 "Deterministic local simulation of a five-service shop (state in a per-run "
                 "SQLite file). No real cluster is involved."
             ),
+            # A fix takes effect the moment it is applied (the clock jumps 5 minutes), so
+            # there is nothing to wait for before the oracle's verdict.
+            stabilization_timeout_seconds=0.0,
         )
 
     def list_scenarios(self) -> list[ScenarioInfo]:

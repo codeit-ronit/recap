@@ -202,3 +202,16 @@ def test_recap_timestamps_are_timezone_aware_utc() -> None:
     )
     assert alert.fired_at.tzinfo is not None and alert.fired_at.utcoffset() == timedelta(0)
     assert minutes_between(datetime(2026, 1, 1, 12), alert.fired_at) == 0  # naive vs aware is safe
+
+
+def test_remaining_seconds_counts_down_and_never_goes_negative() -> None:
+    now = [100.0]
+    budget = BudgetTracker(RunBudget(max_elapsed_seconds=5), clock=lambda: now[0])
+    now[0] = 102.0
+    assert budget.remaining_seconds() == 3.0
+    budget.pause_clock()  # waiting for a human does not use the run's time
+    now[0] = 200.0
+    assert budget.remaining_seconds() == 3.0
+    budget.resume_clock()
+    now[0] = 210.0
+    assert budget.remaining_seconds() == 0.0

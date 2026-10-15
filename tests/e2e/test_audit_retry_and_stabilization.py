@@ -29,9 +29,10 @@ weak spots in that loop. In simple words:
    is reported as an agent failure (FAILED) during investigation, and a proposal call has no
    deadline at all, so the run overruns its budget until the call returns.
 
-Tests marked xfail(strict=True) reproduce a defect: they assert the CORRECT behaviour and fail
-today; they must pass once M1 fixes the defect (strict, so an unexpected pass is reported too).
-Tests without the mark are guards: behaviour that already works and must keep working.
+Status: the reproductions were strict xfails in M0. M1 fixed the lifecycle (a bounded
+stabilization wait for live targets, epoch-aware verification that ignores the fixed
+service's pre-fix state, runbook pinning, and provider calls bounded by the run's deadline),
+so they now pass and stay as regression tests. The guards pin behaviour that already worked.
 
 Every run uses the real controller and a real MCP tool server subprocess (stdio).
 """
@@ -142,11 +143,6 @@ def write_two_fault_scenario(settings: Settings, folder: Path) -> None:
     (folder / f"{TWO_FAULT_ID}.yaml").write_text(yaml.safe_dump(spec, sort_keys=False), "utf-8")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUDIT-2.6: pre-fix evidence re-blames the already fixed service, so no second "
-    "fix is tried (the rollback also needs the AUDIT-2.1 runbook packing fix); fixed in M1",
-)
 async def test_a_half_working_fix_is_followed_by_a_separately_investigated_second_fix(
     settings: Settings, tmp_path: Path
 ) -> None:
@@ -281,11 +277,6 @@ class OperatorApproves:
         )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUDIT-2.6: the oracle is probed once right after a write, with no stabilization "
-    "wait for a live target; fixed in M1",
-)
 async def test_a_live_fix_is_verified_after_the_target_has_stabilized(
     settings: Settings, tmp_path: Path
 ) -> None:
@@ -323,6 +314,11 @@ async def test_a_live_fix_is_verified_after_the_target_has_stabilized(
     assert record.recovery is not None and record.recovery.verified
     assert record.approvals and record.approvals[0].consumed_at is not None
     assert STABILIZE_SECONDS <= elapsed < RUN_LIMIT_SECONDS  # it waited, but not forever
+    recovery = [
+        e for e in runtime.events.list_events(record.run_id) if e.category == C.VERIFY_RECOVERY
+    ]
+    assert recovery[0].payload["probes"] >= 2  # judged again after the target settled
+    assert recovery[0].payload["waited_seconds"] >= STABILIZE_SECONDS
 
 
 async def test_simulated_recovery_is_still_judged_without_waiting(settings: Settings) -> None:
@@ -336,6 +332,10 @@ async def test_simulated_recovery_is_still_judged_without_waiting(settings: Sett
     at = {change.state: change.at for change in record.history}
     waited = (at[IncidentState.RESOLVED] - at[IncidentState.VERIFYING]).total_seconds()
     assert waited < 1.0, f"verification of a simulated fix took {waited:.2f}s"
+    recovery = [
+        e for e in runtime.events.list_events(record.run_id) if e.category == C.VERIFY_RECOVERY
+    ]
+    assert [e.payload["probes"] for e in recovery] == [1]  # a simulated fix is judged at once
 
 
 # --- 3. budgets and attempt limits ------------------------------------------------------------
@@ -398,11 +398,6 @@ class HangingProvider(DeterministicProvider):
         return await super().propose_mitigation(request)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUDIT-2.6: a provider call that outlasts max_elapsed_seconds is not stopped at "
-    "the deadline as BUDGET_EXHAUSTED; fixed in M1",
-)
 @pytest.mark.parametrize("stage", ["investigation", "proposal"])
 async def test_a_provider_call_that_hangs_past_the_wall_clock_budget_is_cut_off(
     settings: Settings, stage: str

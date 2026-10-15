@@ -209,3 +209,33 @@ async def test_a_role_without_a_spec_is_a_configuration_error() -> None:
     specs = {TELEMETRY: SPECS[TELEMETRY]}
     with pytest.raises(ConfigError, match="infrastructure_investigator"):
         await Orchestrator(FakeAgents({}), specs, Tracer("run-test")).execute(decision())
+
+
+async def test_the_run_deadline_stops_agents_as_budget_exhausted() -> None:
+    """An agent may never outlive the run's own wall-clock budget (audit finding 2.6)."""
+    agents = FakeAgents({TELEMETRY: sleep_for(5), INFRA: sleep_for(5)})
+    orchestrator = Orchestrator(
+        agents,
+        SPECS,
+        recording_tracer(),
+        agent_timeout_seconds=60,  # the agents' own limit is far away...
+        remaining_seconds=lambda: 0.1,  # ...but the run has only 0.1 s left
+    )
+    started = time.perf_counter()
+
+    with pytest.raises(BudgetExhausted) as stopped:
+        await orchestrator.execute(decision())
+
+    assert stopped.value.limit == "max_elapsed_seconds"
+    assert time.perf_counter() - started < 1.0  # cut at the deadline, not after 5 s
+
+
+async def test_an_agent_limit_shorter_than_the_run_deadline_is_still_an_agent_error() -> None:
+    agents = FakeAgents({INVESTIGATOR: sleep_for(5)})
+    orchestrator = Orchestrator(
+        agents, SPECS, recording_tracer(), agent_timeout_seconds=0.1, remaining_seconds=lambda: 60
+    )
+
+    [finding] = await orchestrator.execute(decision([INVESTIGATOR], StrategyMode.SINGLE))
+
+    assert finding.error == "timeout after 0.1s"

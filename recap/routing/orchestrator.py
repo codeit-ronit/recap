@@ -14,6 +14,8 @@ evidence by immutable ID) and the run budget, which counts every step and tool c
 Failure handling, so one broken agent cannot sink the whole run:
 
     timeout            -> an AgentFinding with error "timeout after Xs" (the others keep theirs)
+    run deadline       -> BudgetExhausted("max_elapsed_seconds"): an agent may never run past
+                          the run's own wall-clock budget, even inside one slow provider call
     crash (exception)  -> an AgentFinding with error "agent crashed: <type>: <message>"
     BudgetExhausted    -> re-raised once every agent has stopped (the budget is shared, so the
                           controller ends the run as BUDGET_EXHAUSTED)
@@ -83,11 +85,14 @@ class Orchestrator:
         tracer: Tracer,
         *,
         agent_timeout_seconds: float = 60.0,
+        remaining_seconds: Callable[[], float] | None = None,
     ) -> None:
         self._runner = runner
         self._specs = dict(specs)
         self._tracer = tracer
         self._timeout = agent_timeout_seconds
+        # Time left on the run's wall clock (BudgetTracker.remaining_seconds), if bounded.
+        self._remaining = remaining_seconds
 
     async def execute(
         self, decision: StrategyDecision, focus_services: Sequence[str] = ()
@@ -132,11 +137,24 @@ class Orchestrator:
         return runs
 
     async def _run(self, spec: AgentSpec, plan: AgentRunPlan) -> _Run:
-        """Run one agent under its timeout. Errors are captured as the outcome, not raised."""
+        """Run one agent under its timeout. Errors are captured as the outcome, not raised.
+
+        The timeout is the agent's own limit or the time left on the run's clock, whichever
+        is shorter. When the run's clock is what ran out, the outcome is BudgetExhausted
+        (a clean stop of the whole run), not an agent failure.
+        """
         started_at, started = utcnow(), time.perf_counter()
+        remaining = self._remaining() if self._remaining is not None else None
+        deadline_first = remaining is not None and remaining < self._timeout
+        timeout = remaining if deadline_first and remaining is not None else self._timeout
         outcome: AgentFinding | Exception
         try:
-            outcome = await asyncio.wait_for(self._runner(spec, plan), self._timeout)
+            outcome = await asyncio.wait_for(self._runner(spec, plan), timeout)
+        except TimeoutError as exc:
+            outcome = exc
+            if deadline_first:
+                detail = f"{spec.role.value} was still working when the run's time ran out"
+                outcome = BudgetExhausted("max_elapsed_seconds", detail)
         except Exception as exc:  # CancelledError is not an Exception, so cancelling still works
             outcome = exc
         return _Run(plan, outcome, started_at, utcnow(), started, time.perf_counter())

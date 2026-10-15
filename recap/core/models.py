@@ -229,6 +229,11 @@ class EnvironmentInfo(Contract):
     is_simulated: bool
     supported_actions: list[str] = Field(default_factory=list)
     description: str = ""
+    # How long a fix may take to settle on a LIVE target (pods restart, readiness probes
+    # pass) before the recovery oracle's verdict counts, and how often to probe meanwhile.
+    # Ignored for simulated targets: they recover the moment a fix is applied.
+    stabilization_timeout_seconds: float = Field(60.0, ge=0)
+    stabilization_poll_seconds: float = Field(2.0, gt=0)
 
 
 class ScenarioInfo(Contract):

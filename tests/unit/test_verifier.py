@@ -665,3 +665,71 @@ def test_a_healthy_dependency_does_not_get_the_deepest_root_cause_bonus() -> Non
     statuses = {c.hypothesis.target_service: c.hypothesis.status for c in report.checks}
     assert statuses == {"checkout": SUPPORTED, "payment": SUPPORTED}
     assert report.best is not None and report.best.target_service == "checkout"
+
+
+# --- epochs: after a fix, the fixed service's older state no longer counts (audit 2.6) -------
+
+
+def test_oom_kills_from_before_a_restart_no_longer_support_resource_pressure() -> None:
+    run = Run()
+    old_kills = run.events(oom_event("payment", -6), oom_event("payment", -4), service="payment")
+    restarted_at = at(1)
+
+    before = verify(run, hypothesis(PRESSURE, "payment", old_kills))
+    after = EvidenceVerifier().verify(
+        [finding(hypothesis(PRESSURE, "payment", old_kills))],
+        run.registry,
+        run.incident,
+        remediated={"payment": restarted_at},
+    )
+
+    assert only_check(before).hypothesis.status == SUPPORTED
+    assert only_check(after).hypothesis.status != SUPPORTED  # the restart ended those kills
+
+
+def test_oom_kills_after_the_fix_still_count() -> None:
+    run = Run()
+    kills = run.events(oom_event("payment", -2), service="payment")
+
+    report = EvidenceVerifier().verify(
+        [finding(hypothesis(PRESSURE, "payment", kills))],
+        run.registry,
+        run.incident,
+        remediated={"payment": at(-5)},  # the fix came before these kills: they are fresh
+    )
+
+    assert only_check(report).hypothesis.status == SUPPORTED
+
+
+def test_blame_written_before_the_dependency_was_fixed_does_not_count() -> None:
+    """checkout's old 'upstream payment call failed' lines cannot clear its own bad release."""
+    run = Run()
+    deploy = run.deployments(("checkout", "v2.4.0", -2880), ("checkout", "v2.4.1", -30))
+    rate = run.error_rate("checkout", onset=-28)
+    errors = {
+        **release_errors("v2.4.1", range(-8, 1)),
+        **upstream_errors("payment", range(-28, -8)),
+    }
+    logs = run.logs("checkout", errors)
+    claim = hypothesis(DEPLOY, "checkout", deploy, rate, logs, version="v2.4.1")
+
+    before = verify(run, claim)
+    after = EvidenceVerifier().verify(
+        [finding(claim)], run.registry, run.incident, remediated={"payment": at(-9)}
+    )
+
+    assert only_check(before).hypothesis.status == CONTRADICTED  # most errors blame payment
+    assert only_check(after).hypothesis.status == SUPPORTED  # but that was before its fix
+
+
+def test_a_release_that_was_already_replaced_cannot_explain_the_errors() -> None:
+    run = Run()
+    deploy = run.deployments(
+        ("checkout", "v2.4.0", -2880), ("checkout", "v2.4.1", -12), ("checkout", "v2.4.0", 1)
+    )
+    rate = run.error_rate("checkout", onset=-10)
+
+    check = only_check(verify(run, hypothesis(DEPLOY, "checkout", deploy, rate, version="v2.4.1")))
+
+    assert check.hypothesis.status == CONTRADICTED
+    assert any("checkout no longer runs v2.4.1" in message for message in check.failed)

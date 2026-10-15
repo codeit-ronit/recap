@@ -10,15 +10,27 @@ and saves a checkpoint after every transition. It routes each investigation roun
 can execute a mitigation: always through the safety gateway, and only after the policy
 and, when required, an exact human approval allow it. Recovery is judged by an
 independent oracle, and every finished run is consolidated into experience memory.
+
+After a fix (the recovery lifecycle, audit finding 2.6):
+  * a live target gets a bounded stabilization window, probed every few seconds, before
+    the oracle's verdict counts; a simulated target is judged at once;
+  * when the fix did not recover the system, a new "epoch" starts: agents observe again,
+    and the verifier ignores state observations of the fixed service from before the fix;
+  * every provider call is bounded by the run's own wall-clock budget, so a hanging model
+    ends the run as BUDGET_EXHAUSTED at the deadline instead of running on.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+import time
+from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
-from typing import Any
+from datetime import datetime
+from typing import Any, TypeVar
+
+from pydantic import ValidationError
 
 from recap import __version__
 from recap.agents.roles import agent_specs
@@ -51,17 +63,20 @@ from recap.core.models import (
     Incident,
     IncidentState,
     MitigationProposal,
+    OracleProbe,
     ProposalRequest,
     RetrievedChunk,
     RunBudget,
     RunConfig,
     RunRecord,
     ScenarioInfo,
+    ToolResult,
     ToolRisk,
     Usage,
     Verdict,
     VerificationReport,
 )
+from recap.core.observations import ActionOutcome
 from recap.harness.budget import BudgetTracker
 from recap.harness.loop import AgentHarness
 from recap.harness.store import RunStore
@@ -89,6 +104,7 @@ EXECUTED_RESULTS = {"recovered", "not_recovered"}
 # never switch off safety, approvals or memory isolation, or change the provider. (A
 # scenario's separate `budget:` field only shapes that scenario's own RunBudget.)
 SCENARIO_OVERRIDABLE = frozenset({"planner", "strategy"})
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -154,6 +170,8 @@ class IncidentController:
         self.orchestrator: Orchestrator
         self.investigation_round = 0
         self.epoch_findings: list[AgentFinding] = []
+        # service -> environment time of the last fix executed on it (for the verifier).
+        self.remediated: dict[str, datetime] = {}
 
     # ==================================================================================
     # Entry point
@@ -328,9 +346,11 @@ class IncidentController:
                 self._finish(S.BLOCKED, "the gateway refused to execute the mitigation")
                 return
             attempts += 1
+            if result.ok:  # the target changed: its older state observations are now stale
+                self.remediated[proposal.target] = _executed_at(result, before)
 
             self._transition(S.VERIFYING, "independent oracle checks recovery")
-            after = await self.oracle.probe()
+            after, probes, waited = await self._await_recovery()
             recovery = recovery_result(before, after, self.oracle.name)
             self.record.recovery = recovery
             self.tracer.emit(
@@ -342,6 +362,8 @@ class IncidentController:
                     "verified": recovery.verified,
                     "unhealthy_after": after.unhealthy_services,
                     "simulated": self.info.is_simulated,
+                    "probes": probes,
+                    "waited_seconds": waited,
                 },
             )
             outcome = "recovered" if recovery.verified else "not_recovered"
@@ -415,7 +437,9 @@ class IncidentController:
                 )
                 return None
 
-            report = self.deps.verifier.verify(self.epoch_findings, self.evidence, self.incident)
+            report = self.deps.verifier.verify(
+                self.epoch_findings, self.evidence, self.incident, remediated=self.remediated
+            )
             self.record.verification = report
             self.tracer.emit(TraceCategory.VERIFY_EVIDENCE, _report_payload(report))
             self._assess_memory(report)
@@ -482,7 +506,9 @@ class IncidentController:
             memory_hits=memories,
             failed_actions=failed_actions,
         )
-        decision = await self.provider.propose_mitigation(request)
+        decision = await self._before_deadline(
+            self.provider.propose_mitigation(request), "the remediation proposal"
+        )
         self._add_usage(decision.usage)
         if decision.draft is None:
             self.tracer.emit(TraceCategory.PROPOSAL, {"proposal": None, "notes": decision.notes})
@@ -593,6 +619,39 @@ class IncidentController:
             return None
         return approval
 
+    async def _await_recovery(self) -> tuple[OracleProbe, int, float]:
+        """VERIFYING: probe the oracle until the system is healthy or had time to settle.
+
+        A simulated target recovers the moment a fix is applied (its clock jumps forward), so
+        it is probed once. A live target needs time: pods restart and readiness probes must
+        pass. It is probed every `stabilization_poll_seconds` until it is healthy, its
+        `stabilization_timeout_seconds` are over, or the run's wall-clock budget runs out.
+        Returns the last probe, the number of probes and the seconds spent waiting.
+        """
+        started = time.monotonic()
+        after = await self.oracle.probe()
+        probes = 1
+        window = 0.0 if self.info.is_simulated else self.info.stabilization_timeout_seconds
+        while not after.healthy:
+            left = min(window - (time.monotonic() - started), self.budget.remaining_seconds())
+            if left <= 0:
+                break
+            await asyncio.sleep(min(self.info.stabilization_poll_seconds, left))
+            after = await self.oracle.probe()
+            probes += 1
+        return after, probes, round(time.monotonic() - started, 3)
+
+    async def _before_deadline(self, call: Awaitable[T], what: str) -> T:
+        """Await a provider call, but never past the run's wall-clock budget.
+
+        A model that hangs would otherwise keep the run going long after its deadline.
+        """
+        try:
+            return await asyncio.wait_for(call, timeout=self.budget.remaining_seconds())
+        except TimeoutError:
+            detail = f"{what} was still running when the run's time ran out"
+            raise BudgetExhausted("max_elapsed_seconds", detail) from None
+
     # ==================================================================================
     # Helpers
     # ==================================================================================
@@ -644,6 +703,7 @@ class IncidentController:
             agent_specs(self.settings),
             self.tracer,
             agent_timeout_seconds=self.incident.budget.max_elapsed_seconds,
+            remaining_seconds=self.budget.remaining_seconds,  # no agent outlives the run
         )
 
     def _target_scope(self) -> str:
@@ -936,6 +996,20 @@ def _unwrap_group(exc: BaseException) -> BaseException:
     while isinstance(exc, BaseExceptionGroup) and len(exc.exceptions) == 1:
         exc = exc.exceptions[0]
     return exc
+
+
+def _executed_at(result: ToolResult, before: OracleProbe) -> datetime:
+    """Environment time of an executed write, from its ActionOutcome (else the last probe).
+
+    Environment time, not wall-clock time: a simulator's clock is its own, and observations
+    carry that clock, so the verifier can compare them with the fix.
+    """
+    output = result.output or {}
+    known = {key: value for key, value in output.items() if key in ActionOutcome.model_fields}
+    try:
+        return ActionOutcome.model_validate(known).executed_at
+    except ValidationError:
+        return before.checked_at
 
 
 def _retry_focus(
