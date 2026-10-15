@@ -30,6 +30,7 @@ from recap.core.signals import (
 from recap.environments.simulated import SimulatedEnvironment, engine, physics
 from recap.environments.simulated.scenario import load_scenario
 from recap.verification.oracle import EnvironmentHealthOracle, recovery_result
+from tests.helpers import act
 
 SCENARIOS = REPO_ROOT / "fixtures" / "scenarios"
 METRICS = ["error_rate", "latency_p95_ms", "memory_mb", "cpu_pct", "restarts"]
@@ -145,7 +146,7 @@ async def test_two_instances_with_the_same_run_id_share_one_world(tmp_path: Path
     server_side = make_env(tmp_path, run_id="run-shared")  # e.g. inside the MCP server process
 
     assert (await server_side.observe_health("checkout")).error_rate > ERROR_RATE_THRESHOLD
-    assert (await server_side.execute_authorized(rollback("checkout", "v2.4.0"))).ok
+    assert (await act(server_side, rollback("checkout", "v2.4.0"))).ok
     assert (await EnvironmentHealthOracle(controller_side).probe()).healthy
 
     with pytest.raises(RuntimeError):  # a different run has its own (empty) world
@@ -159,12 +160,12 @@ async def test_bad_release_survives_a_restart_but_a_rollback_fixes_it(tmp_path: 
     env = await start(tmp_path, "bad-deployment")
     assert (await env.health_check()).services["checkout"].error_rate == pytest.approx(0.32)
 
-    assert (await env.execute_authorized(restart("checkout"))).ok
+    assert (await act(env, restart("checkout"))).ok
     assert (await env.health_check()).services["checkout"].error_rate == pytest.approx(0.32)
     restarts = await env.observe_metrics("checkout", "restarts", 10)
     assert restarts.points[-1].value == 1  # the restart happened, it just did not help
 
-    outcome = await env.execute_authorized(rollback("checkout", "v2.4.0"))
+    outcome = await act(env, rollback("checkout", "v2.4.0"))
     assert outcome.ok and "checkout: version v2.4.1 -> v2.4.0" in outcome.side_effects
     assert (await EnvironmentHealthOracle(env).probe()).healthy
 
@@ -178,7 +179,7 @@ async def test_memory_leak_is_fixed_by_a_restart(tmp_path: Path) -> None:
         2,
     )
 
-    assert (await env.execute_authorized(restart("inventory"))).ok
+    assert (await act(env, restart("inventory"))).ok
     assert (await EnvironmentHealthOracle(env).probe()).healthy
     memory = await env.observe_metrics("inventory", "memory_mb", 10)
     assert memory.points[-1].value == 200.0  # fresh pods start at the baseline again
@@ -198,7 +199,7 @@ async def test_memory_leak_is_fixed_by_a_rollback_of_the_same_service(tmp_path: 
     await env.reset("leak-with-history", seed=61)
     assert not (await EnvironmentHealthOracle(env).probe()).healthy
     assert (await env.plan_rollback("inventory")).target_version == "v3.0.0"
-    assert (await env.execute_authorized(rollback("inventory", "v3.0.0"))).ok
+    assert (await act(env, rollback("inventory", "v3.0.0"))).ok
     assert (await EnvironmentHealthOracle(env).probe()).healthy
 
 
@@ -254,12 +255,12 @@ async def test_memory_caution_needs_a_payment_restart_not_a_checkout_rollback(
     assert not before.healthy
 
     # The "familiar" fix from bad-deployment works as an action but does not recover anything.
-    assert (await env.execute_authorized(rollback("checkout", "v2.4.0"))).ok
+    assert (await act(env, rollback("checkout", "v2.4.0"))).ok
     after_wrong_fix = await oracle.probe()
     assert not after_wrong_fix.healthy
     assert {"payment", "checkout"} <= set(after_wrong_fix.unhealthy_services)
 
-    assert (await env.execute_authorized(restart("payment"))).ok
+    assert (await act(env, restart("payment"))).ok
     after = await oracle.probe()
     assert after.healthy and recovery_result(before, after, oracle.name).verified
 
@@ -267,7 +268,7 @@ async def test_memory_caution_needs_a_payment_restart_not_a_checkout_rollback(
 async def test_ambiguous_incident_heals_after_rolling_back_payment(tmp_path: Path) -> None:
     env = await start(tmp_path, "ambiguous-incident")
     assert (await env.plan_rollback("payment")).target_version == "v1.12.3"
-    assert (await env.execute_authorized(rollback("payment", "v1.12.3"))).ok
+    assert (await act(env, rollback("payment", "v1.12.3"))).ok
     probe = await EnvironmentHealthOracle(env).probe()
     assert probe.healthy and probe.unhealthy_services == []
 
@@ -275,10 +276,10 @@ async def test_ambiguous_incident_heals_after_rolling_back_payment(tmp_path: Pat
 async def test_delete_namespace_deletes_every_service(tmp_path: Path) -> None:
     env = await start(tmp_path, "malicious-log")
     wrong = AuthorizedAction(action="delete_namespace", target="default")
-    assert not (await env.execute_authorized(wrong)).ok
+    assert not (await act(env, wrong)).ok
 
     delete = AuthorizedAction(action="delete_namespace", target="shop")
-    assert (await env.execute_authorized(delete)).ok
+    assert (await act(env, delete)).ok
     report = await env.health_check()
     assert report.checked_at == alert_time("malicious-log") + timedelta(minutes=1)
     for health in report.services.values():
@@ -287,7 +288,7 @@ async def test_delete_namespace_deletes_every_service(tmp_path: Path) -> None:
     assert not probe.healthy and set(probe.unhealthy_services) == set(report.services)
     assert (await env.observe_services()).services == []
     assert not (await env.plan_rollback("cart")).possible
-    assert not (await env.execute_authorized(rollback("cart", "v2.0.0"))).ok  # nothing to repair
+    assert not (await act(env, rollback("cart", "v2.0.0"))).ok  # nothing to repair
 
 
 # --- writes: validation, clock and audit ------------------------------------------------
@@ -309,7 +310,7 @@ async def test_invalid_rollbacks_change_nothing(
     history_before = await env.observe_deployments("checkout", 10)
 
     action = AuthorizedAction(action="rollback", target="checkout", params=params)
-    outcome = await env.execute_authorized(action)
+    outcome = await act(env, action)
     assert not outcome.ok and reason in outcome.message
     assert await env.health_check() == health_before  # same world, and the clock did not move
     assert await env.observe_deployments("checkout", 10) == history_before
@@ -318,8 +319,8 @@ async def test_invalid_rollbacks_change_nothing(
 
 async def test_actions_on_unknown_services_are_rejected(tmp_path: Path) -> None:
     env = await start(tmp_path, "bad-deployment")
-    assert not (await env.execute_authorized(restart("billing"))).ok
-    assert not (await env.execute_authorized(rollback("billing", "v1.0.0"))).ok
+    assert not (await act(env, restart("billing"))).ok
+    assert not (await act(env, rollback("billing", "v1.0.0"))).ok
 
 
 async def test_clock_advances_after_writes_and_metrics_show_the_recovery(tmp_path: Path) -> None:
@@ -328,7 +329,7 @@ async def test_clock_advances_after_writes_and_metrics_show_the_recovery(tmp_pat
     await env.observe_logs("checkout", 10, 60)  # reads never move the clock
     assert (await env.health_check()).checked_at == t0
 
-    await env.execute_authorized(rollback("checkout", "v2.4.0"))
+    await act(env, rollback("checkout", "v2.4.0"))
     assert (await env.health_check()).checked_at == t0 + timedelta(minutes=5)
 
     series = await env.observe_metrics("checkout", "error_rate", 20)
@@ -347,7 +348,7 @@ async def test_every_write_attempt_is_audited_with_its_approval(tmp_path: Path) 
         approval_id="appr-1",
         proposal_digest="digest-1",
     )
-    await env.execute_authorized(action)
+    await act(env, action)
     entry = env.store.load()["action_log"][-1]
     assert (entry["approval_id"], entry["proposal_digest"]) == ("appr-1", "digest-1")
     assert (entry["action"], entry["ok"], entry["minute"]) == ("rollback", True, 0)
@@ -394,7 +395,7 @@ async def test_metrics_have_a_point_every_five_minutes_up_to_now(tmp_path: Path)
 
 async def test_deployments_and_events_are_newest_first_and_limited(tmp_path: Path) -> None:
     env = await start(tmp_path, "bad-deployment")
-    await env.execute_authorized(rollback("checkout", "v2.4.0"))
+    await act(env, rollback("checkout", "v2.4.0"))
 
     history = (await env.observe_deployments("checkout", 10)).deployments
     assert [(d.version, d.status, d.previous_version) for d in history] == [
@@ -439,5 +440,5 @@ async def test_only_reads_and_writes_wait_their_simulated_latency(
 
     await env.observe_health("checkout")
     await env.plan_rollback("checkout")
-    await env.execute_authorized(restart("checkout"))
+    await act(env, restart("checkout"))
     assert waits == [0.12, 0.12, 0.3]

@@ -32,5 +32,9 @@ class ApprovalError(RecapError):
     """An approval was missing, wrong, expired or already used."""
 
 
+class CapabilityError(RecapError):
+    """A write reached the execution boundary without a valid capability for that exact action."""
+
+
 class EnvironmentNotIntegrated(RecapError):
     """An environment adapter exists only as an interface and is not connected yet."""

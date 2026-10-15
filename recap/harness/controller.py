@@ -88,6 +88,7 @@ from recap.providers.prompts import PROMPT_VERSION
 from recap.routing.orchestrator import Orchestrator
 from recap.routing.signals import compute_signals
 from recap.safety.approvals import ApprovalStore, AutoApprovalChannel, ExternalApprovalChannel
+from recap.safety.capabilities import CapabilityIssuer
 from recap.telemetry.tracer import TraceCategory, Tracer
 from recap.telemetry.usage import cost_label
 from recap.tools.gateway import ToolGateway
@@ -166,6 +167,7 @@ class IncidentController:
         self.evidence: EvidenceRegistry
         self.oracle: RecoveryOracle
         self.gateway: ToolGateway
+        self.capabilities: CapabilityIssuer
         self.harness: AgentHarness
         self.orchestrator: Orchestrator
         self.investigation_round = 0
@@ -203,6 +205,10 @@ class IncidentController:
             metadata=alert.metadata,
             budget=self._budget(),
         )
+        # This run's signing key: its private half stays in this process; the environment
+        # learns only the public half and refuses any write not signed with it.
+        self.capabilities = CapabilityIssuer(self.run_id, self.incident.incident_id)
+        self.environment.bind_executor(self.capabilities.public_key)
         self.budget = BudgetTracker(self.incident.budget)
         self.lifecycle = Lifecycle()
         self.record = RunRecord(
@@ -685,6 +691,7 @@ class IncidentController:
             target_scope=self._target_scope(),
             safety_enabled=self.config.safety_enabled,
             redact=self.deps.redactor,
+            capabilities=self.capabilities,
         )
         self.record.versions["transport"] = getattr(transport, "transport_name", "unknown")
         self.harness = AgentHarness(

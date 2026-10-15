@@ -128,10 +128,13 @@ class RollbackPlan(Contract):
 
 
 class AuthorizedAction(Contract):
-    """A write that already passed the central safety gateway.
+    """A write that RECAP's central safety gateway allowed, on its way to the environment.
 
-    `approval_id` and `proposal_digest` are carried for the audit trail; enforcement
-    happens in the gateway, not here (the MCP transport is not a security boundary).
+    `capability` is the proof: a signed, short-lived, single-use token for exactly this
+    action, which the environment verifies before it changes anything (see
+    recap/safety/capabilities.py). Without a valid one the write is refused, whoever sent
+    it. `approval_id` and `proposal_digest` name the approved proposal for the audit trail
+    (the capability binds them too).
     """
 
     action: EnvironmentAction
@@ -139,6 +142,7 @@ class AuthorizedAction(Contract):
     params: dict[str, Any] = Field(default_factory=dict)
     approval_id: str = ""
     proposal_digest: str = ""
+    capability: str = ""  # never logged or stored: it is a bearer token until it is used
 
 
 class ActionOutcome(Contract):

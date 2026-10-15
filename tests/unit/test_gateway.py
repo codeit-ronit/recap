@@ -31,12 +31,15 @@ from recap.core.models import (
     TrustLevel,
     Verdict,
 )
+from recap.core.observations import AuthorizedAction
 from recap.harness.budget import BudgetTracker
 from recap.safety.approvals import ApprovalStore
+from recap.safety.capabilities import CapabilityIssuer, CapabilityPayload, verify_capability
 from recap.safety.injection import INJECTION_FLAG
 from recap.safety.policy import PolicyEngine
 from recap.telemetry.redact import REDACTED, Redactor
 from recap.telemetry.tracer import MemorySink, TraceCategory, Tracer
+from recap.tools.actions import to_environment_action
 from recap.tools.gateway import (
     RULE_AGENT_ALLOWLIST,
     RULE_CONFLICTING_REMEDIATION,
@@ -106,9 +109,29 @@ class Kit:
     budget: BudgetTracker
     evidence: EvidenceRegistry
     sink: MemorySink
+    capabilities: CapabilityIssuer
 
     def events(self, category: str) -> list[TraceEvent]:
         return [event for event in self.sink.events if event.category == category]
+
+    def check_capability(self, call: tuple[str, dict[str, Any]]) -> CapabilityPayload:
+        """Verify the capability a write carried, as the environment would; return its payload."""
+        tool, args = call
+        action, target, params = to_environment_action(tool, args)
+        authorized = AuthorizedAction(
+            action=action,
+            target=target,
+            params=params,
+            approval_id=args["approval_id"],
+            proposal_digest=args["proposal_digest"],
+        )
+        return verify_capability(
+            args["capability"],
+            public_key=self.capabilities.public_key,
+            run_id="run-test01",
+            action=authorized,
+            allow_safety_off=True,
+        )
 
 
 def make_kit(
@@ -129,6 +152,7 @@ def make_kit(
     approvals = ApprovalStore()
     tracker = BudgetTracker(budget or RunBudget())
     evidence = EvidenceRegistry("run-test01", INCIDENT.incident_id)
+    capabilities = CapabilityIssuer("run-test01", INCIDENT.incident_id)
     gateway = ToolGateway(
         transport=transport,
         registry=registry,
@@ -144,8 +168,9 @@ def make_kit(
         safety_enabled=safety_enabled,
         locks=locks or RemediationLocks(),  # fresh locks: tests never share state
         redact=redact,
+        capabilities=capabilities,
     )
-    return Kit(gateway, transport, approvals, tracker, evidence, sink)
+    return Kit(gateway, transport, approvals, tracker, evidence, sink, capabilities)
 
 
 def make_proposal(
@@ -479,17 +504,25 @@ async def test_approved_mitigation_runs_once_and_consumes_the_approval(settings:
 
     assert result.ok and result.decision.verdict == Verdict.ALLOW
     assert result.side_effects == ["checkout: v2.4.1 -> v2.4.0"]
-    assert kit.transport.calls == [
-        (
-            "execute_rollback",
-            {
-                "service": "checkout",
-                "to_version": "v2.4.0",
-                "approval_id": approval.approval_id,
-                "proposal_digest": proposal.digest(),  # audit link to the exact approved action
-            },
-        )
-    ]
+    [call] = kit.transport.calls
+    tool, args = call
+    assert tool == "execute_rollback"
+    assert {key: value for key, value in args.items() if key != "capability"} == {
+        "service": "checkout",
+        "to_version": "v2.4.0",
+        "approval_id": approval.approval_id,
+        "proposal_digest": proposal.digest(),  # audit link to the exact approved action
+    }
+    # The call carries a capability for exactly this rollback, which the environment checks.
+    payload = kit.check_capability(call)
+    assert (payload.action, payload.target, payload.params) == (
+        "rollback",
+        "checkout",
+        {"to_version": "v2.4.0"},
+    )
+    assert payload.safety_enabled is True
+    # It is a bearer token until used, so it never reaches the trace.
+    assert all(args["capability"] not in str(event.payload) for event in kit.sink.events)
     assert kit.approvals.get_approval(approval.approval_id).consumed_at is not None
     evidence = kit.evidence.get(result.evidence_id)
     assert evidence.source_ref == "mcp:execute_rollback(service=checkout,to_version=v2.4.0)"
@@ -635,12 +668,15 @@ async def test_safety_off_ablation_executes_without_approval_only_in_simulation(
     result = await kit.gateway.execute_mitigation(proposal, None)
     assert result.decision.verdict == Verdict.ALLOW
     assert result.decision.rule_ids[-1] == "R0-safety-disabled-simulation"
-    assert kit.transport.calls == [
-        (
-            "delete_namespace",
-            {"namespace": "shop", "approval_id": "", "proposal_digest": proposal.digest()},
-        )
-    ]
+    [call] = kit.transport.calls
+    assert call[0] == "delete_namespace"
+    assert {key: value for key, value in call[1].items() if key != "capability"} == {
+        "namespace": "shop",
+        "approval_id": "",
+        "proposal_digest": proposal.digest(),
+    }
+    # Marked safety-off: only a simulated environment accepts such a capability.
+    assert kit.check_capability(call).safety_enabled is False
     assert kit.events(TraceCategory.MITIGATION)[0].payload["safety_enabled"] is False
     # The read path still never writes, even with safety off.
     read = await kit.gateway.call_read(

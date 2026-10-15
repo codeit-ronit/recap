@@ -31,6 +31,7 @@ from recap.core.observations import (
 from recap.tools.mcp_client import McpToolClient
 from recap.tools.mcp_server import SERVER_NAME, build_mcp_server, main
 from tests.fakes import GOOD, FakeEnvironment
+from tests.helpers import capability_args
 
 REQUIRED = object()  # marks an argument that has no default
 
@@ -48,9 +49,20 @@ CATALOG: dict[str, dict[str, object]] = {
         "to_version": REQUIRED,
         "approval_id": "",
         "proposal_digest": "",
+        "capability": "",
     },
-    "restart_service": {"service": REQUIRED, "approval_id": "", "proposal_digest": ""},
-    "delete_namespace": {"namespace": REQUIRED, "approval_id": "", "proposal_digest": ""},
+    "restart_service": {
+        "service": REQUIRED,
+        "approval_id": "",
+        "proposal_digest": "",
+        "capability": "",
+    },
+    "delete_namespace": {
+        "namespace": REQUIRED,
+        "approval_id": "",
+        "proposal_digest": "",
+        "capability": "",
+    },
 }
 WRITE_TOOLS = {"execute_rollback", "restart_service", "delete_namespace"}
 READ_TOOLS = set(CATALOG) - WRITE_TOOLS
@@ -233,26 +245,48 @@ async def test_environment_errors_become_tool_errors_and_the_server_keeps_servin
     ],
     ids=["rollback", "restart", "delete-namespace"],
 )
-async def test_write_tools_reach_execute_authorized_with_the_approval_id(env, tool, args, expected):
+async def test_write_tools_reach_execute_authorized_with_a_valid_capability(
+    env, tool, args, expected
+):
+    audit = {"approval_id": "appr-1", "proposal_digest": "d" * 64}
     async with connect(env) as client:
-        audit = {"approval_id": "appr-1", "proposal_digest": "d" * 64}
-        result = await client.call_tool(tool, {**args, **audit}, 5)
+        result = await client.call_tool(tool, capability_args(env, tool, args, **audit), 5)
 
     # The MCP call worked; whether the action itself succeeded is in the ActionOutcome.
     assert result.ok
     ActionOutcome.model_validate(result.structured)
-    # Both audit fields reach the environment's action log unchanged.
+    # Both audit fields reach the environment's action log unchanged; the token does not.
     assert recorded_actions(env) == [{**expected, **audit}]
 
 
 async def test_rollback_through_mcp_repairs_the_fake(env):
+    args = {"service": "checkout", "to_version": GOOD}
+    async with connect(env) as client:
+        result = await client.call_tool(
+            "execute_rollback", capability_args(env, "execute_rollback", args), 5
+        )
+
+    assert ActionOutcome.model_validate(result.structured).ok
+    assert (await env.health_check()).services["checkout"].error_rate == 0.0
+
+
+async def test_a_write_without_a_capability_changes_nothing(env):
     async with connect(env) as client:
         result = await client.call_tool(
             "execute_rollback", {"service": "checkout", "to_version": GOOD}, 5
         )
 
-    assert ActionOutcome.model_validate(result.structured).ok
-    assert (await env.health_check()).services["checkout"].error_rate == 0.0
+    outcome = ActionOutcome.model_validate(result.structured)
+    assert outcome.ok is False and "not authorized" in outcome.message
+    assert (await env.health_check()).services["checkout"].error_rate == 0.4  # still broken
+
+
+async def test_every_tool_rejects_an_argument_it_does_not_define(env):
+    async with connect(env) as client:
+        result = await client.call_tool("list_services", {"verbose": True}, 5)
+
+    assert not result.ok
+    assert "list_services does not accept the argument(s): verbose" in result.error
 
 
 # --- concurrency and timeouts -----------------------------------------------------------

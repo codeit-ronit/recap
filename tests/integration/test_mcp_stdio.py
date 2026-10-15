@@ -5,6 +5,10 @@ child's stdin/stdout. The server process builds its own FakeEnvironment from the
 both processes share the fake's state file. After a rollback through MCP, a fresh environment
 object in THIS process sees the recovery. That is how the recovery oracle works: it reads
 ground truth through its own channel, independent of what the tool channel reported.
+
+The rollback carries a capability signed with a key bound in THIS process (as the
+controller does): the server subprocess holds no secret, yet it verifies the capability
+against the public key in the shared state file.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ from recap.core.observations import ActionOutcome, HealthSnapshot
 from recap.tools.mcp_client import McpToolClient
 from recap.tools.mcp_server import SERVER_NAME
 from tests.fakes import GOOD, FakeEnvironment
+from tests.helpers import capability_args
 
 RUN_ID = "run-stdio"
 TIMEOUT_SECONDS = 10.0
@@ -33,7 +38,13 @@ def fake_config(state_dir: Path) -> EnvironmentConfig:
 
 
 async def test_rollback_through_the_mcp_subprocess_changes_the_shared_state(tmp_path: Path):
-    await FakeEnvironment(run_id=RUN_ID, state_dir=str(tmp_path)).reset("fake-bad-release", 1)
+    environment = FakeEnvironment(run_id=RUN_ID, state_dir=str(tmp_path))
+    await environment.reset("fake-bad-release", 1)
+    rollback_args = {"service": "checkout", "to_version": GOOD}
+    # Bind a key here and sign the rollback, exactly as the controller and gateway do.
+    signed = capability_args(
+        environment, "execute_rollback", rollback_args, approval_id="appr-test"
+    )
 
     async with McpToolClient.stdio(fake_config(tmp_path), RUN_ID) as client:
         assert client.server_info["name"] == SERVER_NAME
@@ -46,21 +57,22 @@ async def test_rollback_through_the_mcp_subprocess_changes_the_shared_state(tmp_
         assert health.ok, health.error
         assert HealthSnapshot.model_validate(health.structured).error_rate == 0.4
 
-        rollback = await client.call_tool(
-            "execute_rollback",
-            {"service": "checkout", "to_version": GOOD, "approval_id": "appr-test"},
-            TIMEOUT_SECONDS,
-        )
+        rollback = await client.call_tool("execute_rollback", signed, TIMEOUT_SECONDS)
         assert rollback.ok, rollback.error
         assert ActionOutcome.model_validate(rollback.structured).ok
+        # The same capability again is refused: it was used up in the subprocess.
+        replay = await client.call_tool("execute_rollback", signed, TIMEOUT_SECONDS)
+        assert ActionOutcome.model_validate(replay.structured).ok is False
 
     # Oracle channel: a separate environment object in this process, no MCP involved.
     oracle_view = FakeEnvironment(run_id=RUN_ID, state_dir=str(tmp_path))
     report = await oracle_view.health_check()
     assert report.services["checkout"].error_rate == 0.0
-    # The approval id crossed the process boundary into the environment's audit trail.
-    [action] = json.loads(oracle_view.path.read_text())["actions"]
-    assert action["approval_id"] == "appr-test"
+    # The approval id crossed the process boundary into the environment's audit trail, and
+    # the capability itself (a bearer token until used) was never stored.
+    action, replayed = json.loads(oracle_view.path.read_text())["actions"]
+    assert action["approval_id"] == "appr-test" and "capability" not in action
+    assert replayed["refused"] is True
 
 
 def test_stdio_client_starts_the_server_module_without_forwarding_our_environment(

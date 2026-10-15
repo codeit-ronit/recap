@@ -7,6 +7,9 @@ which demonstrates that replacing the infrastructure only requires a new adapter
 
 State lives in a small JSON file under `state_dir`, so the MCP server subprocess and
 the oracle in the test process see the same world (just like the real simulator).
+
+It enforces the same write boundary as the simulator: a write needs a valid capability
+signed by the key the controller bound (recap/safety/capabilities.py).
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from recap.core.errors import CapabilityError
 from recap.core.interfaces import TargetEnvironment
 from recap.core.models import EnvironmentInfo, MemoryPartition, ScenarioInfo
 from recap.core.observations import (
@@ -38,6 +42,7 @@ from recap.core.observations import (
     ServiceList,
 )
 from recap.core.signals import RELEASE_ERROR_TEMPLATE
+from recap.safety.capabilities import verify_capability
 
 T0 = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 BAD = "v2.0.0"
@@ -194,12 +199,39 @@ class FakeEnvironment(TargetEnvironment):
         )
 
     # --- act ----------------------------------------------------------------------------
+    def bind_executor(self, public_key: str) -> None:
+        state = self._state()
+        state["executor_key"] = public_key
+        self._save(state)
+
     async def execute_authorized(self, action: AuthorizedAction) -> ActionOutcome:
         state = self._state()
+        used = state.get("used_nonces", [])
+        try:
+            payload = verify_capability(
+                action.capability,
+                public_key=state.get("executor_key"),
+                run_id=self.run_id,
+                action=action,
+                used_nonces=used,
+                allow_safety_off=True,  # a test simulation, like the simulator
+            )
+        except CapabilityError as exc:
+            state["actions"].append({**action.model_dump(exclude={"capability"}), "refused": True})
+            self._save(state)
+            message = f"not authorized: {exc}"
+            return ActionOutcome(
+                ok=False,
+                action=action.action,
+                target=action.target,
+                message=message,
+                executed_at=T0,
+            )
+        state["used_nonces"] = [*used, payload.nonce]
         ok = action.action == "rollback" and action.target == "checkout"
         if ok:
             state["checkout_version"] = action.params.get("to_version", GOOD)
-        state["actions"].append(action.model_dump())
+        state["actions"].append(action.model_dump(exclude={"capability"}))
         self._save(state)
         return ActionOutcome(
             ok=ok,

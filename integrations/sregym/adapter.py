@@ -91,6 +91,11 @@ class SREGymEnvironment(TargetEnvironment):
     async def plan_rollback(self, service: str) -> RollbackPlan:
         raise _not_integrated("plan_rollback")
 
+    def bind_executor(self, public_key: str) -> None:
+        # A real adapter must verify RECAP's capabilities itself before acting on the cluster
+        # (recap/safety/capabilities.py), and refuse safety-off capabilities.
+        raise _not_integrated("bind_executor")
+
     async def execute_authorized(self, action: AuthorizedAction) -> ActionOutcome:
         raise _not_integrated("execute_authorized")
 

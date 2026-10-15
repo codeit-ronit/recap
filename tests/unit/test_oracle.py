@@ -18,6 +18,7 @@ from recap.core.models import OracleProbe
 from recap.core.observations import AuthorizedAction, GroundTruthHealth, HealthReport
 from recap.verification.oracle import EnvironmentHealthOracle, recovery_result
 from tests.fakes import FakeEnvironment
+from tests.helpers import act
 
 T0 = datetime(2026, 3, 14, 10, 0, tzinfo=UTC)
 
@@ -129,7 +130,7 @@ async def test_the_oracle_works_with_another_adapter(tmp_path: Path) -> None:
 
     before = await oracle.probe()
     action = AuthorizedAction(action="rollback", target="checkout", params={"to_version": "v1.9.0"})
-    await environment.execute_authorized(action)
+    await act(environment, action)
     after = await oracle.probe()
     assert not before.healthy and after.healthy
     assert recovery_result(before, after, oracle.name).verified

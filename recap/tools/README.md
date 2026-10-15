@@ -39,15 +39,32 @@ A server *advertises* tools: names, descriptions, input schemas and annotations 
 * Tool *output* is untrusted data: it is redacted, bounded, flagged for injection-like text and
   stored as `TrustLevel.UNTRUSTED` evidence. It is never treated as an instruction.
 
-## Why the MCP transport is not a security boundary
+## Why the MCP transport is not a security boundary, and where the boundary is
 
 MCP is a protocol for listing and calling tools. It has no idea who may call what, and its
 annotations are explicitly *hints*. Anything that can talk to the server process can call
-`execute_rollback` directly. So enforcement cannot live in the transport or in the server: it
-lives in RECAP's own trusted code (the gateway + the policy), keyed by RECAP's own config,
-**before** a request is sent. The `approval_id` and the `proposal_digest` the gateway attaches to
-a write are passed to the server only so the environment's audit log can record which exact
-approved proposal caused each change; the server does not enforce them.
+`execute_rollback`. So the *decision* lives in RECAP's own trusted code (the gateway + the
+policy), keyed by RECAP's own config, **before** a request is sent.
+
+In V1 that was the only check, and the audit showed what it means: a second
+`python -m recap.tools.mcp_server` for an existing run could roll back or delete with an
+empty approval ID. Since M1 the decision is also **enforced at the write boundary**:
+
+1. The controller makes a fresh Ed25519 key pair per run and binds its public half to the
+   environment right after reset (`TargetEnvironment.bind_executor`).
+2. After the policy allows a write and the exact approval is consumed, the gateway signs a
+   **capability** for exactly that environment action: run, action, target, parameters,
+   approval ID, proposal digest, a random nonce and a 60 s expiry
+   (`recap/safety/capabilities.py`; `recap/tools/actions.py` maps tools to actions the same
+   way on both sides).
+3. The write tool passes it on, and the environment verifies it in the same transaction as
+   the change: the signature against the bound key, the exact action, the expiry and a nonce
+   it has never seen. Anything else is refused, recorded in the audit log, and changes nothing.
+
+The private key never leaves the controller, so a process that can read the public key (or
+start another server) still cannot sign. The capability is never traced or stored. The
+server also rejects arguments a tool does not define (`StrictToolServer`), instead of the
+SDK's default of silently dropping them.
 
 ## Read path — `call_read(tool, args, caller)`
 

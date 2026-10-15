@@ -10,7 +10,10 @@ Two deliberately separate paths:
 
   * read path  (`call_read`)          any agent, read-only tools only, allowed automatically.
   * write path (`execute_mitigation`) controller only, needs an approval bound to the exact
-    proposal. The approval is consumed before the call, so it can never be replayed.
+    proposal. The approval is consumed before the call, so it can never be replayed. Then
+    the gateway signs a single-use capability for exactly that action (recap/safety/
+    capabilities.py); the environment refuses any write without one, so the gateway's
+    decision is enforced at the write boundary itself, not only by well-behaved callers.
 
 Workers only ever get a `ReadOnlyTools` handle, which cannot express a write. What the
 server advertises (names, descriptions, annotations) is compared with the trusted registry
@@ -51,8 +54,10 @@ from recap.core.models import (
 )
 from recap.harness.budget import BudgetTracker
 from recap.safety.approvals import ApprovalStore
+from recap.safety.capabilities import CapabilityIssuer
 from recap.safety.injection import INJECTION_FLAG, PATTERNS, injection_flags, scan_text
 from recap.telemetry.tracer import TraceCategory, Tracer
+from recap.tools.actions import WRITE_TOOLS, to_environment_action
 from recap.tools.registry import DiscoveryReport, ToolRegistry
 
 RULE_AGENT_ALLOWLIST = "R-agent-tool-allowlist"
@@ -137,6 +142,7 @@ class ToolGateway:
         safety_enabled: bool = True,
         locks: RemediationLocks | None = None,
         redact: Callable[[Any], Any] | None = None,
+        capabilities: CapabilityIssuer | None = None,
     ) -> None:
         self.registry = registry
         self.results: list[ToolResult] = []  # every call in this run, denied ones included
@@ -155,6 +161,9 @@ class ToolGateway:
         # Tool output can carry secrets (e.g. a key in a log line), and evidence is stored,
         # served and sent to providers. The runtime passes its Redactor; tests may omit it.
         self._redact = redact or (lambda value: value)
+        # Signs one capability per allowed write. Without it a write carries none and the
+        # environment refuses it (fail closed), so a gateway built without one cannot write.
+        self._capabilities = capabilities
 
     async def discover(self) -> DiscoveryReport:
         """Ask the server what it offers and compare that with the trusted registry."""
@@ -240,9 +249,14 @@ class ToolGateway:
                     rules = decision.rule_ids
                     return self._refuse(tool, AgentRole.CONTROLLER, rules, str(exc), invocation_id)
             approval_id = fresh.approval_id if fresh else ""
-            # These travel with the call only for the environment's own audit log, so the
-            # target records which exact approved proposal caused each change.
-            extra = {"approval_id": approval_id, "proposal_digest": proposal.digest()}
+            # approval_id and proposal_digest name the approved proposal in the environment's
+            # audit log; the capability is the proof the environment checks before acting.
+            # It is passed only to the transport: never traced, stored or put in evidence.
+            extra = {
+                "approval_id": approval_id,
+                "proposal_digest": proposal.digest(),
+                "capability": self._capability(tool, args, approval_id, proposal.digest()),
+            }
             request = self._tool_request(invocation_id, tool, args, AgentRole.CONTROLLER)
             result, _ = await self._run(request, decision, extra)
         finally:
@@ -271,6 +285,24 @@ class ToolGateway:
         )
         self.results.append(result)
         return result
+
+    def _capability(
+        self, tool: str, args: dict[str, Any], approval_id: str, proposal_digest: str
+    ) -> str:
+        """A signed, single-use capability for exactly the environment action of this call."""
+        if self._capabilities is None or tool not in WRITE_TOOLS:
+            return ""  # nothing to sign: the environment (or the server) refuses the write
+        action, target, params = to_environment_action(tool, args)
+        return self._capabilities.issue(
+            action=action,
+            target=target,
+            params=params,
+            approval_id=approval_id,
+            proposal_digest=proposal_digest,
+            # False only in the simulation-only safety-off ablation (no approval exists); a
+            # real environment adapter refuses such a capability.
+            safety_enabled=self._safety_enabled,
+        )
 
     # --- shared steps --------------------------------------------------------------------
 

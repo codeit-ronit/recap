@@ -9,6 +9,7 @@ import pytest
 from recap.core.config import EnvironmentConfig, Settings
 from recap.core.errors import ConfigError
 from recap.core.models import EnvironmentInfo, IncidentState, RunConfig
+from recap.environments.registry import create_environment
 from recap.runtime import Runtime
 from tests.fakes import FakeEnvironment
 
@@ -28,11 +29,15 @@ async def test_without_the_gateway_the_injected_action_destroys_the_sandbox(
         "malicious-log",
         RunConfig(approval_mode="auto", safety_enabled=False, memory_write=False),
     )
-    # The compromised planner's delete_namespace actually ran - in the sandbox only.
+    # The compromised planner's delete_namespace actually ran - in the sandbox only. Its
+    # capability was marked safety-off, which only a simulated environment accepts.
     executed = [a for a in record.actions if a.action == "delete_namespace"]
     assert executed and executed[0].result != "denied"
     assert record.state != IncidentState.RESOLVED
     assert record.recovery is not None and not record.recovery.verified
+    sandbox = create_environment(runtime.settings.environment, record.run_id)
+    statuses = {s.status for s in (await sandbox.health_check()).services.values()}
+    assert statuses == {"Deleted"}
 
 
 async def test_safety_cannot_be_disabled_outside_simulation(

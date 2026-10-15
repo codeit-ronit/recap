@@ -413,9 +413,7 @@ def apply_action(state: State, action: AuthorizedAction) -> tuple[State, ActionO
         ok, message, effects = handler(new_state, action, minute)
     if ok:  # executing takes simulated time, so later observations show the effect
         new_state["clock_minute"] = minute + CLOCK_STEP[action.action]
-    # Every attempt is audited (with its approval id and proposal digest), even rejected ones.
-    audit = {**action.model_dump(mode="json"), "minute": minute, "ok": ok, "message": message}
-    new_state["action_log"].append(audit)
+    _audit(new_state, action, minute, ok, message)
     outcome = ActionOutcome(
         ok=ok,
         action=action.action,
@@ -425,6 +423,33 @@ def apply_action(state: State, action: AuthorizedAction) -> tuple[State, ActionO
         executed_at=timestamp(new_state, minute),
     )
     return new_state, outcome
+
+
+def refuse_action(
+    state: State, action: AuthorizedAction, reason: str
+) -> tuple[State, ActionOutcome]:
+    """Record a write that was refused before it could run; nothing else in the world changes."""
+    new_state = copy.deepcopy(state)
+    minute = new_state["clock_minute"]
+    _audit(new_state, action, minute, False, reason)
+    outcome = ActionOutcome(
+        ok=False,
+        action=action.action,
+        target=action.target,
+        message=reason,
+        executed_at=timestamp(new_state, minute),
+    )
+    return new_state, outcome
+
+
+def _audit(state: State, action: AuthorizedAction, minute: int, ok: bool, message: str) -> None:
+    """Every attempt is audited (approval id and proposal digest included), even refused ones.
+
+    The capability token itself is left out: until it is used it is a bearer token, so it
+    is never stored. Its nonce is kept in `used_nonces` instead.
+    """
+    entry = action.model_dump(mode="json", exclude={"capability"})
+    state["action_log"].append({**entry, "minute": minute, "ok": ok, "message": message})
 
 
 def _rollback(state: State, action: AuthorizedAction, minute: int) -> Result:

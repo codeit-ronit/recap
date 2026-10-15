@@ -82,10 +82,12 @@ class TargetEnvironment(ABC):
     """The system RECAP investigates and repairs (simulator now, SREGym/Kubernetes later).
 
     Trust boundary:
-      * `reset` and `health_check` are called only by trusted controller code.
+      * `reset`, `bind_executor` and `health_check` are called only by trusted controller code.
       * `observe_*` and `plan_rollback` are read-only and are exposed to agents as MCP tools.
-      * `execute_authorized` is the single write path. It is reached only through the MCP
-        server *after* the central safety gateway approved the exact action.
+      * `execute_authorized` is the single write path. It is reached through the MCP server,
+        and it must refuse any action that does not carry a valid capability signed by the
+        key given to `bind_executor` (recap/safety/capabilities.py). This is the final
+        privilege barrier: it holds even when the caller of the MCP server is not RECAP.
     """
 
     kind: ClassVar[str]  # e.g. "simulated"
@@ -132,8 +134,21 @@ class TargetEnvironment(ABC):
 
     # --- act (single write path) ----------------------------------------------------------
     @abstractmethod
+    def bind_executor(self, public_key: str) -> None:
+        """Trust capabilities signed by this run's key (called by the controller after reset).
+
+        The key must be stored where every process serving this run can read it (the
+        simulator keeps it in the run's state file), so a separately started MCP server for
+        the same run verifies against the same key, without ever holding a secret.
+        """
+
+    @abstractmethod
     async def execute_authorized(self, action: AuthorizedAction) -> ActionOutcome:
-        """Apply an action the gateway already authorized."""
+        """Apply `action` only if its capability is valid for exactly this action (else refuse).
+
+        Verification and the change must happen together (one transaction), and the
+        capability's nonce must be recorded so it can never be used twice.
+        """
 
     # --- oracle (trusted, independent of agents) ------------------------------------------
     @abstractmethod

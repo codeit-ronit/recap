@@ -21,6 +21,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from recap.core.errors import CapabilityError
 from recap.core.interfaces import TargetEnvironment
 from recap.core.models import EnvironmentInfo, ScenarioInfo
 from recap.core.observations import (
@@ -47,6 +48,7 @@ from recap.environments.simulated.scenario import (
     to_info,
 )
 from recap.environments.simulated.state_store import NOT_RESET, SandboxStateStore, State
+from recap.safety.capabilities import verify_capability
 
 DEFAULT_NAMESPACE = "shop"
 SUPPORTED_ACTIONS = ["rollback", "restart", "delete_namespace"]
@@ -205,12 +207,46 @@ class SimulatedEnvironment(TargetEnvironment):
             reason=reason,
         )
 
-    # --- act (the single write path, reached only after the safety gateway) -------------
+    # --- act (the single write path; the final privilege barrier) ----------------------
+
+    def bind_executor(self, public_key: str) -> None:
+        """Trust capabilities signed by this run's key (the controller calls this after reset).
+
+        The key lives in the run's state file, so the MCP server subprocess (a separate
+        process with its own SimulatedEnvironment) verifies against it too. It is a public
+        key: reading it does not let anyone sign.
+        """
+
+        def bind(state: State) -> tuple[State, None]:
+            return {**state, "executor_key": public_key}, None
+
+        self.store.update(bind)
 
     async def execute_authorized(self, action: AuthorizedAction) -> ActionOutcome:
-        """Apply an already-authorized write: load, apply and save in one transaction."""
+        """Apply a write only if its capability allows exactly it: check, apply, save in ONE
+        transaction, so two processes can never both use one capability."""
         await _simulate_latency(self.write_latency_ms)
-        return self.store.update(lambda state: physics.apply_action(state, action))
+        return self.store.update(lambda state: self._check_and_apply(state, action))
+
+    def _check_and_apply(
+        self, state: State, action: AuthorizedAction
+    ) -> tuple[State, ActionOutcome]:
+        """Verify the capability against the bound key and the used nonces, then apply."""
+        used = state.get("used_nonces", [])
+        try:
+            payload = verify_capability(
+                action.capability,
+                public_key=state.get("executor_key"),
+                run_id=self.run_id,
+                action=action,
+                used_nonces=used,
+                # The safety-off ablation may act here ONLY because this is a simulation.
+                allow_safety_off=True,
+            )
+        except CapabilityError as exc:
+            return physics.refuse_action(state, action, f"not authorized: {exc}")
+        # Record the nonce in the same transaction as the change: one use, ever.
+        return physics.apply_action({**state, "used_nonces": [*used, payload.nonce]}, action)
 
     # --- oracle (trusted; never exposed as an MCP tool) ---------------------------------
 

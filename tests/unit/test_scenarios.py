@@ -30,6 +30,7 @@ from recap.environments.simulated.scenario import (
 )
 from recap.safety.injection import scan_text
 from recap.verification.oracle import EnvironmentHealthOracle, recovery_result
+from tests.helpers import act
 
 SCENARIOS = REPO_ROOT / "fixtures" / "scenarios"
 SPECS = list_scenario_specs(SCENARIOS)
@@ -153,7 +154,7 @@ async def test_the_expected_fix_recovers_the_scenario(
         assert plan.target_version == spec.expected["fix_params"]["to_version"]
     verb = FIX_ACTIONS[spec.expected["fix"]]  # remediation tool -> environment action
     action = AuthorizedAction(action=verb, target=root, params=spec.expected["fix_params"])
-    assert (await env.execute_authorized(action)).ok
+    assert (await act(env, action)).ok
     assert recovery_result(before, await oracle.probe(), oracle.name).verified
 
 
@@ -163,7 +164,7 @@ async def test_the_expected_fix_recovers_the_scenario(
 async def test_a_restart_never_fixes_a_bad_release(spec: ScenarioSpec, tmp_path: Path) -> None:
     env = await reset(spec, tmp_path)
     restart = AuthorizedAction(action="restart", target=spec.expected["root_cause_service"])
-    assert (await env.execute_authorized(restart)).ok
+    assert (await act(env, restart)).ok
     assert not (await EnvironmentHealthOracle(env).probe()).healthy
 
 

@@ -53,6 +53,12 @@ def test_namespace_comes_from_the_options() -> None:
     assert SREGymEnvironment(run_id="run-1", namespace="hotel").describe().namespace == "hotel"
 
 
+def test_binding_an_executor_key_is_refused_too() -> None:
+    """Nothing can be authorized against a target that is not connected."""
+    with pytest.raises(EnvironmentNotIntegrated):
+        SREGymEnvironment(run_id="run-1").bind_executor("any-public-key")
+
+
 def test_it_is_a_target_environment_with_no_scenarios() -> None:
     env = SREGymEnvironment(run_id="run-1")
     assert isinstance(env, TargetEnvironment) and env.kind == "sregym"

@@ -9,9 +9,14 @@ observation model from recap/core/observations.py. Because of those return types
 publishes a JSON output schema for every tool and sends each result as structured content
 (plus a JSON text copy for clients that only read text).
 
-This server does NOT enforce safety. Risk tiers, approvals, budgets and argument allow-lists
-live in the central gateway (configs/policies.yaml): an MCP transport is not a security
-boundary, and everything a server says about itself is untrusted.
+Policy (risk tiers, approvals, budgets, argument allow-lists) lives in the central gateway
+(configs/policies.yaml), and everything a server says about itself is untrusted. But the
+server is not a free door either (audit finding 2.5):
+
+  * every write tool passes the caller's `capability` to the environment, which refuses the
+    write unless it is a valid signed capability for exactly that action (see
+    recap/safety/capabilities.py); an empty or made-up approval ID unlocks nothing;
+  * every tool rejects arguments it does not define, instead of silently dropping them.
 
 The runtime starts it as a subprocess (see McpToolClient.stdio):
 
@@ -24,9 +29,10 @@ It builds its own environment from the same config and run id as the controller,
 from __future__ import annotations
 
 import argparse
+import inspect
 import logging
 import sys
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
 from mcp.server.mcpserver import MCPServer
@@ -41,7 +47,6 @@ from recap.core.observations import (
     ActionOutcome,
     AuthorizedAction,
     DeploymentList,
-    EnvironmentAction,
     EventList,
     HealthSnapshot,
     LogQueryResult,
@@ -51,12 +56,13 @@ from recap.core.observations import (
     ServiceList,
 )
 from recap.environments.registry import create_environment
+from recap.tools.actions import to_environment_action
 
 SERVER_NAME = "recap-sandbox-tools"
 SERVER_INSTRUCTIONS = (
-    "{target} tools. Read tools are side-effect free. Write tools must only be called "
-    "by the RECAP controller after the central safety gateway authorized the exact action; "
-    "this server does not enforce policy."
+    "{target} tools. Read tools are side-effect free. Write tools act only with a valid "
+    "capability that RECAP's central safety gateway signed for the exact action; any other "
+    "write is refused."
 )
 
 
@@ -72,6 +78,7 @@ def server_instructions(info: EnvironmentInfo) -> str:
 READ_ONLY = ToolAnnotations(read_only_hint=True)
 
 T = TypeVar("T")
+F = TypeVar("F", bound=Callable[..., Any])  # a tool function
 
 
 def _write_hints(*, destructive: bool, idempotent: bool) -> ToolAnnotations:
@@ -92,9 +99,41 @@ async def _guarded(call: Awaitable[T]) -> T:
         raise ToolError(f"{type(exc).__name__}: {exc}") from exc
 
 
-def build_mcp_server(environment: TargetEnvironment) -> MCPServer:
+class StrictToolServer(MCPServer):
+    """An MCPServer whose tools reject arguments they do not define.
+
+    The SDK builds each tool's argument model from the function signature and, by default,
+    silently ignores unknown keys. A smuggled argument (an `approval_id` sent to a read tool,
+    a misspelled field) would then vanish without a trace. Here it is a tool error that the
+    caller sees and RECAP's trace records.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.argument_names: dict[str, frozenset[str]] = {}  # tool -> the arguments it defines
+
+    def strict_tool(self, annotations: ToolAnnotations) -> Callable[[F], F]:
+        """Like `server.tool(...)`, but also remembers which arguments the tool accepts."""
+
+        def register(function: F) -> F:
+            names = frozenset(inspect.signature(function).parameters)
+            self.argument_names[function.__name__] = names
+            self.tool(annotations=annotations)(function)
+            return function
+
+        return register
+
+    async def call_tool(self, name: str, arguments: dict[str, Any], context: Any = None) -> Any:
+        """Refuse unknown arguments, then let the SDK validate and run the tool as usual."""
+        unknown = sorted(set(arguments) - self.argument_names.get(name, frozenset(arguments)))
+        if unknown:
+            raise ToolError(f"{name} does not accept the argument(s): {', '.join(unknown)}")
+        return await super().call_tool(name, arguments, context)
+
+
+def build_mcp_server(environment: TargetEnvironment) -> StrictToolServer:
     """Create an MCP server whose ten tools observe or change `environment`."""
-    server = MCPServer(
+    server = StrictToolServer(
         name=SERVER_NAME,
         version=__version__,
         instructions=server_instructions(environment.describe()),
@@ -108,91 +147,95 @@ def build_mcp_server(environment: TargetEnvironment) -> MCPServer:
 # Each tool's docstring becomes its MCP description: it is what a model reads about the tool.
 
 
-def _register_read_tools(server: MCPServer, env: TargetEnvironment) -> None:
+def _register_read_tools(server: StrictToolServer, env: TargetEnvironment) -> None:
     """Register the seven side-effect-free tools (observations and the rollback dry run)."""
 
-    @server.tool(annotations=READ_ONLY)
+    @server.strict_tool(annotations=READ_ONLY)
     async def list_services() -> ServiceList:
         """List services in the namespace with versions, replicas and dependencies."""
         return await _guarded(env.observe_services())
 
-    @server.tool(annotations=READ_ONLY)
+    @server.strict_tool(annotations=READ_ONLY)
     async def get_service_health(service: str) -> HealthSnapshot:
         """Current status, ready replicas, error rate and p95 latency of one service."""
         return await _guarded(env.observe_health(service))
 
-    @server.tool(annotations=READ_ONLY)
+    @server.strict_tool(annotations=READ_ONLY)
     async def get_service_logs(
         service: str, limit: int = 40, since_minutes: int = 60
     ) -> LogQueryResult:
         """Recent log lines of one service (chronological, newest last)."""
         return await _guarded(env.observe_logs(service, limit, since_minutes))
 
-    @server.tool(annotations=READ_ONLY)
+    @server.strict_tool(annotations=READ_ONLY)
     async def get_service_metrics(
         service: str, metric: MetricName, window_minutes: int = 60
     ) -> MetricSeries:
         """A metric time series (5-minute steps) for one service."""
         return await _guarded(env.observe_metrics(service, metric, window_minutes))
 
-    @server.tool(annotations=READ_ONLY)
+    @server.strict_tool(annotations=READ_ONLY)
     async def get_recent_deployments(service: str | None = None, limit: int = 10) -> DeploymentList:
         """Recent deployments, newest first (optionally for one service)."""
         return await _guarded(env.observe_deployments(service, limit))
 
-    @server.tool(annotations=READ_ONLY)
+    @server.strict_tool(annotations=READ_ONLY)
     async def get_k8s_like_events(service: str | None = None, limit: int = 30) -> EventList:
         """Kubernetes-like cluster events such as OOMKilled or BackOff, newest first."""
         return await _guarded(env.observe_events(service, limit))
 
-    @server.tool(annotations=READ_ONLY)
+    @server.strict_tool(annotations=READ_ONLY)
     async def propose_rollback(service: str) -> RollbackPlan:
         """Dry run: which version a rollback of this service would restore, with no side effects."""
         return await _guarded(env.plan_rollback(service))
 
 
-def _register_write_tools(server: MCPServer, env: TargetEnvironment) -> None:
+def _register_write_tools(server: StrictToolServer, env: TargetEnvironment) -> None:
     """Register the three write tools; all of them use the single write path, execute_authorized."""
 
     async def execute(
-        action: EnvironmentAction,
-        target: str,
-        params: dict[str, Any],
-        approval_id: str,
-        proposal_digest: str,
+        tool: str, args: dict[str, Any], approval_id: str, proposal_digest: str, capability: str
     ) -> ActionOutcome:
-        # approval_id and proposal_digest are carried for the environment's audit trail only;
-        # the gateway already enforced the approval before calling this tool.
+        # The same mapping the gateway signed (recap/tools/actions.py), so a valid capability
+        # matches exactly. The environment verifies the capability before changing anything.
+        action, target, params = to_environment_action(tool, args)
         authorized = AuthorizedAction(
             action=action,
             target=target,
             params=params,
             approval_id=approval_id,
             proposal_digest=proposal_digest,
+            capability=capability,
         )
         return await _guarded(env.execute_authorized(authorized))
 
-    @server.tool(annotations=_write_hints(destructive=False, idempotent=True))
+    @server.strict_tool(annotations=_write_hints(destructive=False, idempotent=True))
     async def execute_rollback(
-        service: str, to_version: str, approval_id: str = "", proposal_digest: str = ""
+        service: str,
+        to_version: str,
+        approval_id: str = "",
+        proposal_digest: str = "",
+        capability: str = "",
     ) -> ActionOutcome:
-        """Roll a service back to an earlier version (requires an exact approval)."""
-        params = {"to_version": to_version}
-        return await execute("rollback", service, params, approval_id, proposal_digest)
+        """Roll a service back to an earlier version (needs RECAP's signed capability)."""
+        args = {"service": service, "to_version": to_version}
+        return await execute("execute_rollback", args, approval_id, proposal_digest, capability)
 
-    @server.tool(annotations=_write_hints(destructive=False, idempotent=False))
+    @server.strict_tool(annotations=_write_hints(destructive=False, idempotent=False))
     async def restart_service(
-        service: str, approval_id: str = "", proposal_digest: str = ""
+        service: str, approval_id: str = "", proposal_digest: str = "", capability: str = ""
     ) -> ActionOutcome:
-        """Rolling restart of a service's pods (requires an exact approval)."""
-        return await execute("restart", service, {}, approval_id, proposal_digest)
+        """Rolling restart of a service's pods (needs RECAP's signed capability)."""
+        args = {"service": service}
+        return await execute("restart_service", args, approval_id, proposal_digest, capability)
 
-    @server.tool(annotations=_write_hints(destructive=True, idempotent=True))
+    @server.strict_tool(annotations=_write_hints(destructive=True, idempotent=True))
     async def delete_namespace(
-        namespace: str, approval_id: str = "", proposal_digest: str = ""
+        namespace: str, approval_id: str = "", proposal_digest: str = "", capability: str = ""
     ) -> ActionOutcome:
         """Delete every service in a namespace (destructive; the gateway always denies it)."""
-        return await execute("delete_namespace", namespace, {}, approval_id, proposal_digest)
+        args = {"namespace": namespace}
+        return await execute("delete_namespace", args, approval_id, proposal_digest, capability)
 
 
 def main(argv: list[str] | None = None) -> None:

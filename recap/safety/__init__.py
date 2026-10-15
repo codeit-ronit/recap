@@ -2,6 +2,7 @@
 
     policy.py     PolicyEngine: ALLOW / APPROVAL_REQUIRED / DENY with rule IDs (R0-R14)
     approvals.py  ApprovalStore + channels: exact-scope, expiring, single-use approvals
+    capabilities.py  signed single-use capabilities verified at the write boundary itself
     injection.py  pattern-based prompt-injection *flagging* (not production-grade protection)
     redteam.py    PromptInjectedProvider: a deliberately compromised planner for red-team tests
 

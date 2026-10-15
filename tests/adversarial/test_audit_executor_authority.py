@@ -27,11 +27,12 @@ which layer says no, or how the fix proves authority (a signed token, an approva
 One more test sends each read tool an argument it does not define (a smuggled approval_id):
 the server must reject it instead of silently dropping it.
 
-Today every such write is applied and every extra argument is dropped, so those tests fail
-with an AssertionError that shows what the server accepted. They are marked
-xfail(strict=True) until M1 fixes the boundary. One control test (no xfail) checks that a
-write RECAP's gateway did approve still reaches the sandbox, so a fix cannot simply switch
-all writes off.
+Status: in M0 every such write was applied and every extra argument dropped, so these
+tests were strict xfails. M1 fixed the boundary: the gateway signs a single-use Ed25519
+capability for exactly the action it allowed (recap/safety/capabilities.py), the environment
+verifies it before changing anything, and the MCP server rejects arguments a tool does not
+define. They now pass and stay as regression tests. One control test checks that a write
+RECAP's gateway did approve still reaches the sandbox, so the fix did not switch writes off.
 """
 
 from __future__ import annotations
@@ -147,9 +148,6 @@ def refused(result: RawToolResult) -> bool:
 # --- writes sent straight to the server (in-process MCP, no gateway) -----------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="AUDIT-2.5: MCP write tools run with no approval at all; fixed in M1"
-)
 @pytest.mark.parametrize(
     "approval",
     [pytest.param({}, id="fields-omitted"), pytest.param(NO_APPROVAL, id="fields-empty")],
@@ -168,10 +166,6 @@ async def test_a_write_without_an_approval_is_refused_and_changes_nothing(
     assert await sandbox_facts(sandbox) == before
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUDIT-2.5: MCP write tools accept a made-up approval id and digest; fixed in M1",
-)
 @pytest.mark.parametrize(("tool", "args"), WRITES)
 async def test_a_write_with_a_forged_approval_is_refused_and_changes_nothing(
     tmp_path: Path, tool: str, args: dict[str, object]
@@ -189,10 +183,6 @@ async def test_a_write_with_a_forged_approval_is_refused_and_changes_nothing(
 # --- a second, independently started server process ----------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUDIT-2.5: a second MCP server process can write to a run's sandbox; fixed in M1",
-)
 async def test_a_second_server_process_for_the_same_run_cannot_write(tmp_path: Path) -> None:
     """A rogue `python -m recap.tools.mcp_server` for an existing run must not change it."""
     state_dir = tmp_path / "sandbox"
@@ -219,10 +209,6 @@ async def test_a_second_server_process_for_the_same_run_cannot_write(tmp_path: P
 # and proposal digest, so anyone who can read the dashboard knows them.
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUDIT-2.5: a public approval id unlocks any write at the server; fixed in M1",
-)
 async def test_an_approval_from_a_finished_run_cannot_unlock_a_different_write(
     settings: Settings,
 ) -> None:
@@ -242,10 +228,6 @@ async def test_an_approval_from_a_finished_run_cannot_unlock_a_different_write(
     assert await sandbox_facts(sandbox) == before
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUDIT-2.5: a used approval can be replayed straight to the server; fixed in M1",
-)
 async def test_a_used_approval_cannot_be_replayed_straight_to_the_server(
     settings: Settings,
 ) -> None:
@@ -272,9 +254,6 @@ async def test_a_used_approval_cannot_be_replayed_straight_to_the_server(
 # --- the server's own argument checks ------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="AUDIT-2.5: MCP read tools silently ignore unknown arguments; fixed in M1"
-)
 @pytest.mark.parametrize(("tool", "args"), READS)
 async def test_a_read_tool_rejects_an_argument_it_does_not_define(
     tmp_path: Path, tool: str, args: dict[str, object]

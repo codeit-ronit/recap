@@ -37,14 +37,21 @@ Methods are split by who may call them. This split is the trust boundary.
 | `observe_deployments(service, limit)` | agents | `get_recent_deployments` | Deployment history, newest first |
 | `observe_events(service, limit)` | agents | `get_k8s_like_events` | Kubernetes-like events, newest first |
 | `plan_rollback(service)` | agents | `propose_rollback` | Dry run: which version a rollback would restore |
-| `execute_authorized(action)` | MCP write tools, **only after the safety gateway** | `execute_rollback`, `restart_service`, `delete_namespace` | The single write path |
+| `bind_executor(public_key)` | the controller, right after `reset` | never | Trust capabilities signed by this run's key |
+| `execute_authorized(action)` | MCP write tools, **only with a valid capability** | `execute_rollback`, `restart_service`, `delete_namespace` | The single write path |
 
 * The `observe_*` methods and `plan_rollback` are read-only. Agents reach them only through
   MCP tools; they never hold an environment object.
-* `execute_authorized` is the only way to change anything. The central safety gateway
-  approves the exact action first. The approval id and proposal digest travel with the
-  action for the audit log, but enforcement lives in the gateway: the MCP transport is
-  not a security boundary.
+* `execute_authorized` is the only way to change anything, and it is the final privilege
+  barrier. The central safety gateway decides first; then the environment itself refuses the
+  write unless it carries a valid capability for exactly that action, signed by the key the
+  controller bound with `bind_executor` after reset (`recap/safety/capabilities.py`). The
+  check and the change happen in one transaction, and each capability's nonce is recorded,
+  so a capability works once. The approval id and proposal digest travel with the action for
+  the audit log (the capability binds them too).
+* `bind_executor(public_key)` is trusted, controller-only, like `reset`. A new adapter must
+  implement both halves: store the key where every process serving the run can read it, and
+  verify capabilities before acting (a real adapter must refuse safety-off capabilities).
 * `health_check` is never an MCP tool. The recovery oracle (`recap/verification/`) calls it
   through the controller's own environment instance, so nothing an agent says or does can
   change the verdict.
