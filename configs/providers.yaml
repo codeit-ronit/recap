@@ -1,0 +1,17 @@
+# Decision providers. The default is a scripted deterministic policy: it is NOT an LLM,
+# makes no network calls and costs $0. Real LLM providers are opt-in only.
+default: deterministic
+
+providers:
+  deterministic:
+    kind: scripted
+    description: "Scripted baseline policy (not an LLM): deterministic playbooks and heuristics."
+
+  anthropic:
+    kind: llm
+    description: "Optional Claude adapter via the official Anthropic SDK. Uses YOUR API key and billing."
+    model: claude-opus-5-5
+    effort: high
+    max_tokens: 16000
+    # Used only to *estimate* cost in traces (USD per million tokens). Verify current pricing.
+    price_per_mtok: {input: 4.0, output: 20.0}

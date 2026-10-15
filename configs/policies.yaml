@@ -1,0 +1,77 @@
+# Central safety policy (trusted). The MCP server's own tool list and descriptions are
+# NOT trusted: a tool is usable only if it is listed here, and its risk tier comes from
+# this file, never from the server or from model text.
+version: "policy-v1"
+
+allowed_namespaces: [shop]
+allowed_services: [frontend, checkout, payment, inventory, cart]
+
+limits:
+  tool_timeout_seconds: 10
+  max_output_chars: 6000   # longer tool outputs are truncated before becoming evidence
+  max_list_items: 60
+
+oracle:
+  max_error_rate: 0.05     # a service is healthy only below this error rate
+
+# Risk tiers: read -> ALLOW, reversible_write -> APPROVAL_REQUIRED (exact approval),
+# high_risk -> DENY in V1, destructive -> always DENY.
+tools:
+  list_services:
+    risk: read
+    description: "List services in the namespace with versions, replicas and dependencies."
+  get_service_health:
+    risk: read
+    description: "Current status, ready replicas, error rate and p95 latency of one service."
+    args:
+      service: {type: service}
+  get_service_logs:
+    risk: read
+    description: "Recent log lines of one service (chronological, newest last)."
+    args:
+      service: {type: service}
+      limit: {type: int, min: 1, max: 100, required: false}
+      since_minutes: {type: int, min: 1, max: 240, required: false}
+  get_service_metrics:
+    risk: read
+    description: "A metric time series (5-minute steps) for one service."
+    args:
+      service: {type: service}
+      metric: {type: enum, values: [error_rate, latency_p95_ms, memory_mb, cpu_pct, restarts]}
+      window_minutes: {type: int, min: 5, max: 240, required: false}
+  get_recent_deployments:
+    risk: read
+    description: "Recent deployments, newest first (optionally for one service)."
+    args:
+      service: {type: service, required: false}
+      limit: {type: int, min: 1, max: 50, required: false}
+  get_k8s_like_events:
+    risk: read
+    description: "Kubernetes-like cluster events such as OOMKilled or BackOff, newest first."
+    args:
+      service: {type: service, required: false}
+      limit: {type: int, min: 1, max: 100, required: false}
+  propose_rollback:
+    risk: read
+    description: "Dry run: which version a rollback of this service would restore. No side effects."
+    args:
+      service: {type: service}
+  execute_rollback:
+    risk: reversible_write
+    description: "Roll a service back to an earlier version. Requires an exact approval."
+    args:
+      service: {type: service}
+      to_version: {type: version}
+  restart_service:
+    risk: reversible_write
+    description: "Rolling restart of a service's pods. Requires an exact approval."
+    args:
+      service: {type: service}
+  delete_namespace:
+    risk: destructive
+    description: "Deletes every service in a namespace. Always denied."
+    args:
+      namespace: {type: namespace}
+
+# The only actions a planner may propose as a mitigation.
+remediation_tools: [execute_rollback, restart_service]

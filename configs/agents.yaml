@@ -1,0 +1,25 @@
+# Investigation agents. Every tool listed here is READ-ONLY; workers can never write.
+# Only the controller executes mitigations, and only through the safety gateway.
+
+agents:
+  investigator:
+    goal: "Investigate the incident end to end with read-only tools and propose root-cause hypotheses."
+    tools: [list_services, get_service_health, get_service_logs, get_service_metrics,
+            get_recent_deployments, get_k8s_like_events, propose_rollback]
+    max_steps: 10
+
+  telemetry_investigator:
+    goal: "Use health, logs and metrics to find which service is failing and when it started."
+    tools: [get_service_health, get_service_logs, get_service_metrics]
+    max_steps: 8
+
+  infrastructure_investigator:
+    goal: "Use deployments, cluster events and topology to find risky changes or resource problems."
+    tools: [list_services, get_recent_deployments, get_k8s_like_events, propose_rollback,
+            get_service_health]
+    max_steps: 8
+
+  evidence_verifier:
+    goal: "Check every hypothesis against evidence recorded in this run; reject unsupported claims."
+    tools: []          # the verifier reads the evidence registry only; it never calls tools
+    max_steps: 1

@@ -1,0 +1,25 @@
+# Run limits and controller tuning. All numbers are small on purpose: V1 incidents are
+# simulated and a run should finish in seconds.
+
+default_budget:
+  max_steps: 30              # provider decisions across all agents
+  max_tool_calls: 30         # every MCP tool call (reads and writes)
+  max_elapsed_seconds: 120   # wall clock; time spent waiting for a human approval is excluded
+  max_estimated_tokens: 120000  # sum of context packs handed to providers (estimated tokens)
+  max_parallel_agents: 2
+
+context:
+  pack_tokens: 3000       # max estimated tokens in one context pack
+  max_item_tokens: 400    # longer items are compacted (with a pointer to the full evidence)
+
+routing:
+  parallel_min_tool_calls: 10   # do not start parallel specialists with fewer calls left
+  familiar_similarity: 0.6      # memory similarity that counts as "we have seen this before"
+  conflict_similarity: 0.45     # similar episodes above this that disagree -> conflict
+
+retries:
+  max_investigation_rounds: 2   # re-investigate (escalating) when evidence is insufficient
+  max_mitigation_attempts: 2    # try another fix if the oracle says the first did not work
+
+approvals:
+  ttl_seconds: 900              # an approval request expires after 15 minutes

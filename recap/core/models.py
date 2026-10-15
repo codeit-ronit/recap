@@ -1,0 +1,804 @@
+"""Shared, typed contracts used by every RECAP layer.
+
+Every piece of data that crosses a module boundary is a Pydantic model defined
+here, so all layers agree on one shape and JSON serialization stays stable.
+Read this file first when learning the codebase: it is RECAP's vocabulary.
+
+Sections:
+  1. Enums             - states, roles, risk tiers, outcomes
+  2. Incident & budget - what enters the controller
+  3. Evidence          - immutable observations with IDs
+  4. Reasoning         - hypotheses, agent findings, verification reports
+  5. Tools & safety    - tool requests/results, policy decisions, approvals
+  6. Mitigation        - proposals and recovery results
+  7. Knowledge, memory, context packs
+  8. Routing
+  9. Provider requests/decisions (the "brain" interface)
+ 10. Telemetry & run records
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from enum import StrEnum
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from recap.core.ids import digest_of, utcnow
+
+SCHEMA_VERSION = "recap.v1"
+
+
+class Contract(BaseModel):
+    """Base class for all contracts. Unknown fields are rejected to catch typos early."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+# ======================================================================================
+# 1. Enums
+# ======================================================================================
+
+
+class IncidentState(StrEnum):
+    """Lifecycle states of one incident run. Legal moves live in recap/core/lifecycle.py."""
+
+    CREATED = "CREATED"
+    RETRIEVING = "RETRIEVING"
+    INVESTIGATING = "INVESTIGATING"
+    PROPOSING = "PROPOSING"
+    AWAITING_APPROVAL = "AWAITING_APPROVAL"
+    MITIGATING = "MITIGATING"
+    VERIFYING = "VERIFYING"
+    RESOLVED = "RESOLVED"
+    FAILED = "FAILED"
+    BLOCKED = "BLOCKED"
+    BUDGET_EXHAUSTED = "BUDGET_EXHAUSTED"
+
+
+TERMINAL_STATES = frozenset(
+    {
+        IncidentState.RESOLVED,
+        IncidentState.FAILED,
+        IncidentState.BLOCKED,
+        IncidentState.BUDGET_EXHAUSTED,
+    }
+)
+
+
+class AgentRole(StrEnum):
+    """Who is acting. Only the CONTROLLER may ever execute a write."""
+
+    INVESTIGATOR = "investigator"  # the single generalist used in single-agent mode
+    TELEMETRY = "telemetry_investigator"  # health, logs, metrics
+    INFRASTRUCTURE = "infrastructure_investigator"  # deployments, events, topology
+    VERIFIER = "evidence_verifier"  # checks hypotheses against evidence; no tools
+    CONTROLLER = "controller"  # trusted lifecycle owner; the only writer
+
+
+class SourceType(StrEnum):
+    """Where a piece of evidence came from."""
+
+    TOOL = "tool"  # an MCP tool result
+    DOC = "doc"  # a retrieved runbook chunk
+    MEMORY = "memory"  # a past episode
+    ALERT = "alert"  # the incoming alert
+    ORACLE = "oracle"  # the independent health oracle
+
+
+class TrustLevel(StrEnum):
+    """Trusted = produced by RECAP's own code. Untrusted = data that might lie or inject."""
+
+    TRUSTED = "trusted"
+    UNTRUSTED = "untrusted"
+
+
+class ToolRisk(StrEnum):
+    """Tool taxonomy used by the safety policy."""
+
+    READ = "read"  # no side effects -> allowed automatically
+    REVERSIBLE_WRITE = "reversible_write"  # e.g. rollback, restart -> needs exact approval
+    HIGH_RISK = "high_risk"  # e.g. scaling to zero -> denied in V1
+    DESTRUCTIVE = "destructive"  # e.g. delete namespace -> always denied
+
+
+class Verdict(StrEnum):
+    """Safety gateway decision."""
+
+    ALLOW = "ALLOW"
+    APPROVAL_REQUIRED = "APPROVAL_REQUIRED"
+    DENY = "DENY"
+
+
+class HypothesisStatus(StrEnum):
+    PROPOSED = "proposed"  # not checked yet
+    SUPPORTED = "supported"  # evidence rules pass
+    CONTRADICTED = "contradicted"  # evidence actively disagrees
+    INSUFFICIENT = "insufficient"  # not enough evidence either way
+
+
+class FailureMechanism(StrEnum):
+    """Generic failure mechanisms RECAP can reason about in V1."""
+
+    BAD_DEPLOYMENT = "bad_deployment"
+    RESOURCE_PRESSURE = "resource_pressure"
+    DEPENDENCY_FAILURE = "dependency_failure"  # symptom: a caller fails because a dependency fails
+    UNKNOWN = "unknown"
+
+
+class StrategyMode(StrEnum):
+    SINGLE = "single"
+    PARALLEL = "parallel"
+
+
+class EpisodeOutcome(StrEnum):
+    SUCCESS = "success"  # ONLY when the independent oracle verified recovery
+    FAILED = "failed"
+    BLOCKED = "blocked"
+    BUDGET_EXHAUSTED = "budget_exhausted"
+
+
+class MemoryPartition(StrEnum):
+    """Memory isolation label. Evaluation test runs may only read TRAIN episodes."""
+
+    TRAIN = "train"
+    TEST = "test"
+    DEMO = "demo"
+
+
+class ApprovalStatus(StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+
+
+# ======================================================================================
+# 2. Incident & budget
+# ======================================================================================
+
+
+class RunBudget(Contract):
+    """Hard limits for one run. The harness stops with BUDGET_EXHAUSTED when one is hit."""
+
+    max_steps: int = Field(30, ge=1)  # provider decisions across all agents
+    max_tool_calls: int = Field(30, ge=0)  # every MCP tool call, reads and writes
+    max_elapsed_seconds: float = Field(120.0, gt=0)  # wall clock (approval waits excluded)
+    max_estimated_tokens: int = Field(120_000, ge=0)  # sum of context packs sent to providers
+    max_parallel_agents: int = Field(2, ge=1)
+
+
+class Incident(Contract):
+    """A typed incident created from an alert. Alert text is untrusted data."""
+
+    incident_id: str
+    scenario_id: str
+    service: str  # primary alerted service
+    affected_services: list[str] = Field(default_factory=list)
+    symptoms: list[str]
+    created_at: datetime
+    environment: str  # environment kind, e.g. "simulated"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    budget: RunBudget
+
+
+class EnvironmentInfo(Contract):
+    """What an environment adapter says about itself (shown in the dashboard)."""
+
+    kind: str  # "simulated", "sregym", ...
+    name: str
+    namespace: str
+    is_simulated: bool
+    supported_actions: list[str] = Field(default_factory=list)
+    description: str = ""
+
+
+class ScenarioInfo(Contract):
+    """Public description of a scenario. `family`/`expected` are for evaluation only."""
+
+    id: str
+    title: str
+    description: str = ""
+    family: str  # ground-truth label; never shown to agents
+    partition: MemoryPartition
+    alert_service: str
+    tags: list[str] = Field(default_factory=list)
+    expected: dict[str, Any] = Field(default_factory=dict)  # eval-only ground truth
+    run_overrides: dict[str, Any] = Field(default_factory=dict)
+    default_seed: int | None = None  # used when a run does not pick a seed
+    budget: dict[str, Any] = Field(default_factory=dict)  # per-scenario RunBudget overrides
+    requires_memory_of: list[str] = Field(default_factory=list)  # demo prerequisites
+
+
+# ======================================================================================
+# 3. Evidence
+# ======================================================================================
+
+
+class Evidence(Contract):
+    """One immutable observation. Agents share evidence by ID, never by mutable objects."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str  # run-unique, e.g. "ev-3f9a2c-007"
+    incident_id: str
+    source_type: SourceType
+    source_ref: str  # e.g. "mcp:get_service_logs(service=checkout)"
+    timestamp: datetime
+    content: str  # bounded text rendering (what an LLM would read)
+    data: dict[str, Any] = Field(default_factory=dict)  # structured payload (what rules read)
+    tool_name: str | None = None
+    trust_level: TrustLevel = TrustLevel.UNTRUSTED
+    token_estimate: int = 0
+    flags: tuple[str, ...] = ()  # e.g. ("prompt_injection_suspected", "truncated")
+    agent_role: AgentRole | None = None
+
+
+# ======================================================================================
+# 4. Reasoning: hypotheses, findings, verification
+# ======================================================================================
+
+
+class Hypothesis(Contract):
+    """A claim about the root cause that must cite evidence IDs."""
+
+    claim: str
+    mechanism: FailureMechanism
+    target_service: str | None = None
+    supporting_evidence_ids: list[str] = Field(default_factory=list)
+    contradicting_evidence_ids: list[str] = Field(default_factory=list)
+    status: HypothesisStatus = HypothesisStatus.PROPOSED
+    details: dict[str, Any] = Field(default_factory=dict)  # e.g. {"version": "v2.4.1"}
+    origin: Literal["investigation", "memory"] = "investigation"
+    proposed_by: AgentRole | None = None
+
+
+class Usage(Contract):
+    """Work done. In deterministic mode tokens are *estimates* and cost is always $0."""
+
+    steps: int = 0
+    tool_calls: int = 0
+    estimated_tokens: int = 0
+    actual_input_tokens: int | None = None  # only real LLM providers fill these
+    actual_output_tokens: int | None = None
+    external_cost_usd: float = 0.0
+    is_estimate: bool = True
+    unreported_calls: int = 0  # LLM calls that were billed but returned no usage data
+
+    def plus(self, other: Usage) -> Usage:
+        """Return a new Usage that adds `other` to this one."""
+
+        def add_optional(a: int | None, b: int | None) -> int | None:
+            return None if a is None and b is None else (a or 0) + (b or 0)
+
+        return Usage(
+            steps=self.steps + other.steps,
+            tool_calls=self.tool_calls + other.tool_calls,
+            estimated_tokens=self.estimated_tokens + other.estimated_tokens,
+            actual_input_tokens=add_optional(self.actual_input_tokens, other.actual_input_tokens),
+            actual_output_tokens=add_optional(
+                self.actual_output_tokens, other.actual_output_tokens
+            ),
+            external_cost_usd=self.external_cost_usd + other.external_cost_usd,
+            is_estimate=self.is_estimate and other.is_estimate,
+            unreported_calls=self.unreported_calls + other.unreported_calls,
+        )
+
+
+class AgentFinding(Contract):
+    """What one investigator returns after its turn loop."""
+
+    agent_role: AgentRole
+    evidence_ids: list[str] = Field(default_factory=list)
+    doc_refs: list[str] = Field(default_factory=list)  # runbook chunk IDs the agent saw (citations)
+    hypotheses: list[Hypothesis] = Field(default_factory=list)
+    proposed_next_steps: list[str] = Field(default_factory=list)
+    usage: Usage = Field(default_factory=Usage)
+    summary: str = ""
+    error: str | None = None  # e.g. "timeout" if the agent failed
+    started_at: datetime
+    finished_at: datetime
+    round: int = 1
+
+
+class HypothesisCheck(Contract):
+    """The verifier's result for one hypothesis, with human-readable rule outcomes."""
+
+    hypothesis: Hypothesis  # copy with final status and contradicting IDs filled in
+    passed: list[str] = Field(default_factory=list)
+    failed: list[str] = Field(default_factory=list)
+    rule_ids: list[str] = Field(default_factory=list)
+
+
+class VerificationReport(Contract):
+    """Merged result of all findings. `best` is the top supported, actionable hypothesis."""
+
+    status: Literal["supported", "contradicted", "insufficient"]
+    best: Hypothesis | None = None
+    checks: list[HypothesisCheck] = Field(default_factory=list)
+    unknown_evidence_ids: list[str] = Field(default_factory=list)  # cited but not in this run
+    merged_evidence_ids: list[str] = Field(default_factory=list)
+    focus_services: list[str] = Field(default_factory=list)  # where to look next
+    summary: str = ""
+
+
+class ProposalCheck(Contract):
+    """The verifier's structural check of a mitigation proposal."""
+
+    ok: bool
+    problems: list[str] = Field(default_factory=list)
+    rule_ids: list[str] = Field(default_factory=list)
+
+
+# ======================================================================================
+# 5. Tools & safety
+# ======================================================================================
+
+
+class DiscoveredTool(Contract):
+    """A tool as advertised by an MCP server. Everything here is untrusted."""
+
+    name: str
+    description: str = ""
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+    output_schema: dict[str, Any] | None = None
+    annotations: dict[str, Any] = Field(default_factory=dict)  # server hints, never trusted
+
+
+class RawToolResult(Contract):
+    """What the MCP transport returns before the gateway bounds and records it."""
+
+    ok: bool
+    structured: dict[str, Any] | None = None
+    text: str = ""
+    error: str | None = None
+
+
+class ToolSpecView(Contract):
+    """What a provider is told about a tool it may use (from the trusted registry)."""
+
+    name: str
+    description: str
+    risk: ToolRisk
+    args: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolCall(Contract):
+    """A provider's request to call one tool."""
+
+    tool_name: str
+    args: dict[str, Any] = Field(default_factory=dict)
+    reason: str = ""
+
+
+class ToolCallRecord(Contract):
+    """A tool call an agent already made (fed back to the provider as history)."""
+
+    tool_name: str
+    args: dict[str, Any] = Field(default_factory=dict)
+    ok: bool
+    evidence_id: str | None = None
+    error: str | None = None
+
+
+class ToolRequest(Contract):
+    """One tool call the gateway is about to send: it passed every check; args are validated."""
+
+    invocation_id: str
+    tool_name: str
+    args: dict[str, Any] = Field(default_factory=dict)  # validated arguments
+    caller: AgentRole
+    incident_id: str
+    requested_at: datetime = Field(default_factory=utcnow)
+
+
+class SafetyDecision(Contract):
+    """ALLOW / APPROVAL_REQUIRED / DENY plus the policy rules that produced it."""
+
+    verdict: Verdict
+    reasons: list[str] = Field(default_factory=list)
+    rule_ids: list[str] = Field(default_factory=list)
+    tool_name: str
+    risk: ToolRisk | None = None
+    caller: AgentRole | None = None
+    policy_version: str = ""
+    decided_at: datetime = Field(default_factory=utcnow)
+
+
+class ToolResult(Contract):
+    """A tool call after the gateway: bounded output, timing and the evidence it created."""
+
+    invocation_id: str
+    tool_name: str
+    ok: bool
+    output: dict[str, Any] | None = None
+    error: str | None = None
+    side_effects: list[str] = Field(default_factory=list)
+    duration_ms: float = 0.0
+    evidence_id: str | None = None
+    truncated: bool = False
+    decision: SafetyDecision | None = None
+
+
+class Approval(Contract):
+    """A human (or simulation auto-approver) decision bound to ONE exact proposal.
+
+    It is never general consent: it names the incident, the proposal and its digest,
+    expires, and can be consumed only once.
+    """
+
+    approval_id: str
+    incident_id: str
+    proposal_id: str
+    proposal_digest: str
+    scope: Literal["single_action"] = "single_action"
+    decision: Literal["approved", "rejected"]
+    actor: str
+    decided_at: datetime
+    expires_at: datetime
+    consumed_at: datetime | None = None
+
+
+# ======================================================================================
+# 6. Mitigation & recovery
+# ======================================================================================
+
+
+class MitigationDraft(Contract):
+    """A remediation suggested by a provider. The controller turns it into a proposal."""
+
+    action: str  # tool name, e.g. "execute_rollback"
+    target: str  # usually a service name
+    params: dict[str, Any] = Field(default_factory=dict)  # e.g. {"to_version": "v2.4.0"}
+    rationale: str
+    evidence_ids: list[str] = Field(default_factory=list)
+    expected_health_change: str = ""
+    rollback_hint: str = ""
+    risk_level: ToolRisk = ToolRisk.REVERSIBLE_WRITE  # declared by the proposer; not trusted
+    hypothesis_claim: str | None = None
+    source: Literal["runbook", "memory", "fallback", "llm", "redteam"] = "runbook"
+    citations: list[str] = Field(default_factory=list)  # doc chunk IDs / episode IDs used
+
+
+class MitigationProposal(MitigationDraft):
+    """A draft with identity. Approvals bind to `proposal_id` + `digest()`."""
+
+    proposal_id: str
+    incident_id: str
+    created_at: datetime = Field(default_factory=utcnow)
+
+    def digest(self) -> str:
+        """Fingerprint of exactly what would be executed (incident, action, target, params)."""
+        return digest_of(
+            {
+                "incident_id": self.incident_id,
+                "action": self.action,
+                "target": self.target,
+                "params": self.params,
+            }
+        )
+
+
+class ApprovalRequest(Contract):
+    """A pending request for a human decision on one proposal."""
+
+    proposal_id: str
+    run_id: str
+    incident_id: str
+    proposal_digest: str
+    proposal: MitigationProposal
+    status: ApprovalStatus = ApprovalStatus.PENDING
+    requested_at: datetime
+    expires_at: datetime
+
+
+class PolicyRequest(Contract):
+    """Everything the safety policy needs to judge one tool call or mitigation."""
+
+    tool_name: str
+    args: dict[str, Any] = Field(default_factory=dict)
+    caller: AgentRole
+    incident_id: str
+    environment: EnvironmentInfo
+    proposal: MitigationProposal | None = None  # set for mitigations
+    approval: Approval | None = None  # set when executing an approved mitigation
+    safety_enabled: bool = True  # False only in simulation-only ablations
+    now: datetime = Field(default_factory=utcnow)
+
+
+class OracleProbe(Contract):
+    """One independent health observation by the recovery oracle."""
+
+    healthy: bool
+    signals: dict[str, Any] = Field(default_factory=dict)  # per-service ground truth
+    unhealthy_services: list[str] = Field(default_factory=list)
+    checked_at: datetime
+    services_checked: list[str] = Field(default_factory=list)
+
+
+class ActionRecord(Contract):
+    """One mitigation attempt and what happened to it."""
+
+    action: str
+    target: str
+    params: dict[str, Any] = Field(default_factory=dict)
+    result: Literal["recovered", "not_recovered", "denied", "rejected", "expired", "error"]
+    at: datetime = Field(default_factory=utcnow)
+    note: str = ""
+
+
+class RecoveryResult(Contract):
+    """Independent oracle verdict computed from environment state, never from agent text."""
+
+    healthy_before: bool
+    healthy_after: bool
+    observed_signals: dict[str, Any] = Field(default_factory=dict)
+    oracle_name: str
+    verified: bool
+    checked_at: datetime
+    services_checked: list[str] = Field(default_factory=list)
+
+
+# ======================================================================================
+# 7. Knowledge (RAG), memory and context
+# ======================================================================================
+
+
+class DocChunk(Contract):
+    """One section of a Markdown runbook, with provenance for citations."""
+
+    chunk_id: str  # stable, e.g. "runbook-rollback#remediation-1"
+    doc_path: str  # repo-relative path
+    title: str  # document title
+    heading: str  # section heading
+    text: str
+    checksum: str  # sha256 of the source file (first 12 hex chars)
+    provenance: dict[str, str] = Field(default_factory=dict)
+    token_estimate: int = 0
+
+
+class RetrievedChunk(Contract):
+    chunk: DocChunk
+    score: float
+    rank: int
+    retriever: str  # "bm25" or "hybrid"
+    reranker: str | None = None
+
+
+class EvidenceSummary(Contract):
+    evidence_id: str
+    summary: str
+
+
+class ExperienceEpisode(Contract):
+    """A consolidated past run. `outcome=success` requires independent verification."""
+
+    episode_id: str
+    origin_run_id: str
+    scenario_id: str
+    failure_family: str  # scenario label for isolation/analysis; never shown to agents
+    partition: MemoryPartition
+    service: str
+    symptoms: list[str]
+    failure_mechanism: FailureMechanism | None = None  # from the verified diagnosis
+    mechanism_target: str | None = None
+    verified_evidence: list[EvidenceSummary] = Field(default_factory=list)
+    unsuccessful_actions: list[ActionRecord] = Field(default_factory=list)
+    successful_action: ActionRecord | None = None
+    outcome: EpisodeOutcome
+    verified: bool = False  # oracle-verified recovery
+    verification_source: str | None = None  # oracle name
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class MemoryHit(Contract):
+    """A retrieved episode. Being *similar* is not the same as being *safe to reuse*."""
+
+    episode: ExperienceEpisode
+    similarity: float  # 0..1 lexical similarity to the current incident
+    mechanism_match: bool | None = None  # None until checked against live evidence
+    outcome: EpisodeOutcome
+    safe_to_reuse: bool = False  # success + verified + mechanism matches live evidence
+    reason: str = ""
+
+
+class ContextItem(Contract):
+    """One entry in a bounded context pack. Keeps a pointer to the original record."""
+
+    item_id: str  # evidence ID, doc chunk ID or episode ID
+    kind: Literal["evidence", "doc", "memory"]
+    source_ref: str
+    text: str  # possibly compacted rendering
+    token_estimate: int
+    score: float
+    trust_level: TrustLevel = TrustLevel.UNTRUSTED
+    flags: list[str] = Field(default_factory=list)
+    compacted: bool = False
+
+
+class ContextPack(Contract):
+    """A bounded, ranked view derived from the evidence registry, docs and memory."""
+
+    items: list[ContextItem] = Field(default_factory=list)
+    budget_tokens: int
+    tokens_before: int  # total estimated tokens of all candidates
+    tokens_after: int  # estimated tokens actually packed
+    dropped_ids: list[str] = Field(default_factory=list)
+
+    def ids(self, kind: str | None = None) -> list[str]:
+        """IDs of packed items, optionally only one kind."""
+        return [i.item_id for i in self.items if kind is None or i.kind == kind]
+
+
+# ======================================================================================
+# 8. Routing
+# ======================================================================================
+
+
+class RoutingSignals(Contract):
+    """Observable facts the router uses to choose single vs parallel investigation."""
+
+    services_affected: int
+    symptom_categories: list[str] = Field(default_factory=list)
+    memory_hits: int = 0
+    top_memory_similarity: float = 0.0
+    familiar_success: bool = False  # a verified successful episode is very similar
+    memory_conflict: bool = False  # similar episodes disagree on mechanism or outcome
+    prior_failed_attempts: int = 0
+    escalation: bool = False  # the previous investigation round was inconclusive
+    remaining_tool_calls: int
+    remaining_steps: int
+    max_parallel_agents: int
+
+
+class StrategyDecision(Contract):
+    """The router's choice, with the rule that fired and why."""
+
+    mode: StrategyMode
+    reason: str
+    rule_id: str
+    selected_agents: list[AgentRole]
+    provider: str
+    budget: dict[str, int] = Field(default_factory=dict)  # per-agent step allocation
+    signals: RoutingSignals
+    round: int = 1
+
+
+# ======================================================================================
+# 9. Provider requests and decisions
+# ======================================================================================
+
+
+class ProviderInfo(Contract):
+    name: str  # e.g. "deterministic-scripted-policy"
+    kind: Literal["scripted", "llm"]
+    model: str | None = None
+    description: str = ""
+
+
+class InvestigationRequest(Contract):
+    """Everything an investigator's provider may see for one decision."""
+
+    role: AgentRole
+    goal: str
+    incident: Incident
+    context: ContextPack
+    evidence: dict[str, Evidence] = Field(default_factory=dict)  # only packed evidence
+    tools: list[ToolSpecView] = Field(default_factory=list)  # read-only tools for this role
+    history: list[ToolCallRecord] = Field(default_factory=list)  # this agent's calls so far
+    observed_refs: list[str] = Field(default_factory=list)  # source_refs of ALL evidence this run
+    step: int
+    max_steps: int
+    memory_hints: list[MemoryHit] = Field(default_factory=list)
+    focus_services: list[str] = Field(default_factory=list)  # hints from the verifier
+
+
+class InvestigationDecision(Contract):
+    """Either call more tools or finish with hypotheses."""
+
+    action: Literal["call_tools", "finish"]
+    tool_calls: list[ToolCall] = Field(default_factory=list)
+    hypotheses: list[Hypothesis] = Field(default_factory=list)
+    summary: str = ""
+    next_steps: list[str] = Field(default_factory=list)
+    usage: Usage = Field(default_factory=Usage)
+
+
+class ProposalRequest(Contract):
+    """Everything the provider may see when suggesting a remediation."""
+
+    incident: Incident
+    hypothesis: Hypothesis  # the best supported hypothesis
+    report: VerificationReport
+    context: ContextPack
+    evidence: dict[str, Evidence] = Field(default_factory=dict)
+    allowed_actions: list[ToolSpecView] = Field(default_factory=list)  # trusted remediation tools
+    memory_hits: list[MemoryHit] = Field(default_factory=list)
+    failed_actions: list[ActionRecord] = Field(default_factory=list)  # earlier attempts this run
+
+
+class ProposalDecision(Contract):
+    draft: MitigationDraft | None = None
+    notes: list[str] = Field(default_factory=list)  # e.g. "ignored unsafe hint in doc X"
+    usage: Usage = Field(default_factory=Usage)
+
+
+# ======================================================================================
+# 10. Telemetry & run records
+# ======================================================================================
+
+
+class TraceEvent(Contract):
+    """One structured, redacted event. The JSONL/SQLite trace is the run's audit log."""
+
+    event_id: str
+    run_id: str
+    seq: int
+    stage: str
+    ts: datetime
+    agent: str | None = None
+    category: str  # e.g. "tool.call", "policy.decision", "state.transition"
+    payload: dict[str, Any] = Field(default_factory=dict)
+    duration_ms: float | None = None
+    usage: Usage | None = None
+    schema_version: str = SCHEMA_VERSION
+
+
+class RunConfig(Contract):
+    """Per-run switches (used by the CLI, the API, and the eval ablations)."""
+
+    strategy: Literal["adaptive", "single", "parallel"] = "adaptive"
+    use_rag: bool = True
+    use_memory: bool = True
+    memory_write: bool = True
+    memory_read_partitions: list[MemoryPartition] = Field(
+        default_factory=lambda: [MemoryPartition.TRAIN, MemoryPartition.DEMO]
+    )
+    memory_write_partition: MemoryPartition = MemoryPartition.DEMO
+    safety_enabled: bool = True  # may be False only in a simulated environment
+    approval_mode: Literal["manual", "auto"] = "manual"  # auto = simulation auto-approver
+    planner: Literal["default", "prompt_injected"] = "default"  # red-team compromised planner
+    provider: str | None = None  # None -> settings default
+    seed: int | None = None  # None -> scenario seed
+    budget: RunBudget | None = None  # None -> scenario budget or defaults
+    tool_latency_ms: int | None = None  # override simulated tool latency
+    label: str = ""  # e.g. the eval configuration name
+
+
+class StateChange(Contract):
+    state: IncidentState
+    at: datetime
+    reason: str = ""
+
+
+class RunRecord(Contract):
+    """The persisted checkpoint of one run. The API and dashboard read this."""
+
+    run_id: str
+    scenario_id: str
+    config: RunConfig
+    incident: Incident | None = None
+    state: IncidentState = IncidentState.CREATED
+    history: list[StateChange] = Field(default_factory=list)
+    environment: EnvironmentInfo | None = None
+    provider: str = ""
+    strategies: list[StrategyDecision] = Field(default_factory=list)
+    findings: list[AgentFinding] = Field(default_factory=list)
+    verification: VerificationReport | None = None
+    retrieved_docs: list[RetrievedChunk] = Field(default_factory=list)
+    memory_hits: list[MemoryHit] = Field(default_factory=list)
+    proposals: list[MitigationProposal] = Field(default_factory=list)
+    safety_decisions: list[SafetyDecision] = Field(default_factory=list)
+    pending_approval: ApprovalRequest | None = None
+    approvals: list[Approval] = Field(default_factory=list)
+    actions: list[ActionRecord] = Field(default_factory=list)
+    recovery: RecoveryResult | None = None
+    episode_id: str | None = None
+    usage: Usage = Field(default_factory=Usage)
+    outcome_note: str = ""
+    error: str | None = None
+    versions: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)

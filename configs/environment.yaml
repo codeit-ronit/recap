@@ -1,0 +1,16 @@
+# Which infrastructure RECAP talks to.
+#
+# This is the ONLY place that decides what the target system is. Agents, RAG, memory,
+# routing, guardrails and the harness never import an environment directly: they reach
+# it through MCP tools (reads and approved writes) and through the recovery oracle.
+# A new target needs a new adapter class here; its log conventions, the allowlists in
+# policies.yaml and the runbooks must match it too (data, not code).
+#
+#   kind: simulated              -> deterministic local sandbox (V1, default)
+#   kind: sregym                 -> adapter interface only; raises "not integrated" (V2)
+#   kind: some.module:ClassName  -> any class implementing recap.core.interfaces.TargetEnvironment
+kind: simulated
+options:
+  scenarios_dir: fixtures/scenarios
+  tool_latency_ms: 120   # simulated latency of a read tool call
+  write_latency_ms: 300  # simulated latency of a write (rollback / restart)

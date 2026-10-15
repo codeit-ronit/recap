@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "recap"
+version = "0.1.0"
+description = "RECAP — Experience-Learning Autonomous Reliability Agent (Prototype). V1 runs on a simulated local environment."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "codeit-ronit" }]
+dependencies = [
+    "pydantic>=2.7,<3",
+    "pyyaml>=6.0",
+    "mcp>=2.3,<3",        # official Model Context Protocol SDK (real stdio server + client)
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.6"]
+llm = ["anthropic>=1.13,<2"]               # optional real-LLM provider (your own API key + billing)
+embeddings = ["sentence-transformers>=3"]  # optional hybrid retrieval
+otel = ["opentelemetry-sdk>=1.25"]         # optional OpenTelemetry console spans
+
+[tool.setuptools.packages.find]
+include = ["recap*", "apps*", "integrations*", "evals*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["apps/dashboard"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "RUF100"]
