@@ -258,17 +258,17 @@ Protocol ([evals/runner.py](evals/runner.py), split in [evals/splits/v1.yaml](ev
 2. Every configuration then runs every test scenario with memory read-only (train partition) and memory writes disabled.
 3. The red-team suite runs injection scenarios with a deliberately compromised planner, with the safety gateway on and off (off is simulation-only).
 
-Configurations: `baseline_single` (one agent, no RAG, no memory, no adaptive routing), `full_adaptive` (everything on), `no_memory` and `no_rag` (one component removed), `single_only` (always one investigator), and `redteam_safety_on` / `redteam_safety_off` (compromised planner, gateway on or off). Report `20261015-131432-9d7846` (after M1 and its review, git `581f7ce`), provider `deterministic-scripted-policy`, simulated latency read 30 ms and write 50 ms, split `v1-synthetic`: train 3 · test 6 · red-team 1.
+Configurations: `baseline_single` (one agent, no RAG, no memory, no adaptive routing), `full_adaptive` (everything on), `no_memory` and `no_rag` (one component removed), `single_only` (always one investigator), and `redteam_safety_on` / `redteam_safety_off` (compromised planner, gateway on or off). Report `20261015-132617-a08fdf` (after M1 and its review, git `18198af`), provider `deterministic-scripted-policy`, simulated latency read 30 ms and write 50 ms, split `v1-synthetic`: train 3 · test 6 · red-team 1.
 
 **Test suite** (each row: N = number of test scenarios)
 
 | configuration | N | outcome as expected | oracle-verified recovery | correct diagnosis | mean tool calls | mean steps | mean est. tokens | mean latency (ms) | parallel rounds |
 |---|---|---|---|---|---|---|---|---|---|
-| baseline_single | 6 | 3/6 | 3/6 | 6/6 | 14.2 | 16.5 | 9153.7 | 1127.1 | 0 |
-| full_adaptive | 6 | 6/6 | 6/6 | 6/6 | 8.8 | 10.3 | 8628.8 | 864.6 | 2 |
-| no_memory | 6 | 6/6 | 6/6 | 6/6 | 9.7 | 11.2 | 8690.5 | 939.9 | 2 |
-| no_rag | 6 | 5/6 | 5/6 | 6/6 | 10.0 | 12.0 | 6597.2 | 914.6 | 3 |
-| single_only | 6 | 6/6 | 6/6 | 6/6 | 10.0 | 11.3 | 9807.3 | 1007.1 | 0 |
+| baseline_single | 6 | 3/6 | 3/6 | 6/6 | 14.2 | 16.5 | 9153.7 | 1142.5 | 0 |
+| full_adaptive | 6 | 6/6 | 6/6 | 6/6 | 8.8 | 10.3 | 8628.8 | 867.8 | 2 |
+| no_memory | 6 | 6/6 | 6/6 | 6/6 | 9.7 | 11.2 | 8690.5 | 932.8 | 2 |
+| no_rag | 6 | 5/6 | 5/6 | 6/6 | 10.0 | 12.0 | 6597.2 | 899.9 | 3 |
+| single_only | 6 | 6/6 | 6/6 | 6/6 | 10.0 | 11.3 | 9807.3 | 990.1 | 0 |
 
 **Red-team safety suite**
 

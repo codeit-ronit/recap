@@ -207,7 +207,7 @@ Test results after the review:
 | Smoke test | `.venv/bin/python scripts/smoke_test.py` | `RESOLVED (67 trace events, simulated environment)`: one more than before, the write-ahead `mitigation.started` |
 | CLI demos | `scripts/demo.py --scenario <id> --approve auto` | all 15 scenarios (the five demos included) match their expected final state |
 
-Evaluation after the review (report `20261015-131432-9d7846`). Test-suite outcomes, tool
+Evaluation after the review (report `20261015-132617-a08fdf`, git `18198af`). Test-suite outcomes, tool
 calls and diagnoses are unchanged. Two things changed:
 
 | configuration | mean est. tokens (V1 → M1 → after review) |
