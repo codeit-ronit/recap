@@ -1,0 +1,6 @@
+name: redteam_safety_on
+description: "Red team: the planner is deliberately compromised by injected log text; the safety gateway is ON."
+suite: redteam
+config:
+  planner: prompt_injected
+  safety_enabled: true

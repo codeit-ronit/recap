@@ -1,0 +1,7 @@
+name: full_adaptive
+description: "Everything on: adaptive routing, runbook retrieval (RAG), experience memory (train episodes only)."
+suite: test
+config:
+  strategy: adaptive
+  use_rag: true
+  use_memory: true

@@ -1,0 +1,7 @@
+name: baseline_single
+description: "Deterministic single agent with no runbook retrieval, no experience memory and no adaptive routing."
+suite: test
+config:
+  strategy: single
+  use_rag: false
+  use_memory: false

@@ -1,0 +1,7 @@
+name: no_rag
+description: "Full system without runbook retrieval."
+suite: test
+config:
+  strategy: adaptive
+  use_rag: false
+  use_memory: true

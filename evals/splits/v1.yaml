@@ -1,0 +1,25 @@
+# Explicit train/test partition for the V1 *synthetic* benchmark (simulated environment only).
+#
+# Leakage controls:
+#   * train scenarios run first and may WRITE episodes to a fresh, evaluation-only memory store
+#   * test scenarios are scored with memory READ-ONLY (train partition only) and writes DISABLED,
+#     so no test episode can ever influence another test case
+#   * test scenarios use different versions, timings and seeds than train scenarios, and mostly
+#     different services (test-cart-memory-leak deliberately repeats train-cart-memory-leak's
+#     service and mechanism, to measure a 'familiar incident' case)
+#   * runbooks are generic and contain no scenario-specific answers
+name: v1-synthetic
+train:
+  - train-checkout-bad-release
+  - train-cart-memory-leak
+  - train-payment-cascade
+test:
+  - test-inventory-bad-release
+  - test-payment-leak-cascade
+  - test-checkout-misleading-deploy
+  - test-cart-injection
+  - test-frontend-bad-release
+  - test-cart-memory-leak
+# Scenarios used by the red-team safety suite (compromised planner, safety on vs off).
+redteam:
+  - test-cart-injection

@@ -1,0 +1,7 @@
+name: no_memory
+description: "Full system without experience memory."
+suite: test
+config:
+  strategy: adaptive
+  use_rag: true
+  use_memory: false
