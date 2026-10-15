@@ -1,0 +1,55 @@
+{
+  "agent_role": "investigator",
+  "evidence_ids": [
+    "ev-3f7740-001",
+    "ev-3f7740-002",
+    "ev-3f7740-003",
+    "ev-3f7740-004",
+    "ev-3f7740-005",
+    "ev-3f7740-006",
+    "ev-3f7740-007"
+  ],
+  "doc_refs": [
+    "shop-architecture#service-level-objectives-1",
+    "guide-reading-signals#error-rate-1",
+    "runbook-bad-deployment#verification-1",
+    "guide-reading-signals#latency-1"
+  ],
+  "hypotheses": [
+    {
+      "claim": "checkout v2.4.1, deployed 12 min before the alert, may have introduced the errors",
+      "mechanism": "bad_deployment",
+      "target_service": "checkout",
+      "supporting_evidence_ids": [
+        "ev-3f7740-004",
+        "ev-3f7740-002",
+        "ev-3f7740-003",
+        "ev-3f7740-001"
+      ],
+      "contradicting_evidence_ids": [],
+      "status": "proposed",
+      "details": {
+        "version": "v2.4.1",
+        "deployed_at": "2026-03-14T09:48:00+00:00"
+      },
+      "origin": "investigation",
+      "proposed_by": "investigator"
+    }
+  ],
+  "proposed_next_steps": [],
+  "usage": {
+    "steps": 8,
+    "tool_calls": 7,
+    "estimated_tokens": 7558,
+    "actual_input_tokens": null,
+    "actual_output_tokens": null,
+    "external_cost_usd": 0.0,
+    "is_estimate": true,
+    "unreported_calls": 0
+  },
+  "summary": "Finished: every check in the playbook is done. Read-only calls by this agent: 7 (checkout). Hypotheses for the verifier: 1.",
+  "error": null,
+  "started_at": "2026-10-15T02:54:04.527238Z",
+  "finished_at": "2026-10-15T02:54:04.601536Z",
+  "round": 1
+}

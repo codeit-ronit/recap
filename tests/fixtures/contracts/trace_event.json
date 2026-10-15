@@ -1,0 +1,22 @@
+{
+  "event_id": "evt-efa314fbd3",
+  "run_id": "run-3f7740bb4e",
+  "seq": 13,
+  "stage": "INVESTIGATING",
+  "ts": "2026-10-15T02:54:04.528711Z",
+  "agent": "investigator",
+  "category": "tool.call",
+  "payload": {
+    "invocation_id": "call-5907d26bcf",
+    "tool": "get_service_health",
+    "caller": "investigator",
+    "args": {
+      "service": "checkout"
+    },
+    "incident_id": "inc-1f2fd4576c",
+    "requested_at": "2026-10-15T02:54:04.528702Z"
+  },
+  "duration_ms": null,
+  "usage": null,
+  "schema_version": "recap.v1"
+}

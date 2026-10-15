@@ -1,0 +1,12 @@
+{
+  "approval_id": "apr-71d827796a",
+  "incident_id": "inc-1f2fd4576c",
+  "proposal_id": "prop-c6750d0285",
+  "proposal_digest": "d3ba93eff6f686e7ba7f4d62d6ce532cfc4301f1a6ce478be7a79d722507db82",
+  "scope": "single_action",
+  "decision": "approved",
+  "actor": "auto-approver[simulation]",
+  "decided_at": "2026-10-15T02:54:04.605644Z",
+  "expires_at": "2026-10-15T03:09:04.605268Z",
+  "consumed_at": "2026-10-15T02:54:04.607176Z"
+}

@@ -1,0 +1,29 @@
+{
+  "mode": "single",
+  "reason": "clear single-service incident",
+  "rule_id": "RT7-default",
+  "selected_agents": [
+    "investigator"
+  ],
+  "provider": "deterministic-scripted-policy",
+  "budget": {
+    "investigator": 10
+  },
+  "signals": {
+    "services_affected": 1,
+    "symptom_categories": [
+      "errors",
+      "latency"
+    ],
+    "memory_hits": 0,
+    "top_memory_similarity": 0.0,
+    "familiar_success": false,
+    "memory_conflict": false,
+    "prior_failed_attempts": 0,
+    "escalation": false,
+    "remaining_tool_calls": 30,
+    "remaining_steps": 30,
+    "max_parallel_agents": 2
+  },
+  "round": 1
+}

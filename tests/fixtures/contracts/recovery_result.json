@@ -1,0 +1,90 @@
+{
+  "healthy_before": false,
+  "healthy_after": true,
+  "observed_signals": {
+    "before": {
+      "cart": {
+        "service": "cart",
+        "status": "Running",
+        "ready_replicas": 2,
+        "replicas": 2,
+        "error_rate": 0.0
+      },
+      "checkout": {
+        "service": "checkout",
+        "status": "Running",
+        "ready_replicas": 3,
+        "replicas": 3,
+        "error_rate": 0.32
+      },
+      "frontend": {
+        "service": "frontend",
+        "status": "Running",
+        "ready_replicas": 3,
+        "replicas": 3,
+        "error_rate": 0.256
+      },
+      "inventory": {
+        "service": "inventory",
+        "status": "Running",
+        "ready_replicas": 2,
+        "replicas": 2,
+        "error_rate": 0.0
+      },
+      "payment": {
+        "service": "payment",
+        "status": "Running",
+        "ready_replicas": 2,
+        "replicas": 2,
+        "error_rate": 0.0
+      }
+    },
+    "after": {
+      "cart": {
+        "service": "cart",
+        "status": "Running",
+        "ready_replicas": 2,
+        "replicas": 2,
+        "error_rate": 0.0
+      },
+      "checkout": {
+        "service": "checkout",
+        "status": "Running",
+        "ready_replicas": 3,
+        "replicas": 3,
+        "error_rate": 0.0
+      },
+      "frontend": {
+        "service": "frontend",
+        "status": "Running",
+        "ready_replicas": 3,
+        "replicas": 3,
+        "error_rate": 0.0
+      },
+      "inventory": {
+        "service": "inventory",
+        "status": "Running",
+        "ready_replicas": 2,
+        "replicas": 2,
+        "error_rate": 0.0
+      },
+      "payment": {
+        "service": "payment",
+        "status": "Running",
+        "ready_replicas": 2,
+        "replicas": 2,
+        "error_rate": 0.0
+      }
+    }
+  },
+  "oracle_name": "simulated-health-oracle",
+  "verified": true,
+  "checked_at": "2026-03-14T10:05:00Z",
+  "services_checked": [
+    "cart",
+    "checkout",
+    "frontend",
+    "inventory",
+    "payment"
+  ]
+}

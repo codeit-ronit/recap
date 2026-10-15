@@ -1,0 +1,25 @@
+{
+  "verdict": "APPROVAL_REQUIRED",
+  "reasons": [
+    "reversible write: needs a human approval bound to this exact proposal"
+  ],
+  "rule_ids": [
+    "R1-tool-name-format",
+    "R2-known-tool",
+    "R3-safety-scope",
+    "R4-args-valid",
+    "R5-namespace-allowlist",
+    "R6-service-allowlist",
+    "R7-worker-read-only",
+    "R8-read-allow",
+    "R9-destructive-deny",
+    "R10-high-risk-deny",
+    "R14-remediation-catalog",
+    "R11-reversible-approval"
+  ],
+  "tool_name": "execute_rollback",
+  "risk": "reversible_write",
+  "caller": "controller",
+  "policy_version": "policy-v1",
+  "decided_at": "2026-10-15T02:54:04.604490Z"
+}
