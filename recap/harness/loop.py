@@ -8,6 +8,10 @@ One loop iteration ("step"):
 The loop stops when the provider finishes, when the agent's step allocation is used
 up, or when the run budget is exhausted (BudgetExhausted propagates to the controller).
 The harness is provider-agnostic: it never knows whether the "brain" is an LLM.
+
+What a provider sees is built here, so this is also where the no-leak rule is applied:
+the incident and the remembered episodes are converted to their label-free views
+(AgentIncident, AgentMemoryHit) before they reach the packer or the provider request.
 """
 
 from __future__ import annotations
@@ -57,6 +61,8 @@ class AgentHarness:
         pack_tokens: int,
     ) -> None:
         self.incident = incident
+        # What the packer and providers see: the incident without its evaluation labels.
+        self.agent_incident = incident.agent_view()
         self.provider = provider
         self.gateway = gateway
         self.packer = packer
@@ -100,15 +106,17 @@ class AgentHarness:
         final = None
         for step in range(1, plan.max_steps + 1):
             self.budget.charge_step()
+            # The controller may re-assess memory between rounds, so take fresh views each step.
+            memories = [hit.agent_view() for hit in self.memory_hits]
 
             # 1. observe: a bounded view of everything recorded so far. The pack is never
             # shrunk to fit the run budget: when the budget cannot pay for a normal pack,
             # charge_tokens raises BudgetExhausted and the run stops honestly.
             pack = self.packer.build(
-                incident=self.incident,
+                incident=self.agent_incident,
                 evidence=self.evidence.all(),
                 docs=self.docs,
-                memories=self.memory_hits,
+                memories=memories,
                 max_tokens=self.pack_tokens,
                 focus_services=plan.focus_services,
                 priority_ids=self.priority_ids,
@@ -133,7 +141,7 @@ class AgentHarness:
             request = InvestigationRequest(
                 role=role,
                 goal=spec.goal,
-                incident=self.incident,
+                incident=self.agent_incident,
                 context=pack,
                 evidence={e.id: e for e in self.evidence.by_ids(pack.ids("evidence"))},
                 tools=tools.specs(),
@@ -141,7 +149,7 @@ class AgentHarness:
                 observed_refs=[e.source_ref for e in self.evidence.all()[self.epoch_start :]],
                 step=step,
                 max_steps=plan.max_steps,
-                memory_hints=list(self.memory_hits),
+                memory_hints=memories,
                 focus_services=plan.focus_services,
             )
             decision = await self.provider.next_action(request)

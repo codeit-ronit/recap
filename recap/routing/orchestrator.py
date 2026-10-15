@@ -49,7 +49,8 @@ class AgentRunPlan(Contract):
     role: AgentRole
     round: int
     max_steps: int
-    focus_services: list[str] = Field(default_factory=list)  # services the verifier asked about
+    # Services to examine first: named by the verifier or by an earlier fix attempt.
+    focus_services: list[str] = Field(default_factory=list)
 
 
 # Anything that runs one agent: AgentHarness.run_agent in a real run, a fake in tests.

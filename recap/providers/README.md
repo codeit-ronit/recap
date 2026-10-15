@@ -87,7 +87,7 @@ and a remediation still needs an exact approval.
 ## Prompts and versioning
 
 `prompts.py` holds everything the model sees and must return: the system prompt, the two
-renderers and the output schemas. `PROMPT_VERSION` (`prompts-v2`) is stored on every run,
+renderers and the output schemas. `PROMPT_VERSION` (`prompts-v3`) is stored on every run,
 so a trace always says which prompts produced it. Change anything in that file and bump the
 version.
 

@@ -33,12 +33,12 @@ from typing import Any, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from recap.core.models import (
+    AgentIncident,
+    AgentMemoryHit,
     EpisodeOutcome,
     Evidence,
     FailureMechanism,
     Hypothesis,
-    Incident,
-    MemoryHit,
 )
 from recap.core.observations import (
     ClusterEvent,
@@ -199,7 +199,9 @@ def parse_evidence(evidence: Iterable[Evidence]) -> ParsedEvidence:
 
 
 def generate_hypotheses(
-    evidence: Sequence[Evidence], incident: Incident, memory_hints: Sequence[MemoryHit] = ()
+    evidence: Sequence[Evidence],
+    incident: AgentIncident,
+    memory_hints: Sequence[AgentMemoryHit] = (),
 ) -> list[Hypothesis]:
     """Naive root-cause hypotheses from tool evidence and past episodes, each citing evidence IDs.
 
@@ -217,7 +219,7 @@ def generate_hypotheses(
     return sorted([*live, *remembered], key=_order)
 
 
-def memory_target(hit: MemoryHit, incident: Incident) -> str:
+def memory_target(hit: AgentMemoryHit, incident: AgentIncident) -> str:
     """Where a remembered diagnosis applies today: its service if this incident involves it."""
     remembered = hit.episode.mechanism_target
     if remembered and remembered in (incident.service, *incident.affected_services):
@@ -291,7 +293,7 @@ def _dependency_rule(parsed: ParsedEvidence) -> list[Hypothesis]:
 
 
 def _memory_rule(
-    live: list[Hypothesis], incident: Incident, hints: Sequence[MemoryHit]
+    live: list[Hypothesis], incident: AgentIncident, hints: Sequence[AgentMemoryHit]
 ) -> list[Hypothesis]:
     """H-memory: what verified past episodes suggest, cited with the live evidence that agrees.
 

@@ -28,20 +28,20 @@ from pydantic import Field
 from recap.core.ids import canonical_json
 from recap.core.models import (
     ActionRecord,
+    AgentIncident,
+    AgentMemoryHit,
     ContextPack,
     Contract,
     FailureMechanism,
     Hypothesis,
-    Incident,
     InvestigationRequest,
-    MemoryHit,
     ProposalRequest,
     ToolCallRecord,
     ToolSpecView,
 )
 from recap.safety.injection import injection_flags
 
-PROMPT_VERSION = "prompts-v2"
+PROMPT_VERSION = "prompts-v3"
 
 # Static on purpose: no per-run values here, so the same system prompt is sent every time.
 # Which environment RECAP works on is stated in each request's incident section instead.
@@ -146,8 +146,11 @@ def render_investigation_prompt(request: InvestigationRequest) -> str:
         _incident_section(request.incident),
     ]
     if request.focus_services:
+        # Named by RECAP's evidence verifier or by an earlier fix attempt, never by the
+        # recovery oracle (whose findings are ground truth no agent may see).
         focus = ", ".join(request.focus_services)
-        sections.append(_section("Focus", [f"RECAP's verifier asked to look closer at: {focus}"]))
+        title = "Services to examine first (named by RECAP's verifier or by an earlier fix attempt)"
+        sections.append(_section(title, [focus]))
     history = [_call_line(number, call) for number, call in enumerate(request.history, 1)]
     instructions = list(INVESTIGATION_INSTRUCTIONS)
     if request.step >= request.max_steps:
@@ -189,7 +192,7 @@ def _section(title: str, lines: Iterable[str]) -> str:
     return f"## {title}\n{body}"
 
 
-def _incident_section(incident: Incident) -> str:
+def _incident_section(incident: AgentIncident) -> str:
     # IDs, environment and time come from RECAP itself; the alert text is untrusted data.
     alert = "\n".join(
         [
@@ -278,7 +281,7 @@ def _failed_line(number: int, action: ActionRecord) -> str:
     return _untrusted(f"failed-action-{number}", "failed_action", text)
 
 
-def _memory_line(hit: MemoryHit) -> str:
+def _memory_line(hit: AgentMemoryHit) -> str:
     # Outcome, verification and "safe to reuse" are RECAP's own judgements, not episode text.
     episode = hit.episode
     line = (

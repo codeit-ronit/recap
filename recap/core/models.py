@@ -21,9 +21,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 from recap.core.ids import digest_of, utcnow
 
@@ -170,16 +170,53 @@ class RunBudget(Contract):
 
 
 class Incident(Contract):
-    """A typed incident created from an alert. Alert text is untrusted data."""
+    """A typed incident created from an alert. Alert text is untrusted data.
+
+    This full record is for RECAP's trusted code (controller, gateway, verifier, run store).
+    Providers get `agent_view()` instead, which leaves out the evaluation labels.
+    """
 
     incident_id: str
-    scenario_id: str
+    scenario_id: str  # which simulator scenario produced the alert: eval bookkeeping only
     service: str  # primary alerted service
     affected_services: list[str] = Field(default_factory=list)
     symptoms: list[str]
     created_at: datetime
     environment: str  # environment kind, e.g. "simulated"
     metadata: dict[str, Any] = Field(default_factory=dict)
+    budget: RunBudget
+
+    def agent_view(self) -> AgentIncident:
+        """The incident as a provider (scripted policy or LLM) may see it.
+
+        `scenario_id` names the scenario, and a scenario's name often IS its answer
+        ("bad-deployment"), so a provider that read it could skip the investigation.
+        `metadata` is left out too: it is free-form, so nothing guarantees it stays label-free.
+        """
+        return AgentIncident(
+            incident_id=self.incident_id,
+            service=self.service,
+            affected_services=list(self.affected_services),
+            symptoms=list(self.symptoms),
+            created_at=self.created_at,
+            environment=self.environment,
+            budget=self.budget,
+        )
+
+
+class AgentIncident(Contract):
+    """The provider-facing view of an Incident: the alert as an on-call engineer sees it.
+
+    It has no field for a scenario ID or any other label, so no code path can hand one
+    to a provider by accident (extra fields are rejected).
+    """
+
+    incident_id: str
+    service: str  # primary alerted service
+    affected_services: list[str] = Field(default_factory=list)
+    symptoms: list[str]
+    created_at: datetime
+    environment: str  # environment kind, e.g. "simulated"
     budget: RunBudget
 
 
@@ -572,13 +609,17 @@ class EvidenceSummary(Contract):
 
 
 class ExperienceEpisode(Contract):
-    """A consolidated past run. `outcome=success` requires independent verification."""
+    """A consolidated past run. `outcome=success` requires independent verification.
+
+    The full record is for memory's trusted code (store, partitions, evaluation). Providers
+    get `agent_view()`, which keeps only what the past run observed and did.
+    """
 
     episode_id: str
     origin_run_id: str
-    scenario_id: str
+    scenario_id: str  # eval bookkeeping; never shown to agents
     failure_family: str  # scenario label for isolation/analysis; never shown to agents
-    partition: MemoryPartition
+    partition: MemoryPartition  # eval bookkeeping; never shown to agents
     service: str
     symptoms: list[str]
     failure_mechanism: FailureMechanism | None = None  # from the verified diagnosis
@@ -592,6 +633,46 @@ class ExperienceEpisode(Contract):
     provenance: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
 
+    def agent_view(self) -> AgentEpisode:
+        """The episode as a provider may see it: the observable story, never the answer key.
+
+        `scenario_id` and `failure_family` are the scenario's ground-truth labels, and
+        `partition`, `origin_run_id` and `provenance` are evaluation bookkeeping. The
+        diagnosis a past run reached (`failure_mechanism`) stays: it is the run's own
+        verified conclusion, which is what experience memory is for.
+        """
+        return AgentEpisode(
+            episode_id=self.episode_id,
+            service=self.service,
+            symptoms=list(self.symptoms),
+            failure_mechanism=self.failure_mechanism,
+            mechanism_target=self.mechanism_target,
+            verified_evidence=list(self.verified_evidence),
+            unsuccessful_actions=list(self.unsuccessful_actions),
+            successful_action=self.successful_action,
+            outcome=self.outcome,
+            verified=self.verified,
+            verification_source=self.verification_source,
+            created_at=self.created_at,
+        )
+
+
+class AgentEpisode(Contract):
+    """The provider-facing view of an ExperienceEpisode. It has no label fields at all."""
+
+    episode_id: str  # kept: providers cite it
+    service: str
+    symptoms: list[str]
+    failure_mechanism: FailureMechanism | None = None
+    mechanism_target: str | None = None
+    verified_evidence: list[EvidenceSummary] = Field(default_factory=list)
+    unsuccessful_actions: list[ActionRecord] = Field(default_factory=list)
+    successful_action: ActionRecord | None = None
+    outcome: EpisodeOutcome
+    verified: bool = False
+    verification_source: str | None = None
+    created_at: datetime
+
 
 class MemoryHit(Contract):
     """A retrieved episode. Being *similar* is not the same as being *safe to reuse*."""
@@ -602,6 +683,47 @@ class MemoryHit(Contract):
     outcome: EpisodeOutcome
     safe_to_reuse: bool = False  # success + verified + mechanism matches live evidence
     reason: str = ""
+
+    def agent_view(self) -> AgentMemoryHit:
+        """The hit with its episode reduced to the provider-facing view."""
+        return AgentMemoryHit(
+            episode=self.episode.agent_view(),
+            similarity=self.similarity,
+            mechanism_match=self.mechanism_match,
+            outcome=self.outcome,
+            safe_to_reuse=self.safe_to_reuse,
+            reason=self.reason,
+        )
+
+
+class AgentMemoryHit(Contract):
+    """The provider-facing view of a MemoryHit (RECAP's reuse verdict plus a label-free episode)."""
+
+    episode: AgentEpisode
+    similarity: float
+    mechanism_match: bool | None = None
+    outcome: EpisodeOutcome
+    safe_to_reuse: bool = False
+    reason: str = ""
+
+
+def _as_agent_incident(value: Any) -> Any:
+    """Provider requests accept a full Incident too, but keep only its label-free view."""
+    return value.agent_view() if isinstance(value, Incident) else value
+
+
+def _as_agent_hits(value: Any) -> Any:
+    """Likewise for memory hits: each full MemoryHit is reduced to its AgentMemoryHit view."""
+    if isinstance(value, list | tuple):
+        return [hit.agent_view() if isinstance(hit, MemoryHit) else hit for hit in value]
+    return value
+
+
+# Field types of the provider-facing requests (section 9). Whatever a caller passes in, the
+# request ends up holding only the label-free views, so a scenario label cannot reach a
+# provider through a request, even by mistake.
+ProviderIncident = Annotated[AgentIncident, BeforeValidator(_as_agent_incident)]
+ProviderMemoryHits = Annotated[list[AgentMemoryHit], BeforeValidator(_as_agent_hits)]
 
 
 class ContextItem(Contract):
@@ -679,11 +801,15 @@ class ProviderInfo(Contract):
 
 
 class InvestigationRequest(Contract):
-    """Everything an investigator's provider may see for one decision."""
+    """Everything an investigator's provider may see for one decision.
+
+    Provider-facing: it holds label-free views (AgentIncident, AgentMemoryHit) and nothing
+    from the recovery oracle, so a provider cannot read the answer key even if it tried.
+    """
 
     role: AgentRole
     goal: str
-    incident: Incident
+    incident: ProviderIncident
     context: ContextPack
     evidence: dict[str, Evidence] = Field(default_factory=dict)  # only packed evidence
     tools: list[ToolSpecView] = Field(default_factory=list)  # read-only tools for this role
@@ -691,8 +817,10 @@ class InvestigationRequest(Contract):
     observed_refs: list[str] = Field(default_factory=list)  # source_refs of ALL evidence this run
     step: int
     max_steps: int
-    memory_hints: list[MemoryHit] = Field(default_factory=list)
-    focus_services: list[str] = Field(default_factory=list)  # hints from the verifier
+    memory_hints: ProviderMemoryHits = Field(default_factory=list)
+    # Services to examine first: named by RECAP's evidence verifier or by an earlier fix
+    # attempt in this run. Never the oracle's list of unhealthy services.
+    focus_services: list[str] = Field(default_factory=list)
 
 
 class InvestigationDecision(Contract):
@@ -707,15 +835,15 @@ class InvestigationDecision(Contract):
 
 
 class ProposalRequest(Contract):
-    """Everything the provider may see when suggesting a remediation."""
+    """Everything the provider may see when suggesting a remediation (label-free, like above)."""
 
-    incident: Incident
+    incident: ProviderIncident
     hypothesis: Hypothesis  # the best supported hypothesis
     report: VerificationReport
     context: ContextPack
     evidence: dict[str, Evidence] = Field(default_factory=dict)
     allowed_actions: list[ToolSpecView] = Field(default_factory=list)  # trusted remediation tools
-    memory_hits: list[MemoryHit] = Field(default_factory=list)
+    memory_hits: ProviderMemoryHits = Field(default_factory=list)
     failed_actions: list[ActionRecord] = Field(default_factory=list)  # earlier attempts this run
 
 

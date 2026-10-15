@@ -40,8 +40,6 @@ import dataclasses
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from recap.core.config import Settings
 from recap.core.interfaces import TargetEnvironment
 from recap.core.models import (
@@ -203,10 +201,6 @@ def around(text: str, needle: str, width: int = 70) -> str:
 # --- tests ----------------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUDIT-2.3: oracle unhealthy_services become the retry's focus_services; fixed in M1",
-)
 async def test_oracle_findings_never_reach_the_provider_after_a_failed_fix(
     settings: Settings,
 ) -> None:
@@ -235,10 +229,6 @@ async def test_oracle_findings_never_reach_the_provider_after_a_failed_fix(
         assert ORACLE_SENTINEL not in as_json, f"{where} JSON: {around(as_json, ORACLE_SENTINEL)}"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUDIT-2.3: provider requests carry scenario_id and failure_family; fixed in M1",
-)
 async def test_provider_requests_carry_no_scenario_labels(
     settings: Settings, tmp_path: Path
 ) -> None:

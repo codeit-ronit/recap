@@ -356,8 +356,10 @@ class IncidentController:
             if attempts >= retries.max_mitigation_attempts:
                 self._finish(S.FAILED, "mitigation did not recover the system; attempts used up")
                 return
-            # Start a new epoch: the system changed, so agents may observe it again.
-            focus = after.unhealthy_services
+            # Start a new epoch: the system changed, so agents may observe it again. The
+            # oracle's verdict is used only as a yes/no; where to look next comes from
+            # RECAP's own reasoning, never from the oracle's list of unhealthy services.
+            focus = _retry_focus(self.deps.registry, proposal, report)
             self.harness.epoch_start = len(self.evidence)
             self.epoch_findings = []
 
@@ -438,11 +440,14 @@ class IncidentController:
 
         target = best.target_service
         priority = [*best.supporting_evidence_ids, *_contradicting_ids(report)]
+        # Providers get label-free views: no scenario ID, no evaluation labels.
+        incident = self.incident.agent_view()
+        memories = [hit.agent_view() for hit in self.record.memory_hits]
         pack = self.deps.packer.build(
-            incident=self.incident,
+            incident=incident,
             evidence=self.evidence.all(),
             docs=self.record.retrieved_docs,
-            memories=self.record.memory_hits,
+            memories=memories,
             max_tokens=self.settings.budget.context.pack_tokens,
             focus_services=[target] if target else [],
             priority_ids=priority,
@@ -463,13 +468,13 @@ class IncidentController:
             },
         )
         request = ProposalRequest(
-            incident=self.incident,
+            incident=incident,
             hypothesis=best,
             report=report,
             context=pack,
             evidence=self._proposal_evidence(pack.ids("evidence"), best),
             allowed_actions=self.deps.registry.remediation_views(),
-            memory_hits=list(self.record.memory_hits),
+            memory_hits=memories,
             failed_actions=failed_actions,
         )
         decision = await self.provider.propose_mitigation(request)
@@ -926,6 +931,21 @@ def _unwrap_group(exc: BaseException) -> BaseException:
     while isinstance(exc, BaseExceptionGroup) and len(exc.exceptions) == 1:
         exc = exc.exceptions[0]
     return exc
+
+
+def _retry_focus(
+    registry: ToolRegistry, proposal: MitigationProposal, report: VerificationReport
+) -> list[str]:
+    """Where the next round should look first after a fix that did not recover the system.
+
+    Only what RECAP itself knows counts: the service the failed fix was aimed at (did the
+    fix take effect?) and the services the evidence verifier asked about. The recovery
+    oracle reads the environment's private ground truth; its list of unhealthy services
+    is something no agent observed, so it must never become a hint (audit finding 2.3).
+    """
+    # Only service targets: a namespace-wide action has no service to look at again.
+    services = [proposal.target] if registry.target_arg(proposal.action) == "service" else []
+    return list(dict.fromkeys([*services, *report.focus_services]))
 
 
 def _contradicting_ids(report: VerificationReport) -> list[str]:

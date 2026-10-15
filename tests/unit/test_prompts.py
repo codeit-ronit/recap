@@ -254,7 +254,9 @@ def test_investigation_prompt_shows_step_tools_and_history(context: ContextPack)
     assert "- get_service_logs (risk: read): get_service_logs description" in prompt
     assert '"values":["checkout","payment"]' in prompt  # argument rules are spelled out
     assert '1. get_service_health {"service":"checkout"} -> ok, evidence ev-abc-001' in prompt
-    assert "look closer at: payment" in prompt
+    # Focus services are named by RECAP's verifier or an earlier fix, never by the oracle.
+    focus = "## Services to examine first (named by RECAP's verifier or by an earlier fix attempt)"
+    assert f"{focus}\npayment" in prompt
     # Observed tool calls are listed once each; non-tool references are left out.
     assert prompt.count("- mcp:get_service_health(service=checkout)") == 1
     assert "doc:runbook#remediation-1" not in prompt
@@ -309,7 +311,7 @@ def test_only_a_simulated_environment_is_called_a_simulation(context: ContextPac
 
 
 def test_prompt_version_is_defined() -> None:
-    assert PROMPT_VERSION == "prompts-v2"
+    assert PROMPT_VERSION == "prompts-v3"
 
 
 def test_prompts_contain_no_secrets(context: ContextPack, monkeypatch: pytest.MonkeyPatch) -> None:

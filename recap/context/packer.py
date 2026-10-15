@@ -15,7 +15,8 @@ How a pack is built:
   2. Safety       text that looks like a prompt injection keeps its flag and is prefixed
                   with UNTRUSTED_PREFIX, so a reader treats it as data, not instructions.
   3. Ranking      0.5 * query-term overlap + 0.2 * recency + kind prior
-                  + 0.2 if the item mentions a focus service (a hint from the verifier).
+                  + 0.2 if the item mentions a focus service (named by the verifier or by
+                  an earlier fix attempt; never by the recovery oracle).
   4. Compaction   an item over `max_item_tokens` keeps its beginning plus a pointer
                   "...[compacted; full record: <id>]" back to the original.
   5. Selection    greedy by score while the budget allows. Everything left out is listed
@@ -31,11 +32,11 @@ from typing import Literal, NamedTuple
 from recap.context.tokens import CHARS_PER_TOKEN, estimate_tokens
 from recap.core.models import (
     ActionRecord,
+    AgentIncident,
+    AgentMemoryHit,
     ContextItem,
     ContextPack,
     Evidence,
-    Incident,
-    MemoryHit,
     RetrievedChunk,
     TrustLevel,
 )
@@ -86,10 +87,10 @@ class ContextPacker:
     def build(
         self,
         *,
-        incident: Incident,
+        incident: AgentIncident,
         evidence: Sequence[Evidence],
         docs: Sequence[RetrievedChunk] = (),
-        memories: Sequence[MemoryHit] = (),
+        memories: Sequence[AgentMemoryHit] = (),
         max_tokens: int,
         focus_services: Sequence[str] = (),
         priority_ids: Sequence[str] = (),
@@ -98,6 +99,9 @@ class ContextPacker:
 
         `priority_ids` are packed first (e.g. the evidence a diagnosis cites and evidence
         that contradicts a hypothesis), so a tight budget never hides them.
+
+        The packer takes the provider-facing views (AgentIncident, AgentMemoryHit), so it
+        cannot put a scenario label into a pack even by mistake.
         """
         query = _query_terms(incident, focus_services)
         focus_words = [_words(service) for service in focus_services]  # one set per service
@@ -168,7 +172,7 @@ def _doc_drafts(docs: Sequence[RetrievedChunk]) -> list[_Draft]:
     ]
 
 
-def _memory_drafts(memories: Sequence[MemoryHit]) -> list[_Draft]:
+def _memory_drafts(memories: Sequence[AgentMemoryHit]) -> list[_Draft]:
     """Past episodes, most similar first."""
     ordered = sorted(memories, key=lambda hit: (-hit.similarity, hit.episode.episode_id))
     return [
@@ -182,12 +186,11 @@ def _memory_drafts(memories: Sequence[MemoryHit]) -> list[_Draft]:
     ]
 
 
-def _render_memory(hit: MemoryHit) -> str:
-    """One line about a past episode, WITHOUT its evaluation labels.
+def _render_memory(hit: AgentMemoryHit) -> str:
+    """One line about a past episode: what was diagnosed, what was tried, what the oracle said.
 
-    failure_family, partition and scenario_id are the scenario's answer key and eval
-    bookkeeping; showing them to an agent would leak the label, so only the observable
-    story (what was diagnosed, what was tried, what the oracle said) is rendered.
+    The episode is already the label-free AgentEpisode view (no scenario_id,
+    failure_family or partition), so only the observable story can be rendered.
     """
     episode = hit.episode
     diagnosis = episode.failure_mechanism.value if episode.failure_mechanism else "unknown"
@@ -256,7 +259,7 @@ def _score(draft: _Draft, query: set[str], focus_words: list[set[str]]) -> float
     return round(score, 4)  # rounded so near-equal scores tie exactly (ties go by ID)
 
 
-def _query_terms(incident: Incident, focus_services: Sequence[str]) -> set[str]:
+def _query_terms(incident: AgentIncident, focus_services: Sequence[str]) -> set[str]:
     """Words that describe the incident: its services, the focus services, symptom words."""
     terms: set[str] = set()
     for service in (incident.service, *incident.affected_services, *focus_services):
