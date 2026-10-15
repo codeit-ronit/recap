@@ -1,0 +1,39 @@
+# Demo 1 (single agent): one service, one bad release, rollback fixes it.
+id: bad-deployment
+title: "Checkout errors right after a new release"
+description: "Clear single-service bad release. The router picks one investigator and a rollback recovers checkout."
+family: bad_deployment
+partition: demo
+seed: 11
+tags: [demo, single-agent]
+incident_time: "2026-03-14T10:00:00Z"
+namespace: shop
+alert:
+  service: checkout
+  affected_services: [checkout]
+  symptoms:
+    - "checkout: HTTP 5xx ratio above 30% (SLO 1%)"
+    - "checkout: p95 latency above 1.5s"
+services:
+  frontend:  {version: v1.8.2, replicas: 3, dependencies: [checkout, cart]}
+  checkout:  {version: v2.4.1, replicas: 3, dependencies: [payment, inventory]}
+  payment:   {version: v1.12.3, replicas: 2}
+  inventory: {version: v3.0.1, replicas: 2}
+  cart:      {version: v2.0.0, replicas: 2}
+deployments:
+  - {service: frontend, version: v1.8.2, minutes_ago: 4320, change: "Responsive product grid"}
+  - {service: checkout, version: v2.4.0, minutes_ago: 2880, change: "Price rounding fix"}
+  - {service: checkout, version: v2.4.1, minutes_ago: 12, change: "Discount stacking"}
+  - {service: payment, version: v1.12.3, minutes_ago: 3600, change: "Card network retry budget"}
+  - {service: inventory, version: v3.0.1, minutes_ago: 4800, change: "Stock cache warm-up on start"}
+  - {service: cart, version: v2.0.0, minutes_ago: 2400, change: "Persist carts across sessions"}
+faults:
+  - {type: bad_release, service: checkout, version: v2.4.1, started_minutes_ago: 11,
+     error_rate: 0.32, latency_ms: 1600, exception: "NullPointerException in PricingClient.applyDiscount"}
+log_lines: []
+# Evaluation-only ground truth: never shown to agents.
+expected: {root_cause_service: checkout, mechanism: bad_deployment, fix: execute_rollback,
+           fix_params: {to_version: v2.4.0}}
+budget: {}
+run_overrides: {}
+requires_memory_of: []

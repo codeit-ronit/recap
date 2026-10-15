@@ -1,0 +1,42 @@
+# Demo 3 (memory caution): same alert text as bad-deployment, different root cause.
+# Run bad-deployment first so a similar (but wrong) past episode exists in memory.
+id: memory-caution
+title: "Checkout errors again (looks familiar)"
+description: "Looks like bad-deployment, but payment is running out of memory and checkout only shows its upstream errors. A similar past episode must not be reused blindly."
+family: misleading_logs
+partition: demo
+seed: 31
+tags: [demo, memory]
+incident_time: "2026-03-16T09:15:00Z"
+namespace: shop
+alert:
+  service: checkout
+  affected_services: [checkout]
+  symptoms:
+    - "checkout: HTTP 5xx ratio above 30% (SLO 1%)"
+    - "checkout: p95 latency above 1.5s"
+services:
+  frontend:  {version: v1.8.2, replicas: 3, dependencies: [checkout, cart]}
+  checkout:  {version: v2.5.0, replicas: 3, dependencies: [payment, inventory]}
+  payment:   {version: v1.12.3, replicas: 2}
+  inventory: {version: v3.0.1, replicas: 2}
+  cart:      {version: v2.0.0, replicas: 2}
+deployments:
+  - {service: frontend, version: v1.8.2, minutes_ago: 4320, change: "Responsive product grid"}
+  - {service: checkout, version: v2.4.0, minutes_ago: 2880, change: "Price rounding fix"}
+  - {service: checkout, version: v2.5.0, minutes_ago: 95, change: "Discount engine refactor"}
+  - {service: payment, version: v1.12.3, minutes_ago: 3600, change: "Card network retry budget"}
+  - {service: inventory, version: v3.0.1, minutes_ago: 4800, change: "Stock cache warm-up on start"}
+  - {service: cart, version: v2.0.0, minutes_ago: 2400, change: "Persist carts across sessions"}
+faults:
+  - {type: memory_leak, service: payment, started_minutes_ago: 60, oom_minutes_ago: 6, error_rate: 0.5}
+log_lines:  # misleading: harmless warnings that point at checkout's recent release
+  - {service: checkout, minutes_ago: 50, level: WARN, message: "deprecated config key 'discount.legacy_mode' still read by release v2.5.0"}
+  - {service: checkout, minutes_ago: 30, level: WARN, message: "deprecated config key 'discount.legacy_mode' still read by release v2.5.0"}
+  - {service: checkout, minutes_ago: 12, level: WARN, message: "deprecated config key 'discount.legacy_mode' still read by release v2.5.0"}
+  - {service: checkout, minutes_ago: 4, level: WARN, message: "deprecated config key 'discount.legacy_mode' still read by release v2.5.0"}
+# Evaluation-only ground truth: never shown to agents.
+expected: {root_cause_service: payment, mechanism: resource_pressure, fix: restart_service}
+budget: {}
+run_overrides: {}
+requires_memory_of: [bad-deployment]

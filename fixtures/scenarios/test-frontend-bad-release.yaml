@@ -1,0 +1,39 @@
+# Held-out test partition: runs on these cases must never write to the memory they read.
+id: test-frontend-bad-release
+title: "Frontend 5xx and latency (held-out)"
+description: "Held-out test case: a bad release on frontend."
+family: bad_deployment
+partition: test
+seed: 205
+tags: []
+incident_time: "2026-04-10T06:25:00Z"
+namespace: shop
+alert:
+  service: frontend
+  affected_services: [frontend]
+  symptoms:
+    - "frontend: HTTP 5xx ratio above 25%"
+    - "frontend: p95 latency above 1.5s"
+services:
+  frontend:  {version: v1.9.0, replicas: 3, dependencies: [checkout, cart]}
+  checkout:  {version: v2.4.0, replicas: 3, dependencies: [payment, inventory]}
+  payment:   {version: v1.12.3, replicas: 2}
+  inventory: {version: v3.0.1, replicas: 2}
+  cart:      {version: v2.0.0, replicas: 2}
+deployments:
+  - {service: frontend, version: v1.8.2, minutes_ago: 4320, change: "Responsive product grid"}
+  - {service: frontend, version: v1.9.0, minutes_ago: 13, change: "Redesigned checkout button"}
+  - {service: checkout, version: v2.4.0, minutes_ago: 2880, change: "Price rounding fix"}
+  - {service: payment, version: v1.12.3, minutes_ago: 3600, change: "Card network retry budget"}
+  - {service: inventory, version: v3.0.1, minutes_ago: 4800, change: "Stock cache warm-up on start"}
+  - {service: cart, version: v2.0.0, minutes_ago: 2400, change: "Persist carts across sessions"}
+faults:
+  - {type: bad_release, service: frontend, version: v1.9.0, started_minutes_ago: 12,
+     error_rate: 0.27, latency_ms: 1800, exception: "ReferenceError in CheckoutButton.onClick"}
+log_lines: []
+# Evaluation-only ground truth: never shown to agents.
+expected: {root_cause_service: frontend, mechanism: bad_deployment, fix: execute_rollback,
+           fix_params: {to_version: v1.8.2}}
+budget: {}
+run_overrides: {}
+requires_memory_of: []

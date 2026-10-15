@@ -1,0 +1,16 @@
+# EXAMPLE ONLY. Nothing in RECAP V1 reads this file.
+#
+# It shows what configs/environment.yaml would look like once a real SREGym adapter
+# exists. Today, kind: sregym builds integrations/sregym/adapter.py, which describes
+# itself as "not integrated" and raises EnvironmentNotIntegrated on every operation.
+#
+# Swapping the infrastructure is meant to be a config change: agents, RAG, memory,
+# routing, guardrails and the harness never import an environment directly.
+kind: sregym
+options:
+  namespace: default   # namespace of the benchmark application (passed to describe())
+  # The keys below are placeholders for a future adapter. They are accepted and ignored
+  # today; their real names must be decided after pinning and reading an SREGym commit.
+  sregym_commit: "PIN-ME"   # exact SREGym commit the adapter was verified against
+  problem_id: ""            # an SREGym problem id from that commit
+  kubeconfig: ""            # path to the kubeconfig of the benchmark cluster

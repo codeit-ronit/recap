@@ -1,0 +1,37 @@
+# Held-out test partition: runs on these cases must never write to the memory they read.
+id: test-payment-leak-cascade
+title: "Checkout and frontend failing (held-out)"
+description: "Held-out test case: memory pressure on payment that surfaces through its callers."
+family: resource_pressure
+partition: test
+seed: 202
+tags: []
+incident_time: "2026-04-04T12:10:00Z"
+namespace: shop
+alert:
+  service: checkout
+  affected_services: [checkout, frontend]
+  symptoms:
+    - "checkout: HTTP 5xx ratio above 30%"
+    - "frontend: checkout page error rate above 25%"
+    - "frontend: p95 latency above 2s"
+services:
+  frontend:  {version: v1.8.2, replicas: 3, dependencies: [checkout, cart]}
+  checkout:  {version: v2.4.0, replicas: 3, dependencies: [payment, inventory]}
+  payment:   {version: v1.12.3, replicas: 2}
+  inventory: {version: v3.0.1, replicas: 2}
+  cart:      {version: v2.0.0, replicas: 2}
+deployments:
+  - {service: frontend, version: v1.8.2, minutes_ago: 4320, change: "Responsive product grid"}
+  - {service: checkout, version: v2.4.0, minutes_ago: 2880, change: "Price rounding fix"}
+  - {service: payment, version: v1.12.3, minutes_ago: 3600, change: "Card network retry budget"}
+  - {service: inventory, version: v3.0.1, minutes_ago: 4800, change: "Stock cache warm-up on start"}
+  - {service: cart, version: v2.0.0, minutes_ago: 2400, change: "Persist carts across sessions"}
+faults:
+  - {type: memory_leak, service: payment, started_minutes_ago: 55, oom_minutes_ago: 7, error_rate: 0.5}
+log_lines: []
+# Evaluation-only ground truth: never shown to agents.
+expected: {root_cause_service: payment, mechanism: resource_pressure, fix: restart_service}
+budget: {}
+run_overrides: {}
+requires_memory_of: []

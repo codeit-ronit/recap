@@ -1,0 +1,39 @@
+# Training partition: verified episodes from these runs may be reused by evaluation runs.
+id: train-checkout-bad-release
+title: "Checkout 5xx and latency after a change (training)"
+description: "Training case: a single-service bad release on checkout."
+family: bad_deployment
+partition: train
+seed: 101
+tags: []
+incident_time: "2026-02-03T09:40:00Z"
+namespace: shop
+alert:
+  service: checkout
+  affected_services: [checkout]
+  symptoms:
+    - "checkout: HTTP 5xx ratio above 25% (SLO 1%)"
+    - "checkout: p95 latency above 1.2s"
+services:
+  frontend:  {version: v1.8.2, replicas: 3, dependencies: [checkout, cart]}
+  checkout:  {version: v3.2.0, replicas: 3, dependencies: [payment, inventory]}
+  payment:   {version: v1.12.3, replicas: 2}
+  inventory: {version: v3.0.1, replicas: 2}
+  cart:      {version: v2.0.0, replicas: 2}
+deployments:
+  - {service: frontend, version: v1.8.2, minutes_ago: 4320, change: "Responsive product grid"}
+  - {service: checkout, version: v3.1.4, minutes_ago: 3100, change: "Tax rounding configuration"}
+  - {service: checkout, version: v3.2.0, minutes_ago: 15, change: "Regional tax tables"}
+  - {service: payment, version: v1.12.3, minutes_ago: 3600, change: "Card network retry budget"}
+  - {service: inventory, version: v3.0.1, minutes_ago: 4800, change: "Stock cache warm-up on start"}
+  - {service: cart, version: v2.0.0, minutes_ago: 2400, change: "Persist carts across sessions"}
+faults:
+  - {type: bad_release, service: checkout, version: v3.2.0, started_minutes_ago: 14,
+     error_rate: 0.30, latency_ms: 1400, exception: "ArithmeticException in TaxCalculator.round"}
+log_lines: []
+# Evaluation-only ground truth: never shown to agents.
+expected: {root_cause_service: checkout, mechanism: bad_deployment, fix: execute_rollback,
+           fix_params: {to_version: v3.1.4}}
+budget: {}
+run_overrides: {}
+requires_memory_of: []

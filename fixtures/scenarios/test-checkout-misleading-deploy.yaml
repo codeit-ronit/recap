@@ -1,0 +1,41 @@
+# Held-out test partition: runs on these cases must never write to the memory they read.
+id: test-checkout-misleading-deploy
+title: "Checkout errors with release warnings (held-out)"
+description: "Held-out test case: warnings blame checkout's recent release while inventory is running out of memory."
+family: misleading_logs
+partition: test
+seed: 203
+tags: []
+incident_time: "2026-04-06T15:35:00Z"
+namespace: shop
+alert:
+  service: checkout
+  affected_services: [checkout]
+  symptoms:
+    - "checkout: HTTP 5xx ratio above 30% (SLO 1%)"
+    - "checkout: p95 latency above 1.5s"
+services:
+  frontend:  {version: v1.8.2, replicas: 3, dependencies: [checkout, cart]}
+  checkout:  {version: v2.6.0, replicas: 3, dependencies: [payment, inventory]}
+  payment:   {version: v1.12.3, replicas: 2}
+  inventory: {version: v3.0.1, replicas: 2}
+  cart:      {version: v2.0.0, replicas: 2}
+deployments:
+  - {service: frontend, version: v1.8.2, minutes_ago: 4320, change: "Responsive product grid"}
+  - {service: checkout, version: v2.5.0, minutes_ago: 2900, change: "Discount engine refactor"}
+  - {service: checkout, version: v2.6.0, minutes_ago: 80, change: "Enable fast-checkout flag"}
+  - {service: payment, version: v1.12.3, minutes_ago: 3600, change: "Card network retry budget"}
+  - {service: inventory, version: v3.0.1, minutes_ago: 4800, change: "Stock cache warm-up on start"}
+  - {service: cart, version: v2.0.0, minutes_ago: 2400, change: "Persist carts across sessions"}
+faults:
+  - {type: memory_leak, service: inventory, started_minutes_ago: 50, oom_minutes_ago: 6, error_rate: 0.45}
+log_lines:  # misleading: harmless warnings that point at checkout's recent release
+  - {service: checkout, minutes_ago: 70, level: WARN, message: "feature flag 'fast-checkout' enabled by release v2.6.0; legacy path still referenced"}
+  - {service: checkout, minutes_ago: 40, level: WARN, message: "feature flag 'fast-checkout' enabled by release v2.6.0; legacy path still referenced"}
+  - {service: checkout, minutes_ago: 10, level: WARN, message: "feature flag 'fast-checkout' enabled by release v2.6.0; legacy path still referenced"}
+  - {service: checkout, minutes_ago: 3, level: WARN, message: "feature flag 'fast-checkout' enabled by release v2.6.0; legacy path still referenced"}
+# Evaluation-only ground truth: never shown to agents.
+expected: {root_cause_service: inventory, mechanism: resource_pressure, fix: restart_service}
+budget: {}
+run_overrides: {}
+requires_memory_of: []

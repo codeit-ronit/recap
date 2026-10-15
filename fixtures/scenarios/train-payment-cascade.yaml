@@ -1,0 +1,39 @@
+# Training partition: verified episodes from these runs may be reused by evaluation runs.
+id: train-payment-cascade
+title: "Checkout and frontend failing (training)"
+description: "Training case: a bad payment release that surfaces through its callers."
+family: bad_deployment
+partition: train
+seed: 103
+tags: []
+incident_time: "2026-02-07T18:05:00Z"
+namespace: shop
+alert:
+  service: checkout
+  affected_services: [checkout, frontend]
+  symptoms:
+    - "checkout: HTTP 5xx ratio above 30%"
+    - "frontend: checkout page error rate above 25%"
+services:
+  frontend:  {version: v1.8.2, replicas: 3, dependencies: [checkout, cart]}
+  checkout:  {version: v2.4.0, replicas: 3, dependencies: [payment, inventory]}
+  payment:   {version: v2.0.1, replicas: 2}
+  inventory: {version: v3.0.1, replicas: 2}
+  cart:      {version: v2.0.0, replicas: 2}
+deployments:
+  - {service: frontend, version: v1.8.2, minutes_ago: 4320, change: "Responsive product grid"}
+  - {service: checkout, version: v2.4.0, minutes_ago: 2880, change: "Price rounding fix"}
+  - {service: payment, version: v2.0.0, minutes_ago: 3300, change: "Card network failover"}
+  - {service: payment, version: v2.0.1, minutes_ago: 10, change: "Tokenizer library upgrade"}
+  - {service: inventory, version: v3.0.1, minutes_ago: 4800, change: "Stock cache warm-up on start"}
+  - {service: cart, version: v2.0.0, minutes_ago: 2400, change: "Persist carts across sessions"}
+faults:
+  - {type: bad_release, service: payment, version: v2.0.1, started_minutes_ago: 9,
+     error_rate: 0.5, latency_ms: 2600, exception: "NullPointerException in CardTokenizer.tokenize"}
+log_lines: []
+# Evaluation-only ground truth: never shown to agents.
+expected: {root_cause_service: payment, mechanism: bad_deployment, fix: execute_rollback,
+           fix_params: {to_version: v2.0.0}}
+budget: {}
+run_overrides: {}
+requires_memory_of: []

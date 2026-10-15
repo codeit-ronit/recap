@@ -1,0 +1,36 @@
+# Demo: memory pressure on one service; a controlled restart fixes it.
+id: resource-pressure
+title: "Inventory pods failing readiness"
+description: "Inventory's memory climbs to its limit and one pod crash-loops. A controlled restart recovers it."
+family: resource_pressure
+partition: demo
+seed: 61
+tags: [demo]
+incident_time: "2026-03-19T11:05:00Z"
+namespace: shop
+alert:
+  service: inventory
+  affected_services: [inventory]
+  symptoms:
+    - "inventory: readiness probe failures on 1 of 2 pods"
+    - "inventory: HTTP 5xx ratio above 25%"
+services:
+  frontend:  {version: v1.8.2, replicas: 3, dependencies: [checkout, cart]}
+  checkout:  {version: v2.4.0, replicas: 3, dependencies: [payment, inventory]}
+  payment:   {version: v1.12.3, replicas: 2}
+  inventory: {version: v3.0.1, replicas: 2}
+  cart:      {version: v2.0.0, replicas: 2}
+deployments:
+  - {service: frontend, version: v1.8.2, minutes_ago: 4320, change: "Responsive product grid"}
+  - {service: checkout, version: v2.4.0, minutes_ago: 2880, change: "Price rounding fix"}
+  - {service: payment, version: v1.12.3, minutes_ago: 3600, change: "Card network retry budget"}
+  - {service: inventory, version: v3.0.1, minutes_ago: 4800, change: "Stock cache warm-up on start"}
+  - {service: cart, version: v2.0.0, minutes_ago: 2400, change: "Persist carts across sessions"}
+faults:
+  - {type: memory_leak, service: inventory, started_minutes_ago: 50, oom_minutes_ago: 8, error_rate: 0.42}
+log_lines: []
+# Evaluation-only ground truth: never shown to agents.
+expected: {root_cause_service: inventory, mechanism: resource_pressure, fix: restart_service}
+budget: {}
+run_overrides: {}
+requires_memory_of: []

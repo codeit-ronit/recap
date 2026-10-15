@@ -1,0 +1,42 @@
+# Demo 2 (parallel agents): the alert fires on checkout, but the cause is upstream in payment.
+id: ambiguous-incident
+title: "Checkout and frontend failing together"
+description: "Cross-service incident with noisy inventory warnings. Parallel telemetry and infrastructure investigators must find that payment's release is the root cause."
+family: bad_deployment
+partition: demo
+seed: 23
+tags: [demo, parallel]
+incident_time: "2026-03-15T14:30:00Z"
+namespace: shop
+alert:
+  service: checkout
+  affected_services: [checkout, frontend]
+  symptoms:
+    - "checkout: HTTP 5xx ratio above 25%"
+    - "frontend: checkout page error rate above 20%"
+    - "frontend: p95 latency above 2s"
+services:
+  frontend:  {version: v1.8.2, replicas: 3, dependencies: [checkout, cart]}
+  checkout:  {version: v2.4.0, replicas: 3, dependencies: [payment, inventory]}
+  payment:   {version: v1.13.0, replicas: 2}
+  inventory: {version: v3.0.1, replicas: 2}
+  cart:      {version: v2.0.0, replicas: 2}
+deployments:
+  - {service: frontend, version: v1.8.2, minutes_ago: 4320, change: "Responsive product grid"}
+  - {service: checkout, version: v2.4.0, minutes_ago: 2880, change: "Price rounding fix"}
+  - {service: payment, version: v1.12.3, minutes_ago: 3600, change: "Card network retry budget"}
+  - {service: payment, version: v1.13.0, minutes_ago: 9, change: "Reserve funds before capture"}
+  - {service: inventory, version: v3.0.1, minutes_ago: 4800, change: "Stock cache warm-up on start"}
+  - {service: cart, version: v2.0.0, minutes_ago: 2400, change: "Persist carts across sessions"}
+faults:
+  - {type: bad_release, service: payment, version: v1.13.0, started_minutes_ago: 8,
+     error_rate: 0.45, latency_ms: 2400, exception: "IllegalStateException in LedgerClient.reserveFunds"}
+log_lines:  # noise: unrelated slow-query warnings on inventory
+  - {service: inventory, minutes_ago: 20, level: WARN, message: "slow query on stock_levels took 850ms"}
+  - {service: inventory, minutes_ago: 14, level: WARN, message: "slow query on stock_levels took 850ms"}
+# Evaluation-only ground truth: never shown to agents.
+expected: {root_cause_service: payment, mechanism: bad_deployment, fix: execute_rollback,
+           fix_params: {to_version: v1.12.3}}
+budget: {}
+run_overrides: {}
+requires_memory_of: []
