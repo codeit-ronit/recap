@@ -1,0 +1,471 @@
+"""The tool gateway: the single door every tool call goes through. RECAP's security boundary.
+
+Where it sits: agents and the controller never talk to the MCP server directly. Before a
+call reaches the `ToolTransport` (the real MCP client in V1), this gateway asks the central
+safety policy and charges the budget. It then enforces a timeout, and the output is
+redacted (secrets removed), bounded, flagged for prompt-injection text and stored as
+immutable evidence. Every step is written to the audit trace.
+
+Two deliberately separate paths:
+
+  * read path  (`call_read`)          any agent, read-only tools only, allowed automatically.
+  * write path (`execute_mitigation`) controller only, needs an approval bound to the exact
+    proposal. The approval is consumed before the call, so it can never be replayed.
+
+Workers only ever get a `ReadOnlyTools` handle, which cannot express a write. What the
+server advertises (names, descriptions, annotations) is compared with the trusted registry
+and reported, but it never decides anything.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import threading
+import time
+from collections.abc import Callable
+from typing import Any
+
+from recap.context.evidence import EvidenceRegistry, tool_source_ref
+from recap.core.config import PolicyLimits
+from recap.core.errors import ApprovalError, ConfigError
+from recap.core.ids import new_id
+from recap.core.interfaces import SafetyPolicy, ToolTransport
+from recap.core.models import (
+    AgentRole,
+    Approval,
+    EnvironmentInfo,
+    Evidence,
+    Incident,
+    MitigationProposal,
+    PolicyRequest,
+    RawToolResult,
+    SafetyDecision,
+    SourceType,
+    ToolRequest,
+    ToolResult,
+    ToolRisk,
+    ToolSpecView,
+    TrustLevel,
+    Verdict,
+)
+from recap.harness.budget import BudgetTracker
+from recap.safety.approvals import ApprovalStore
+from recap.safety.injection import INJECTION_FLAG, PATTERNS, injection_flags, scan_text
+from recap.telemetry.tracer import TraceCategory, Tracer
+from recap.tools.registry import DiscoveryReport, ToolRegistry
+
+RULE_AGENT_ALLOWLIST = "R-agent-tool-allowlist"
+RULE_CONFLICTING_REMEDIATION = "R13-conflicting-remediation"
+TRUNCATED_FLAG = "truncated"
+TRUNCATION_MARK = "...[truncated]"
+MAX_ERROR_CHARS = 500
+# Chronological lists (oldest first) keep their LAST items, i.e. the most recent ones.
+# Every other list (deployments, events, services: newest first) keeps its FIRST items.
+_CHRONOLOGICAL_LISTS = frozenset({"lines", "points"})
+
+
+class RemediationLocks:
+    """Targets currently being changed, so two fixes never touch one target at once."""
+
+    def __init__(self) -> None:
+        self._held: set[str] = set()
+        self._guard = threading.Lock()  # runs may execute in different threads
+
+    def acquire(self, key: str) -> bool:
+        """Take the lock for `key`; False if another remediation already holds it."""
+        with self._guard:
+            if key in self._held:
+                return False
+            self._held.add(key)
+            return True
+
+    def release(self, key: str) -> None:
+        """Give the lock for `key` back."""
+        with self._guard:
+            self._held.discard(key)
+
+
+SHARED_LOCKS = RemediationLocks()  # one per process, shared by every run
+
+
+class ReadOnlyTools:
+    """The only tool handle a worker agent gets: allowlisted read-only tools, nothing else.
+
+    Python cannot truly hide the gateway inside this object, so the gateway does not rely
+    on it alone: its read path refuses non-read tools and every write needs an approval.
+    """
+
+    def __init__(self, gateway: ToolGateway, caller: AgentRole, allowed_tools: list[str]) -> None:
+        not_read = [n for n in allowed_tools if gateway.registry.risk_of(n) != ToolRisk.READ]
+        if not_read:
+            raise ConfigError(f"{caller.value} may only hold read-only tools, got {not_read}")
+        self._gateway = gateway
+        self._allowed = list(allowed_tools)
+        self.caller = caller
+
+    def specs(self) -> list[ToolSpecView]:
+        """Trusted descriptions of the tools this agent may call."""
+        return self._gateway.registry.views(self._allowed)
+
+    async def call(self, tool_name: str, args: dict[str, Any]) -> ToolResult:
+        """Call one allowlisted read tool through the gateway."""
+        if tool_name not in self._allowed:
+            reason = f"{tool_name[:64]!r} is not in {self.caller.value}'s tool allowlist"
+            # Same-module helper, so the denial still lands in the gateway's audit trail.
+            return self._gateway._refuse(tool_name, self.caller, [RULE_AGENT_ALLOWLIST], reason)
+        return await self._gateway.call_read(tool_name, args, self.caller)
+
+
+class ToolGateway:
+    """Policy, budget, timeout, redaction, output bounds, evidence and audit for every call."""
+
+    def __init__(
+        self,
+        *,
+        transport: ToolTransport,
+        registry: ToolRegistry,
+        policy: SafetyPolicy,
+        approvals: ApprovalStore,
+        budget: BudgetTracker,
+        evidence: EvidenceRegistry,
+        tracer: Tracer,
+        incident: Incident,
+        environment: EnvironmentInfo,
+        limits: PolicyLimits,
+        target_scope: str,
+        safety_enabled: bool = True,
+        locks: RemediationLocks | None = None,
+        redact: Callable[[Any], Any] | None = None,
+    ) -> None:
+        self.registry = registry
+        self.results: list[ToolResult] = []  # every call in this run, denied ones included
+        self._transport = transport
+        self._policy = policy
+        self._approvals = approvals
+        self._budget = budget
+        self._evidence = evidence
+        self._tracer = tracer
+        self._incident = incident
+        self._environment = environment
+        self._limits = limits
+        self._target_scope = target_scope  # what a lock covers, e.g. one sandbox or cluster
+        self._safety_enabled = safety_enabled
+        self._locks = locks if locks is not None else SHARED_LOCKS
+        # Tool output can carry secrets (e.g. a key in a log line), and evidence is stored,
+        # served and sent to providers. The runtime passes its Redactor; tests may omit it.
+        self._redact = redact or (lambda value: value)
+
+    async def discover(self) -> DiscoveryReport:
+        """Ask the server what it offers and compare that with the trusted registry."""
+        tools = await self._transport.list_tools()
+        report = self.registry.compare(self._transport.transport_name, tools)
+        self._tracer.emit(TraceCategory.TOOL_DISCOVERY, report.model_dump())
+        return report
+
+    def read_only_view(self, caller: AgentRole, allowed_tools: list[str]) -> ReadOnlyTools:
+        """The tool handle for one worker agent."""
+        return ReadOnlyTools(self, caller, allowed_tools)
+
+    # --- read path -----------------------------------------------------------------------
+
+    async def call_read(
+        self, tool_name: str, args: dict[str, Any], caller: AgentRole
+    ) -> ToolResult:
+        """Read path: policy -> budget -> transport -> redacted, bounded, flagged evidence."""
+        invocation_id = new_id("call")
+        decision = self._judge(self._policy_request(tool_name, args, caller))
+        # The read path never writes, even if the policy allows it (safety-off ablation).
+        if decision.verdict != Verdict.ALLOW or self.registry.risk_of(tool_name) != ToolRisk.READ:
+            return self._denied(invocation_id, decision)
+
+        clean_args, _ = self.registry.validate_args(tool_name, args)
+        self._budget.reserve_tool_call()  # raises BudgetExhausted before anything is sent
+        request = self._tool_request(invocation_id, tool_name, clean_args, caller)
+        # Key names are a contract with the dashboard: it reads invocation_id, tool, caller
+        # and args, and pairs tool.call with tool.result by invocation_id. Never rename them.
+        call = {
+            "invocation_id": request.invocation_id,
+            "tool": request.tool_name,
+            "caller": request.caller.value,
+        }
+        details = request.model_dump(mode="json", include={"args", "incident_id", "requested_at"})
+        self._tracer.emit(TraceCategory.TOOL_CALL, {**call, **details}, agent=caller.value)
+
+        result, flags = await self._run(request, decision)
+        outcome = result.model_dump(include={"ok", "error", "evidence_id", "truncated"})
+        self._tracer.emit(
+            TraceCategory.TOOL_RESULT,
+            {**call, **outcome, "duration_ms": result.duration_ms, "flags": flags},
+            agent=caller.value,
+            duration_ms=result.duration_ms,
+        )
+        self.results.append(result)
+        return result
+
+    # --- write path (controller only) ----------------------------------------------------
+
+    def evaluate_mitigation(self, proposal: MitigationProposal) -> SafetyDecision:
+        """The policy check before any approval is requested."""
+        args = self.registry.mitigation_args(proposal)
+        request = self._policy_request(proposal.action, args, AgentRole.CONTROLLER, proposal)
+        return self._judge(request)
+
+    async def execute_mitigation(
+        self, proposal: MitigationProposal, approval: Approval | None
+    ) -> ToolResult:
+        """Write path: exact approval -> target lock -> budget -> consume -> one call."""
+        invocation_id = new_id("call")
+        tool, args = proposal.action, self.registry.mitigation_args(proposal)
+        # Re-read the approval from the store: the caller's copy may be stale or forged.
+        fresh = self._approvals.get_approval(approval.approval_id) if approval else None
+        policy_request = self._policy_request(tool, args, AgentRole.CONTROLLER, proposal, fresh)
+        decision = self._judge(policy_request)
+        if decision.verdict != Verdict.ALLOW:
+            return self._denied(invocation_id, decision)
+
+        lock_key = f"{self._target_scope}/{self._environment.namespace}/{proposal.target}"
+        if not self._locks.acquire(lock_key):
+            reason = f"another remediation of {lock_key} is already in progress"
+            rules = [*decision.rule_ids, RULE_CONFLICTING_REMEDIATION]
+            return self._refuse(tool, AgentRole.CONTROLLER, rules, reason, invocation_id)
+        try:
+            self._budget.reserve_tool_call()
+            if self._safety_enabled and fresh is not None:
+                try:
+                    # Consume BEFORE the call, so the approval can never be replayed,
+                    # even if the call below fails or times out.
+                    self._approvals.consume(fresh.approval_id)
+                except ApprovalError as exc:  # e.g. another process used it first
+                    rules = decision.rule_ids
+                    return self._refuse(tool, AgentRole.CONTROLLER, rules, str(exc), invocation_id)
+            approval_id = fresh.approval_id if fresh else ""
+            # These travel with the call only for the environment's own audit log, so the
+            # target records which exact approved proposal caused each change.
+            extra = {"approval_id": approval_id, "proposal_digest": proposal.digest()}
+            request = self._tool_request(invocation_id, tool, args, AgentRole.CONTROLLER)
+            result, _ = await self._run(request, decision, extra)
+        finally:
+            self._locks.release(lock_key)
+
+        result = _with_action_outcome(result)
+        # A write is traced only here, not as tool.call/tool.result: the dashboard draws
+        # and counts each write once, from this event.
+        self._tracer.emit(
+            TraceCategory.MITIGATION,
+            {
+                "invocation_id": invocation_id,
+                "tool": tool,
+                "target": proposal.target,
+                "params": proposal.params,
+                "ok": result.ok,
+                "error": result.error,
+                "side_effects": result.side_effects,
+                "approval_id": approval_id or None,
+                "proposal_digest": proposal.digest(),
+                "evidence_id": result.evidence_id,
+                "safety_enabled": self._safety_enabled,
+            },
+            agent=AgentRole.CONTROLLER.value,
+            duration_ms=result.duration_ms,
+        )
+        self.results.append(result)
+        return result
+
+    # --- shared steps --------------------------------------------------------------------
+
+    def _policy_request(
+        self,
+        tool_name: str,
+        args: dict[str, Any],
+        caller: AgentRole,
+        proposal: MitigationProposal | None = None,
+        approval: Approval | None = None,
+    ) -> PolicyRequest:
+        """What the policy judges: the call as asked for, before anything is checked."""
+        return PolicyRequest(
+            tool_name=tool_name,
+            args=args,
+            caller=caller,
+            incident_id=self._incident.incident_id,
+            environment=self._environment,
+            proposal=proposal,
+            approval=approval,
+            safety_enabled=self._safety_enabled,
+        )
+
+    def _tool_request(
+        self, invocation_id: str, tool_name: str, args: dict[str, Any], caller: AgentRole
+    ) -> ToolRequest:
+        """What is sent: a call that passed every check, with its validated arguments."""
+        return ToolRequest(
+            invocation_id=invocation_id,
+            tool_name=tool_name,
+            args=args,
+            caller=caller,
+            incident_id=self._incident.incident_id,
+        )
+
+    def _judge(self, request: PolicyRequest) -> SafetyDecision:
+        """Ask the policy, and write its decision to the audit trail."""
+        decision = self._policy.evaluate(request)
+        self._trace_decision(decision)
+        return decision
+
+    def _trace_decision(self, decision: SafetyDecision) -> None:
+        payload = decision.model_dump(mode="json", include={"verdict", "rule_ids", "reasons"})
+        caller = decision.caller.value if decision.caller else None
+        risk = decision.risk.value if decision.risk else None
+        self._tracer.emit(
+            TraceCategory.POLICY,
+            {"tool": decision.tool_name, **payload, "caller": caller, "risk": risk},
+            agent=caller,
+        )
+
+    def _refuse(
+        self,
+        tool_name: str,
+        caller: AgentRole,
+        rule_ids: list[str],
+        reason: str,
+        invocation_id: str | None = None,
+    ) -> ToolResult:
+        """A denial decided by the gateway itself (agent allowlist, lock conflict, replay)."""
+        decision = SafetyDecision(
+            verdict=Verdict.DENY,
+            reasons=[reason],
+            rule_ids=rule_ids,
+            tool_name=tool_name,
+            risk=self.registry.risk_of(tool_name),
+            caller=caller,
+            policy_version=self._policy.version,
+        )
+        self._trace_decision(decision)
+        return self._denied(invocation_id or new_id("call"), decision)
+
+    def _denied(self, invocation_id: str, decision: SafetyDecision) -> ToolResult:
+        """A refused call: nothing was sent to the transport and nothing was charged."""
+        error = "denied: " + "; ".join(decision.reasons)
+        identity = {"invocation_id": invocation_id, "tool_name": decision.tool_name}
+        result = ToolResult(**identity, ok=False, error=error, decision=decision)
+        self.results.append(result)
+        return result
+
+    async def _run(
+        self,
+        request: ToolRequest,
+        decision: SafetyDecision,
+        transport_extra: dict[str, Any] | None = None,
+    ) -> tuple[ToolResult, list[str]]:
+        """Send one call; a successful output is redacted, bounded, flagged and kept as evidence."""
+        started = time.perf_counter()
+        raw = await self._send(request.tool_name, {**request.args, **(transport_extra or {})})
+        duration_ms = round((time.perf_counter() - started) * 1000, 2)
+        identity = {
+            "invocation_id": request.invocation_id,
+            "tool_name": request.tool_name,
+            "decision": decision,
+        }
+        if not raw.ok:  # failed calls are traced but never become evidence
+            # Error text is tool output too: providers and the run record show it.
+            error = self._redact(raw.error or raw.text or "tool call failed")[:MAX_ERROR_CHARS]
+            return ToolResult(**identity, ok=False, error=error, duration_ms=duration_ms), []
+        output, evidence, truncated = self._record(request, raw)
+        result = ToolResult(
+            **identity,
+            ok=True,
+            output=output,
+            duration_ms=duration_ms,
+            evidence_id=evidence.id,
+            truncated=truncated,
+        )
+        return result, list(evidence.flags)
+
+    async def _send(self, tool_name: str, args: dict[str, Any]) -> RawToolResult:
+        """One transport call with a hard timeout. Failures become error results, not crashes."""
+        timeout = self._limits.tool_timeout_seconds
+        try:
+            call = self._transport.call_tool(tool_name, args, timeout)
+            return await asyncio.wait_for(call, timeout)
+        except TimeoutError:
+            return RawToolResult(ok=False, error=f"tool call timed out after {timeout:g}s")
+        except Exception as exc:  # a broken transport or server must not crash the run
+            return RawToolResult(ok=False, error=f"transport error: {type(exc).__name__}: {exc}")
+
+    def _record(
+        self, request: ToolRequest, raw: RawToolResult
+    ) -> tuple[dict[str, Any], Evidence, bool]:
+        """Redact a successful output, bound it, flag injection text, and store it as evidence."""
+        structured = raw.structured if raw.structured is not None else {"text": raw.text}
+        # Redact before bounding: a secret cut in half by truncation would no longer match.
+        data, lists_cut = _bound(self._redact(structured), self._limits)
+        content, text_cut = _render(data, self._limits.max_output_chars)
+        truncated = lists_cut or text_cut
+        flags = injection_flags(content) + ([TRUNCATED_FLAG] if truncated else [])
+        evidence = self._evidence.add(
+            source_type=SourceType.TOOL,
+            source_ref=tool_source_ref(request.tool_name, request.args),
+            content=content,
+            data=data,
+            tool_name=request.tool_name,
+            trust_level=TrustLevel.UNTRUSTED,  # tool output is data, never instructions
+            flags=flags,
+            agent_role=request.caller,
+        )
+        if INJECTION_FLAG in flags:
+            patterns = scan_text(content)
+            found = {"evidence_id": evidence.id, "tool": request.tool_name, "patterns": patterns}
+            excerpt = _excerpt(content, patterns)
+            self._tracer.emit(
+                TraceCategory.INJECTION, {**found, "excerpt": excerpt}, agent=request.caller.value
+            )
+        return data, evidence, truncated
+
+
+# --- output bounding ----------------------------------------------------------------------
+
+
+def _bound(value: Any, limits: PolicyLimits, key: str | None = None) -> tuple[Any, bool]:
+    """Cut long lists and long strings anywhere in a structure. Returns (bounded, was_cut)."""
+    if isinstance(value, dict):
+        pairs = {k: _bound(v, limits, k) for k, v in value.items()}
+        return {k: v for k, (v, _) in pairs.items()}, any(cut for _, cut in pairs.values())
+    if isinstance(value, list):
+        keep = limits.max_list_items
+        cut = len(value) > keep
+        if cut:
+            value = value[len(value) - keep :] if key in _CHRONOLOGICAL_LISTS else value[:keep]
+        items = [_bound(item, limits) for item in value]
+        return [v for v, _ in items], cut or any(c for _, c in items)
+    if isinstance(value, str) and len(value) > limits.max_output_chars:
+        return value[: limits.max_output_chars] + TRUNCATION_MARK, True
+    return value, False
+
+
+def _render(data: dict[str, Any], max_chars: int) -> tuple[str, bool]:
+    """Compact JSON text of the data (what an LLM would read), hard-capped at max_chars."""
+    text = json.dumps(data, ensure_ascii=False, separators=(",", ":"), default=str)
+    if len(text) <= max_chars:
+        return text, False
+    return text[:max_chars] + TRUNCATION_MARK, True
+
+
+def _excerpt(content: str, patterns: list[str], width: int = 80) -> str:
+    """The text around the first suspicious match, so a human can see what was injected."""
+    match = PATTERNS[patterns[0]].search(content) if patterns else None
+    if match is None:
+        return content[: 2 * width]
+    return content[max(0, match.start() - width) : match.end() + width]
+
+
+def _with_action_outcome(result: ToolResult) -> ToolResult:
+    """Apply the environment's ActionOutcome: it can refuse an action in a successful call."""
+    outcome = result.output or {}
+    effects = outcome.get("side_effects")
+    update: dict[str, Any] = {
+        "side_effects": [str(e) for e in effects] if isinstance(effects, list) else []
+    }
+    if result.ok and outcome.get("ok") is False:  # e.g. rollback to an unknown version
+        message = str(outcome.get("message") or "action refused by the environment")
+        update |= {"ok": False, "error": message[:MAX_ERROR_CHARS]}
+    return result.model_copy(update=update)
