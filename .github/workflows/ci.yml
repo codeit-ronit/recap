@@ -1,0 +1,38 @@
+# Continuous integration: lint + full test suite + end-to-end smoke test + dashboard build.
+# Everything runs offline against the simulated environment; no secrets are needed.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: pip install -e ".[dev,llm]"   # llm = the Anthropic SDK, only so its adapter tests run (never called)
+      - name: Lint
+        run: ruff check .
+      - name: Tests (unit, integration, e2e, adversarial)
+        run: python -m pytest -q
+      - name: End-to-end smoke test (API -> controller -> MCP -> simulator)
+        run: python scripts/smoke_test.py
+
+  dashboard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"   # runs the TypeScript unit tests natively (type stripping)
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
