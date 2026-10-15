@@ -1,0 +1,24 @@
+{
+  "name": "recap-dashboard",
+  "private": true,
+  "version": "0.1.0",
+  "description": "RECAP V1 dashboard: live incident runs, agent timeline, evidence, memory, safety and evaluations (SIMULATED LOCAL ENVIRONMENT).",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "node --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "@vitejs/plugin-react": "4.3.3",
+    "typescript": "5.6.3",
+    "vite": "5.4.10"
+  }
+}
