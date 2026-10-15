@@ -59,6 +59,7 @@ every step and tool call centrally.
 | Failure | What happens |
 |---|---|
 | timeout (per agent) | an `AgentFinding` with `error="timeout after Xs"`; the other agent's finding survives |
+| the run's deadline | each agent's timeout is the shorter of its own limit and the time left on the run (`remaining_seconds`); when the run's clock is what ran out, `BudgetExhausted` is re-raised and the run ends BUDGET_EXHAUSTED |
 | crash | an `AgentFinding` with `error="agent crashed: <type>: <message>"` |
 | `BudgetExhausted` | re-raised once every agent has stopped; the controller ends the run as BUDGET_EXHAUSTED |
 | cancellation | propagates |

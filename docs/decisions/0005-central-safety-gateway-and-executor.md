@@ -6,7 +6,7 @@ bound to that exact action; destructive actions are always denied.
 
 ## Status
 
-Accepted.
+Accepted. Extended by [ADR 0014](0014-signed-capabilities-at-the-write-boundary.md) (the gateway's decision is now also enforced at the write boundary, through a signed capability) and [ADR 0015](0015-operator-auth-and-no-wins-approvals.md) (an explicit "no" wins until the action runs; the API approver is the authenticated operator).
 
 ## Context
 

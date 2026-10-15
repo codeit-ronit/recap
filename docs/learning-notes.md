@@ -11,9 +11,14 @@ real incident followed through the code, the 17 architecture components, and thr
 **Part 3** follows the next phase (M0 onwards), which hardens V1 after an independent audit.
 
 Every number in Part 1 comes from the code, the files in [`configs/`](../configs/), the real demo
-transcripts, or the evaluation report in
-[`evals/reports/latest/summary.md`](../evals/reports/latest/summary.md). When a sentence describes
+transcripts, or the V1 evaluation report (`20261014-215026-339816`, git history of
+[`evals/reports/latest/summary.md`](../evals/reports/latest/summary.md)). When a sentence describes
 a plan rather than working code, it says so.
+
+> **Part 1 describes V1 as released (commit `ad382e6`).** Milestone M1 changed some of the
+> behaviour it describes: what providers see, how evidence is packed, verifier rule V3, the
+> MCP write path, approvals and the API. Part 3 lists every change, with the Part 1 section it
+> supersedes, and [`flow.md`](flow.md) shows the current flow end to end.
 
 Companion documents: [`architecture.md`](architecture.md) (the reference description of the
 architecture), [`threat-model.md`](threat-model.md) (attacks and defences),
@@ -4147,3 +4152,78 @@ the current code for the right reason. Those tests are strict xfails, so the sui
 while the bug exists, and the fix has to remove the mark when the test starts passing. I also
 kept guard tests next to them, such as 'an approved rollback still reaches the sandbox', so
 a fix couldn't simply switch the feature off."
+
+### M1 — Security, context and oracle hardening
+
+**What changed, in one paragraph.** M1 fixed the six weaknesses the audit found, each one
+first reproduced by a test that failed on the V1 code. Providers now get label-free views and
+structured evidence summaries; the verifier lets platform signals outrank log text; a fix on a
+live target gets a bounded time to settle and the next round ignores the fixed service's
+stale state; every provider call is bounded by the run's deadline; every write carries a
+signed, single-use capability that the environment checks itself; and approvals are decided
+by an authenticated operator, with "no" winning until the action runs.
+
+**Why each change matters (and what it replaced).**
+
+| Audit item | V1 behaviour (Part 1 section it supersedes) | M1 behaviour | Read |
+|---|---|---|---|
+| 2.3 Oracle and labels | After a failed fix, focus = the oracle's unhealthy services; requests carried `scenario_id` (components 1, 2, 11) | Focus = failed fix's target + verifier's focus; `AgentIncident`/`AgentMemoryHit` views | [ADR 0010](decisions/0010-label-free-views-and-a-yes-no-oracle.md), `_retry_focus` in `controller.py` |
+| 2.1 Context loss | Packs held raw JSON cut to its beginning (component 11) | Structured summaries; head-and-tail cuts; pinned runbooks | [ADR 0011](decisions/0011-structured-evidence-summaries.md), `recap/context/summaries.py` |
+| 2.2 Forged evidence | V3 accepted OOM log text alone; V2 trusted "upstream D failed" (component 14) | Rule V6: platform signals outrank text | [ADR 0012](decisions/0012-platform-signals-outrank-log-text.md), `recap/agents/verifier.py` |
+| 2.6 Lifecycle | One oracle probe right after the write; all evidence counted after a fix; provider calls not bounded by the run (components 1, 3, 13, 15) | Stabilization polling for live targets; `remediated` epochs; deadline-bound calls | [ADR 0013](decisions/0013-stabilization-epochs-and-deadlines.md) |
+| 2.5 Execution authority | The MCP server and the environment accepted any write (components 5, 6, 7) | Ed25519 capabilities verified by the environment; strict tool arguments | [ADR 0014](decisions/0014-signed-capabilities-at-the-write-boundary.md), `recap/safety/capabilities.py` |
+| 2.4 Approvals and API | First decision won; no API authentication; free-text approver (component 8, appendix A) | "No" wins until used; compare-and-swap; append-only log; operator token; host and origin checks | [ADR 0015](decisions/0015-operator-auth-and-no-wins-approvals.md), `apps/api/auth.py` |
+
+**Inputs → outputs (the new pieces).**
+
+- `render_for_agents(evidence, incident_time, max_chars)` → the text a provider reads for one
+  tool result.
+- `EvidenceVerifier.verify(findings, registry, incident, remediated=...)` → a report in which
+  the fixed service's pre-fix state no longer counts.
+- `CapabilityIssuer.issue(action, target, params, approval_id, proposal_digest)` → a token;
+  `verify_capability(token, public_key, run_id, action, used_nonces)` → its payload, or
+  `CapabilityError`.
+- `ApprovalStore.decide(...)` → an `Approval` or a refusal, always logged;
+  `ApprovalStore.events(proposal_id)` → the decision log.
+- `OperatorAuth.check(request)` → the `Operator`, or HTTP 401.
+
+**Signed capabilities in one paragraph (the idea most worth understanding).** Each run makes a
+key pair. The private half never leaves the controller's memory; the public half is written
+into the run's sandbox state with `bind_executor`. When the gateway has done all its checks
+for a write, it signs a small JSON payload naming exactly that write (and a random nonce, and
+a 60-second expiry). The environment verifies the signature with the public key, compares
+every field with the write it was actually asked to do, refuses a nonce it has seen, and
+records the nonce in the same database transaction as the change. A second MCP server process
+can read the public key but cannot sign, so it cannot write. This is the same idea as a
+signed, short-lived, single-use token in any capability-based security system.
+
+**Tradeoffs.**
+
+- A retry has to find the other broken services by observing, without the oracle's hint, and
+  log text alone no longer proves memory pressure: one evaluation scenario now needs a second
+  round (10 → 15 tool calls without memory).
+- Summaries can hide a detail only the raw lines show; the raw record is kept, but no tool
+  lets a provider fetch it yet.
+- One operator token is not per-user identity, and reads stay open on localhost.
+- A live run can wait up to a minute per fix for the target to settle.
+
+**Reproduce it.**
+
+```bash
+.venv/bin/python -m pytest tests/adversarial/test_audit_*.py tests/e2e/test_audit_*.py   # 43 reproductions, all pass
+.venv/bin/python -m pytest -m e2e                                                       # 43 end-to-end test cases
+.venv/bin/python scripts/evaluate.py                                                    # the synthetic evaluation after M1
+```
+
+**Interview question:** "Your gateway already checked approvals. Why did you also add signed
+capabilities at the environment?"
+
+**Model answer:** "Because the gateway only protects callers that go through it. The audit
+showed that anything able to speak MCP to the tool server, for example a second server process
+started for the same run, could roll back or delete with an empty approval ID. So I moved the
+final check to where the write happens. The gateway signs a short-lived, single-use capability
+for exactly the action it allowed, with a per-run Ed25519 key that never leaves the
+controller. The environment verifies the signature, the exact action, the expiry and the nonce
+in the same transaction as the change. A process that can read the public key still can't
+sign, so a bypass changes nothing. Nineteen tests reproduce the bypasses, and a control test
+makes sure the approved path still works."

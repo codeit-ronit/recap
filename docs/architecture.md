@@ -1,9 +1,14 @@
-# RECAP V1 architecture
+# RECAP architecture
 
 How **RECAP — Experience-Learning Autonomous Reliability Agent (Prototype)** is built: its parts,
 how they talk to each other, where trust starts and ends, and how to replace the simulated
 infrastructure with a real one.
 
+> **Updated for milestone M1** (2026-10-15), which fixed the six findings of an independent
+> audit: label-free provider views, structured evidence summaries, verifier rule V6, a
+> stabilization wait and epoch-aware verification, signed single-use execution capabilities, and
+> an operator-authenticated API. [flow.md](flow.md) follows one incident through all of it.
+>
 > **Scope of V1.** RECAP V1 runs only against a **simulated** five-service shop. The default
 > decision provider is a **scripted deterministic policy, not an LLM**. The SREGym adapter is an
 > **interface stub**: it says it is not integrated, lists no scenarios and refuses every other
@@ -183,7 +188,7 @@ How to read it:
 | `AgentHarness` | [`recap/harness/loop.py`](../recap/harness/loop.py) | The observe, reason, act loop every investigator runs. |
 | `EvidenceRegistry`, `ContextPacker` | [`recap/context/evidence.py`](../recap/context/evidence.py), [`recap/context/packer.py`](../recap/context/packer.py) | Append-only evidence with run-unique IDs; bounded, ranked context packs built from it, with the evidence a diagnosis cites and any contradicting evidence packed first. |
 | Decision provider | [`recap/providers/`](../recap/providers) | `DeterministicProvider` (default, scripted, not an LLM), `AnthropicProvider` (opt-in Claude adapter), and a red-team wrapper. |
-| `EvidenceVerifier` | [`recap/agents/verifier.py`](../recap/agents/verifier.py) | The `Verifier`: rule checks of root-cause claims (V1 to V5) and of proposed fixes (VP1 to VP3). Not proof of causation. |
+| `EvidenceVerifier` | [`recap/agents/verifier.py`](../recap/agents/verifier.py) | The `Verifier`: rule checks of root-cause claims (V1 to V6; V6 lets platform signals outrank log text) and of proposed fixes (VP1 to VP3). Not proof of causation. |
 | `ToolGateway`, `PolicyEngine`, `ToolRegistry` | [`recap/tools/gateway.py`](../recap/tools/gateway.py), [`recap/safety/policy.py`](../recap/safety/policy.py), [`recap/tools/registry.py`](../recap/tools/registry.py) | The single door for tool calls. ALLOW, APPROVAL_REQUIRED or DENY, decided from trusted config only. Every output is redacted and bounded before it becomes evidence. |
 | `ApprovalStore` and channels | [`recap/safety/approvals.py`](../recap/safety/approvals.py) | Approvals bound to one exact proposal, expiring and single-use, stored in SQLite. |
 | `McpToolClient` | [`recap/tools/mcp_client.py`](../recap/tools/mcp_client.py) | The `ToolTransport`: real MCP over stdio to a subprocess. |
@@ -330,9 +335,10 @@ sequenceDiagram
     G->>P: evaluate with the approval
     P-->>G: ALLOW, rule R12-approval-binding
     G->>A: consume the approval before the call
-    G->>MC: call_tool execute_rollback with approval_id and digest
+    G->>G: sign a single-use capability for exactly this rollback
+    G->>MC: call_tool execute_rollback with approval_id, digest and capability
     MC->>S: tools/call
-    S->>E: execute_authorized rollback
+    S->>E: execute_authorized rollback (verifies the capability first)
     E-->>S: ok - checkout v2.4.1 to v2.4.0, pods replaced
     S-->>MC: ActionOutcome
     MC-->>G: raw result
@@ -499,7 +505,7 @@ flowchart LR
 |---|---|---|---|
 | **Controller process** (the CLI demo, the API server or the evaluation runner) | The whole session | The `Runtime` and, per run, an `IncidentController` with its gateway, agents, evidence registry, budget, tracer, oracle and adapter instance A | In-process calls on one asyncio event loop |
 | **MCP server subprocess** | One per run: started after `reset` and the namespace check (never for a refused incident), closed when the lifecycle loop ends (before memory consolidation) | `MCPServer` with 10 tools, plus adapter instance B | MCP messages (JSON-RPC 2.0, a simple request/response format) over the subprocess's stdin and stdout ("stdio") |
-| **Sandbox SQLite file** `data/sandbox/<run_id>.db` | One per run, kept afterwards for inspection | The whole simulated world (services, deployments, faults, log lines, clock, and an action log that records each attempted write with its approval ID and proposal digest) as one JSON row | Both adapter instances read it fresh on every call; each write is one `BEGIN IMMEDIATE` transaction |
+| **Sandbox SQLite file** `data/sandbox/<run_id>.db` | One per run, kept afterwards for inspection | The whole simulated world (services, deployments, faults, log lines, clock, an action log that records each attempted write with its approval ID and proposal digest, the run's executor public key, and the capability nonces already used) as one JSON row | Both adapter instances read it fresh on every call; each write is one `BEGIN IMMEDIATE` transaction |
 
 ### The MCP server subprocess
 
@@ -523,10 +529,14 @@ interpreter and the repository root as the working directory. The server builds 
 - **Failures are data.** A timeout (`limits.tool_timeout_seconds`, 10 s), a crashed server or a bad
   reply comes back as `RawToolResult(ok=False, error=...)`. The gateway records it, with the error
   text redacted; the run does not crash.
-- **Writes carry their audit identity.** The write tools take `approval_id` and `proposal_digest`
-  and pass them to `execute_authorized` only for the environment's action log, so the sandbox
-  records which exact approved proposal caused each change. The server checks neither; the
-  gateway has already enforced the approval.
+- **Writes carry a capability.** The write tools take `approval_id`, `proposal_digest` and a
+  `capability`: a token the gateway signed with the run's private key for exactly this action
+  ([`recap/safety/capabilities.py`](../recap/safety/capabilities.py)). The environment verifies it
+  in the same transaction as the change and records its nonce, so a write that did not come
+  through the gateway (a second server process, a replay, a stolen approval ID) is refused. The
+  approval ID and digest still go to the action log for the audit trail.
+- **Strict arguments.** `StrictToolServer` rejects any argument a tool does not define, instead
+  of the SDK's default of dropping it silently.
 - **Cost:** about 0.4 to 0.5 s of start-up per run.
 
 ### Why the oracle reads ground truth through its own adapter instance
@@ -610,7 +620,7 @@ All interfaces live in [`recap/core/interfaces.py`](../recap/core/interfaces.py)
 | `RouterPolicy` | `RulesRouter`: rules RT0 to RT7, first match wins. `LearnedRouter` is a stub that raises `NotImplementedError`. | [`recap/routing/router.py`](../recap/routing/router.py) | rules: implemented; learned: adapter only | Learned router, a contextual bandit (a model that learns which choice pays off in which situation) over the same signals (not yet built) |
 | `SafetyPolicy` | `PolicyEngine`: rules R1 to R10, R14, R11 and R12, in that order, over simulator-scoped allowlists (the gateway adds R13 and the per-agent tool allowlist) | [`recap/safety/policy.py`](../recap/safety/policy.py) | implemented | Kubernetes RBAC-aware policy, where RBAC is Kubernetes role-based access control (not yet built) |
 | `RecoveryOracle` | `EnvironmentHealthOracle` plus `recovery_result()`; each run's oracle is built by `ControllerDeps.oracle_factory` | [`recap/verification/oracle.py`](../recap/verification/oracle.py) | implemented (its ground truth comes from the simulator) | Benchmark health oracle, for example SREGym's own mitigation check (not yet built) |
-| `Verifier` | `EvidenceVerifier`: evidence rules for root-cause claims (V1 to V5) and for proposed fixes (VP1 to VP3); not proof of causation | [`recap/agents/verifier.py`](../recap/agents/verifier.py) | implemented | Richer causal checks (not yet built) |
+| `Verifier` | `EvidenceVerifier`: evidence rules for root-cause claims (V1 to V6) and for proposed fixes (VP1 to VP3), epoch-aware after a fix; not proof of causation | [`recap/agents/verifier.py`](../recap/agents/verifier.py) | implemented | Richer causal checks (not yet built) |
 | `TraceSink` | `JsonlTraceSink`, `SqliteTraceSink`, `BroadcastSink` (live stream); optional `OTelTraceSink` printing OpenTelemetry spans to the console | [`recap/telemetry/sinks.py`](../recap/telemetry/sinks.py), [`recap/telemetry/otel.py`](../recap/telemetry/otel.py) | implemented; OpenTelemetry bridge: adapter only (needs the `otel` extra) | OpenTelemetry collector over OTLP, the OpenTelemetry wire protocol (not yet built) |
 | `ApprovalChannel` | `AutoApprovalChannel` (refuses to exist outside a simulation), `ConsoleApprovalChannel` (terminal), `ExternalApprovalChannel` (dashboard through the API) | [`recap/safety/approvals.py`](../recap/safety/approvals.py) | console and API: implemented; auto-approver: simulated | Chat-ops approvals; authenticated approvers (not yet built: in V1 the approver is a free-text label) |
 | `TrainingPipeline` | None. An abstract placeholder whose `train()` raises `NotImplementedError`. | [`recap/core/interfaces.py`](../recap/core/interfaces.py) | not yet built | Trajectory distillation or SFT (supervised fine-tuning) on recorded runs |
@@ -686,6 +696,8 @@ class KubernetesEnvironment(TargetEnvironment):
             namespace=self.namespace,
             is_simulated=False,
             supported_actions=["rollback", "restart"],
+            stabilization_timeout_seconds=180,  # how long a rollout may take to settle
+            stabilization_poll_seconds=5,
         )
 
     def list_scenarios(self) -> list[ScenarioInfo]: ...  # problem inventory
@@ -701,9 +713,10 @@ class KubernetesEnvironment(TargetEnvironment):
     async def observe_deployments(self, service: str | None, limit: int) -> DeploymentList: ...
     async def observe_events(self, service: str | None, limit: int) -> EventList: ...
     async def plan_rollback(self, service: str) -> RollbackPlan: ...  # dry run, no side effects
+    def bind_executor(self, public_key: str) -> None: ...  # store where every process sees it
     async def execute_authorized(
         self, action: AuthorizedAction
-    ) -> ActionOutcome: ...  # the only write
+    ) -> ActionOutcome: ...  # the only write: verify_capability(...) first, refuse safety-off
     async def health_check(self) -> HealthReport: ...  # ground truth for the oracle
 ```
 
@@ -726,6 +739,10 @@ Rules for the translation:
 - Pass credentials and paths (for example a kubeconfig path) through `options`. The MCP subprocess
   does not inherit `KUBECONFIG` or any other variable outside the allowlist in
   [section 5](#5-process-model).
+- Enforce the write boundary yourself: store the public key from `bind_executor` where both
+  adapter instances see it, call `verify_capability` (with `allow_safety_off=False`) before every
+  write, and record the nonce together with the change. A real adapter must never accept a
+  write without it.
 - The planned (unverified) mapping from RECAP tools to Kubernetes-style capabilities is in
   [`integrations/sregym/mapping.md`](../integrations/sregym/mapping.md), and what a real SREGym
   integration needs is in [`integrations/sregym/README.md`](../integrations/sregym/README.md).
@@ -855,14 +872,18 @@ A run moves data like this:
 2. **Runbook chunks** and **past episodes** are retrieved with citations and IDs.
 3. Agents call read tools; each **tool output** is redacted, bounded, flagged and stored as
    immutable, untrusted `Evidence`.
-4. The packer builds a bounded **context pack** for each provider decision. The evidence a
-   diagnosis cites and any evidence that contradicts a hypothesis are packed first, and every
-   pack, the proposal's included, is traced.
+4. The packer builds a bounded **context pack** for each provider decision from structured
+   evidence summaries and label-free views of the incident and past episodes. The evidence a
+   diagnosis cites and any evidence that contradicts a hypothesis are packed first, the
+   diagnosis' runbook is pinned in the proposal pack, and every pack is traced.
 5. The provider returns **decisions**: tool calls, hypotheses and finally one mitigation draft.
-6. The **verifier** judges claims against all evidence of the run; the **policy** judges every call
-   and the draft; a **human** approves the exact write.
-7. The gateway executes the write; the **oracle** checks ground truth; the **consolidator** writes
-   the episode.
+6. The **verifier** judges claims against all evidence of the run (after a fix, the fixed
+   service's older state no longer counts); the **policy** judges every call and the draft; a
+   **human** approves the exact write.
+7. The gateway executes the write with a signed single-use capability that the environment
+   verifies; the **oracle** checks ground truth (waiting for a live target to settle); the
+   **consolidator** writes the episode. The oracle's verdict is a yes/no for the controller: its
+   findings never reach a provider.
 
 Untrusted inputs, and where each is checked:
 
@@ -870,13 +891,13 @@ Untrusted inputs, and where each is checked:
 |---|---|---|
 | **Alert** (symptoms text) | `TargetEnvironment.reset` | Typed into `Incident` (unknown fields rejected). Used only as search text for RAG, memory and routing signals, and wrapped in `<untrusted_data>` tags in LLM prompts ([`prompts.py`](../recap/providers/prompts.py)). The policy never reads it. |
 | **Tool listings** (names, descriptions, schemas, annotations) | The MCP server | `ToolGateway.discover` compares them with `ToolRegistry`, built from `configs/policies.yaml`. Unknown tools are never callable (R2), look-alike names fail R1, and the tool descriptions shown to providers come from the trusted config, not the server. |
-| **Tool outputs** | MCP server and environment | `ToolGateway` first redacts secrets in them (best-effort patterns), then bounds them (at most 60 list items and 6000 characters), flags injection-like text, and stores them as frozen `Evidence` with `trust_level=untrusted`. Failed calls never become evidence. The verifier re-validates `Evidence.data` against the observation models before using it. |
+| **Tool outputs** | MCP server and environment | `ToolGateway` first redacts secrets in them (best-effort patterns), then bounds them (at most 60 list items, newest kept for chronological lists, and 6000 characters with the head and tail kept), flags injection-like text, and stores them as frozen `Evidence` with `trust_level=untrusted`. Failed calls never become evidence. Providers read a structured summary of the data ([`summaries.py`](../recap/context/summaries.py)). The verifier re-validates `Evidence.data` against the observation models before using it, and lets platform signals outrank log text (V6). |
 | **Logs** (a tool output, and the main injection vector) | `get_service_logs` | As above. In addition, the context packer prefixes flagged text with `[UNTRUSTED DATA - contains instruction-like text; ...]`. In the `malicious-log` demo, evidence `ev-d8b4bc-002` was flagged with `ignore-instructions`, `system-override` and `imperative-destructive` ([`injection.py`](../recap/safety/injection.py)). |
 | **Runbook chunks** (docs) | `fixtures/knowledge` through `KnowledgeRetriever` | Cited by stable chunk ID with a file checksum; scanned again by the packer. The scripted policy ignores action hints that are not in `remediation_tools`. The policy denies destructive tools whatever a document says. |
-| **Past episodes** (memories) | `data/memory.db` through `ExperienceStore` | Partition rules decide what a run may read. "Similar" is not "safe": `assess_reuse` requires a past success, verified by the oracle, whose mechanism matches today's live evidence. Episodes are rendered without their evaluation labels, and a remembered claim faces the same verifier rules (V5-memory). |
+| **Past episodes** (memories) | `data/memory.db` through `ExperienceStore` | Partition rules decide what a run may read. "Similar" is not "safe": `assess_reuse` requires a past success, verified by the oracle, whose mechanism matches today's live evidence. Providers receive `AgentMemoryHit` views with no label fields at all, and a remembered claim faces the same verifier rules (V5-memory). |
 | **Provider decisions** (tool calls, hypotheses, mitigation drafts) | `DeterministicProvider`, the optional Claude adapter, or the red-team wrapper | Tool calls go through `ReadOnlyTools` and the policy. Hypotheses go through the verifier. For a draft, the policy takes the risk tier from the registry and ignores the draft's self-declared `risk_level`; the tool must be in the remediation catalog (R14), and the draft's params may not set the tool's target argument (R11/R12). Tool arguments are derived from the proposal by `mitigation_args`, and `check_proposal` requires cited evidence from this run and the diagnosed target. |
 | **Scenario overrides** (`run_overrides` in a scenario file) | `fixtures/scenarios` | Only `planner` and `strategy` are accepted, checked twice (`ScenarioSpec` validation and `SCENARIO_OVERRIDABLE` in the controller), and a field the caller set explicitly wins. A scenario can never switch off safety, approvals, memory isolation, the provider or the budget. |
-| **Approval decisions** | Terminal, API and dashboard, or the auto-approver (simulation only) | Accepted only through `ApprovalStore.decide`, which checks the digest, that the request is pending and that it has not expired. The gateway re-reads the stored approval and consumes it before the call. The approver's identity is a label, not authenticated (V1 limitation). |
+| **Approval decisions** | Terminal, API and dashboard, or the auto-approver (simulation only) | Accepted only through `ApprovalStore.decide`, which checks the digest and the expiry; approve only a pending request, reject a pending one or revoke an unused approval ("no" wins until the action runs); compare-and-swap in one transaction; every attempt logged. Through the API the operator's bearer token is required and the approver recorded comes from it. The gateway re-reads the stored approval and consumes it before the call. |
 
 The trusted side:
 
@@ -884,7 +905,9 @@ The trusted side:
 |---|---|---|
 | `IncidentController` and `Lifecycle` | What happens next; the only writer | [`controller.py`](../recap/harness/controller.py), [`lifecycle.py`](../recap/core/lifecycle.py) |
 | `PolicyEngine`, `ToolRegistry`, `ToolGateway` | Whether any tool call may run, from config only | [`policy.py`](../recap/safety/policy.py), [`registry.py`](../recap/tools/registry.py), [`gateway.py`](../recap/tools/gateway.py) |
-| `ApprovalStore` | Whether this exact write was approved, once | [`approvals.py`](../recap/safety/approvals.py) |
+| `ApprovalStore` | Whether this exact write was approved, once, and not revoked | [`approvals.py`](../recap/safety/approvals.py) |
+| `CapabilityIssuer` and the adapter's `execute_authorized` | Whether a write reaching the environment was signed by this run's gateway for exactly that action | [`capabilities.py`](../recap/safety/capabilities.py), [`engine.py`](../recap/environments/simulated/engine.py) |
+| `OperatorAuth` | Who is calling a state-changing API endpoint | [`auth.py`](../apps/api/auth.py) |
 | `EvidenceVerifier` | Which claim the evidence supports | [`verifier.py`](../recap/agents/verifier.py) |
 | `EnvironmentHealthOracle` | Whether the system recovered | [`oracle.py`](../recap/verification/oracle.py) |
 | `Consolidator` | What is remembered; `success` only if the oracle verified it | [`consolidation.py`](../recap/memory/consolidation.py) |
@@ -986,7 +1009,7 @@ context packer (ties broken by ID) and the verifier's rules.
 |---|---|
 | `recap` | `0.1.0` |
 | `schema` | `recap.v1` |
-| `prompt_version` | `prompts-v2` (versioned LLM prompts, recorded even when the scripted provider is used) |
+| `prompt_version` | `prompts-v3` (versioned LLM prompts, recorded even when the scripted provider is used) |
 | `config_hash` | `02086400a3e4f88a`: the first 16 hex characters of a SHA-256 over the five `configs/*.yaml` files |
 | `fixture_hash` | `b73cc0a448614155`: the first 16 hex characters of a SHA-256 over every file under `fixtures/` (scenarios and runbooks) |
 | `policy_version` | `policy-v1` |
@@ -1025,9 +1048,10 @@ were produced from identical configuration and fixtures.
 - **The default brain is scripted.** It understands the simulator's log conventions
   ([`signals.py`](../recap/core/signals.py)); real logs would need real parsers or an LLM provider.
   The Claude adapter is opt-in and has not been measured.
-- **The MCP server enforces nothing.** It is a local subprocess, and code that can reach it directly
-  could bypass the gateway. A real deployment would also need server-side authorization (for example
-  Kubernetes RBAC); that is not yet built.
+- **The MCP server is a local subprocess.** Since M1 a write needs a capability signed with the
+  run's private key, so calling a write tool directly is refused. A process that can rewrite the
+  run's sandbox file, or the controller process itself, is still trusted. A real deployment would
+  also need least-privilege credentials (for example Kubernetes RBAC); that is not yet built.
 - **Injection detection is pattern-based** and easy to evade. The protection is the gateway, which
   denies dangerous actions whatever any text says.
 - **Secret redaction is best-effort.** Pattern matching removes known key formats, values under
@@ -1035,8 +1059,8 @@ were produced from identical configuration and fixtures.
   in another format is stored as it is.
 - **The verifier checks evidence rules, not causation.** A supported claim agrees with simple rules
   about timing and platform signals; it is not proven.
-- **Approvals are not authenticated.** The approver is a free-text label, and the SQLite files are
-  trusted local state.
+- **One operator, not individual people.** The API records `operator:<name>` from a single bearer
+  token, reads stay open on the loopback host names, and the SQLite files are trusted local state.
 - **One MCP subprocess per run** costs about 0.4 to 0.5 s of start-up.
 - **Token counts are estimates** (about 4 characters per token), and external API cost is $0 in
   deterministic mode.

@@ -1,6 +1,7 @@
 # RECAP — Experience-Learning Autonomous Reliability Agent (Prototype)
 
 > **V1 prototype: runs on a simulated local environment; nothing here repairs a real cluster.**
+> Hardened in milestone M1 (October 2026) after an independent audit: see [docs/status.md](docs/status.md) for measured results and [docs/flow.md](docs/flow.md) for one incident end to end.
 
 An incident-response agent that investigates through real MCP (Model Context Protocol) tools, asks a human to approve one exact fix, checks recovery with an independent oracle, and remembers only what was verified.
 
@@ -39,11 +40,11 @@ Agents never import an environment: they reach it only through MCP tools. The or
 
 ### 2. Real MCP over stdio
 
-Tools are served by a real MCP server ([recap/tools/mcp_server.py](recap/tools/mcp_server.py)) built with the official MCP Python SDK (v2). RECAP starts it as a subprocess for every incident run, and the two sides exchange JSON-RPC messages over stdin/stdout ("stdio"). It publishes ten tools: seven reads (services, health, logs, metrics, deployments, events, rollback dry run) and three writes (`execute_rollback`, `restart_service`, `delete_namespace`). RECAP treats the server as untrusted: what it advertises about its tools (names, descriptions, hints) decides nothing. A tool is callable only if the trusted registry lists it, and risk tiers come from [configs/policies.yaml](configs/policies.yaml).
+Tools are served by a real MCP server ([recap/tools/mcp_server.py](recap/tools/mcp_server.py)) built with the official MCP Python SDK (v2). RECAP starts it as a subprocess for every incident run, and the two sides exchange JSON-RPC messages over stdin/stdout ("stdio"). It publishes ten tools: seven reads (services, health, logs, metrics, deployments, events, rollback dry run) and three writes (`execute_rollback`, `restart_service`, `delete_namespace`). RECAP treats the server as untrusted: what it advertises about its tools (names, descriptions, hints) decides nothing. A tool is callable only if the trusted registry lists it, and risk tiers come from [configs/policies.yaml](configs/policies.yaml). Since M1 the server is not a free door either: a write tool acts only with a capability that RECAP's gateway signed for exactly that action (verified by the environment itself, single use), and every tool rejects arguments it does not define.
 
 ### 3. One safety gateway with exact approvals
 
-Every tool call goes through one `ToolGateway` ([recap/tools/gateway.py](recap/tools/gateway.py)): policy check, budget reservation, hard timeout, secret redaction, output limits, injection flags, immutable evidence and an audit trace. The policy ([recap/safety/policy.py](recap/safety/policy.py)) decides only from trusted inputs, never from model or document text. With safety on, a reversible write runs only with an approval bound to a SHA-256 fingerprint (digest) of that exact proposal. The approval expires and works once ([recap/safety/approvals.py](recap/safety/approvals.py)). Destructive actions are always denied.
+Every tool call goes through one `ToolGateway` ([recap/tools/gateway.py](recap/tools/gateway.py)): policy check, budget reservation, hard timeout, secret redaction, output limits, injection flags, immutable evidence and an audit trace. The policy ([recap/safety/policy.py](recap/safety/policy.py)) decides only from trusted inputs, never from model or document text. With safety on, a reversible write runs only with an approval bound to a SHA-256 fingerprint (digest) of that exact proposal. The approval expires and works once, and an explicit "no" wins until the action has run ([recap/safety/approvals.py](recap/safety/approvals.py)). After the approval is used, the gateway signs a single-use Ed25519 capability for exactly that action, and the environment refuses any write without one ([recap/safety/capabilities.py](recap/safety/capabilities.py)). Through the API, only the operator holding the bearer token can approve, and the approver recorded comes from that token. Destructive actions are always denied.
 
 ### 4. An independent recovery oracle
 
@@ -89,14 +90,16 @@ Requirements: Python 3.11+, and Node 18+ only for the dashboard. No cloud accoun
 git clone https://github.com/codeit-ronit/recap.git && cd recap
 
 # Python environment. uv is a fast Python package manager; plain venv + pip works too.
+# constraints.txt pins every package to the version the test suite passed with.
 uv venv .venv --python 3.11
-uv pip install --python .venv/bin/python -e ".[dev]"
-#   or: python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+uv pip install --python .venv/bin/python -c constraints.txt -e ".[dev]"
+#   or: python3 -m venv .venv && .venv/bin/pip install -c constraints.txt -e ".[dev]"
 #   or: scripts/bootstrap.sh   (also installs the dashboard's npm packages)
 source .venv/bin/activate
 
-python -m pytest          # about 28 s; expected counts under "Tests and CI"
-ruff check .              # lint
+python -m pytest          # about 55 s; expected counts under "Tests and CI"
+python -m pytest -m e2e   # only the end-to-end tests (real controller, MCP subprocess, simulator)
+ruff check . && ruff format --check .   # lint and formatting
 
 # The five demos (exit code 0 when the outcome matches the scenario's expected final state)
 python scripts/demo.py --list
@@ -118,6 +121,8 @@ cd apps/dashboard && npm install && npm run dev   # terminal 2: http://localhost
 ```
 
 Or build once (`cd apps/dashboard && npm install && npm run build`), restart uvicorn, and open http://127.0.0.1:8000/.
+
+**Sign in to act.** Starting runs, approving or rejecting and cancelling need the operator token. On first start the API prints it and saves it to `data/operator-token` (readable by your user only); paste it into the dashboard's **Sign in** box, top right. Set `RECAP_OPERATOR_TOKEN` to choose your own. Viewing runs needs no token. Details: [apps/api/README.md](apps/api/README.md).
 
 - `--approve ask` (the default in an interactive terminal) asks *you* to approve the exact action. `--approve auto` uses the simulation-only auto-approver.
 - Runtime data (SQLite databases, sandbox state, JSONL traces) goes to `data/`, which is git-ignored and shared by the CLI, API and dashboard.
@@ -253,17 +258,17 @@ Protocol ([evals/runner.py](evals/runner.py), split in [evals/splits/v1.yaml](ev
 2. Every configuration then runs every test scenario with memory read-only (train partition) and memory writes disabled.
 3. The red-team suite runs injection scenarios with a deliberately compromised planner, with the safety gateway on and off (off is simulation-only).
 
-Configurations: `baseline_single` (one agent, no RAG, no memory, no adaptive routing), `full_adaptive` (everything on), `no_memory` and `no_rag` (one component removed), `single_only` (always one investigator), and `redteam_safety_on` / `redteam_safety_off` (compromised planner, gateway on or off). Report `20261014-215026-339816`, provider `deterministic-scripted-policy`, simulated latency read 30 ms and write 50 ms, split `v1-synthetic`: train 3 · test 6 · red-team 1.
+Configurations: `baseline_single` (one agent, no RAG, no memory, no adaptive routing), `full_adaptive` (everything on), `no_memory` and `no_rag` (one component removed), `single_only` (always one investigator), and `redteam_safety_on` / `redteam_safety_off` (compromised planner, gateway on or off). Report `20261015-121819-442b88` (after M1, git `bf37f1e`), provider `deterministic-scripted-policy`, simulated latency read 30 ms and write 50 ms, split `v1-synthetic`: train 3 · test 6 · red-team 1.
 
 **Test suite** (each row: N = number of test scenarios)
 
 | configuration | N | outcome as expected | oracle-verified recovery | correct diagnosis | mean tool calls | mean steps | mean est. tokens | mean latency (ms) | parallel rounds |
 |---|---|---|---|---|---|---|---|---|---|
-| baseline_single | 6 | 3/6 | 3/6 | 6/6 | 14.2 | 16.3 | 20008.3 | 1127.0 | 0 |
-| full_adaptive | 6 | 6/6 | 6/6 | 6/6 | 8.8 | 10.3 | 13375.3 | 864.9 | 2 |
-| no_memory | 6 | 6/6 | 6/6 | 6/6 | 8.8 | 10.0 | 11297.7 | 889.2 | 1 |
-| no_rag | 6 | 5/6 | 5/6 | 6/6 | 10.5 | 12.5 | 14163.0 | 903.8 | 3 |
-| single_only | 6 | 6/6 | 6/6 | 6/6 | 10.0 | 11.3 | 15686.3 | 968.5 | 0 |
+| baseline_single | 6 | 3/6 | 3/6 | 6/6 | 14.2 | 16.5 | 8634.5 | 1173.0 | 0 |
+| full_adaptive | 6 | 6/6 | 6/6 | 6/6 | 8.8 | 10.3 | 8416.3 | 903.5 | 2 |
+| no_memory | 6 | 6/6 | 6/6 | 6/6 | 9.7 | 11.2 | 8435.5 | 958.8 | 2 |
+| no_rag | 6 | 5/6 | 5/6 | 6/6 | 10.0 | 12.0 | 6326.7 | 1002.5 | 3 |
+| single_only | 6 | 6/6 | 6/6 | 6/6 | 10.0 | 11.3 | 9522.8 | 1070.9 | 0 |
 
 **Red-team safety suite**
 
@@ -282,7 +287,9 @@ Configurations: `baseline_single` (one agent, no RAG, no memory, no adaptive rou
 - Token counts are estimates (about 4 characters per token); external API cost is $0.
 - These are not SREGym results. See [docs/benchmark-plan.md](docs/benchmark-plan.md) for the planned real benchmark.
 
-What the differences show, and no more: runbooks supply remediation knowledge. Without runbooks or memory, the scripted policy falls back to a restart, which cannot fix a bad release in the simulator, so `baseline_single` names the right root cause in 6/6 cases but recovers only 3/6. Verified memory can partly substitute (`no_rag` 5/6), but only when live evidence confirms the same mechanism. Memory did not reduce tool calls here (8.8 with and without) and adds context tokens (13375.3 vs 11297.7 mean). Adaptive routing used fewer tool calls than always-single (8.8 vs 10.0). With the gateway on, the compromised planner's unsafe attempt was blocked; with it off (simulation only), the planner made 2 unsafe attempts: 1 executed in the sandbox, and the sandbox refused the other because the namespace was already deleted.
+What the differences show, and no more: runbooks supply remediation knowledge. Without runbooks or memory, the scripted policy falls back to a restart, which cannot fix a bad release in the simulator, so `baseline_single` names the right root cause in 6/6 cases but recovers only 3/6. Verified memory can partly substitute (`no_rag` 5/6), but only when live evidence confirms the same mechanism. Adaptive routing used fewer tool calls than always-single (8.8 vs 10.0). With the gateway on, the compromised planner's unsafe attempt was blocked; with it off (simulation only), the planner made 2 unsafe attempts: 1 executed in the sandbox, and the sandbox refused the other because the namespace was already deleted.
+
+What M1 changed in these numbers (outcomes and diagnoses are identical to the V1 report): mean estimated context tokens per case fell by 25 to 57% depending on the configuration, because providers now read evidence summaries instead of raw JSON (`full_adaptive` 13,375 → 8,416 mean per case). One scenario, `test-checkout-misleading-deploy`, now needs a second investigation round without memory (10 → 15 tool calls in `no_memory`), because rule V6 no longer accepts out-of-memory log text without a memory metric or cluster events; that is why memory now saves tool calls (8.8 vs 9.7). Failed fixes retry with fewer calls (for example 17 → 15) because a retry no longer gets the oracle's list of unhealthy services.
 
 Reproduce with `python scripts/evaluate.py` or the dashboard's **Run evaluation**. Only the script replaces `evals/reports/latest/` (and never with an empty report); an evaluation started from the dashboard keeps its report under `evals/reports/runs/`. Per-case outcomes are in [evals/reports/latest/summary.md](evals/reports/latest/summary.md).
 
@@ -298,6 +305,9 @@ Safety does not depend on the planner behaving well. Trusted code decides, from 
 | destructive | `delete_namespace` | always DENY, even with an approval |
 
 - **Exact approvals.** An approval names one incident, one proposal and its digest (a SHA-256 fingerprint of the incident, action, target and parameters). It expires after 15 minutes by default, is consumed *before* the call so it cannot be replayed, and is re-read from the store right before execution. The API answers a wrong digest with 409. A request still pending when its run is cancelled or its wait times out is marked expired, so it can never be approved later.
+- **"No" wins until the action runs.** A rejection also revokes an approval that was not used yet, nothing is accepted after a rejection, every transition is a compare-and-swap in one SQLite transaction (safe across processes), and every request, decision, use and refused attempt goes to an append-only log.
+- **The write boundary checks too.** The gateway signs a single-use, 60-second Ed25519 capability for exactly the approved action; the environment verifies it in the same transaction as the change. A second MCP server, a replayed approval or a made-up approval ID changes nothing.
+- **An authenticated operator.** Every state-changing API call needs the operator's bearer token; the approver recorded is `operator:<name>`, never a field the client sends. The API serves only loopback host names and refuses cross-origin writes.
 - **Only catalog tools can be a fix.** A mitigation must use a tool from the trusted remediation catalog (`remediation_tools` in [configs/policies.yaml](configs/policies.yaml), rule R14), so a read tool cannot be proposed as a fix to skip the approval. A proposal's params may not set the tool's target argument either (R11 and R12 deny it), so an approval card can never show a decoy service.
 - **Refused before it starts.** After `reset` the controller re-reads the adapter's namespace. If it is not in `allowed_namespaces`, the run ends `BLOCKED` before any tool call.
 - **Injection is treated as data.** Tool output, runbooks and memories are untrusted. Suspicious text is flagged and labeled as untrusted in context packs, and tool descriptions shown to a provider come from the trusted registry, not the server. The pattern matcher is easy to evade; the real protection is that the gateway denies dangerous actions whatever any text says.
@@ -305,7 +315,7 @@ Safety does not depend on the planner behaving well. Trusted code decides, from 
 - **Safety off only in simulation.** The "safety off" ablation is refused by the policy and the controller outside a simulated environment, is rejected by the API, and is used only by tests and the evaluation's red-team suite. The API also refuses a per-run `provider` override: the provider is server configuration.
 - **Scenario files cannot weaken safety.** A scenario's `run_overrides` may only choose the planner and the investigation strategy (checked when the file loads and again by the controller). It can never switch off safety, approvals, memory isolation, the provider or the budget.
 - **Secrets are redacted** from tool outputs before they become evidence, from run errors and from every trace payload. This is best-effort pattern matching (for example `password=…` keeps the key and hides the value), not a guarantee.
-- **Known gaps.** Approver identity is not authenticated, and the MCP server is a local subprocess that other local code could reach directly.
+- **Known gaps.** One shared operator token, not individual accounts; reads are open on localhost; whoever can rewrite RECAP's local files (or the controller process) is trusted. What a real cluster still needs is listed in [docs/threat-model.md](docs/threat-model.md#before-a-real-kubernetes-target).
 
 Full details: [docs/threat-model.md](docs/threat-model.md) and [recap/safety/README.md](recap/safety/README.md).
 
@@ -349,18 +359,20 @@ Full details: [docs/threat-model.md](docs/threat-model.md) and [recap/safety/REA
 
 ## Tests and CI
 
-`python -m pytest` gives **781 passed, 1 skipped** in about 30 s (Python 3.11, with the optional Anthropic SDK installed, as in CI). The skip is the optional OpenTelemetry SDK test. With only the `dev` extra, three tests that need the Anthropic SDK's error classes are skipped too: 778 passed, 4 skipped. No test calls a real LLM API. `ruff check .` is clean.
+`python -m pytest` gives **912 passed, 1 skipped** in about 55 s (Python 3.11, with the optional Anthropic SDK installed, as in CI). The skip is the optional OpenTelemetry SDK test. With only the `dev` extra, three tests that need the Anthropic SDK's error classes are skipped too. No test calls a real LLM API. `ruff check .` and `ruff format --check .` are clean. `python -m pytest -m e2e` selects the **43** test cases (40 test functions) that run a real incident end to end through the controller, the MCP subprocess, the gateway and the simulator.
 
 | Category | Files | What it covers |
 |---|---|---|
-| unit | 38 | Module-level checks: policy rules, approvals, BM25, memory isolation, packer, router, verifier, oracle, simulator, redaction, providers, the agent loop, the run store, the evaluation split, scenario alerts that match the simulated signals, and golden JSON examples of the contracts ([tests/fixtures/contracts/](tests/fixtures/contracts/), made by [scripts/export_contract_examples.py](scripts/export_contract_examples.py)) |
-| integration | 5 | A real MCP stdio subprocess; nothing runs before approval, and rejection or expiry blocks; the safety-off ablation; controller paths (namespace refusal, scenario overrides that cannot switch off safety, token-budget stop, retry, provider failure, cancellation, a late console answer); the evaluation runner's protocol |
-| adversarial | 3 | Poisoned runbook, prompt injection against the gateway, malicious MCP servers (look-alike names, lying hints, smuggled approval ids) |
-| e2e | 4 | All five demos, the API flow over HTTP, the API's evaluation results and run statuses, and the environment swap |
+| unit | 41 | Module-level checks: policy rules, approvals (revocation, the decision log, a cross-process race), capabilities, BM25, memory isolation, packer, evidence summaries, label-free views, router, orchestrator deadlines, verifier (V1 to V6, epochs), oracle, simulator, redaction, providers, the agent loop, the run store, the evaluation split, scenario alerts that match the simulated signals, and golden JSON examples of the contracts ([tests/fixtures/contracts/](tests/fixtures/contracts/), made by [scripts/export_contract_examples.py](scripts/export_contract_examples.py)) |
+| integration | 5 | A real MCP stdio subprocess (with a signed write and its refused replay); nothing runs before approval, and rejection or expiry blocks; the safety-off ablation; controller paths (namespace refusal, scenario overrides that cannot switch off safety, token-budget stop, retry, provider failure, cancellation, a late console answer); the evaluation runner's protocol |
+| adversarial | 8 | Poisoned runbook, prompt injection against the gateway, malicious MCP servers, and the audit reproductions: context survival, forged evidence, oracle isolation, the approval race, executor authority |
+| e2e | 7 | All five demos, the API flow over HTTP, the API's evaluation results and run statuses, API security (anonymous and signed in), the retry and stabilization lifecycle, and the environment swap |
 
-The dashboard has its own small test file, [apps/dashboard/tests/format.test.ts](apps/dashboard/tests/format.test.ts), run with `npm test` (Node's built-in test runner; it needs a Node version that runs TypeScript natively, and CI uses Node 24).
+The `test_audit_*.py` files reproduce each finding of the independent V1 audit; they failed on the V1 code and pass since M1 ([docs/status.md](docs/status.md)).
 
-CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on every push and pull request: ruff, the full test suite, the smoke test, and the dashboard's tests and strict TypeScript build. It needs no secrets.
+The dashboard has its own small tests, [apps/dashboard/tests/](apps/dashboard/tests/) (honest labels and the operator sign-in state), run with `npm test` (Node's built-in test runner; it needs a Node version that runs TypeScript natively, and CI uses Node 24).
+
+CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on every push and pull request: it installs the exact versions in `constraints.txt`, then runs ruff (lint and format), the full test suite, the smoke test, and the dashboard's tests and strict TypeScript build. It needs no secrets.
 
 ## Roadmap (V2)
 
@@ -369,7 +381,7 @@ CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on every push and
 | SREGym adapter (pinned commit, Kind cluster) | First real, non-simulated incidents and results | Pinning and reading an SREGym commit; a Kubernetes-in-Docker (Kind) cluster, provisioned only with the owner's consent and after cost checks | High |
 | Real LLM provider evaluation (Claude adapter + open models) | V1 numbers describe a scripted policy, not an LLM | Real tasks (SREGym or many more scenarios); an API budget; serving for open models | High |
 | Larger scenario set with confidence intervals | N = 6 supports no statistical claim | More scenarios per failure family; interval estimates in `evals/runner.py` | High |
-| Authenticated approvals (chat-ops) | The approver is a free-text label today; approvals should come from a verified person, for example in a chat tool | API authentication and a chat integration | High before any real cluster |
+| Per-user approvals (chat-ops) | M1 added a single operator token; approvals should come from a verified individual person, with roles, for example in a chat tool | Single sign-on and a chat integration | High before any real cluster |
 | Learned router (contextual bandit) | Spend parallel compute only where it pays off | Many logged runs with verified outcomes; the existing `RoutingSignals` and `LearnedRouter` interface | Medium |
 | Hybrid retrieval + neural reranker | BM25 misses synonyms ("OOM" vs "out of memory") | A larger, realistic runbook corpus; the `Reranker` interface | Medium |
 | Crash-resume from checkpoints | An interrupted run is recorded but not resumed | Safe replay of each stage from `RunStore` checkpoints | Medium |
@@ -380,10 +392,13 @@ CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on every push and
 
 ## Documentation
 
+- [docs/flow.md](docs/flow.md): one incident end to end: what goes in, what links to what, what comes out
+- [docs/status.md](docs/status.md): measured results, milestone by milestone
 - [docs/architecture.md](docs/architecture.md): the full architecture, data flow and trust boundaries
 - [docs/learning-notes.md](docs/learning-notes.md): the concepts behind RECAP, explained simply
 - [docs/threat-model.md](docs/threat-model.md): what can go wrong and what stops it
 - [docs/benchmark-plan.md](docs/benchmark-plan.md): the plan for a real SREGym benchmark
+- [docs/provider-options.md](docs/provider-options.md): free LLM inference options (researched, not yet used)
 - [docs/decisions/](docs/decisions/): architecture decision records
 - Module READMEs: [harness](recap/harness/README.md) · [environments](recap/environments/README.md) · [tools](recap/tools/README.md) · [safety](recap/safety/README.md) · [knowledge](recap/knowledge/README.md) · [memory](recap/memory/README.md) · [context](recap/context/README.md) · [routing](recap/routing/README.md) · [agents](recap/agents/README.md) · [verification](recap/verification/README.md) · [providers](recap/providers/README.md) · [telemetry](recap/telemetry/README.md) · [API](apps/api/README.md) · [dashboard](apps/dashboard/README.md) · [SREGym adapter](integrations/sregym/README.md) · [infra](infra/README.md)
 

@@ -35,17 +35,27 @@ CREATED → BLOCKED, before any tool call.
 2. **INVESTIGATING** — the router picks *single* or *parallel* from observable signals; the
    orchestrator runs the agents (parallel = `asyncio.gather`); the evidence verifier checks
    every hypothesis against the evidence registry. If evidence is insufficient the next
-   round escalates (more compute, focused on the services the verifier names).
+   round escalates (more compute, focused on the services the verifier names). Providers
+   receive label-free views (`AgentIncident`, `AgentMemoryHit`) and evidence summaries; no
+   agent may outlive the run's own deadline.
 3. **PROPOSING** — if no runbook for the diagnosed mechanism is loaded yet, it is retrieved
-   now ("agentic RAG"). The provider drafts a fix; the **safety policy** judges it first
-   (hard gate), then the **verifier** checks that it cites real evidence and targets the
-   diagnosed service.
+   now ("agentic RAG"), and the runbook chunks for the diagnosed mechanism are pinned in the
+   proposal pack. The provider drafts a fix (bounded by the run's deadline); the **safety
+   policy** judges it first (hard gate), then the **verifier** checks that it cites real
+   evidence and targets the diagnosed service.
 4. **AWAITING_APPROVAL** — reversible writes need an approval bound to the exact proposal
-   digest. The run budget clock is paused while a human decides. Rejection or expiry → BLOCKED.
+   digest. The run budget clock is paused while a human decides. Rejection (or a revocation
+   before the action ran) or expiry → BLOCKED.
 5. **MITIGATING** — `gateway.execute_mitigation` re-checks the policy with the approval,
-   consumes it (single use) and sends the write over MCP.
-6. **VERIFYING** — the independent oracle compares ground-truth health before and after.
-   Not recovered → a new investigation epoch (bounded by `max_mitigation_attempts`).
+   consumes it (single use), signs a single-use capability for exactly this action with the
+   run's key (bound to the environment right after `reset`) and sends the write over MCP. The
+   environment verifies the capability before changing anything.
+6. **VERIFYING** — the independent oracle compares ground-truth health before and after. A
+   live target is probed every `stabilization_poll_seconds` until it is healthy or its
+   `stabilization_timeout_seconds` (or the run's time) are over; a simulated one once.
+   Not recovered → a new investigation epoch (bounded by `max_mitigation_attempts`): the
+   focus is the failed fix's target plus the verifier's focus (never the oracle's list), and
+   the verifier ignores the fixed service's state observations from before the fix.
 7. **Consolidation** — a finished run becomes an experience episode; `success` only if
    the oracle verified recovery. Nothing is written when the run's memory writes are off
    (evaluation scoring), when it ended by an error or a cancellation, or when it ran a
@@ -55,7 +65,9 @@ CREATED → BLOCKED, before any tool call.
 
 - `BudgetExhausted` → `BUDGET_EXHAUSTED` (no further tool calls, no claimed recovery). That
   includes the token budget: context packs are always built at their configured size, and
-  `charge_tokens` stops the run when the next pack no longer fits.
+  `charge_tokens` stops the run when the next pack no longer fits. It also includes the wall
+  clock: a provider call (investigation or proposal) that is still running at the run's
+  deadline is cut off there.
 - Every agent of an investigation round failed (for example the provider API is down) →
   `FAILED` with `run.error` set, instead of another round or an "insufficient evidence" note.
 - Any other exception → `FAILED` with the error, redacted, in `run.error`.

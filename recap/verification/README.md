@@ -16,7 +16,12 @@ healthy(service) = status == "Running"
 healthy(system)  = every service is healthy (an empty report never counts as healthy)
 ```
 
-The controller probes **before** and **after** a mitigation. `recovery_result(before, after,
+The controller probes **before** and **after** a mitigation. For a live target it probes
+again every `stabilization_poll_seconds` until the target is healthy or its
+`stabilization_timeout_seconds` are over (both declared by the adapter in `EnvironmentInfo`); a
+simulated target is probed once, because it recovers the moment a fix is applied. The
+oracle's verdict is a yes/no for the controller: its list of unhealthy services is recorded in
+the trace but never becomes a hint for agents. `recovery_result(before, after,
 oracle_name)` turns the two probes into a `RecoveryResult`:
 
 ```

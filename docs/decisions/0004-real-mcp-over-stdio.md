@@ -5,7 +5,7 @@ served by a separate subprocess for each run, and RECAP treats that server as un
 
 ## Status
 
-Accepted.
+Accepted. Amended by [ADR 0014](0014-signed-capabilities-at-the-write-boundary.md): the server is still untrusted, but it no longer "enforces nothing". Its write tools pass a signed single-use capability to the environment, which refuses any write without a valid one, and every tool rejects arguments it does not define.
 
 ## Context
 

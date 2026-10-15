@@ -6,7 +6,7 @@ simulated world all live in plain SQLite files under `data/`, and the safety-cri
 
 ## Status
 
-Accepted.
+Accepted. Amended by [ADR 0015](0015-operator-auth-and-no-wins-approvals.md): "decide once" became "approve once; a rejection wins until the approval is used", every approval transition runs in one `BEGIN IMMEDIATE` transaction, and the new `approval_events` table is append-only (enforced by triggers). The sandbox state file now also holds the run's executor public key and used capability nonces ([ADR 0014](0014-signed-capabilities-at-the-write-boundary.md)).
 
 ## Context
 

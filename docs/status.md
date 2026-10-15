@@ -115,3 +115,75 @@ Each item is fixed with its reproduction tests turned green, without weakening t
    identity from it, checks the Host and Origin headers, and gains a cancel endpoint. The
    dashboard gets an operator sign-in.
 7. **Test audit (2.7).** An `e2e` pytest marker, so end-to-end tests are counted separately.
+
+---
+
+## M1: security, context and oracle hardening (2026-10-15)
+
+Every audit finding reproduced in M0 is fixed, and its reproduction test now passes (the
+strict-xfail marks were removed in the same commits as the fixes). Nothing was weakened:
+reproduction assertions are unchanged or stronger.
+
+### Fixes, one commit each
+
+| Audit item | Commit | What changed | Decision record |
+|---|---|---|---|
+| 2.3 Oracle and label leakage | `94b8071` | Label-free provider views (`AgentIncident`, `AgentEpisode`, `AgentMemoryHit`); retry focus from RECAP's own reasoning, never the oracle | [ADR 0010](decisions/0010-label-free-views-and-a-yes-no-oracle.md) |
+| 2.1 Context loss | `3a7c3f6` | Structured evidence summaries; head-and-tail cuts in the packer and the gateway; pinned runbooks | [ADR 0011](decisions/0011-structured-evidence-summaries.md) |
+| 2.2 Forged evidence | `7469d01` | Verifier rule V6: platform signals outrank log text | [ADR 0012](decisions/0012-platform-signals-outrank-log-text.md) |
+| 2.6 Recovery lifecycle | `29f997d` | Stabilization polling for live targets; epoch-aware verification; provider calls bounded by the run's deadline | [ADR 0013](decisions/0013-stabilization-epochs-and-deadlines.md) |
+| 2.5 Execution authority | `884f04a` | Ed25519 single-use capabilities verified by the environment; strict MCP tool arguments | [ADR 0014](decisions/0014-signed-capabilities-at-the-write-boundary.md) |
+| 2.4 Approvals and API | `2df849c` | "No" wins until the action runs; compare-and-swap transitions; append-only decision log; operator bearer token, host and origin checks; dashboard sign-in | [ADR 0015](decisions/0015-operator-auth-and-no-wins-approvals.md) |
+| 2.7 Test audit | `bf37f1e` | `e2e` pytest marker, `--strict-markers` | (this page) |
+
+### Test results after M1
+
+| Check | Command | Result |
+|---|---|---|
+| Python tests | `.venv/bin/python -m pytest` | **912 passed, 1 skipped, 0 xfailed** in about 55 s (the skip is the optional OpenTelemetry test) |
+| By folder | `--collect-only tests/<folder>` | unit 780 · integration 25 · adversarial 62 · e2e folder 46 · total 913 |
+| End-to-end (real controller, MCP subprocess, gateway, simulator) | `.venv/bin/python -m pytest -m e2e` | **43 passed** (43 test cases from 40 test functions) |
+| Audit reproductions | `.venv/bin/python -m pytest tests/adversarial/test_audit_*.py tests/e2e/test_audit_*.py` | 43 reproductions and 11 guards, all pass |
+| Lint and format | `ruff check .` and `ruff format --check .` | clean |
+| Dashboard tests | `cd apps/dashboard && npm test` | 12 passed, 0 failed |
+| Dashboard build (strict TypeScript) | `npm run build` | passed |
+| Smoke test | `.venv/bin/python scripts/smoke_test.py` | `RESOLVED (66 trace events, simulated environment)` |
+| Five CLI demos | `scripts/demo.py --scenario <id> --approve auto` | all five match their expected final state |
+| Live API check | uvicorn on 127.0.0.1, curl as the dashboard would call it | 401 without the token, 403 for a foreign Origin, 400 for a foreign Host; a manual run approved with the token ended RESOLVED; decision log `requested → approved (operator:local-operator) → consumed` |
+
+No skipped test is a critical one: the only skip is the optional OpenTelemetry extra.
+
+### Evaluation after M1 (synthetic, scripted policy, simulated)
+
+Report `20261015-121819-442b88`. Outcomes and diagnoses are identical to V1 in every
+configuration. What changed:
+
+| configuration | recovered (V1 → M1) | mean tool calls (V1 → M1) | mean est. tokens (V1 → M1) |
+|---|---|---|---|
+| baseline_single | 3/6 → 3/6 | 14.2 → 14.2 | 20,008 → 8,635 |
+| full_adaptive | 6/6 → 6/6 | 8.8 → 8.8 | 13,375 → 8,416 |
+| no_memory | 6/6 → 6/6 | 8.8 → 9.7 | 11,298 → 8,436 |
+| no_rag | 5/6 → 5/6 | 10.5 → 10.0 | 14,163 → 6,327 |
+| single_only | 6/6 → 6/6 | 10.0 → 10.0 | 15,686 → 9,523 |
+
+- Tokens fell 25 to 57% because providers read evidence summaries instead of raw JSON.
+- `test-checkout-misleading-deploy` needs a second round without memory (10 → 15 tool calls),
+  because out-of-memory log text alone no longer proves memory pressure (rule V6).
+- Failed fixes retry with fewer calls (for example 17 → 15), because a retry no longer gets
+  the oracle's list of unhealthy services.
+
+### What genuinely ran
+
+Scripted provider only (`deterministic-scripted-policy`, not an LLM), simulated environment
+only. **No LLM request of any kind was sent, no model was downloaded, nothing was provisioned.
+Cost: $0.**
+
+### Still open (blockers for later milestones)
+
+- **M2 (real LLM inference)** needs one owner decision: a verified-free hosted provider key
+  (proposed: Groq Free plan, see [provider-options.md](provider-options.md)), and/or approval to
+  download a local model (proposed: `qwen3:8b`, 5.2 GB; `llama3.2:3b` is already installed but
+  is too small to diagnose reliably).
+- **M5 (local Kubernetes)**: Docker, Kind and kubectl are not installed on this machine.
+- The threat model lists what a real cluster still needs:
+  [Before a real Kubernetes target](threat-model.md#before-a-real-kubernetes-target).
