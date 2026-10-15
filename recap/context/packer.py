@@ -115,7 +115,9 @@ class ContextPacker:
         """
         query = _query_terms(incident, focus_services)
         focus_words = [_words(service) for service in focus_services]  # one set per service
-        item_chars = self.max_item_tokens * CHARS_PER_TOKEN  # room for one item's text
+        # Room for one item's text, minus what flagging may add in front of it, so the
+        # prefix can never push a fitted summary into compaction.
+        item_chars = self.max_item_tokens * CHARS_PER_TOKEN - len(UNTRUSTED_PREFIX)
         drafts = _unique(
             [
                 *_evidence_drafts(evidence, incident.created_at, item_chars),

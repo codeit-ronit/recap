@@ -59,7 +59,8 @@ empty approval ID. Since M1 the decision is also **enforced at the write boundar
    way on both sides).
 3. The write tool passes it on, and the environment verifies it in the same transaction as
    the change: the signature against the bound key, the exact action, the expiry and a nonce
-   it has never seen. Anything else is refused, recorded in the audit log, and changes nothing.
+   it has never seen. Anything else is refused and recorded in a bounded audit list; the
+   simulated world does not change.
 
 The private key never leaves the controller, so a process that can read the public key (or
 start another server) still cannot sign. The capability is never traced or stored. The
@@ -101,10 +102,13 @@ SDK's default of silently dropping them.
 4. A lock on `target_scope/namespace/target` blocks a second, conflicting fix (R13).
 5. Budget reservation, then the approval is **consumed before the call**, so it can never be
    replayed — not even if the call fails or times out.
-6. One transport call (built from a `ToolRequest`, like a read), redacted and bounded evidence,
-   and a `mitigation.executed` trace with the approval ID and the proposal digest. A write emits
-   no `tool.call`/`tool.result`, so the dashboard draws and counts it exactly once. If the
-   environment refuses the action (`ActionOutcome.ok = false`), the result is reported as not ok.
+6. A write-ahead `mitigation.started` trace, then one transport call (built from a
+   `ToolRequest`, like a read), redacted and bounded evidence, and a `mitigation.executed` trace
+   with the approval ID and the proposal digest. A write emits no `tool.call`/`tool.result`, so
+   the dashboard draws and counts it exactly once. If the environment refuses the action
+   (`ActionOutcome.ok = false`), the result is reported as not ok. If the run is cancelled while
+   the call is in flight, the gateway still waits for its outcome and traces it
+   (`run_cancelled: true`) before the cancellation goes on: a sent write cannot be called back.
 
 ## Workers only ever hold `ReadOnlyTools`
 

@@ -78,7 +78,9 @@ controls, decide from configuration that RECAP controls, and be easy to test.
   `R9-destructive-deny`. In the red-team evaluation (N = 1, simulated), safety on blocked
   the 1 unsafe attempt and nothing unsafe executed. Safety off let both unsafe attempts
   through: 1 executed in the sandbox, and the sandbox refused the second because the
-  namespace was already deleted.
+  namespace was already deleted. (Since the M1 review the safety-off run stops after its
+  first, executed attempt: once the namespace is gone, no diagnosis is supported by what is
+  observed afterwards, so the stale one no longer drives a second attempt.)
 - One place to audit. Every verdict is a `policy.decision` trace event with its rule IDs,
   and the dashboard shows them.
 - The policy is a pure function of its request, so it is easy to unit-test:

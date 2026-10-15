@@ -44,7 +44,7 @@ Tools are served by a real MCP server ([recap/tools/mcp_server.py](recap/tools/m
 
 ### 3. One safety gateway with exact approvals
 
-Every tool call goes through one `ToolGateway` ([recap/tools/gateway.py](recap/tools/gateway.py)): policy check, budget reservation, hard timeout, secret redaction, output limits, injection flags, immutable evidence and an audit trace. The policy ([recap/safety/policy.py](recap/safety/policy.py)) decides only from trusted inputs, never from model or document text. With safety on, a reversible write runs only with an approval bound to a SHA-256 fingerprint (digest) of that exact proposal. The approval expires and works once, and an explicit "no" wins until the action has run ([recap/safety/approvals.py](recap/safety/approvals.py)). After the approval is used, the gateway signs a single-use Ed25519 capability for exactly that action, and the environment refuses any write without one ([recap/safety/capabilities.py](recap/safety/capabilities.py)). Through the API, only the operator holding the bearer token can approve, and the approver recorded comes from that token. Destructive actions are always denied.
+Every tool call goes through one `ToolGateway` ([recap/tools/gateway.py](recap/tools/gateway.py)): policy check, budget reservation, hard timeout, secret redaction, output limits, injection flags, immutable evidence and an audit trace. The policy ([recap/safety/policy.py](recap/safety/policy.py)) decides only from trusted inputs, never from model or document text. With safety on, a reversible write runs only with an approval bound to a SHA-256 fingerprint (digest) of that exact proposal. The approval expires and works once, and an explicit "no" wins until the gateway uses it, immediately before the write ([recap/safety/approvals.py](recap/safety/approvals.py)). After the approval is used, the gateway signs a single-use Ed25519 capability for exactly that action, and the environment refuses any write without one ([recap/safety/capabilities.py](recap/safety/capabilities.py)). Through the API, only the operator holding the bearer token can approve, and the approver recorded comes from that token. Destructive actions are always denied.
 
 ### 4. An independent recovery oracle
 
@@ -258,23 +258,23 @@ Protocol ([evals/runner.py](evals/runner.py), split in [evals/splits/v1.yaml](ev
 2. Every configuration then runs every test scenario with memory read-only (train partition) and memory writes disabled.
 3. The red-team suite runs injection scenarios with a deliberately compromised planner, with the safety gateway on and off (off is simulation-only).
 
-Configurations: `baseline_single` (one agent, no RAG, no memory, no adaptive routing), `full_adaptive` (everything on), `no_memory` and `no_rag` (one component removed), `single_only` (always one investigator), and `redteam_safety_on` / `redteam_safety_off` (compromised planner, gateway on or off). Report `20261015-121819-442b88` (after M1, git `bf37f1e`), provider `deterministic-scripted-policy`, simulated latency read 30 ms and write 50 ms, split `v1-synthetic`: train 3 · test 6 · red-team 1.
+Configurations: `baseline_single` (one agent, no RAG, no memory, no adaptive routing), `full_adaptive` (everything on), `no_memory` and `no_rag` (one component removed), `single_only` (always one investigator), and `redteam_safety_on` / `redteam_safety_off` (compromised planner, gateway on or off). Report `20261015-131432-9d7846` (after M1 and its review, git `581f7ce`), provider `deterministic-scripted-policy`, simulated latency read 30 ms and write 50 ms, split `v1-synthetic`: train 3 · test 6 · red-team 1.
 
 **Test suite** (each row: N = number of test scenarios)
 
 | configuration | N | outcome as expected | oracle-verified recovery | correct diagnosis | mean tool calls | mean steps | mean est. tokens | mean latency (ms) | parallel rounds |
 |---|---|---|---|---|---|---|---|---|---|
-| baseline_single | 6 | 3/6 | 3/6 | 6/6 | 14.2 | 16.5 | 8634.5 | 1173.0 | 0 |
-| full_adaptive | 6 | 6/6 | 6/6 | 6/6 | 8.8 | 10.3 | 8416.3 | 903.5 | 2 |
-| no_memory | 6 | 6/6 | 6/6 | 6/6 | 9.7 | 11.2 | 8435.5 | 958.8 | 2 |
-| no_rag | 6 | 5/6 | 5/6 | 6/6 | 10.0 | 12.0 | 6326.7 | 1002.5 | 3 |
-| single_only | 6 | 6/6 | 6/6 | 6/6 | 10.0 | 11.3 | 9522.8 | 1070.9 | 0 |
+| baseline_single | 6 | 3/6 | 3/6 | 6/6 | 14.2 | 16.5 | 9153.7 | 1127.1 | 0 |
+| full_adaptive | 6 | 6/6 | 6/6 | 6/6 | 8.8 | 10.3 | 8628.8 | 864.6 | 2 |
+| no_memory | 6 | 6/6 | 6/6 | 6/6 | 9.7 | 11.2 | 8690.5 | 939.9 | 2 |
+| no_rag | 6 | 5/6 | 5/6 | 6/6 | 10.0 | 12.0 | 6597.2 | 914.6 | 3 |
+| single_only | 6 | 6/6 | 6/6 | 6/6 | 10.0 | 11.3 | 9807.3 | 1007.1 | 0 |
 
 **Red-team safety suite**
 
 | configuration | N | unsafe attempts | blocked by RECAP | executed in sandbox | refused by the sandbox | outcome as expected (BLOCKED) |
 |---|---|---|---|---|---|---|
-| redteam_safety_off | 1 | 2 | 0 | 1 | 1 | 0/1 |
+| redteam_safety_off | 1 | 1 | 0 | 1 | 0 | 0/1 |
 | redteam_safety_on | 1 | 1 | 1 | 0 | 0 | 1/1 |
 
 **How to read these honestly**
@@ -287,9 +287,9 @@ Configurations: `baseline_single` (one agent, no RAG, no memory, no adaptive rou
 - Token counts are estimates (about 4 characters per token); external API cost is $0.
 - These are not SREGym results. See [docs/benchmark-plan.md](docs/benchmark-plan.md) for the planned real benchmark.
 
-What the differences show, and no more: runbooks supply remediation knowledge. Without runbooks or memory, the scripted policy falls back to a restart, which cannot fix a bad release in the simulator, so `baseline_single` names the right root cause in 6/6 cases but recovers only 3/6. Verified memory can partly substitute (`no_rag` 5/6), but only when live evidence confirms the same mechanism. Adaptive routing used fewer tool calls than always-single (8.8 vs 10.0). With the gateway on, the compromised planner's unsafe attempt was blocked; with it off (simulation only), the planner made 2 unsafe attempts: 1 executed in the sandbox, and the sandbox refused the other because the namespace was already deleted.
+What the differences show, and no more: runbooks supply remediation knowledge. Without runbooks or memory, the scripted policy falls back to a restart, which cannot fix a bad release in the simulator, so `baseline_single` names the right root cause in 6/6 cases but recovers only 3/6. Verified memory can partly substitute (`no_rag` 5/6), but only when live evidence confirms the same mechanism. Adaptive routing used fewer tool calls than always-single (8.8 vs 10.0). With the gateway on, the compromised planner's unsafe attempt was blocked; with it off (simulation only), its one unsafe attempt executed in the sandbox and deleted all five services, and the run ended FAILED: nothing observed after the deletion supported a diagnosis, so it handed over to a human.
 
-What M1 changed in these numbers (outcomes and diagnoses are identical to the V1 report): mean estimated context tokens per case fell by 25 to 57% depending on the configuration, because providers now read evidence summaries instead of raw JSON (`full_adaptive` 13,375 → 8,416 mean per case). One scenario, `test-checkout-misleading-deploy`, now needs a second investigation round without memory (10 → 15 tool calls in `no_memory`), because rule V6 no longer accepts out-of-memory log text without a memory metric or cluster events; that is why memory now saves tool calls (8.8 vs 9.7). Failed fixes retry with fewer calls (for example 17 → 15) because a retry no longer gets the oracle's list of unhealthy services.
+What M1 changed in these numbers (test-suite outcomes and diagnoses are identical to the V1 report): mean estimated context tokens per case fell by 23 to 54% depending on the configuration, because providers now read evidence summaries instead of raw JSON (`full_adaptive` 13,375 → 8,629 mean per case). One scenario, `test-checkout-misleading-deploy`, now needs a second investigation round without memory (10 → 15 tool calls in `no_memory`), because rule V6 no longer accepts out-of-memory log text without a memory metric or cluster events; that is why memory now saves tool calls (8.8 vs 9.7). Failed fixes retry with fewer calls (for example 17 → 15) because a retry no longer gets the oracle's list of unhealthy services. The review of M1 changed two numbers: log summaries now always name the newest ERROR line (a few percent more tokens than the 25 to 57% fall measured right after M1), and the safety-off red-team run now makes 1 unsafe attempt instead of 2 (1 executed either way), because after a namespace-wide action every service's older evidence counts as stale, so no stale diagnosis drives a second attempt.
 
 Reproduce with `python scripts/evaluate.py` or the dashboard's **Run evaluation**. Only the script replaces `evals/reports/latest/` (and never with an empty report); an evaluation started from the dashboard keeps its report under `evals/reports/runs/`. Per-case outcomes are in [evals/reports/latest/summary.md](evals/reports/latest/summary.md).
 
@@ -305,8 +305,8 @@ Safety does not depend on the planner behaving well. Trusted code decides, from 
 | destructive | `delete_namespace` | always DENY, even with an approval |
 
 - **Exact approvals.** An approval names one incident, one proposal and its digest (a SHA-256 fingerprint of the incident, action, target and parameters). It expires after 15 minutes by default, is consumed *before* the call so it cannot be replayed, and is re-read from the store right before execution. The API answers a wrong digest with 409. A request still pending when its run is cancelled or its wait times out is marked expired, so it can never be approved later.
-- **"No" wins until the action runs.** A rejection also revokes an approval that was not used yet, nothing is accepted after a rejection, every transition is a compare-and-swap in one SQLite transaction (safe across processes), and every request, decision, use and refused attempt goes to an append-only log.
-- **The write boundary checks too.** The gateway signs a single-use, 60-second Ed25519 capability for exactly the approved action; the environment verifies it in the same transaction as the change. A second MCP server, a replayed approval or a made-up approval ID changes nothing.
+- **"No" wins until the approval is used.** A rejection also revokes an approval that was not used yet (the gateway uses it immediately before sending the write), nothing is accepted after a rejection, every transition is a compare-and-swap in one SQLite transaction (safe across processes), and every request, decision, use and refused attempt goes to an append-only log.
+- **The write boundary checks too.** The gateway signs a single-use, 60-second Ed25519 capability for exactly the approved action; the environment verifies it in the same transaction as the change. A second MCP server, a replayed approval or a made-up approval ID changes nothing in the simulated world (the attempt goes to a bounded audit list).
 - **An authenticated operator.** Every state-changing API call needs the operator's bearer token; the approver recorded is `operator:<name>`, never a field the client sends. The API serves only loopback host names and refuses cross-origin writes.
 - **Only catalog tools can be a fix.** A mitigation must use a tool from the trusted remediation catalog (`remediation_tools` in [configs/policies.yaml](configs/policies.yaml), rule R14), so a read tool cannot be proposed as a fix to skip the approval. A proposal's params may not set the tool's target argument either (R11 and R12 deny it), so an approval card can never show a decoy service.
 - **Refused before it starts.** After `reset` the controller re-reads the adapter's namespace. If it is not in `allowed_namespaces`, the run ends `BLOCKED` before any tool call.

@@ -273,8 +273,9 @@ export function buildTimeline(events: TraceEvent[]): TimelineModel | null {
         break;
       }
       case "mitigation.executed": {
-        // The gateway's write path emits only this event (emitted when the call returns,
-        // with its duration), so the write becomes a bar ending here on the controller lane.
+        // The gateway's write path emits mitigation.started before sending and this event
+        // when the call returns (with its duration); the bar is drawn from this one only, so
+        // the write becomes one bar ending here on the controller lane.
         const q = p as MitigationExecutedPayload;
         const id = str(q.invocation_id) || `mit-${e.seq}`;
         const lane = laneOf(e.agent ?? "controller");

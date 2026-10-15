@@ -8,18 +8,19 @@ by this store, so every channel goes through the same rules:
   * an approval names one incident, one proposal and that proposal's digest
     (a fingerprint of action + target + params), so it cannot authorize anything else;
   * it expires, and it can be consumed only once (single use);
-  * an explicit "no" wins until the action has run: a rejection is accepted while the
+  * an explicit "no" wins until the approval is used: a rejection is accepted while the
     request is pending AND after an approval that was not used yet (a revocation), and
     after a rejection no approval is accepted any more (audit finding 2.4: V1 let a
-    separate API approval override the operator's "n");
+    separate API approval override the operator's "n"). The gateway uses (consumes) an
+    approval immediately before it sends the write, so from then on "no" comes too late;
   * `expire()` ends a pending request early (e.g. its run was cancelled while waiting):
     the waiter returns None and a later "yes" is refused.
 
 The state machine of one request:
 
-    pending --approve--> approved --consume (the gateway, right before the write)--> used
-       |                    |
-       +--reject-->  rejected  <--reject (revocation; refused once the approval was used)
+    pending --approve--> approved --consume (the gateway, right before the write)--> approved,
+       |                    |                                                    consumed_at set
+       +--reject-->  rejected  <--reject (revocation; refused once consumed_at is set)
        |
        +--expire / timeout--> expired
 
@@ -27,7 +28,8 @@ Every transition is a compare-and-swap inside ONE SQLite write transaction (BEGI
 IMMEDIATE takes the write lock before anything is read), so two processes that share the
 database file (the API server and the CLI, say) are serialized and can never both win.
 Every step, including each refused attempt, is appended to `approval_events`, a decision
-log that the database itself refuses to update or delete (triggers).
+log in which the database itself refuses updates, deletes and replacements (triggers: a guard
+against bugs and accidental edits, not against someone who can write the file).
 
 The gateway re-reads the approval from this store right before executing, so an
 approval object held by the caller can never be stale or forged.
@@ -99,10 +101,16 @@ CREATE TABLE IF NOT EXISTS approval_events (
     proposal_digest TEXT NOT NULL,
     detail          TEXT NOT NULL
 );
--- The decision log is append-only: the database refuses to change or delete an entry.
+-- The decision log is append-only: the database refuses to change, delete or replace an
+-- entry. This guards against bugs and accidental edits; someone who can write the file could
+-- still drop these triggers (files under data/ are trusted state).
 CREATE TRIGGER IF NOT EXISTS approval_events_no_update BEFORE UPDATE ON approval_events
     BEGIN SELECT RAISE(ABORT, 'approval events are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS approval_events_no_delete BEFORE DELETE ON approval_events
+    BEGIN SELECT RAISE(ABORT, 'approval events are append-only'); END;
+-- INSERT OR REPLACE removes the old row without firing delete triggers, so refuse it here.
+CREATE TRIGGER IF NOT EXISTS approval_events_no_replace BEFORE INSERT ON approval_events
+    WHEN EXISTS (SELECT 1 FROM approval_events WHERE event_id = NEW.event_id)
     BEGIN SELECT RAISE(ABORT, 'approval events are append-only'); END;
 """
 _INSERT_REQUEST = """INSERT INTO approval_requests VALUES (:proposal_id, :run_id, :incident_id,
@@ -186,7 +194,7 @@ class ApprovalStore:
         """Record a human (or auto-approver) decision on one request.
 
         Approve: only a pending request. Reject: a pending request, or an approved one whose
-        approval was not used yet (a revocation: "no" wins until the action runs). Anything
+        approval was not used yet (a revocation: "no" wins until the approval is used). Anything
         else raises ApprovalError, and the refused attempt is still written to the log.
         """
         now = now or utcnow()
@@ -268,7 +276,10 @@ class ApprovalStore:
             "SELECT * FROM approvals WHERE proposal_id = ?", (proposal_id,)
         ).fetchone()
         if current is None or current["consumed_at"] is not None:
-            reason = "the approved action was already executed; a rejection can no longer stop it"
+            reason = (
+                "the approval was already used to send the action; "
+                "a rejection can no longer stop it"
+            )
             return _refuse(conn, proposal_id, actor, now, request, reason)
         conn.execute(_MOVE_STATUS, (REJECTED, proposal_id, APPROVED))
         conn.execute(

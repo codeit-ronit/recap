@@ -11,8 +11,8 @@ weak spots in that loop. In simple words:
    was already fixed and gives up. No test reached RESOLVED on a second fix.
    Reproduced with a two-fault scenario written into tmp_path: payment leaks memory AND
    checkout runs a bad release. Restarting payment fixes only half; a correct controller then
-   investigates again and rolls back checkout. Today the run ends FAILED ("no remediation
-   could be drafted") because round 2 diagnoses payment again.
+   investigates again and rolls back checkout. In V1 the run ended FAILED ("no remediation
+   could be drafted") because round 2 diagnosed payment again.
    A second problem sits on the same path: once a run holds this much evidence, the bounded
    proposal context pack drops the very runbook chunk that names the fix for the diagnosis
    (context loss, AUDIT-2.1). The scripted policy then falls back to a blind restart, which
@@ -21,18 +21,21 @@ weak spots in that loop. In simple words:
 2. No stabilization wait. The oracle is probed once, immediately after the write. The
    simulator moves its clock 5 minutes per action, so recovery there is instant, but a live
    target needs time (pods restart, readiness probes pass). Reproduced with a small
-   NON-simulated environment whose health only turns green 1.5 s after the fix: today the
-   controller judges too early and calls the right fix "not recovered".
+   NON-simulated environment whose health only turns green 1.5 s after the fix: in V1 the
+   controller judged too early and called the right fix "not recovered".
 
-3. Wall-clock limits around provider calls (a slow or hanging LLM). Several slow calls do
-   stop the run as BUDGET_EXHAUSTED (guard), but a single call that outlasts the whole budget
-   is reported as an agent failure (FAILED) during investigation, and a proposal call has no
-   deadline at all, so the run overruns its budget until the call returns.
+3. Wall-clock limits around provider calls (a slow or hanging LLM). Several slow calls did
+   stop the run as BUDGET_EXHAUSTED (guard), but in V1 a single call that outlasted the whole
+   budget was reported as an agent failure (FAILED) during investigation, and a proposal call
+   had no deadline at all, so the run overran its budget until the call returned.
 
 Status: the reproductions were strict xfails in M0. M1 fixed the lifecycle (a bounded
 stabilization wait for live targets, epoch-aware verification that ignores the fixed
 service's pre-fix state, runbook pinning, and provider calls bounded by the run's deadline),
 so they now pass and stay as regression tests. The guards pin behaviour that already worked.
+The M1 review added the edge cases of the new lifecycle: a live target that never settles
+(the wait is bounded by its window, and by the run's own clock), a write the target refused
+(nothing to wait for), and a provider's own TimeoutError (an error, not the run's deadline).
 
 Every run uses the real controller and a real MCP tool server subprocess (stdio).
 """
@@ -67,7 +70,7 @@ from recap.providers.deterministic import DeterministicProvider
 from recap.runtime import Runtime
 from recap.safety.approvals import ApprovalStore
 from recap.telemetry.tracer import TraceCategory as C
-from tests.fakes import BAD, FakeEnvironment
+from tests.fakes import BAD, T0, FakeEnvironment
 
 pytestmark = pytest.mark.e2e  # every test here runs a real incident end to end
 
@@ -155,7 +158,7 @@ async def test_a_half_working_fix_is_followed_by_a_separately_investigated_secon
 
     record = await runtime.run_incident(TWO_FAULT_ID, RunConfig(approval_mode="auto"))
 
-    # Today: FAILED, "no remediation could be drafted", and the last diagnosis is still
+    # V1: FAILED, "no remediation could be drafted", and the last diagnosis was still
     # "resource pressure on payment" although payment was already restarted.
     last = record.verification.summary if record.verification else "none"
     assert record.state == IncidentState.RESOLVED, (
@@ -208,12 +211,21 @@ async def test_the_runbook_for_the_diagnosis_reaches_the_proposal(
     ]
     drafted = [(p.action, p.target, p.source) for p in record.proposals]
     assert record.proposals, f"no fix was drafted: {record.outcome_note}"
-    # Today: ["fallback"], because the pack dropped "runbook-memory-pressure#remediation-1",
+    # V1: ["fallback"], because the pack dropped "runbook-memory-pressure#remediation-1",
     # the chunk that RAG retrieved for exactly this diagnosis (resource pressure on payment).
     sources = [p.source for p in record.proposals]
     assert sources == ["runbook"] * len(sources), (
         f"proposals {drafted}; left out of the proposal packs: {dropped}"
     )
+    # Why it now reaches the proposal: the chunk is PINNED (packed before any ranking), so it
+    # stays in even when it would rank too low to fit the pack's token budget.
+    first_pack = next(
+        event.payload
+        for event in runtime.events.list_events(record.run_id)
+        if event.category == C.CONTEXT and event.payload.get("stage") == "proposal"
+    )
+    assert "runbook-memory-pressure#remediation-1" in first_pack["pinned"]
+    assert set(first_pack["pinned"]) <= set(first_pack["items"])  # pinned = always packed
 
 
 # --- 2. a live target needs time to stabilize after a fix -----------------------------------
@@ -304,7 +316,7 @@ async def test_a_live_fix_is_verified_after_the_target_has_stabilized(
     )
     elapsed = time.monotonic() - started
 
-    # Today: the rollback is judged "not_recovered" a few milliseconds after it was applied.
+    # V1: the rollback was judged "not_recovered" a few milliseconds after it was applied.
     assert record.actions, f"no fix was executed: {record.state.value}: {record.outcome_note}"
     first = record.actions[0]
     assert (first.action, first.target) == ("execute_rollback", "checkout")
@@ -321,6 +333,137 @@ async def test_a_live_fix_is_verified_after_the_target_has_stabilized(
     ]
     assert recovery[0].payload["probes"] >= 2  # judged again after the target settled
     assert recovery[0].payload["waited_seconds"] >= STABILIZE_SECONDS
+
+
+# The classes below are built by the MCP tool server subprocess from this import path too.
+THIS_MODULE = "tests.e2e.test_audit_retry_and_stabilization"
+SETTLE_POLL_SECONDS = 0.2  # how often the controller re-probes these targets
+SHORT_WINDOW_SECONDS = 1.0  # NeverSettles: the adapter's stabilization window
+TIGHT_RUN_SECONDS = 4.0  # NeverSettlesInAMinute: the run's wall-clock budget
+
+
+class NeverSettles(SlowRolloutEnvironment):
+    """A live-like target that accepts the rollback but never turns healthy again.
+
+    Its adapter declares a short stabilization window, probed every SETTLE_POLL_SECONDS.
+    """
+
+    window_seconds = SHORT_WINDOW_SECONDS
+
+    def describe(self) -> EnvironmentInfo:
+        update = {
+            "stabilization_timeout_seconds": self.window_seconds,
+            "stabilization_poll_seconds": SETTLE_POLL_SECONDS,
+        }
+        return super().describe().model_copy(update=update)
+
+    def _broken(self) -> bool:
+        return True  # still failing, whatever was done
+
+
+class NeverSettlesInAMinute(NeverSettles):
+    """The same, but its adapter allows a full minute to settle: longer than the run has."""
+
+    window_seconds = 60.0
+
+
+class RefusesEveryWrite(SlowRolloutEnvironment):
+    """A live-like target that explicitly refuses every write (like an admission webhook).
+
+    Nothing changes, so there is nothing to wait for. Its adapter would otherwise allow the
+    default 60 s stabilization window per fix.
+    """
+
+    async def execute_authorized(self, action: AuthorizedAction) -> ActionOutcome:
+        return ActionOutcome(
+            ok=False,
+            action=action.action,
+            target=action.target,
+            message="admission webhook denied the change",
+            executed_at=T0,
+        )
+
+
+def live_runtime(settings: Settings, tmp_path: Path, class_name: str) -> Runtime:
+    """A runtime whose target is one of this module's live-like environments."""
+    environment = EnvironmentConfig(
+        kind=f"{THIS_MODULE}:{class_name}", options={"state_dir": str(tmp_path / "live")}
+    )
+    return Runtime(settings.model_copy(update={"environment": environment}))
+
+
+async def run_live(runtime: Runtime, config: RunConfig | None = None) -> Any:
+    """Run the fake bad release with manual approvals answered by OperatorApproves."""
+    return await asyncio.wait_for(  # a wait that never ends would fail here, not hang
+        runtime.run_incident(
+            "fake-bad-release",
+            config or RunConfig(memory_write=False),
+            approval_channel=OperatorApproves(runtime.approvals),
+        ),
+        timeout=RUN_LIMIT_SECONDS,
+    )
+
+
+def recovery_checks(runtime: Runtime, run_id: str) -> list[dict[str, Any]]:
+    """The payload of every oracle verdict in a run (one per executed fix)."""
+    events = runtime.events.list_events(run_id)
+    return [event.payload for event in events if event.category == C.VERIFY_RECOVERY]
+
+
+async def test_a_live_target_that_never_settles_is_judged_after_its_window(
+    settings: Settings, tmp_path: Path
+) -> None:
+    """The adapter's stabilization window bounds the wait: probe, wait 1 s, then judge."""
+    runtime = live_runtime(settings, tmp_path, "NeverSettles")
+
+    record = await run_live(runtime)
+
+    [first, *_] = recovery_checks(runtime, record.run_id)
+    assert first["verified"] is False
+    assert first["probes"] >= 3  # re-probed during the window, not judged once
+    assert SHORT_WINDOW_SECONDS <= first["waited_seconds"] < SHORT_WINDOW_SECONDS + 2.0
+    assert record.actions[0].result == "not_recovered"
+    assert record.state != IncidentState.RESOLVED
+
+
+async def test_the_stabilization_wait_never_outlives_the_run_budget(
+    settings: Settings, tmp_path: Path
+) -> None:
+    """A 60 s window, a 4 s run: the run stops at its budget; the fix it sent is recorded."""
+    runtime = live_runtime(settings, tmp_path, "NeverSettlesInAMinute")
+    config = RunConfig(memory_write=False, budget=RunBudget(max_elapsed_seconds=TIGHT_RUN_SECONDS))
+
+    started = time.monotonic()
+    record = await run_live(runtime, config)
+    elapsed = time.monotonic() - started
+
+    assert record.state == IncidentState.BUDGET_EXHAUSTED, record.outcome_note
+    assert "waiting for the target to settle" in record.outcome_note
+    assert elapsed < TIGHT_RUN_SECONDS + STOP_SLACK_SECONDS
+    # The write reached the target before the time ran out: it must not vanish from the record.
+    [fix] = record.actions
+    assert (fix.action, fix.target, fix.result) == ("execute_rollback", "checkout", "error")
+    assert "stopped while this fix was awaiting verification" in fix.note
+    assert "the tool reported it done" in fix.note and "recovery not verified" in fix.note
+    assert record.approvals[-1].consumed_at is not None  # the approval was used, once
+    assert len(writes(runtime, record.run_id)) == 1
+
+
+async def test_a_write_the_live_target_refused_is_judged_without_waiting(
+    settings: Settings, tmp_path: Path
+) -> None:
+    """A refused write changed nothing: one probe each, no 60 s stabilization window."""
+    runtime = live_runtime(settings, tmp_path, "RefusesEveryWrite")
+
+    record = await run_live(runtime)
+
+    checks = recovery_checks(runtime, record.run_id)
+    assert checks, f"no fix was attempted: {record.outcome_note}"
+    assert [check["probes"] for check in checks] == [1] * len(checks)
+    assert all(check["waited_seconds"] < 0.5 for check in checks)
+    assert record.actions and {a.result for a in record.actions} == {"error"}
+    assert "admission webhook denied the change" in record.actions[0].note
+    assert record.state == IncidentState.FAILED
 
 
 async def test_simulated_recovery_is_still_judged_without_waiting(settings: Settings) -> None:
@@ -414,15 +557,36 @@ async def test_a_provider_call_that_hangs_past_the_wall_clock_budget_is_cut_off(
     record = await runtime.run_incident("bad-deployment", config)
     elapsed = time.monotonic() - started
 
-    # Today, "investigation": FAILED, "every agent in the round failed" (an agent timeout).
+    # V1, "investigation": FAILED, "every agent in the round failed" (an agent timeout).
     assert record.state == IncidentState.BUDGET_EXHAUSTED, (
         f"{record.state.value}: {record.outcome_note} (error: {record.error})"
     )
     assert "max_elapsed_seconds" in record.outcome_note
-    # Today, "proposal": the right state, but only after the full hang (no deadline on it).
+    # V1, "proposal": the right state, but only after the full hang (no deadline on it).
     assert elapsed < HANG_BUDGET_SECONDS + STOP_SLACK_SECONDS, (
         f"the run took {elapsed:.1f}s for a {HANG_BUDGET_SECONDS:g}s wall-clock budget"
     )
+    assert writes(runtime, record.run_id) == []
+
+
+class TimingOutProposer(DeterministicProvider):
+    """A proposal call whose own HTTP client gives up at once (it raises TimeoutError)."""
+
+    async def propose_mitigation(self, request: ProposalRequest) -> ProposalDecision:
+        raise TimeoutError("the provider's HTTP read timed out")
+
+
+async def test_a_providers_own_timeout_error_is_a_failure_not_the_runs_deadline(
+    settings: Settings,
+) -> None:
+    """Guard for the deadline wrapper: only the run's own clock means BUDGET_EXHAUSTED."""
+    runtime = Runtime(settings)
+    runtime.make_provider = lambda config: TimingOutProposer()  # type: ignore[method-assign]
+
+    record = await runtime.run_incident("bad-deployment", AUTO_NO_MEMORY)
+
+    assert record.state == IncidentState.FAILED, record.outcome_note
+    assert record.error is not None and "TimeoutError" in record.error
     assert writes(runtime, record.run_id) == []
 
 
@@ -472,3 +636,6 @@ async def test_executed_fixes_never_exceed_max_mitigation_attempts(
     assert 1 <= len(writes(runtime, record.run_id)) <= cap
     assert record.state == IncidentState.FAILED
     assert record.recovery is not None and not record.recovery.verified
+    # A simulated fix that did not work is judged at once too: nothing more will settle.
+    checks = recovery_checks(runtime, record.run_id)
+    assert [check["probes"] for check in checks] == [1] * len(writes(runtime, record.run_id))

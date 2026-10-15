@@ -9,6 +9,7 @@ in them. After a failed fix, the next round's focus comes from RECAP's own reaso
 
 from __future__ import annotations
 
+import inspect
 from datetime import UTC, datetime
 from typing import Any
 
@@ -198,13 +199,16 @@ def test_the_retry_focus_is_the_failed_target_plus_the_verifiers_services() -> N
     assert focus == ["checkout", "payment"]  # deduplicated, the fix's target first
 
 
-def test_the_retry_focus_never_names_a_service_only_the_oracle_saw() -> None:
-    """The function has no input for oracle data at all, so 'frontend' cannot appear."""
+def test_the_retry_focus_cannot_see_the_oracles_unhealthy_services() -> None:
+    """Structural guard: the focus is computed from the fix and the verifier's report only.
+    If someone ever passes the oracle's probe in (its list of unhealthy services is ground
+    truth no agent observed), this test fails and points at audit finding 2.3."""
+    assert list(inspect.signature(_retry_focus).parameters) == ["registry", "proposal", "report"]
     report = VerificationReport(status="supported", focus_services=[])
 
     focus = _retry_focus(registry(), proposal("execute_rollback", "checkout"), report)
 
-    assert focus == ["checkout"]
+    assert focus == ["checkout"]  # only the failed fix's own target
 
 
 def test_a_namespace_wide_action_adds_no_service_to_the_focus() -> None:

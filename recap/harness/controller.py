@@ -30,8 +30,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, TypeVar
 
-from pydantic import ValidationError
-
 from recap import __version__
 from recap.agents.roles import agent_specs
 from recap.context.evidence import EvidenceRegistry
@@ -70,13 +68,11 @@ from recap.core.models import (
     RunConfig,
     RunRecord,
     ScenarioInfo,
-    ToolResult,
     ToolRisk,
     Usage,
     Verdict,
     VerificationReport,
 )
-from recap.core.observations import ActionOutcome
 from recap.harness.budget import BudgetTracker
 from recap.harness.loop import AgentHarness
 from recap.harness.store import RunStore
@@ -174,6 +170,8 @@ class IncidentController:
         self.epoch_findings: list[AgentFinding] = []
         # service -> environment time of the last fix executed on it (for the verifier).
         self.remediated: dict[str, datetime] = {}
+        # The fix being sent right now, so a cancellation can record what happened to it.
+        self.mitigating: MitigationProposal | None = None
 
     # ==================================================================================
     # Entry point
@@ -255,6 +253,7 @@ class IncidentController:
                 await self._resolve()
         except asyncio.CancelledError:
             self.cancelled = True
+            self._record_interrupted_fix("cancelled")
             self._finish(S.FAILED, "run cancelled")
             raise
         except Exception as exc:  # budget stops and any bug or provider error end the run cleanly
@@ -342,21 +341,31 @@ class IncidentController:
 
             self._transition(S.MITIGATING, f"{proposal.action} on {proposal.target}")
             before = await self.oracle.probe()
+            # Until its outcome is recorded below, a cancellation records this fix instead
+            # (see _record_interrupted_fix): an executed write must never vanish from the record.
+            self.mitigating = proposal
             result = await self.gateway.execute_mitigation(proposal, approval)
             if approval is not None:  # show the store's copy: it records the single use
                 stored = self.deps.approvals.get_approval(approval.approval_id)
                 self.record.approvals[-1] = stored or approval
             if result.decision is not None and result.decision.verdict != Verdict.ALLOW:
+                self.mitigating = None
                 self.record.safety_decisions.append(result.decision)
                 self._record_action(proposal, "denied", "; ".join(result.decision.reasons))
                 self._finish(S.BLOCKED, "the gateway refused to execute the mitigation")
                 return
             attempts += 1
             if result.ok:  # the target changed: its older state observations are now stale
-                self.remediated[proposal.target] = _executed_at(result, before)
+                # The boundary is the oracle's own "before" reading (environment time from
+                # the trusted channel), never a time the tool reported about itself.
+                for service in self._fixed_services(proposal):
+                    self.remediated[service] = before.checked_at
 
             self._transition(S.VERIFYING, "independent oracle checks recovery")
-            after, probes, waited = await self._await_recovery()
+            # A write the target explicitly refused changed nothing: no reason to wait for it
+            # to settle. A transport error or timeout leaves the outcome unknown, so wait.
+            refused = not result.ok and result.output is not None
+            after, probes, waited = await self._await_recovery(settle=not refused)
             recovery = recovery_result(before, after, self.oracle.name)
             self.record.recovery = recovery
             self.tracer.emit(
@@ -374,6 +383,7 @@ class IncidentController:
             )
             outcome = "recovered" if recovery.verified else "not_recovered"
             note = "" if result.ok else f"tool error: {result.error}"
+            self.mitigating = None
             action = self._record_action(proposal, outcome if result.ok else "error", note)
             if recovery.verified:
                 where = "simulated environment" if self.info.is_simulated else self.info.kind
@@ -625,24 +635,32 @@ class IncidentController:
             return None
         return approval
 
-    async def _await_recovery(self) -> tuple[OracleProbe, int, float]:
+    async def _await_recovery(self, settle: bool = True) -> tuple[OracleProbe, int, float]:
         """VERIFYING: probe the oracle until the system is healthy or had time to settle.
 
         A simulated target recovers the moment a fix is applied (its clock jumps forward), so
-        it is probed once. A live target needs time: pods restart and readiness probes must
-        pass. It is probed every `stabilization_poll_seconds` until it is healthy, its
-        `stabilization_timeout_seconds` are over, or the run's wall-clock budget runs out.
+        it is probed once; so is a target that refused the write (`settle=False`). A live
+        target needs time: pods restart and readiness probes must pass. It is probed every
+        `stabilization_poll_seconds` until it is healthy or its `stabilization_timeout_seconds`
+        are over. If the run's own time runs out first, the verdict is not reached: that is a
+        budget stop (BUDGET_EXHAUSTED), not evidence that the fix failed.
         Returns the last probe, the number of probes and the seconds spent waiting.
         """
         started = time.monotonic()
         after = await self.oracle.probe()
         probes = 1
-        window = 0.0 if self.info.is_simulated else self.info.stabilization_timeout_seconds
+        window = (
+            0.0 if self.info.is_simulated or not settle else self.info.stabilization_timeout_seconds
+        )
         while not after.healthy:
-            left = min(window - (time.monotonic() - started), self.budget.remaining_seconds())
-            if left <= 0:
-                break
-            await asyncio.sleep(min(self.info.stabilization_poll_seconds, left))
+            window_left = window - (time.monotonic() - started)
+            if window_left <= 0:
+                break  # the target had its full window: the verdict stands
+            run_left = self.budget.remaining_seconds()
+            if run_left <= 0:
+                detail = "the run's time ran out while waiting for the target to settle"
+                raise BudgetExhausted("max_elapsed_seconds", detail)
+            await asyncio.sleep(min(self.info.stabilization_poll_seconds, window_left, run_left))
             after = await self.oracle.probe()
             probes += 1
         return after, probes, round(time.monotonic() - started, 3)
@@ -653,14 +671,52 @@ class IncidentController:
         A model that hangs would otherwise keep the run going long after its deadline.
         """
         try:
-            return await asyncio.wait_for(call, timeout=self.budget.remaining_seconds())
+            async with asyncio.timeout(self.budget.remaining_seconds()) as deadline:
+                return await call
         except TimeoutError:
+            if not deadline.expired():
+                raise  # the call itself raised TimeoutError: an error, not the run's deadline
             detail = f"{what} was still running when the run's time ran out"
             raise BudgetExhausted("max_elapsed_seconds", detail) from None
 
     # ==================================================================================
     # Helpers
     # ==================================================================================
+
+    def _record_interrupted_fix(self, how: str) -> None:
+        """The run stopped between sending a fix and recording it: record what happened.
+
+        `how` is "cancelled" or "stopped" (a budget stop or an error). A write that reached the
+        target cannot be called back, so the gateway waits for its outcome even when the run is
+        cancelled mid-send; a stop can also arrive while the controller waits for a live target
+        to settle. Either way the record must show the fix, whether the tool reported it done,
+        and the stored (used) approval. Its recovery was not verified.
+        """
+        proposal = self.mitigating
+        if proposal is None:
+            return
+        self.mitigating = None
+        if self.record.approvals:  # the store's copy records the single use
+            latest = self.record.approvals[-1]
+            stored = self.deps.approvals.get_approval(latest.approval_id)
+            self.record.approvals[-1] = stored or latest
+        write = self.gateway.last_write  # reset by the gateway at the start of every write
+        if write is None:
+            sent = "it was not sent"
+        elif write.ok:
+            sent = "the tool reported it done"
+        else:
+            sent = f"it failed: {write.error}"
+        when = "being sent" if self.lifecycle.state == S.MITIGATING else "awaiting verification"
+        note = f"the run was {how} while this fix was {when}; {sent}; recovery not verified"
+        self._record_action(proposal, "error", note)
+
+    def _fixed_services(self, proposal: MitigationProposal) -> list[str]:
+        """The services a fix changed: its service target, or every service for a namespace-wide
+        action (possible only in the simulation-only safety-off ablation)."""
+        if self.deps.registry.target_arg(proposal.action) == "service":
+            return [proposal.target]
+        return list(self.settings.policies.allowed_services)
 
     def _namespace_refused(self, alert_namespace: str) -> bool:
         """Refuse up front to work in a namespace the safety policy does not allow."""
@@ -824,6 +880,7 @@ class IncidentController:
 
     def _stop_on_error(self, exc: BaseException) -> None:
         """BudgetExhausted -> BUDGET_EXHAUSTED (a clean, expected stop); anything else -> FAILED."""
+        self._record_interrupted_fix("stopped")
         if isinstance(exc, BudgetExhausted):
             self.tracer.emit(TraceCategory.BUDGET, {"limit": exc.limit, "detail": exc.detail})
             self._finish(S.BUDGET_EXHAUSTED, f"stopped safely: {exc}")
@@ -1003,20 +1060,6 @@ def _unwrap_group(exc: BaseException) -> BaseException:
     while isinstance(exc, BaseExceptionGroup) and len(exc.exceptions) == 1:
         exc = exc.exceptions[0]
     return exc
-
-
-def _executed_at(result: ToolResult, before: OracleProbe) -> datetime:
-    """Environment time of an executed write, from its ActionOutcome (else the last probe).
-
-    Environment time, not wall-clock time: a simulator's clock is its own, and observations
-    carry that clock, so the verifier can compare them with the fix.
-    """
-    output = result.output or {}
-    known = {key: value for key, value in output.items() if key in ActionOutcome.model_fields}
-    try:
-        return ActionOutcome.model_validate(known).executed_at
-    except ValidationError:
-        return before.checked_at
 
 
 def _retry_focus(

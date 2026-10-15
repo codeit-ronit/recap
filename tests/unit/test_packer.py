@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime
 from typing import Any
 
@@ -9,7 +10,8 @@ import pytest
 
 from recap.context.evidence import EvidenceRegistry
 from recap.context.packer import UNTRUSTED_PREFIX, ContextPacker
-from recap.context.tokens import estimate_tokens
+from recap.context.summaries import render_for_agents
+from recap.context.tokens import CHARS_PER_TOKEN, estimate_tokens
 from recap.core.models import (
     ActionRecord,
     ContextPack,
@@ -201,6 +203,44 @@ def test_flagged_evidence_is_prefixed_and_keeps_its_flags() -> None:
     assert by_id[flagged.id].flags == [INJECTION_FLAG, "truncated"]
     assert by_id[clean.id].text == clean.content
     assert by_id[clean.id].flags == []
+
+
+def test_a_flagged_summary_gets_its_prefix_without_being_compacted() -> None:
+    """The summary is fitted to the item's room minus the prefix, so adding the prefix can
+    never push it into compaction (which would cut a hole in the middle of the summary)."""
+    registry = EvidenceRegistry("run-abc123def4", "inc-1")
+    lines = [
+        {
+            "timestamp": f"2026-03-14T09:{10 + i}:00Z",
+            "level": "ERROR",
+            "service": "checkout",
+            "message": f"distinct failure {i:02d} " + "z" * 40,
+        }
+        for i in range(20)
+    ]
+    data = {"service": "checkout", "lines": lines, "total_matched": 20}
+    flagged = registry.add(
+        source_type=SourceType.TOOL,
+        source_ref="mcp:get_service_logs(service=checkout)",
+        content=str(data),
+        data=data,
+        tool_name="get_service_logs",
+        flags=(INJECTION_FLAG,),
+    )
+    # An item room the unprefixed summary would just fit, but the prefixed one would not.
+    summary = render_for_agents(flagged, T0)
+    room_tokens = math.ceil((len(summary) + len(UNTRUSTED_PREFIX) // 2) / CHARS_PER_TOKEN)
+
+    pack = ContextPacker(max_item_tokens=room_tokens).build(
+        incident=make_incident(), evidence=registry.all(), max_tokens=HUGE
+    )
+
+    [item] = pack.items
+    assert item.text.startswith(UNTRUSTED_PREFIX + "Logs of checkout: 20 lines returned")
+    assert not item.compacted and "[compacted" not in item.text
+    assert item.text.endswith(f"raw evidence: {flagged.id}")  # the summary is whole
+    assert "distinct failure 19" in item.text  # with its newest line
+    assert item.token_estimate <= room_tokens
 
 
 def test_injection_text_the_gateway_did_not_flag_is_still_caught() -> None:

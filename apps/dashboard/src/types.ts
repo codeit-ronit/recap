@@ -779,6 +779,8 @@ export interface MitigationExecutedPayload {
   proposal_digest?: string;
   evidence_id?: string | null;
   safety_enabled?: boolean;
+  /** True when the run was cancelled while this write was in flight (its outcome is still recorded). */
+  run_cancelled?: boolean;
 }
 
 export interface CheckSummary {

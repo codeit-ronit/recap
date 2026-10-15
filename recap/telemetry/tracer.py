@@ -43,6 +43,7 @@ class TraceCategory:
     PROPOSAL = "mitigation.proposed"
     APPROVAL_REQUESTED = "approval.requested"
     APPROVAL_DECIDED = "approval.decided"
+    MITIGATION_STARTED = "mitigation.started"  # written BEFORE a write is sent (write-ahead)
     MITIGATION = "mitigation.executed"
     VERIFY_EVIDENCE = "verification.evidence"
     VERIFY_RECOVERY = "verification.recovery"

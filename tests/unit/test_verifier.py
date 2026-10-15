@@ -701,9 +701,8 @@ def test_oom_kills_after_the_fix_still_count() -> None:
     assert only_check(report).hypothesis.status == SUPPORTED
 
 
-def test_blame_written_before_the_dependency_was_fixed_does_not_count() -> None:
-    """checkout's old 'upstream payment call failed' lines cannot clear its own bad release."""
-    run = Run()
+def checkout_blamed_payment_before_payment_was_fixed(run: Run) -> Hypothesis:
+    """checkout v2.4.1 is bad; most of its errors blamed payment until payment's fix at -9."""
     deploy = run.deployments(("checkout", "v2.4.0", -2880), ("checkout", "v2.4.1", -30))
     rate = run.error_rate("checkout", onset=-28)
     errors = {
@@ -711,15 +710,92 @@ def test_blame_written_before_the_dependency_was_fixed_does_not_count() -> None:
         **upstream_errors("payment", range(-28, -8)),
     }
     logs = run.logs("checkout", errors)
-    claim = hypothesis(DEPLOY, "checkout", deploy, rate, logs, version="v2.4.1")
+    return hypothesis(DEPLOY, "checkout", deploy, rate, logs, version="v2.4.1")
 
-    before = verify(run, claim)
-    after = EvidenceVerifier().verify(
+
+def test_old_blame_stops_counting_once_the_fixed_dependency_is_seen_healthy() -> None:
+    """A fix on payment plus fresh evidence that payment is healthy: the blame was stale."""
+    run = Run()
+    claim = checkout_blamed_payment_before_payment_was_fixed(run)
+    run.health("payment", error_rate=0.001)  # observed after the fix (minute 0 > -9)
+    run.error_rate("payment", onset=None)
+
+    report = EvidenceVerifier().verify(
         [finding(claim)], run.registry, run.incident, remediated={"payment": at(-9)}
     )
 
-    assert only_check(before).hypothesis.status == CONTRADICTED  # most errors blame payment
-    assert only_check(after).hypothesis.status == SUPPORTED  # but that was before its fix
+    assert only_check(report).hypothesis.status == SUPPORTED
+    assert any("payment is observed healthy" in m for m in only_check(report).passed)
+
+
+def test_a_fix_on_a_dependency_alone_does_not_clear_the_blame() -> None:
+    """A new epoch starts only when the fix did NOT recover the system: without fresh evidence
+    that payment is healthy, its blame still counts, so the innocent caller is not picked."""
+    run = Run()
+    claim = checkout_blamed_payment_before_payment_was_fixed(run)
+
+    report = EvidenceVerifier().verify(
+        [finding(claim)], run.registry, run.incident, remediated={"payment": at(-9)}
+    )
+
+    assert only_check(report).hypothesis.status == CONTRADICTED  # most errors blame payment
+    assert "payment" in report.focus_services
+
+
+def test_a_slow_dependency_is_not_healthy_even_with_few_errors() -> None:
+    """A dependency whose requests time out (p95 far above the SLO) keeps its blame."""
+    run = Run()
+    deploy = run.deployments(("checkout", "v2.4.0", -2880), ("checkout", "v2.4.1", -12))
+    rate = run.error_rate("checkout", onset=-10)
+    logs = run.logs("checkout", upstream_errors("payment", range(-8, 1)))
+    slow = HealthSnapshot(
+        service="payment",
+        status="Running",
+        ready_replicas=2,
+        replicas=2,
+        error_rate=0.01,
+        latency_p95_ms=9500.0,
+        observed_at=at(0),
+    )
+    run.observe("get_service_health", slow, service="payment")
+
+    check = only_check(
+        verify(run, hypothesis(DEPLOY, "checkout", deploy, rate, logs, version="v2.4.1"))
+    )
+
+    assert check.hypothesis.status == CONTRADICTED  # its errors come from payment
+    assert not any("observed healthy" in m for m in check.passed)
+
+
+def test_after_a_fix_with_no_new_log_lines_the_errors_cannot_be_attributed() -> None:
+    run = Run()
+    deploy, rate, logs = bad_checkout_release(run)
+    claim = hypothesis(DEPLOY, "checkout", deploy, rate, logs, version="v2.4.1")
+
+    report = EvidenceVerifier().verify(
+        [finding(claim)], run.registry, run.incident, remediated={"checkout": at(1)}
+    )
+
+    check = only_check(report)
+    assert check.hypothesis.status != SUPPORTED
+    assert any("no log lines of checkout since its last fix" in m for m in check.failed)
+
+
+def test_an_event_list_from_before_a_fix_cannot_prove_there_were_no_oom_kills() -> None:
+    run = Run()
+    old_kills = run.events(oom_event("payment", -6), service="payment")
+    memory = run.memory("payment", ratio=0.39)
+
+    report = EvidenceVerifier().verify(
+        [finding(hypothesis(PRESSURE, "payment", old_kills, memory))],
+        run.registry,
+        run.incident,
+        remediated={"payment": at(-5)},
+    )
+
+    check = only_check(report)
+    assert check.hypothesis.status == INSUFFICIENT  # not contradicted by a stale list
+    assert any("no cluster events since its last fix" in m for m in check.failed)
 
 
 def test_a_release_that_was_already_replaced_cannot_explain_the_errors() -> None:
@@ -733,3 +809,49 @@ def test_a_release_that_was_already_replaced_cannot_explain_the_errors() -> None
 
     assert check.hypothesis.status == CONTRADICTED
     assert any("checkout no longer runs v2.4.1" in message for message in check.failed)
+
+
+def test_an_unhealthy_snapshot_alone_means_the_dependency_is_not_healthy() -> None:
+    """payment is visibly down (CrashLoopBackOff, 0/2 ready, no error-rate series): blame
+    toward it counts, so checkout's claim is not wrongly cleared."""
+    run = Run()
+    deploy = run.deployments(("checkout", "v2.4.0", -2880), ("checkout", "v2.4.1", -12))
+    rate = run.error_rate("checkout", onset=-10)
+    logs = run.logs("checkout", upstream_errors("payment", range(-10, 1)))  # all errors blame it
+    run.health("payment", error_rate=0.32, status="CrashLoopBackOff", ready=0)
+
+    report = verify(run, hypothesis(DEPLOY, "checkout", deploy, rate, logs, version="v2.4.1"))
+
+    assert only_check(report).hypothesis.status == CONTRADICTED  # checkout is a victim
+    assert "payment" in report.focus_services
+
+
+def test_memory_near_the_limit_before_a_restart_no_longer_supports_pressure() -> None:
+    """A restart resets memory: the pre-fix peak must not re-support the old diagnosis."""
+    run = Run()
+    memory = run.memory("payment", ratio=0.99)  # 99% of the limit, minutes -60..0
+    claim = hypothesis(PRESSURE, "payment", memory)
+
+    before = verify(run, claim)
+    after = EvidenceVerifier().verify(
+        [finding(claim)], run.registry, run.incident, remediated={"payment": at(1)}
+    )
+
+    assert only_check(before).hypothesis.status == SUPPORTED
+    assert only_check(after).hypothesis.status != SUPPORTED
+
+
+def test_log_lines_from_before_a_fix_no_longer_support_a_dependency_failure() -> None:
+    """checkout was fixed at +1: its older 'upstream payment call failed' lines are stale."""
+    run = Run()
+    logs = run.logs("checkout", upstream_errors("payment", range(-6, 1)))
+    claim = hypothesis(DEPENDENCY, "checkout", logs, dependency="payment")
+
+    before = verify(run, claim)
+    after = EvidenceVerifier().verify(
+        [finding(claim)], run.registry, run.incident, remediated={"checkout": at(1)}
+    )
+
+    assert only_check(before).hypothesis.status == SUPPORTED
+    assert only_check(after).hypothesis.status == INSUFFICIENT  # stale, not contradicting
+    assert any("no log lines of checkout since its last fix" in m for m in only_check(after).failed)

@@ -4,7 +4,7 @@ This page follows one incident from the moment it starts to the moment it is rem
 For every step it says **what comes in**, **which code handles it**, **what comes out**, and
 **where that output goes next**. It describes the code as of milestone M1 (after the audit
 fixes). The numbers in the example come from a real run of the `bad-deployment` scenario
-(an operator approved the fix): 66 trace events, 8 tool calls, 9 provider decisions,
+(an operator approved the fix): 67 trace events, 8 tool calls, 9 provider decisions,
 RESOLVED.
 
 Companion pages: [architecture.md](architecture.md) (the components in depth),
@@ -84,7 +84,7 @@ remembered.
 | Runbook chunks | `BM25Retriever.search` | **no** (text) | wrapped as untrusted data; their action hints only suggest, the policy decides |
 | Past episodes | `ExperienceStore.search` | partly: outcome and verification are RECAP's own | "similar" is not "safe to reuse" (`assess_reuse`); providers see label-free views |
 | Provider decisions (tool calls, hypotheses, fix drafts) | `AgentHarness`, `IncidentController._propose` | **no** (an LLM may be manipulated) | the gateway's policy, the verifier and the approval decide; declared risk is ignored |
-| A human decision | `ApprovalStore.decide` (CLI console, or `POST /approvals/{id}`) | yes, once authenticated | API: operator bearer token, identity from the token; "no" wins until the action runs |
+| A human decision | `ApprovalStore.decide` (CLI console, or `POST /approvals/{id}`) | yes, once authenticated | API: operator bearer token, identity from the token; "no" wins until the approval is used |
 | Recovery oracle output | `EnvironmentHealthOracle.probe` | yes, but **private** | only its yes/no verdict reaches the controller's decisions; its findings never reach a provider |
 
 ---
@@ -239,10 +239,16 @@ deployments, events, the memory metric, and a rollback dry run (`propose_rollbac
      use, in the same transaction that checks it is still approved).
   4. The gateway signs a **capability** for exactly this environment action (run, action,
      target, params, approval, digest, a nonce, 60 s expiry).
-  5. The MCP write tool passes it to `execute_authorized`; the environment verifies the
-     signature against the bound public key, the exact action, the expiry and the nonce, and
-     records the nonce in the same transaction as the change. Anything else is refused and
-     changes nothing.
+  5. Write-ahead: `mitigation.started` is traced **before** the write is sent, so the
+     trace shows a sent write even if this process dies before the answer comes back.
+  6. The MCP write tool passes the capability to `execute_authorized`; the environment
+     verifies the signature against the bound public key, the exact action, the expiry and
+     the nonce, and records the nonce in the same transaction as the change. Anything else
+     is refused: the world does not change, and the attempt goes to a bounded audit list.
+  7. If the run is cancelled while the write is in flight, the gateway still waits for its
+     outcome (a sent write cannot be called back), records it, and only then lets the
+     cancellation through; the controller records the fix as `error`, "recovery not
+     verified", with its used approval.
 - **Output:** an `ActionOutcome` (stored as evidence) → `mitigation.executed`. The
   capability itself is never traced or stored.
 - **Next:** stage 9.
@@ -253,13 +259,16 @@ deployments, events, the memory metric, and a rollback dry run (`propose_rollbac
 - **Code:** `_await_recovery`: the oracle
   ([recap/verification/oracle.py](../recap/verification/oracle.py)) calls `health_check()`
   on the controller's own environment object (never an MCP tool). A simulated target is
-  judged at once; a live target is probed every `stabilization_poll_seconds` until it is
-  healthy, its `stabilization_timeout_seconds` are over, or the run's time runs out.
+  judged at once, and so is a write the target refused (nothing changed). A live target is
+  probed every `stabilization_poll_seconds` until it is healthy or its
+  `stabilization_timeout_seconds` are over. If the run's own time runs out first, the run
+  stops as BUDGET_EXHAUSTED and the fix is recorded as sent but unverified.
 - **Output:** a `RecoveryResult` → `verification.recovery` (with the number of probes and
   the time waited).
 - **Next:** verified → RESOLVED. Not verified → a new **epoch**: the next round's focus is
   the failed fix's target plus the verifier's own focus services (never the oracle's list),
-  the fixed service's pre-fix state stops counting, and the run returns to stage 4, at most
+  the fixed service's pre-fix state stops counting (the boundary is the time of the oracle's
+  "before" probe, never a time the tool reported), and the run returns to stage 4, at most
   `max_mitigation_attempts` fixes in total.
 
 ### Stage 10. Remember and summarize (terminal state)
@@ -330,7 +339,7 @@ environment. One line per event (consecutive repeats of a pattern are grouped):
 | | `verification.evidence` | "bad deployment on checkout" supported |
 | PROPOSING | `state.transition`, `retrieval.docs`, `context.pack`, `mitigation.proposed`, `policy.decision`, `verification.evidence` | rollback of checkout to v2.4.0, from the runbook; APPROVAL_REQUIRED |
 | AWAITING_APPROVAL | `state.transition`, `approval.requested`, `approval.decided` | the operator approved the exact digest |
-| MITIGATING | `state.transition`, `policy.decision`, `mitigation.executed` | approval consumed, capability signed and verified, rollback applied |
+| MITIGATING | `state.transition`, `policy.decision`, `mitigation.started`, `mitigation.executed` | approval consumed, capability signed, write-ahead event, capability verified, rollback applied |
 | VERIFYING | `state.transition`, `verification.recovery` | oracle: unhealthy before, healthy after (1 probe: simulated) |
 | RESOLVED | `state.transition`, `memory.consolidated`, `run.summary` | a verified success episode written |
 

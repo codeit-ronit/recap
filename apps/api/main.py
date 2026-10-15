@@ -253,7 +253,8 @@ def create_app(
         """Approve or reject ONE proposal. The digest must match exactly; approvals expire.
 
         A rejection also revokes an approval that was not used yet: "no" wins until the
-        action has run. The approver recorded is the authenticated operator.
+        gateway uses the approval, right before it sends the write. The approver recorded is
+        the authenticated operator.
         """
         approvals = manager(request).runtime.approvals
         if approvals.get_request(proposal_id) is None:

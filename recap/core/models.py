@@ -490,7 +490,7 @@ ApprovalEventKind = Literal[
 class ApprovalEvent(Contract):
     """One entry of the append-only approval decision log: who did what to which proposal.
 
-    `revoked` is a rejection that overrode an approval before the action ran; `refused`
+    `revoked` is a rejection that overrode an approval before it was used; `refused`
     records an attempt the store turned down (a late, stale, forged or replayed decision).
     """
 

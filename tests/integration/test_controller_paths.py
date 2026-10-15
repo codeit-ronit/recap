@@ -20,6 +20,7 @@ from recap.core.models import (
     InvestigationDecision,
     InvestigationRequest,
     MemoryPartition,
+    MitigationProposal,
     ProposalDecision,
     ProposalRequest,
     ProviderInfo,
@@ -28,6 +29,7 @@ from recap.core.models import (
     ScenarioInfo,
     Usage,
 )
+from recap.environments.registry import create_environment
 from recap.harness.controller import IncidentController
 from recap.providers.deterministic import DeterministicProvider
 from recap.runtime import Runtime
@@ -93,6 +95,28 @@ def test_scenario_overrides_cannot_switch_off_safety_or_approvals(settings: Sett
     assert effective.provider is None
     assert effective.memory_write_partition == MemoryPartition.DEMO
     assert effective.planner == "prompt_injected"  # allowed: a red-team scenario may set it
+
+
+def test_a_fix_marks_exactly_the_services_it_changed(settings: Settings) -> None:
+    """After a fix, the verifier ignores the pre-fix state of the services it changed. A
+    service-level fix changed that service; a namespace-wide action (possible only in the
+    simulation-only safety-off ablation) changed every service, and a namespace is not one."""
+    runtime = Runtime(settings)
+    controller = IncidentController(
+        runtime.controller_deps(), scenario_id="x", config=RunConfig(), run_id="run-fix0000001"
+    )
+
+    def changed(action: str, target: str) -> list[str]:
+        fix = MitigationProposal(
+            proposal_id="prop-1", incident_id="inc-1", action=action, target=target, rationale="t"
+        )
+        return controller._fixed_services(fix)
+
+    assert changed("restart_service", "payment") == ["payment"]
+    assert changed("execute_rollback", "checkout") == ["checkout"]
+    every_service = list(settings.policies.allowed_services)
+    assert len(every_service) > 1 and "shop" not in every_service
+    assert changed("delete_namespace", "shop") == every_service
 
 
 @pytest.mark.e2e
@@ -194,6 +218,54 @@ async def test_cancelling_a_waiting_run_fails_it_expires_the_request_and_learns_
     assert record.episode_id is None and runtime.memory.count() == 0
     request = runtime.approvals.get_request(proposal_id)
     assert request and request.status == ApprovalStatus.EXPIRED  # can never be approved later
+
+
+async def wait_for_event(
+    runtime: Runtime,
+    task: asyncio.Task,  # type: ignore[type-arg]
+    run_id: str,
+    category: C,
+) -> None:
+    for _ in range(500):
+        if any(event.category == category for event in runtime.events.list_events(run_id)):
+            return
+        assert not task.done(), f"run ended before a {category.value} event"
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"no {category.value} event appeared")
+
+
+@pytest.mark.e2e
+async def test_cancelling_while_a_fix_is_being_sent_still_records_that_fix(
+    settings: Settings,
+) -> None:
+    """A write that reached the target cannot be called back. The run waits for its outcome,
+    records the fix (unverified) with its used approval, and only then stops as cancelled."""
+    options = dict(settings.environment.options, write_latency_ms=1500)  # a slow write
+    environment = settings.environment.model_copy(update={"options": options})
+    runtime = Runtime(settings.model_copy(update={"environment": environment}))
+    run_id = "run-cancel0002"
+    task = asyncio.create_task(
+        runtime.run_incident(
+            "bad-deployment", RunConfig(approval_mode="auto", memory_write=False), run_id=run_id
+        )
+    )
+    await wait_for_event(runtime, task, run_id, C.MITIGATION_STARTED)
+    task.cancel()  # the write is now in flight in the MCP server
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    record = runtime.runs.get(run_id)
+    assert record and record.state == IncidentState.FAILED
+    assert record.outcome_note == "run cancelled"
+    [fix] = record.actions
+    assert (fix.action, fix.target, fix.result) == ("execute_rollback", "checkout", "error")
+    assert "cancelled while this fix was being sent" in fix.note
+    assert "the tool reported it done" in fix.note and "recovery not verified" in fix.note
+    assert record.approvals[-1].consumed_at is not None  # used once, before the write
+    [sent] = [e for e in runtime.events.list_events(run_id) if e.category == C.MITIGATION]
+    assert sent.payload["ok"] is True and sent.payload["run_cancelled"] is True
+    sandbox = create_environment(runtime.settings.environment, run_id)
+    assert len(sandbox.store.load()["action_log"]) == 1  # type: ignore[attr-defined]
 
 
 @pytest.mark.e2e

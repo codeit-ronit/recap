@@ -33,12 +33,15 @@ in the dashboard) could unlock a different write, and a used approval could be r
   right after `reset`. The simulator stores the public key in the run's state file, so the
   MCP server subprocess verifies against the same key without holding any secret.
 - The simulator verifies **inside the same SQLite transaction** as the change and records
-  the nonce there. A refused write is audited and changes nothing.
+  the nonce there. A refused write does not change the simulated world; the attempt goes to a
+  bounded audit list (the most recent 50, with every field truncated, plus a running count),
+  so an unauthenticated caller cannot grow the state without limit.
 - [recap/tools/actions.py](../../recap/tools/actions.py): one mapping from write tools to
   environment actions, used by both the gateway (to sign) and the server (to build the
   action), so a valid capability matches exactly.
 - The MCP write tools take a `capability` argument; `StrictToolServer` rejects any argument
-  a tool does not define (the SDK's default drops them silently).
+  a tool does not define (the SDK's default drops them silently), however the tool was
+  registered (`add_tool` records its argument names; added after the M1 review).
 - The capability is never traced, stored in evidence, the run record or the sandbox audit
   log.
 

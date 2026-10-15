@@ -7,6 +7,7 @@ must be refused, and the simulator must change nothing when it refuses.
 
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 from pathlib import Path
 
@@ -122,6 +123,13 @@ def test_an_expired_capability_is_refused() -> None:
         check(token_for(signer), signer.public_key, now=later)
 
 
+def test_a_capability_issued_in_the_future_is_refused() -> None:
+    """A token issued later than the verifier's clock (beyond a 5 s tolerance) is refused."""
+    signer = issuer()
+    with pytest.raises(CapabilityError, match="issued in the future"):
+        check(token_for(signer), signer.public_key, now=utcnow() - timedelta(seconds=30))
+
+
 def test_a_used_nonce_is_refused() -> None:
     signer = issuer()
     token = token_for(signer)
@@ -164,8 +172,29 @@ async def test_the_simulator_refuses_an_unsigned_write_and_changes_nothing(tmp_p
     assert outcome.ok is False and "not authorized" in outcome.message
     assert after["clock_minute"] == before["clock_minute"]  # the world did not move
     assert after["deployments"] == before["deployments"]
-    [refused] = after["action_log"]  # but the attempt is audited
+    assert after["action_log"] == []  # that log is for writes the gateway authorized
+    [refused] = after["refused_writes"]  # the unauthorized attempt is audited separately
     assert refused["ok"] is False and "capability" not in refused
+    assert after["refused_writes_total"] == 1
+
+
+async def test_unauthorized_attempts_cannot_grow_the_world_state_without_limit(
+    tmp_path: Path,
+) -> None:
+    """Refused callers are not authenticated: their audit trail is bounded and truncated."""
+    env = await bad_deployment(tmp_path)
+    issuer_for(env)
+    huge = AuthorizedAction(action="restart", target="x" * 200_000, approval_id="a" * 50_000)
+
+    for _ in range(60):
+        await env.execute_authorized(huge)
+
+    state = env.store.load()
+    assert state["refused_writes_total"] == 60
+    assert len(state["refused_writes"]) == 50  # only the most recent are kept
+    entry = state["refused_writes"][-1]
+    assert len(entry["target"]) <= 131 and len(entry["approval_id"]) <= 131
+    assert len(json.dumps(state)) < 100_000  # 60 attempts of ~250 KB each left a small state
 
 
 async def test_the_simulator_accepts_a_capability_once(tmp_path: Path) -> None:

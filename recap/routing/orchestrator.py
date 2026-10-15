@@ -55,6 +55,10 @@ class AgentRunPlan(Contract):
     focus_services: list[str] = Field(default_factory=list)
 
 
+class _AgentTimedOut(Exception):
+    """The agent ran past its own time limit (set by the orchestrator, not the run's deadline)."""
+
+
 # Anything that runs one agent: AgentHarness.run_agent in a real run, a fake in tests.
 AgentRunner = Callable[[AgentSpec, AgentRunPlan], Awaitable[AgentFinding]]
 
@@ -148,13 +152,23 @@ class Orchestrator:
         deadline_first = remaining is not None and remaining < self._timeout
         timeout = remaining if deadline_first and remaining is not None else self._timeout
         outcome: AgentFinding | Exception
+        if deadline_first and timeout is not None and timeout <= 0:
+            detail = f"no time was left on the run to start {spec.role.value}"
+            outcome = BudgetExhausted("max_elapsed_seconds", detail)
+            return _Run(plan, outcome, started_at, utcnow(), started, time.perf_counter())
         try:
-            outcome = await asyncio.wait_for(self._runner(spec, plan), timeout)
+            async with asyncio.timeout(timeout) as limit:
+                outcome = await self._runner(spec, plan)
         except TimeoutError as exc:
-            outcome = exc
-            if deadline_first:
+            if not limit.expired():
+                # A TimeoutError raised inside the agent (for example by a provider's HTTP
+                # client) is an ordinary agent error, not this time limit.
+                outcome = exc
+            elif deadline_first:
                 detail = f"{spec.role.value} was still working when the run's time ran out"
                 outcome = BudgetExhausted("max_elapsed_seconds", detail)
+            else:
+                outcome = _AgentTimedOut()
         except Exception as exc:  # CancelledError is not an Exception, so cancelling still works
             outcome = exc
         return _Run(plan, outcome, started_at, utcnow(), started, time.perf_counter())
@@ -172,7 +186,7 @@ class Orchestrator:
         )
 
     def _error_text(self, error: Exception) -> str:
-        if isinstance(error, TimeoutError):
+        if isinstance(error, _AgentTimedOut):
             return f"timeout after {self._timeout:g}s"
         if isinstance(error, BudgetExhausted):
             return str(error)  # not a crash: the shared budget ran out

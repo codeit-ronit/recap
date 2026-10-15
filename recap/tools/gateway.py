@@ -164,6 +164,7 @@ class ToolGateway:
         # Signs one capability per allowed write. Without it a write carries none and the
         # environment refuses it (fail closed), so a gateway built without one cannot write.
         self._capabilities = capabilities
+        self.last_write: ToolResult | None = None  # the outcome of the latest write sent
 
     async def discover(self) -> DiscoveryReport:
         """Ask the server what it offers and compare that with the trusted registry."""
@@ -225,6 +226,7 @@ class ToolGateway:
     ) -> ToolResult:
         """Write path: exact approval -> target lock -> budget -> consume -> one call."""
         invocation_id = new_id("call")
+        self.last_write = None  # set again once this write's outcome is known
         tool, args = proposal.action, self.registry.mitigation_args(proposal)
         # Re-read the approval from the store: the caller's copy may be stale or forged.
         fresh = self._approvals.get_approval(approval.approval_id) if approval else None
@@ -258,33 +260,62 @@ class ToolGateway:
                 "capability": self._capability(tool, args, approval_id, proposal.digest()),
             }
             request = self._tool_request(invocation_id, tool, args, AgentRole.CONTROLLER)
-            result, _ = await self._run(request, decision, extra)
-        finally:
-            self._locks.release(lock_key)
-
-        result = _with_action_outcome(result)
-        # A write is traced only here, not as tool.call/tool.result: the dashboard draws
-        # and counts each write once, from this event.
-        self._tracer.emit(
-            TraceCategory.MITIGATION,
-            {
+            write = {
                 "invocation_id": invocation_id,
                 "tool": tool,
                 "target": proposal.target,
                 "params": proposal.params,
+                "approval_id": approval_id or None,
+                "proposal_digest": proposal.digest(),
+            }
+            # Write-ahead: the trace shows the write was sent even if this process is
+            # cancelled or dies before the outcome comes back.
+            self._tracer.emit(
+                TraceCategory.MITIGATION_STARTED, write, agent=AgentRole.CONTROLLER.value
+            )
+            result, cancelled = await self._send_write(request, decision, extra)
+        finally:
+            self._locks.release(lock_key)
+
+        result = _with_action_outcome(result)
+        self.last_write = result
+        # The outcome is traced here, not as tool.call/tool.result: the dashboard draws and
+        # counts each write once, from this event.
+        self._tracer.emit(
+            TraceCategory.MITIGATION,
+            {
+                **write,
                 "ok": result.ok,
                 "error": result.error,
                 "side_effects": result.side_effects,
-                "approval_id": approval_id or None,
-                "proposal_digest": proposal.digest(),
                 "evidence_id": result.evidence_id,
                 "safety_enabled": self._safety_enabled,
+                "run_cancelled": cancelled is not None,
             },
             agent=AgentRole.CONTROLLER.value,
             duration_ms=result.duration_ms,
         )
         self.results.append(result)
+        if cancelled is not None:
+            raise cancelled  # the run is being stopped; the write's outcome is recorded above
         return result
+
+    async def _send_write(
+        self, request: ToolRequest, decision: SafetyDecision, extra: dict[str, Any]
+    ) -> tuple[ToolResult, asyncio.CancelledError | None]:
+        """Send one write and learn its outcome, even if the run is cancelled meanwhile.
+
+        Cancelling this coroutine cannot call back a write that already reached the target,
+        so the outcome is awaited anyway (the tool timeout bounds the wait) and returned with
+        the cancellation, which the caller re-raises after recording what happened.
+        """
+        send = asyncio.ensure_future(self._run(request, decision, extra))
+        try:
+            result, _ = await asyncio.shield(send)
+            return result, None
+        except asyncio.CancelledError as cancelled:
+            result, _ = await send
+            return result, cancelled
 
     def _capability(
         self, tool: str, args: dict[str, Any], approval_id: str, proposal_digest: str

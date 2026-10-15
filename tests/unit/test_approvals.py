@@ -313,7 +313,7 @@ async def test_external_channel_leaves_the_decision_to_the_api(store: ApprovalSt
     assert store.get_request("prop-1").status == ApprovalStatus.PENDING
 
 
-# --- "no" wins until the action runs, and every step is logged (audit finding 2.4) ----------
+# --- "no" wins until the approval is used, and every step is logged (audit finding 2.4) ---
 
 
 def reject(store: ApprovalStore, proposal: MitigationProposal, actor: str = "bob"):
@@ -336,13 +336,13 @@ def test_a_rejection_revokes_an_approval_that_was_not_used_yet(store: ApprovalSt
         store.consume(approval.approval_id)  # the gateway can no longer use it
 
 
-def test_a_rejection_after_the_action_ran_is_refused(store: ApprovalStore) -> None:
+def test_a_rejection_after_the_approval_was_used_is_refused(store: ApprovalStore) -> None:
     proposal = make_proposal()
     store.create_request(proposal, run_id="run-1", ttl_seconds=900)
     approval = approve(store, proposal)
     store.consume(approval.approval_id)
 
-    with pytest.raises(ApprovalError, match="already executed"):
+    with pytest.raises(ApprovalError, match="already used to send"):
         reject(store, proposal)
     assert store.get_request("prop-1").status == ApprovalStatus.APPROVED  # history is not rewritten
 
@@ -394,6 +394,11 @@ def test_the_decision_log_cannot_be_changed_or_deleted(tmp_path: Path) -> None:
         raw.execute("UPDATE approval_events SET actor = 'someone else'")
     with pytest.raises(sqlite3.DatabaseError, match="append-only"):
         raw.execute("DELETE FROM approval_events")
+    with pytest.raises(sqlite3.DatabaseError, match="append-only"):  # replace = delete + insert
+        raw.execute(
+            "INSERT OR REPLACE INTO approval_events VALUES (1, 'prop-1', 'approved', "
+            "'operator:mallory', '2026-01-01T00:00:00+00:00', '', '')"
+        )
     raw.close()
     assert [e.kind for e in store.events("prop-1")] == ["requested"]
 
@@ -462,6 +467,54 @@ except ApprovalError as exc:
     stored = store.get_approval(approval.approval_id)
     assert stored is not None
     if consume_out == "won":
-        assert stored.consumed_at is not None and "already executed" in revoke_out
+        assert stored.consumed_at is not None and "already used to send" in revoke_out
     else:
         assert stored.decision == "rejected" and stored.consumed_at is None
+
+
+def test_a_used_approval_is_in_the_decision_log(store: ApprovalStore) -> None:
+    proposal = make_proposal()
+    store.create_request(proposal, run_id="run-1", ttl_seconds=900)
+    store.consume(approve(store, proposal).approval_id)
+
+    assert [e.kind for e in store.events("prop-1")] == ["requested", "approved", "consumed"]
+
+
+def test_a_decision_waits_for_another_writer_instead_of_reading_stale_state(
+    tmp_path: Path,
+) -> None:
+    """BEGIN IMMEDIATE: while another process holds the write lock and uses the approval, a
+    consume here waits for it, then refuses cleanly; it never acts on a stale read."""
+    import sqlite3
+    import threading
+
+    db = tmp_path / "recap.db"
+    store = ApprovalStore(db)
+    proposal = make_proposal()
+    store.create_request(proposal, run_id="run-1", ttl_seconds=900)
+    approval = approve(store, proposal)
+
+    other = sqlite3.connect(db, timeout=10, isolation_level=None)
+    other.execute("BEGIN IMMEDIATE")  # another process takes the write lock first
+    outcome: list[BaseException | None] = []
+
+    def consume() -> None:
+        try:
+            store.consume(approval.approval_id)
+            outcome.append(None)
+        except BaseException as exc:
+            outcome.append(exc)
+
+    worker = threading.Thread(target=consume)
+    worker.start()
+    time.sleep(0.3)  # the consume is now waiting for the lock
+    other.execute(
+        "UPDATE approvals SET consumed_at = ? WHERE approval_id = ?",
+        (utcnow().isoformat(), approval.approval_id),
+    )
+    other.execute("COMMIT")
+    worker.join(timeout=15)
+    other.close()
+
+    assert len(outcome) == 1 and isinstance(outcome[0], ApprovalError), outcome
+    assert "already used" in str(outcome[0])

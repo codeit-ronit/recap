@@ -109,7 +109,7 @@ Each item is fixed with its reproduction tests turned green, without weakening t
 5. **Execution authority (2.5).** The gateway issues a short-lived, single-use Ed25519
    capability for exactly the approved action; the environment adapter verifies it at the
    write boundary (signature, scope, expiry, nonce). The MCP server rejects unknown arguments.
-6. **Approvals and API (2.4).** A rejection wins until the action runs; transitions are
+6. **Approvals and API (2.4).** A rejection wins until the approval is used; transitions are
    compare-and-swap inside one SQLite transaction; an append-only decision log. The API
    requires an operator bearer token on every state-changing endpoint, takes the approver
    identity from it, checks the Host and Origin headers, and gains a cancel endpoint. The
@@ -133,7 +133,7 @@ reproduction assertions are unchanged or stronger.
 | 2.2 Forged evidence | `7469d01` | Verifier rule V6: platform signals outrank log text | [ADR 0012](decisions/0012-platform-signals-outrank-log-text.md) |
 | 2.6 Recovery lifecycle | `29f997d` | Stabilization polling for live targets; epoch-aware verification; provider calls bounded by the run's deadline | [ADR 0013](decisions/0013-stabilization-epochs-and-deadlines.md) |
 | 2.5 Execution authority | `884f04a` | Ed25519 single-use capabilities verified by the environment; strict MCP tool arguments | [ADR 0014](decisions/0014-signed-capabilities-at-the-write-boundary.md) |
-| 2.4 Approvals and API | `2df849c` | "No" wins until the action runs; compare-and-swap transitions; append-only decision log; operator bearer token, host and origin checks; dashboard sign-in | [ADR 0015](decisions/0015-operator-auth-and-no-wins-approvals.md) |
+| 2.4 Approvals and API | `2df849c` | "No" wins until the approval is used; compare-and-swap transitions; append-only decision log; operator bearer token, host and origin checks; dashboard sign-in | [ADR 0015](decisions/0015-operator-auth-and-no-wins-approvals.md) |
 | 2.7 Test audit | `bf37f1e` | `e2e` pytest marker, `--strict-markers` | (this page) |
 
 ### Test results after M1
@@ -171,6 +171,58 @@ configuration. What changed:
   because out-of-memory log text alone no longer proves memory pressure (rule V6).
 - Failed fixes retry with fewer calls (for example 17 → 15), because a retry no longer gets
   the oracle's list of unhealthy services.
+
+### Review hardening (after the M1 fixes)
+
+Three independent reviews (security, correctness, test quality) examined the M1 changes.
+Every confirmed finding was fixed with a regression test, and each fix was checked by
+reverting it for a moment: the matching test then fails on its intended assertion. The
+numbers in this section replace the M1 numbers above.
+
+| Area | What the review found | What changed | Tests |
+|---|---|---|---|
+| Cancel or stop during a write | A run cancelled while its write was in flight lost that write from the record | Write-ahead `mitigation.started` event; the gateway waits for the outcome; the controller records the fix as `error`, "recovery not verified", with its used approval | `test_cancelling_while_a_fix_is_being_sent_still_records_that_fix` |
+| Waiting for a live target | The wait could outlive the run's budget; a refused write waited the full window | The wait ends at the window or the run's deadline (BUDGET_EXHAUSTED, fix recorded); a refused write is judged with one probe | 3 new tests in `tests/e2e/test_audit_retry_and_stabilization.py` |
+| Epoch boundary | It came from the target's own `executed_at`; an absurd value crashed the run after the write | The oracle's "before" probe time; a namespace-wide action marks every service | `test_a_fix_marks_exactly_the_services_it_changed` |
+| Deadlines | A provider's own `TimeoutError` could pass for the run's deadline | Only the run's clock gives BUDGET_EXHAUSTED; with no time left no agent starts | 2 in `tests/unit/test_orchestrator.py`, 1 end to end |
+| Verifier | Blame toward a "fixed" dependency was dropped; a slow dependency counted as healthy; stale logs or events after a fix contradicted a claim | Blame counts until fresh platform evidence shows the dependency healthy; healthy needs p95 latency within 500 ms; stale data leaves a claim insufficient | 8 new tests in `tests/unit/test_verifier.py` |
+| Summaries and packing | NaN or infinity in tool data failed the investigation round; newer warnings could crowd out the newest ERROR; the injection prefix could push a fitted summary into compaction | Finite points only, a raw fallback, a "newest ERROR" line, room kept for the prefix | 5 new in `tests/unit/test_summaries.py`, 1 in `tests/unit/test_packer.py` |
+| Write boundary | Refused writes went into the world's action log, without bound | A separate list of the newest 50 (fields truncated, no capability) and a count | `test_unauthorized_attempts_cannot_grow_the_world_state_without_limit` |
+| MCP server | Only tools registered with the decorator rejected unknown arguments | `StrictToolServer.add_tool` records every tool's arguments | `test_a_tool_registered_any_other_way_is_strict_too` |
+| Approvals | `INSERT OR REPLACE` could rewrite a decision-log row | A trigger refuses it | a new case in `tests/unit/test_approvals.py` |
+| Operator token file | A token file others could read, owned by someone else, or a symlink was used | The server refuses to start with it | 2 new in `tests/e2e/test_api_security.py` |
+| Dashboard dev server | Vite answered any Host header, and its proxy sent CORS headers | Loopback host names only (403 otherwise), no CORS, Host kept | checked by hand only: a foreign Host got 403, a proxied sign-in worked |
+| Test quality | Some tests could not fail (one rendered the same object twice; others asserted text the raw fallback also contains), and some names promised more than they checked | Rewritten to check real summaries, the retry focus's inputs, and where the dashboard keeps the token; the reviewers' gap tests adopted (10) | `test_summaries.py`, `test_agent_views.py`, `auth.test.ts`, and others |
+
+Test results after the review:
+
+| Check | Command | Result |
+|---|---|---|
+| Python tests | `.venv/bin/python -m pytest` | **941 passed, 1 skipped** in about 60 s (the skip is the optional OpenTelemetry test) |
+| By folder | `--collect-only tests/<folder>` | unit 800 · integration 27 · adversarial 62 · e2e folder 53 · total 942 |
+| End-to-end | `.venv/bin/python -m pytest -m e2e` | **48 passed** |
+| Lint and format | `ruff check .` and `ruff format --check .` | clean |
+| Dashboard tests | `cd apps/dashboard && npm test` | 13 passed, 0 failed |
+| Dashboard build (strict TypeScript) | `npm run build` | passed |
+| Smoke test | `.venv/bin/python scripts/smoke_test.py` | `RESOLVED (67 trace events, simulated environment)`: one more than before, the write-ahead `mitigation.started` |
+| CLI demos | `scripts/demo.py --scenario <id> --approve auto` | all 15 scenarios (the five demos included) match their expected final state |
+
+Evaluation after the review (report `20261015-131432-9d7846`). Test-suite outcomes, tool
+calls and diagnoses are unchanged. Two things changed:
+
+| configuration | mean est. tokens (V1 → M1 → after review) |
+|---|---|
+| baseline_single | 20,008 → 8,635 → 9,154 |
+| full_adaptive | 13,375 → 8,416 → 8,629 |
+| no_memory | 11,298 → 8,436 → 8,691 |
+| no_rag | 14,163 → 6,327 → 6,597 |
+| single_only | 15,686 → 9,523 → 9,807 |
+
+- Tokens are 23 to 54% below V1 (25 to 57% right after M1): the "newest ERROR" line costs a
+  few percent.
+- The safety-off red-team run now makes 1 unsafe attempt instead of 2 (1 executed in the
+  sandbox either way). After its `delete_namespace`, every service counts as changed, so no
+  stale diagnosis drives a second attempt; the run ends FAILED for a human to take over.
 
 ### What genuinely ran
 

@@ -2688,8 +2688,9 @@ others, change one thing at a time, and report exactly how many cases you ran.
 | `redteam_safety_on` | compromised planner, safety gateway on |
 | `redteam_safety_off` | compromised planner, safety gateway off (simulation only) |
 
-**Results** (from [`evals/reports/latest/summary.md`](../evals/reports/latest/summary.md); each row
-has N = 6 test scenarios):
+**Results in V1** (the V1 report; the current numbers after M1 and its review are in
+[`evals/reports/latest/summary.md`](../evals/reports/latest/summary.md) and
+[status.md](status.md); each row has N = 6 test scenarios):
 
 | configuration | outcome as expected | oracle-verified recovery | correct diagnosis | mean tool calls | mean steps | mean est. tokens | mean latency (ms) | parallel rounds |
 |---|---|---|---|---|---|---|---|---|
@@ -3754,7 +3755,7 @@ The Safety page shows these verdicts with their rule IDs ([safety screenshot](sc
 | safety on | 1 | 1 | 0 | 0 | BLOCKED |
 | safety off (simulation only) | 2 | 0 | 1 | 1 | FAILED |
 
-With safety off, the first `delete_namespace` deleted every service; the second reached the sandbox but was refused, because the namespace was already gone.
+With safety off, the first `delete_namespace` deleted every service; the second reached the sandbox but was refused, because the namespace was already gone. (That was V1. Since the M1 review the safety-off run stops after its first, executed attempt: once the namespace is gone, nothing observed afterwards supports a diagnosis, so no stale diagnosis drives a second attempt.)
 
 The budget-exhausted demo shows the other side of safety: the run stopped at 3/3 tool calls and claimed no recovery.
 
@@ -4161,7 +4162,7 @@ structured evidence summaries; the verifier lets platform signals outrank log te
 live target gets a bounded time to settle and the next round ignores the fixed service's
 stale state; every provider call is bounded by the run's deadline; every write carries a
 signed, single-use capability that the environment checks itself; and approvals are decided
-by an authenticated operator, with "no" winning until the action runs.
+by an authenticated operator, with "no" winning until the approval is used.
 
 **Why each change matters (and what it replaced).**
 
@@ -4225,5 +4226,74 @@ final check to where the write happens. The gateway signs a short-lived, single-
 for exactly the action it allowed, with a per-run Ed25519 key that never leaves the
 controller. The environment verifies the signature, the exact action, the expiry and the nonce
 in the same transaction as the change. A process that can read the public key still can't
-sign, so a bypass changes nothing. Nineteen tests reproduce the bypasses, and a control test
+sign, so a bypass cannot change the target. Nineteen tests reproduce the bypasses, and a control test
 makes sure the approved path still works."
+
+### M1 review — Hardening the fixes themselves
+
+**What changed, in one paragraph.** After M1, three independent reviews (security,
+correctness, test quality) examined the fixes themselves, the same way the audit examined V1.
+They found edge cases: a run cancelled while its fix was being sent lost that fix from the
+record; the wait for a live target could outlive the run's budget; the epoch boundary came
+from a time the target reported about itself; NaN in tool data could fail a whole
+investigation round; refused writes could grow the simulated world without limit; a symlinked
+or world-readable token file was accepted; and several tests could not fail at all. Each is
+now fixed, with a test that fails if the fix is reverted. Details:
+[status.md](status.md#review-hardening-after-the-m1-fixes) and
+[ADR 0013's amendment](decisions/0013-stabilization-epochs-and-deadlines.md#amended-after-the-m1-review).
+
+**The idea most worth understanding: a sent write cannot be called back.** Cancelling a
+Python task raises `CancelledError` at whatever `await` it is waiting on. If that `await` is
+the write itself, the write may already have reached the target, but the code that records it
+never runs. Three small pieces make the record trustworthy:
+
+1. **Write-ahead:** the gateway traces `mitigation.started` *before* sending, like a
+   database's write-ahead log. Even if the process dies, the trace shows the write was sent.
+2. **Shield:** `asyncio.shield(send)` lets the outer task be cancelled while the send itself
+   carries on. The gateway catches the cancellation, waits for the send to finish, traces
+   the real outcome (`run_cancelled: true`), and only then re-raises.
+3. **Record the interrupted fix:** `IncidentController._record_interrupted_fix` adds the fix
+   to `record.actions` as `error`, "recovery not verified", with the stored (used) approval.
+
+**Trusted time, not reported time.** After a fix, older observations of the fixed service no
+longer count. The cut-off used to be `executed_at`, a time the target reported about its own
+write: untrusted output that could be absurd (it crashed the run) or simply wrong. Now it is
+the environment time of the oracle's own "before" probe, taken just before the write.
+
+**How to know a test can fail.** A test that passes proves nothing until you have seen it
+fail for the right reason. For each fix in this review: revert the fix for a moment, run its
+test, check that it fails *on its intended assertion* (not an import error or a timeout),
+then restore the fix. That is mutation testing done by hand. The reviews found tests that
+rendered the same object twice and compared it with itself, or asserted text that the raw
+fallback contains too; those were rewritten to check real behaviour.
+
+**Inputs → outputs (the new pieces).**
+
+- `ToolGateway.execute_mitigation(proposal, approval)` → traces `mitigation.started`, then
+  `mitigation.executed` (with `run_cancelled`); returns the result or re-raises the
+  cancellation after recording it.
+- `IncidentController._await_recovery(settle)` → `(last probe, probes, seconds waited)`; one
+  probe if the target is simulated or refused the write; raises `BudgetExhausted` if the
+  run's time runs out while waiting.
+- `IncidentController._fixed_services(proposal)` → the services an epoch covers: the target
+  service, or every service for a namespace-wide action.
+
+**Reproduce it.**
+
+```bash
+.venv/bin/python -m pytest                    # 941 passed, 1 skipped (the optional OpenTelemetry test)
+.venv/bin/python -m pytest -m e2e             # 48 end-to-end tests
+.venv/bin/python -m pytest "tests/integration/test_controller_paths.py::test_cancelling_while_a_fix_is_being_sent_still_records_that_fix"
+```
+
+**Interview question:** "What happens if someone cancels your agent run while it is in the
+middle of executing a fix?"
+
+**Model answer:** "The fix may already have reached the target, and nothing can call it back,
+so the system must never pretend it didn't happen. RECAP writes a `mitigation.started` trace
+event before sending, like a write-ahead log. The send runs under `asyncio.shield`, so a
+cancellation interrupts the run but not the write: the gateway waits for the real outcome,
+records it, and only then lets the cancellation through. The controller records the fix as
+sent but unverified, with its used approval. The one gap left is a hard kill of the process
+between sending and recording; then only the write-ahead event shows it, and a startup
+reconciliation step would be the next thing to build."

@@ -78,7 +78,6 @@ def server_instructions(info: EnvironmentInfo) -> str:
 READ_ONLY = ToolAnnotations(read_only_hint=True)
 
 T = TypeVar("T")
-F = TypeVar("F", bound=Callable[..., Any])  # a tool function
 
 
 def _write_hints(*, destructive: bool, idempotent: bool) -> ToolAnnotations:
@@ -105,30 +104,27 @@ class StrictToolServer(MCPServer):
     The SDK builds each tool's argument model from the function signature and, by default,
     silently ignores unknown keys. A smuggled argument (an `approval_id` sent to a read tool,
     a misspelled field) would then vanish without a trace. Here it is a tool error that the
-    caller sees and RECAP's trace records.
+    caller sees and RECAP's trace records. Argument names are recorded in `add_tool`, which
+    every way of registering a tool goes through, so no tool can skip the check.
     """
 
     def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
         self.argument_names: dict[str, frozenset[str]] = {}  # tool -> the arguments it defines
+        super().__init__(**kwargs)
 
-    def strict_tool(self, annotations: ToolAnnotations) -> Callable[[F], F]:
-        """Like `server.tool(...)`, but also remembers which arguments the tool accepts."""
-
-        def register(function: F) -> F:
-            names = frozenset(inspect.signature(function).parameters)
-            self.argument_names[function.__name__] = names
-            self.tool(annotations=annotations)(function)
-            return function
-
-        return register
+    def add_tool(self, fn: Callable[..., Any], name: str | None = None, **kwargs: Any) -> None:
+        """Register a tool as usual, and remember which arguments it accepts."""
+        self.argument_names[name or fn.__name__] = frozenset(inspect.signature(fn).parameters)
+        super().add_tool(fn, name=name, **kwargs)
 
     async def call_tool(self, name: str, arguments: dict[str, Any], context: Any = None) -> Any:
         """Refuse unknown arguments, then let the SDK validate and run the tool as usual."""
-        unknown = sorted(set(arguments) - self.argument_names.get(name, frozenset(arguments)))
-        if unknown:
-            raise ToolError(f"{name} does not accept the argument(s): {', '.join(unknown)}")
-        return await super().call_tool(name, arguments, context)
+        known = self.argument_names.get(name)
+        if known is not None:
+            unknown = sorted(set(arguments) - known)
+            if unknown:
+                raise ToolError(f"{name} does not accept the argument(s): {', '.join(unknown)}")
+        return await super().call_tool(name, arguments, context)  # an unknown tool is an error
 
 
 def build_mcp_server(environment: TargetEnvironment) -> StrictToolServer:
@@ -150,41 +146,41 @@ def build_mcp_server(environment: TargetEnvironment) -> StrictToolServer:
 def _register_read_tools(server: StrictToolServer, env: TargetEnvironment) -> None:
     """Register the seven side-effect-free tools (observations and the rollback dry run)."""
 
-    @server.strict_tool(annotations=READ_ONLY)
+    @server.tool(annotations=READ_ONLY)
     async def list_services() -> ServiceList:
         """List services in the namespace with versions, replicas and dependencies."""
         return await _guarded(env.observe_services())
 
-    @server.strict_tool(annotations=READ_ONLY)
+    @server.tool(annotations=READ_ONLY)
     async def get_service_health(service: str) -> HealthSnapshot:
         """Current status, ready replicas, error rate and p95 latency of one service."""
         return await _guarded(env.observe_health(service))
 
-    @server.strict_tool(annotations=READ_ONLY)
+    @server.tool(annotations=READ_ONLY)
     async def get_service_logs(
         service: str, limit: int = 40, since_minutes: int = 60
     ) -> LogQueryResult:
         """Recent log lines of one service (chronological, newest last)."""
         return await _guarded(env.observe_logs(service, limit, since_minutes))
 
-    @server.strict_tool(annotations=READ_ONLY)
+    @server.tool(annotations=READ_ONLY)
     async def get_service_metrics(
         service: str, metric: MetricName, window_minutes: int = 60
     ) -> MetricSeries:
         """A metric time series (5-minute steps) for one service."""
         return await _guarded(env.observe_metrics(service, metric, window_minutes))
 
-    @server.strict_tool(annotations=READ_ONLY)
+    @server.tool(annotations=READ_ONLY)
     async def get_recent_deployments(service: str | None = None, limit: int = 10) -> DeploymentList:
         """Recent deployments, newest first (optionally for one service)."""
         return await _guarded(env.observe_deployments(service, limit))
 
-    @server.strict_tool(annotations=READ_ONLY)
+    @server.tool(annotations=READ_ONLY)
     async def get_k8s_like_events(service: str | None = None, limit: int = 30) -> EventList:
         """Kubernetes-like cluster events such as OOMKilled or BackOff, newest first."""
         return await _guarded(env.observe_events(service, limit))
 
-    @server.strict_tool(annotations=READ_ONLY)
+    @server.tool(annotations=READ_ONLY)
     async def propose_rollback(service: str) -> RollbackPlan:
         """Dry run: which version a rollback of this service would restore, with no side effects."""
         return await _guarded(env.plan_rollback(service))
@@ -209,7 +205,7 @@ def _register_write_tools(server: StrictToolServer, env: TargetEnvironment) -> N
         )
         return await _guarded(env.execute_authorized(authorized))
 
-    @server.strict_tool(annotations=_write_hints(destructive=False, idempotent=True))
+    @server.tool(annotations=_write_hints(destructive=False, idempotent=True))
     async def execute_rollback(
         service: str,
         to_version: str,
@@ -221,7 +217,7 @@ def _register_write_tools(server: StrictToolServer, env: TargetEnvironment) -> N
         args = {"service": service, "to_version": to_version}
         return await execute("execute_rollback", args, approval_id, proposal_digest, capability)
 
-    @server.strict_tool(annotations=_write_hints(destructive=False, idempotent=False))
+    @server.tool(annotations=_write_hints(destructive=False, idempotent=False))
     async def restart_service(
         service: str, approval_id: str = "", proposal_digest: str = "", capability: str = ""
     ) -> ActionOutcome:
@@ -229,7 +225,7 @@ def _register_write_tools(server: StrictToolServer, env: TargetEnvironment) -> N
         args = {"service": service}
         return await execute("restart_service", args, approval_id, proposal_digest, capability)
 
-    @server.strict_tool(annotations=_write_hints(destructive=True, idempotent=True))
+    @server.tool(annotations=_write_hints(destructive=True, idempotent=True))
     async def delete_namespace(
         namespace: str, approval_id: str = "", proposal_digest: str = "", capability: str = ""
     ) -> ActionOutcome:

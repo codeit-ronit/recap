@@ -1,9 +1,10 @@
-# ADR 0015: An operator-authenticated API, and approvals where "no" wins until the action runs
+# ADR 0015: An operator-authenticated API, and approvals where "no" wins until the approval is used
 
 **In one sentence:** every state-changing API call needs the operator's bearer token and
 records the approver from it, the API answers only loopback host names and same-site
-origins, and the approval store accepts a rejection until the approved action has been used,
-with every transition a compare-and-swap and every attempt in an append-only log.
+origins, and the approval store accepts a rejection until the approval has been used
+(immediately before the write is sent), with every transition a compare-and-swap and every
+attempt in an append-only log.
 
 ## Status
 
@@ -26,27 +27,35 @@ Approval store ([recap/safety/approvals.py](../../recap/safety/approvals.py)):
 
 - Approve: only a pending request. Reject: a pending request, **or** an approved one whose
   approval was not used yet (a revocation; the gateway's later attempt to use it is
-  refused). After a rejection nothing is accepted; after the action ran a rejection is
-  refused ("already executed").
+  refused). After a rejection nothing is accepted. The gateway uses the approval immediately
+  before it sends the write; from then on a rejection is refused ("already used to send the
+  action"), because nothing can call the write back.
 - Every transition runs in one `BEGIN IMMEDIATE` transaction (the write lock is taken before
   reading), so processes sharing the file are serialized. `consume` also requires the request
   to still be approved.
 - `approval_events`: an append-only log of every request, approval, rejection, revocation,
-  expiry, use and refused attempt. SQLite triggers refuse updates and deletes.
+  expiry, use and refused attempt. SQLite triggers refuse updates, deletes and
+  `INSERT OR REPLACE`: a guard against bugs and accidental edits, not against someone who can
+  write the file (they could drop the triggers; files under `data/` are trusted state).
 
 API ([apps/api/auth.py](../../apps/api/auth.py), [apps/api/main.py](../../apps/api/main.py)):
 
 - `Authorization: Bearer <operator token>` on `POST /incidents/run`, `/approvals/{id}`,
   `/evals/run` and the new `/runs/{id}/cancel`, compared in constant time. The token comes
   from `RECAP_OPERATOR_TOKEN`, or is generated on first start, saved to
-  `data/operator-token` (mode 0600) and printed once. `GET /auth/session` names the operator.
+  `data/operator-token` (mode 0600) and printed once. An existing token file is used only if
+  it is not a symlink, belongs to this user and no one else can read it; otherwise the
+  server refuses to start (added after the M1 review). `GET /auth/session` names the
+  operator.
 - The approver recorded is `operator:<name>` (`RECAP_OPERATOR_NAME`); an `actor` field in the
   body is refused (422).
 - Trusted Host check (`localhost`, `127.0.0.1`, `[::1]`; `RECAP_ALLOWED_HOSTS`) and an Origin
   check on unsafe methods. Reads stay open on trusted hosts, because the dashboard's live
   event stream (EventSource) cannot send headers.
 - The dashboard has an operator sign-in (the token lives in the tab's sessionStorage, never
-  a cookie), sends the header, shows the decision log, and can cancel a run.
+  a cookie), sends the header, shows the decision log, and can cancel a run. Its development
+  server (Vite) answers only the loopback host names too (403 otherwise) and proxies to the
+  API without CORS headers (added after the M1 review).
 
 ## Consequences
 
@@ -71,5 +80,5 @@ API ([apps/api/auth.py](../../apps/api/auth.py), [apps/api/main.py](../../apps/a
   sessionStorage cannot be sent by another site at all.
 - **First decision wins (V1).** That is exactly what let a separate approval override the
   operator's "no".
-- **Let a rejection always win, even after the action ran.** It cannot undo the action, and
-  would make the record claim something that did not happen.
+- **Let a rejection always win, even after the approval was used.** It cannot call back a
+  write that was already sent, and would make the record claim something that did not happen.

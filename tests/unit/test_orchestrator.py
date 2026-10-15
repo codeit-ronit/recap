@@ -239,3 +239,28 @@ async def test_an_agent_limit_shorter_than_the_run_deadline_is_still_an_agent_er
     [finding] = await orchestrator.execute(decision([INVESTIGATOR], StrategyMode.SINGLE))
 
     assert finding.error == "timeout after 0.1s"
+
+
+async def test_a_timeout_error_raised_inside_an_agent_is_an_ordinary_agent_error() -> None:
+    """E.g. a provider's HTTP client timing out. Neither the agent's limit nor the run's
+    deadline was reached, so it must not be reported as either."""
+    agents = FakeAgents({INVESTIGATOR: fail_with(TimeoutError("read timed out"))})
+    orchestrator = Orchestrator(
+        agents, SPECS, recording_tracer(), agent_timeout_seconds=60, remaining_seconds=lambda: 30
+    )
+
+    [finding] = await orchestrator.execute(decision([INVESTIGATOR], StrategyMode.SINGLE))
+
+    assert finding.error == "agent crashed: TimeoutError: read timed out"
+
+
+async def test_with_no_time_left_on_the_run_no_agent_is_started() -> None:
+    agents = FakeAgents({})
+    orchestrator = Orchestrator(
+        agents, SPECS, recording_tracer(), agent_timeout_seconds=60, remaining_seconds=lambda: 0
+    )
+
+    with pytest.raises(BudgetExhausted, match="no time was left on the run"):
+        await orchestrator.execute(decision())
+
+    assert agents.plans == []  # not one agent was started

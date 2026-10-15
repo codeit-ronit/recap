@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 # --- Thresholds ---------------------------------------------------------------------
 
 ERROR_RATE_THRESHOLD = 0.05  # a service with error_rate above this is "erroring"
+LATENCY_SLO_MS = 500.0  # p95 latency above this is not healthy (the shop's SLO); timeouts show here
 MEMORY_PRESSURE_RATIO = 0.90  # memory at or above 90% of its limit is "under pressure"
 MEMORY_RELAXED_RATIO = 0.70  # memory below 70% of its limit argues against pressure
 RECENT_DEPLOY_MINUTES = 120  # deployments younger than this are "recent"

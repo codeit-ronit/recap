@@ -38,6 +38,7 @@ plain text) is passed through as the raw content; the packer then keeps its head
 
 from __future__ import annotations
 
+import math
 import re
 from collections import Counter
 from collections.abc import Callable, Sequence
@@ -95,10 +96,15 @@ def render_for_agents(
         return evidence.content  # the data does not have the expected shape: show it raw
     footer = f"raw evidence: {evidence.id}"
     text = ""
-    for limit in ENTRY_LIMITS:
-        text = "\n".join([*render(observation, incident_time, limit), footer])
-        if max_chars is None or len(text) <= max_chars:
-            break
+    try:
+        for limit in ENTRY_LIMITS:
+            text = "\n".join([*render(observation, incident_time, limit), footer])
+            if max_chars is None or len(text) <= max_chars:
+                break
+    except (ValueError, ArithmeticError):
+        # Tool data is untrusted: a value this code cannot summarize (say, an overflowing
+        # timestamp) must never stop the run. Show the raw record instead.
+        return evidence.content
     return text
 
 
@@ -118,8 +124,12 @@ def _logs(result: LogQueryResult, alert: datetime | None, limit: int) -> list[st
     out = [header, f"levels: {counts}"]
     errors = [line for line in lines if line.level == "ERROR"]
     if errors:
-        first = errors[0]
+        first, newest = errors[0], errors[-1]
         out.append(f"first ERROR: {_when(first.timestamp, alert)}: {_message(first.message)}")
+        if newest is not first:  # always shown, however many WARN lines came after it
+            out.append(
+                f"newest ERROR: {_when(newest.timestamp, alert)}: {_message(newest.message)}"
+            )
     notable = [line for line in lines if line.level in NOTABLE_LEVELS]
     if notable:
         out.append(f"newest {'/'.join(NOTABLE_LEVELS)} lines (newest last):")
@@ -164,10 +174,13 @@ def _shape(message: str) -> str:
 
 def _metric(series: MetricSeries, alert: datetime | None, limit: int) -> list[str]:
     del limit  # a metric summary has a fixed size
-    points = series.points
     header = f"Metric {series.metric} of {series.service} ({series.unit})"
+    # Statistics use finite values only: untrusted data may contain NaN or infinity.
+    points = [point for point in series.points if math.isfinite(point.value)]
+    skipped = len(series.points) - len(points)
+    note = [f"{skipped} points are not finite numbers (left out)"] if skipped else []
     if not points:
-        return [header + ": no data points."]
+        return [header + ": no finite data points.", *note]
     first, last = points[0], points[-1]
     low = min(points, key=lambda point: point.value)
     high = max(points, key=lambda point: point.value)
@@ -190,12 +203,12 @@ def _metric(series: MetricSeries, alert: datetime | None, limit: int) -> list[st
             f"largest jump: {_signed(after.value - before.value)} from "
             f"{_stamp(before.timestamp, alert)} to {_when(after.timestamp, alert)}"
         )
-    if series.limit:
+    if series.limit and math.isfinite(series.limit):
         out.append(
             f"limit {_num(series.limit)} {series.unit}: latest at "
             f"{last.value / series.limit:.0%} of it, max at {high.value / series.limit:.0%}"
         )
-    return out
+    return out + note
 
 
 # --- health, deployments, events, services, plans, outcomes ---------------------------------
@@ -304,7 +317,7 @@ def _parse(model: type[Model], data: dict[str, Any]) -> Model | None:
     known = {key: value for key, value in data.items() if key in model.model_fields}
     try:
         return model.model_validate(known)
-    except ValidationError:
+    except (ValidationError, ValueError, ArithmeticError):  # e.g. a timestamp out of range
         return None
 
 
@@ -343,8 +356,12 @@ def _duration(minutes: float) -> str:
 
 
 def _num(value: float) -> str:
-    """A number as short text: 3170, 2905.5, 0.3623, 0.002."""
-    if value == int(value) and abs(value) < 1e15:
+    """A number as short text: 3170, 2905.5, 0.3623, 0.002, 1.2e+20, nan."""
+    if not math.isfinite(value):
+        return str(value)  # "nan", "inf": untrusted data may contain them
+    if abs(value) >= 1e15:
+        return f"{value:.4g}"
+    if value == int(value):
         return str(int(value))
     if abs(value) >= 1:
         return f"{value:.2f}".rstrip("0").rstrip(".")

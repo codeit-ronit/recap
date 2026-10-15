@@ -33,11 +33,13 @@ on a healthy service, and forged "upstream payment call failed" lines clear the 
 release, so RECAP restarted the wrong service. Platform signals come from the platform
 itself (the orchestrator, the metrics pipeline), so they are much harder to fake.
 
-Epochs: after a fix, `remediated` (service -> environment time of the last executed fix on
-it) makes the verifier ignore STATE observations of that service from before the fix: OOM
-kills, memory, health snapshots, error-rate points and log lines, and blame toward it. A
-restart clears memory pressure, so the OOM kills it ended must not re-support the old
-diagnosis (audit finding 2.6). History stays: deployments and when errors first began.
+Epochs: after a fix, `remediated` (service -> environment time when the last fix on it began)
+makes the verifier ignore STATE observations of that service from before the fix: OOM kills,
+memory, health snapshots, error-rate and latency points, and its own log lines. A restart
+clears memory pressure, so the OOM kills it ended must not re-support the old diagnosis
+(audit finding 2.6). Blame that OTHER services' fresh logs put on a fixed service still
+counts: a fix on it does not prove it is fixed, so only fresh platform evidence showing it
+healthy clears that blame (V6). History stays: deployments and when errors first began.
 
 One contradiction rejects a claim; a missing piece leaves it INSUFFICIENT. The best claim is
 a SUPPORTED bad_deployment or resource_pressure, preferring the deepest root cause (the
@@ -259,15 +261,15 @@ class _Observations:
     def upstream_errors(self, service: str) -> list[tuple[str, str]]:
         """(evidence ID, dependency) for each ERROR line of `service` saying 'upstream D failed'.
 
-        Only fresh lines count, and blame toward D only if it is newer than D's last fix: a
-        dependency that was just fixed cannot be blamed with lines written before the fix.
+        Only lines newer than `service`'s own last fix count. Blame toward D is kept even if a
+        fix ran on D: a new epoch starts only when the oracle said "not recovered", so a fix
+        on D does not mean D is fixed. Blame stops counting only when fresh platform evidence
+        shows D healthy (V6, see healthy_evidence).
         """
         found = []
         for eid, line in self.fresh_lines(service):
             dependency = signals.upstream_dependency(line.message)
-            if line.level != "ERROR" or not dependency or dependency == service:
-                continue
-            if self.fresh(dependency, line.timestamp):
+            if line.level == "ERROR" and dependency and dependency != service:
                 found.append((eid, dependency))
         return found
 
@@ -289,24 +291,31 @@ class _Observations:
         """IDs of platform evidence that shows `service` working normally; [] if it does not.
 
         "Observed healthy" needs at least one health snapshot or error_rate series for the
-        service, and EVERY one of them must look healthy: snapshots Running with all
-        replicas ready and an error rate at or below ERROR_RATE_THRESHOLD, and no error_rate
-        point above it. One unhealthy observation, or none at all, gives [].
+        service, and EVERY observation must look healthy: snapshots Running with all replicas
+        ready, an error rate at or below ERROR_RATE_THRESHOLD and p95 latency at or below
+        LATENCY_SLO_MS; no error_rate point above its threshold; no latency point above the
+        SLO (a dependency that times out is not healthy, even with few errors). Only
+        observations newer than the service's last fix count. One unhealthy observation, or
+        none at all, gives [].
         """
-        threshold = signals.ERROR_RATE_THRESHOLD
+        threshold, slo = signals.ERROR_RATE_THRESHOLD, signals.LATENCY_SLO_MS
         snapshots = [
             (eid, s)
             for eid, s in self.health
             if s.service == service and self.fresh(service, s.observed_at)
         ]
         rates = self.fresh_series(service, "error_rate")
+        latencies = self.fresh_series(service, "latency_p95_ms")
         if not snapshots and not rates:
             return []
         for _, snapshot in snapshots:
             ready = snapshot.replicas > 0 and snapshot.ready_replicas >= snapshot.replicas
-            if snapshot.status != "Running" or not ready or snapshot.error_rate > threshold:
+            slow = not snapshot.latency_p95_ms <= slo  # NaN counts as not healthy
+            if snapshot.status != "Running" or not ready or snapshot.error_rate > threshold or slow:
                 return []
-        if any(point.value > threshold for _, series in rates for point in series.points):
+        if any(not p.value <= threshold for _, series in rates for p in series.points):
+            return []
+        if any(not p.value <= slo for _, series in latencies for p in series.points):
             return []
         return _union([eid for eid, _ in snapshots], [eid for eid, _ in rates])
 
@@ -559,7 +568,12 @@ def _upstream_dominance(check: _Check, observed: _Observations) -> None:
         message = f"no log evidence for {service}: errors from its dependencies are not ruled out"
         check.lack(V2_UPSTREAM, message, [service])
         return
-    errors = sum(1 for _, line in observed.fresh_lines(service) if line.level == "ERROR")
+    fresh = observed.fresh_lines(service)
+    if not fresh:  # every log line of the service is older than its last fix
+        message = f"no log lines of {service} since its last fix: its errors cannot be attributed"
+        check.lack(V2_UPSTREAM, message, [service])
+        return
+    errors = sum(1 for _, line in fresh if line.level == "ERROR")
     upstream = _discount_healthy_blame(check, observed, observed.upstream_errors(service))
     counted = f"{len(upstream)} of {errors} ERROR lines of {service}"
     if len(upstream) < UPSTREAM_SHARE * errors or not upstream:
@@ -614,7 +628,10 @@ def _resource_pressure(check: _Check, observed: _Observations) -> None:
         if oom_lines:  # text that agrees with a platform signal adds corroboration
             check.ok(V3, f"{len(oom_lines)} out-of-memory errors in {service}'s logs")
         return  # a platform signal is enough
-    covering = observed.events_covering(service)
+    # An event list cannot be dated, so for a service that was fixed in this run, a list read
+    # before the fix must not prove "no OOM kills": coverage then counts as missing.
+    fixed = service in observed.remediated
+    covering = [] if fixed else observed.events_covering(service)
     relaxed = signals.MEMORY_RELAXED_RATIO
     if memory is not None and memory.peak < relaxed and covering:
         message = (
@@ -643,7 +660,10 @@ def _resource_pressure(check: _Check, observed: _Observations) -> None:
         check.lack(V3, message, [service])
         return
     gaps = [f"memory peaks at {memory.peak:.0%} of its limit" if memory else "no memory metric"]
-    gaps += [] if covering else ["no cluster events cover it"]
+    if not covering:
+        gaps.append(
+            "no cluster events since its last fix" if fixed else "no cluster events cover it"
+        )
     message = f"cannot confirm or rule out memory pressure on {service}: {', '.join(gaps)}"
     check.lack(V3, message, [service])
 
@@ -663,6 +683,9 @@ def _dependency_failure(check: _Check, observed: _Observations) -> None:
     service = check.target
     if not observed.log_ids(service):
         check.lack(V4, f"no log evidence for {service}", [service])
+        return
+    if not observed.fresh_lines(service):  # every log line of it is older than its last fix
+        check.lack(V4, f"no log lines of {service} since its last fix", [service])
         return
     dependency = _named_dependency(check.hypothesis, observed)
     failures = [eid for eid, dep in observed.upstream_errors(service) if dep == dependency]

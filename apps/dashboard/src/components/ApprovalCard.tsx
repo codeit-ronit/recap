@@ -26,7 +26,8 @@ function tamper(digest: string): string {
  *
  * Deciding needs the operator token (sign in, top right). The approver the server records
  * is the signed-in operator, never a name the browser sends. A rejection also revokes an
- * approval that was not used yet: "no" wins until the action runs.
+ * approval that was not used yet: "no" wins until the gateway uses the approval, right before
+ * it sends the write.
  */
 export function ApprovalCard({
   request,

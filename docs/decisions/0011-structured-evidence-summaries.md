@@ -45,8 +45,9 @@ diagnosis, turning a runbook-backed rollback into a blind restart.
 
 - All seven AUDIT-2.1 reproductions and the runbook-packing reproduction pass, end to end.
 - Packs are much smaller. In the synthetic evaluation, mean estimated context tokens per
-  case fell by 25 to 57% depending on the configuration (`full_adaptive`: 13,375 to 8,416),
-  which matters for free-tier token-per-minute limits in M2.
+  case fell by 23 to 54% depending on the configuration (`full_adaptive`: 13,375 to 8,629),
+  which matters for free-tier token-per-minute limits in M2. (Right after M1 it was 25 to
+  57%; the review's "newest ERROR" line, below, costs a few percent.)
 
 ### Bad
 
@@ -56,6 +57,19 @@ diagnosis, turning a runbook-backed rollback into a blind restart.
 - Estimated token counts in evaluations dropped because packs are smaller; older reports
   are not comparable on that column.
 - Summaries are rule-based extraction, not model-written summarization.
+
+## Amended after the M1 review
+
+- **The newest ERROR is always named.** A log summary lists the newest ERROR/WARN lines, so
+  many newer warnings could crowd the newest error out of a tight summary. It now gets its
+  own line ("newest ERROR: ...").
+- **Untrusted numbers cannot break a summary.** NaN and infinity in tool data crashed the
+  number formatting (`int(nan)`), which failed the whole investigation round. Metric
+  statistics now use finite points only and say how many were left out; any value a
+  summarizer still trips over falls back to the raw record instead of stopping the run.
+- **The untrusted-data prefix has its own room.** A summary is fitted to the item's room
+  minus the prefix the packer adds to flagged text, so the prefix can never push a fitted
+  summary into compaction.
 
 ## Alternatives considered
 

@@ -359,3 +359,19 @@ def test_server_instructions_follow_the_adapter(tmp_path: Path) -> None:
     live = build_mcp_server(LiveLooking(run_id="i2", state_dir=str(tmp_path)))
     assert simulated.instructions.startswith("Simulated sandbox tools.")
     assert live.instructions.startswith("Target environment (live) tools.")
+
+
+async def test_a_tool_registered_any_other_way_is_strict_too(env):
+    """Argument names are recorded in add_tool, which every registration path goes through."""
+    server = build_mcp_server(env)
+
+    def echo(text: str) -> str:
+        return text
+
+    server.add_tool(echo)  # not through the decorator
+    async with McpToolClient.in_process(server) as client:
+        plain = await client.call_tool("echo", {"text": "hi"}, 5)
+        smuggled = await client.call_tool("echo", {"text": "hi", "approval_id": "x"}, 5)
+
+    assert plain.ok
+    assert not smuggled.ok and "echo does not accept the argument(s): approval_id" in smuggled.error

@@ -36,7 +36,7 @@ curl -H "Authorization: Bearer $(cat data/operator-token)" http://127.0.0.1:8000
 | GET | `/runs/{id}/events` | stored trace events (`?after_seq=`) |
 | GET | `/runs/{id}/stream` | **SSE**: replays stored events; for a run this server is running, then live ones until `run.summary` |
 | GET | `/approvals/pending` | proposals waiting for a human |
-| POST | `/approvals/{proposal_id}` | **operator** · `{decision, proposal_digest}` — approve/reject ONE exact proposal; the approver recorded is the signed-in operator (an `actor` field is refused with 422). A rejection also revokes an approval that was not used yet; approving after a rejection, deciding an expired request, or rejecting after the action ran → 409 |
+| POST | `/approvals/{proposal_id}` | **operator** · `{decision, proposal_digest}` — approve/reject ONE exact proposal; the approver recorded is the signed-in operator (an `actor` field is refused with 422). A rejection also revokes an approval that was not used yet; approving after a rejection, deciding an expired request, or rejecting after the gateway used the approval (right before sending the write) → 409 |
 | GET | `/approvals/{proposal_id}/events` | the proposal's append-only decision log (requested, approved, rejected, revoked, expired, consumed, refused) |
 | GET | `/approvals/events` | the newest decision-log entries across all proposals (`?limit=`) |
 | GET | `/memory` | experience episodes (`?partition=demo\|train`) |

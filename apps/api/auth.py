@@ -108,12 +108,14 @@ def origin_allowed(origin: str | None, allowed_hosts: list[str]) -> bool:
 def _saved_or_new_token(data_dir: Path) -> str:
     """Read <data_dir>/operator-token, or create it (mode 0600) and print it once."""
     path = data_dir / TOKEN_FILE
-    if path.exists():
-        return path.read_text(encoding="utf-8").strip()
     data_dir.mkdir(parents=True, exist_ok=True)
     token = secrets.token_urlsafe(32)
-    # Created readable by this user only, before the secret is written into it.
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        # Created readable by this user only, before the secret is written into it. O_EXCL:
+        # an existing file (or a symlink planted in its place) is never written through.
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return _read_private_token(path)
     with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
         handle.write(token + "\n")
     print(
@@ -121,4 +123,32 @@ def _saved_or_new_token(data_dir: Path) -> str:
         f"  saved in {path}; paste it into the dashboard's sign-in box.",
         file=sys.stderr,
     )
+    return token
+
+
+def _read_private_token(path: Path) -> str:
+    """Read an existing token file, but only if it really is this user's private file.
+
+    A token that other users can read, or a file someone else planted (or a symlink to one),
+    would let them act as the operator, so the server refuses to start instead.
+    """
+    no_follow = getattr(os, "O_NOFOLLOW", 0)  # not a symlink (where the platform supports it)
+    try:
+        descriptor = os.open(path, os.O_RDONLY | no_follow)
+    except OSError as exc:  # e.g. a symlink was planted in its place
+        raise RuntimeError(f"{path} cannot be read safely ({exc.strerror})") from exc
+    try:
+        info = os.fstat(descriptor)
+        others_can_access = info.st_mode & 0o077
+        owner = getattr(os, "getuid", None)  # POSIX only
+        if others_can_access or (owner is not None and info.st_uid != owner()):
+            raise RuntimeError(
+                f"{path} must belong to this user and be readable by this user only "
+                f"(chmod 600 {path}), or set RECAP_OPERATOR_TOKEN instead"
+            )
+        token = os.read(descriptor, 4096).decode("utf-8").strip()
+    finally:
+        os.close(descriptor)
+    if not token:  # another server is creating it at this very moment
+        raise RuntimeError(f"{path} is empty; start the server again")
     return token

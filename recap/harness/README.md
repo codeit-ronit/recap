@@ -45,7 +45,7 @@ CREATED → BLOCKED, before any tool call.
    evidence and targets the diagnosed service.
 4. **AWAITING_APPROVAL** — reversible writes need an approval bound to the exact proposal
    digest. The run budget clock is paused while a human decides. Rejection (or a revocation
-   before the action ran) or expiry → BLOCKED.
+   before the approval was used) or expiry → BLOCKED.
 5. **MITIGATING** — `gateway.execute_mitigation` re-checks the policy with the approval,
    consumes it (single use), signs a single-use capability for exactly this action with the
    run's key (bound to the environment right after `reset`) and sends the write over MCP. The

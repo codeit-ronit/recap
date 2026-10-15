@@ -86,7 +86,7 @@ function RecentDecisions() {
   return (
     <Card
       title="Approval decision log"
-      subtitle="GET /approvals/events — append-only (the database refuses to change or delete an entry); the approver is the signed-in operator"
+      subtitle="GET /approvals/events — append-only: RECAP only adds entries, and the database refuses updates, deletes and replacements (a guard against bugs, not against someone who can edit the file); the approver is the signed-in operator"
       flush
     >
       {recent.error && !recent.data ? (

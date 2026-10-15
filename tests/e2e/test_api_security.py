@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from apps.api.auth import OperatorAuth, origin_allowed
+from apps.api.auth import OperatorAuth, allowed_hosts_from_environment, origin_allowed
 from apps.api.main import create_app
 from recap.core.config import Settings
 from recap.core.models import ApprovalRequest, ApprovalStatus, MitigationProposal
@@ -141,7 +141,14 @@ def test_a_write_from_a_page_on_another_origin_is_refused(settings: Settings) ->
     assert read.status_code == 200  # reads are not state-changing
 
 
-def test_only_loopback_host_names_are_served_by_default() -> None:
+def test_without_configuration_only_loopback_host_names_are_allowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("RECAP_ALLOWED_HOSTS", raising=False)
+    assert allowed_hosts_from_environment() == ["localhost", "127.0.0.1", "[::1]"]
+
+
+def test_the_origin_check_accepts_only_allowed_host_names() -> None:
     assert origin_allowed(None, ["localhost"])  # not a browser: no Origin header
     assert origin_allowed("http://[::1]:5173", ["[::1]"])
     assert not origin_allowed("http://localhost.evil.example", ["localhost"])
@@ -198,3 +205,29 @@ def test_a_generated_token_is_saved_for_this_user_only(
     assert len(token) >= 40
     for auth in (first, second):
         assert auth._token == token.encode()
+
+
+def test_a_token_file_others_can_read_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("RECAP_OPERATOR_TOKEN", raising=False)
+    token_file = tmp_path / "operator-token"
+    token_file.write_text("planted-token-0123456789\n")
+    token_file.chmod(0o644)  # readable by everyone
+
+    with pytest.raises(RuntimeError, match="readable by this user only"):
+        OperatorAuth.from_environment(tmp_path)
+
+    token_file.chmod(0o600)  # the owner's private file is accepted
+    assert OperatorAuth.from_environment(tmp_path)._token == b"planted-token-0123456789"
+
+
+def test_a_symlinked_token_file_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("RECAP_OPERATOR_TOKEN", raising=False)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.write_text("someone-elses-token-0123456789\n")
+    elsewhere.chmod(0o600)
+    (tmp_path / "operator-token").symlink_to(elsewhere)
+
+    with pytest.raises(RuntimeError, match="cannot be read safely"):
+        OperatorAuth.from_environment(tmp_path)

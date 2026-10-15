@@ -23,7 +23,7 @@ How these tests reproduce it
    succeeds, because single use is enforced inside SQLite.
 
 Status: tests 1 and 2 were strict xfails in M0. M1 fixed the store: a rejection now also
-revokes an approval that was not used yet ("no" wins until the action runs), every
+revokes an approval that was not used yet ("no" wins until the approval is used), every
 transition is a compare-and-swap inside one SQLite write transaction, and every step is
 written to an append-only decision log. They now pass and stay as regression tests.
 """

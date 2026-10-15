@@ -66,11 +66,12 @@ An approval is never general consent. It allows **one** action, once:
   held by the caller has no effect.
 * Every channel records its decision through `ApprovalStore.decide`, which checks the digest
   and that the request has not expired.
-* **"No" wins until the action runs** (audit finding 2.4). An approval is accepted only for a
+* **"No" wins until the approval is used** (audit finding 2.4). An approval is accepted only for a
   pending request. A rejection is accepted for a pending request **and** for an approved one
   whose approval was not used yet (a *revocation*: the gateway's later attempt to use it is
-  refused). After a rejection nothing more is accepted; after the action ran, a rejection is
-  refused ("already executed"). V1 let a separate API approval override the operator's `n`.
+  refused). After a rejection nothing more is accepted. The gateway uses the approval
+  immediately before it sends the write; from then on a rejection is refused ("already used
+  to send the action"). V1 let a separate API approval override the operator's `n`.
 * **Atomic across processes.** Every transition is a compare-and-swap inside one SQLite
   `BEGIN IMMEDIATE` transaction, so the API server and the CLI sharing `data/recap.db` are
   serialized: a revocation and the gateway's use of the approval can never both win.

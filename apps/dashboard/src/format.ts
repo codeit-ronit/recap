@@ -758,6 +758,23 @@ export function describeEvent(e: TraceEvent): EventLine {
       };
     }
 
+    case "mitigation.started": {
+      // Written before the write is sent, so a write is never invisible, even if the run stops.
+      const q = p as MitigationExecutedPayload;
+      return {
+        icon: "zap",
+        tone: "accent",
+        tag: "MITIGATE",
+        parts: [
+          "Sending ",
+          code(`${str(q.tool, "?")} on ${str(q.target, "?")}`),
+          Object.keys(obj(q.params)).length ? ` (${fmtArgs(q.params)})` : "",
+          q.approval_id ? " · approval " : "",
+          q.approval_id ? code(q.approval_id) : "",
+        ],
+      };
+    }
+
     case "mitigation.executed": {
       const q = p as MitigationExecutedPayload;
       const effects = arr<string>(q.side_effects);
@@ -771,6 +788,7 @@ export function describeEvent(e: TraceEvent): EventLine {
           Object.keys(obj(q.params)).length ? ` (${fmtArgs(q.params)})` : "",
           effects.length ? ` · ${effects.join("; ")}` : "",
           q.error ? ` · ${q.error}` : "",
+          q.run_cancelled ? " · the run was cancelled while this write was in flight" : "",
         ],
       };
     }

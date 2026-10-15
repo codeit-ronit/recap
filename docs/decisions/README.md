@@ -21,7 +21,7 @@ these notes explain why RECAP looks the way it does.
 | [0012](0012-platform-signals-outrank-log-text.md) | Platform signals outrank log text in the evidence verifier | accepted | Rule V6: OOM text alone proves nothing, and blame toward a healthy dependency does not count (audit 2.2). |
 | [0013](0013-stabilization-epochs-and-deadlines.md) | Wait for live targets to settle, judge each epoch on its own evidence, bound every provider call | accepted | Bounded stabilization polling, pre-fix state of a fixed service ignored, BUDGET_EXHAUSTED at the deadline (audit 2.6). |
 | [0014](0014-signed-capabilities-at-the-write-boundary.md) | The write boundary verifies signed, single-use capabilities | accepted | Ed25519 per run; the environment refuses any write the gateway did not sign for exactly that action (audit 2.5). |
-| [0015](0015-operator-auth-and-no-wins-approvals.md) | An operator-authenticated API, and approvals where "no" wins until the action runs | accepted | Bearer token, identity from the credential, Host and Origin checks, compare-and-swap transitions, append-only log (audit 2.4). |
+| [0015](0015-operator-auth-and-no-wins-approvals.md) | An operator-authenticated API, and approvals where "no" wins until the approval is used | accepted | Bearer token, identity from the credential, Host and Origin checks, compare-and-swap transitions, append-only log (audit 2.4). |
 
 ## How the decisions fit together
 

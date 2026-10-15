@@ -379,7 +379,7 @@ function CancelRunButton({ runId }: { runId: string }) {
         type="button"
         className="btn btn-reject"
         disabled={state !== "idle"}
-        title="Stops the run; nothing is executed afterwards"
+        title="Stops the run at its next step. A fix already being sent cannot be called back: the run then records its outcome, unverified."
         onClick={() => void cancel()}
       >
         <Icon name="stop" size={14} /> {state === "sent" ? "Cancelling…" : "Cancel run"}

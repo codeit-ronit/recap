@@ -23,7 +23,7 @@ test("signing in adds the bearer header to every request, signing out removes it
   assert.deepEqual(authHeaders(), {});
 });
 
-test("an explicit token is used as given (the sign-in box checks it before saving)", () => {
+test("a candidate token can be tried without signing in", () => {
   setToken(null);
   assert.deepEqual(authHeaders("candidate"), { Authorization: "Bearer candidate" });
   assert.equal(getToken(), null); // checking a candidate does not sign anyone in
@@ -43,6 +43,48 @@ test("listeners hear sign-in and sign-out, and can stop listening", () => {
 test("a blank token counts as signed out", () => {
   setToken("   ");
   assert.equal(getToken(), null);
+});
+
+/** A minimal Web Storage stand-in that shows what was written to it. */
+function fakeStorage() {
+  const data = new Map<string, string>();
+  return {
+    data,
+    getItem: (key: string) => data.get(key) ?? null,
+    setItem: (key: string, value: string) => void data.set(key, String(value)),
+    removeItem: (key: string) => void data.delete(key),
+  };
+}
+
+/** Put fake browser storages on globalThis; returns the function that puts back the old ones. */
+function installStorages(storages: Record<string, unknown>): () => void {
+  const saved = Object.keys(storages).map(
+    (name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const,
+  );
+  for (const [name, value] of Object.entries(storages)) {
+    Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
+  }
+  return () => {
+    for (const [name, descriptor] of saved) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+      else delete (globalThis as Record<string, unknown>)[name];
+    }
+  };
+}
+
+test("the token is kept in this tab's sessionStorage, never in localStorage", () => {
+  const session = fakeStorage();
+  const local = fakeStorage();
+  const restore = installStorages({ sessionStorage: session, localStorage: local });
+  try {
+    setToken("tab-token-0123456789");
+    assert.equal(session.data.get("recap.operatorToken"), "tab-token-0123456789");
+    assert.equal(local.data.size, 0); // other tabs and later visits never see it
+    setToken(null);
+    assert.equal(session.data.size, 0); // signing out removes it from the tab too
+  } finally {
+    restore();
+  }
 });
 
 test("refusals, rejections and revocations stand out in the decision log", () => {

@@ -22,6 +22,7 @@ the evidence verifier can parse exactly what the simulator writes.
 from __future__ import annotations
 
 import copy
+import json
 import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -425,17 +426,32 @@ def apply_action(state: State, action: AuthorizedAction) -> tuple[State, ActionO
     return new_state, outcome
 
 
+# Audit entries keep bounded copies of what a caller sent: a refused caller is not
+# authenticated, so it must not be able to grow the world-state document without limit.
+MAX_AUDIT_CHARS = 128  # target, approval id and proposal digest
+MAX_AUDIT_PARAMS_CHARS = 512  # the parameters, as compact JSON
+MAX_REFUSALS_KEPT = 50  # the most recent unauthorized attempts are kept; all are counted
+
+
 def refuse_action(
     state: State, action: AuthorizedAction, reason: str
 ) -> tuple[State, ActionOutcome]:
-    """Record a write that was refused before it could run; nothing else in the world changes."""
+    """Record a write that was refused before it could run; the simulated world is unchanged.
+
+    Unauthorized attempts go to their own bounded list (`refused_writes`: the most recent
+    MAX_REFUSALS_KEPT, plus `refused_writes_total`), not to `action_log`, which records the
+    writes RECAP's gateway authorized.
+    """
     new_state = copy.deepcopy(state)
     minute = new_state["clock_minute"]
-    _audit(new_state, action, minute, False, reason)
+    entry = _audit_entry(action, minute, False, reason)
+    kept = [*new_state.get("refused_writes", []), entry][-MAX_REFUSALS_KEPT:]
+    new_state["refused_writes"] = kept
+    new_state["refused_writes_total"] = new_state.get("refused_writes_total", 0) + 1
     outcome = ActionOutcome(
         ok=False,
         action=action.action,
-        target=action.target,
+        target=_clip(action.target, MAX_AUDIT_CHARS),
         message=reason,
         executed_at=timestamp(new_state, minute),
     )
@@ -443,13 +459,35 @@ def refuse_action(
 
 
 def _audit(state: State, action: AuthorizedAction, minute: int, ok: bool, message: str) -> None:
-    """Every attempt is audited (approval id and proposal digest included), even refused ones.
+    """Every authorized attempt is audited (approval id and digest included), even rejected ones."""
+    state["action_log"].append(_audit_entry(action, minute, ok, message))
 
-    The capability token itself is left out: until it is used it is a bearer token, so it
-    is never stored. Its nonce is kept in `used_nonces` instead.
+
+def _audit_entry(action: AuthorizedAction, minute: int, ok: bool, message: str) -> dict[str, Any]:
+    """A bounded audit record of one attempt.
+
+    The capability token itself is left out: until it is used it is a bearer token, so it is
+    never stored (its nonce is kept in `used_nonces` instead).
     """
-    entry = action.model_dump(mode="json", exclude={"capability"})
-    state["action_log"].append({**entry, "minute": minute, "ok": ok, "message": message})
+    params_text = json.dumps(action.params, sort_keys=True, separators=(",", ":"), default=str)
+    params: dict[str, Any] = dict(action.params)
+    if len(params_text) > MAX_AUDIT_PARAMS_CHARS:
+        params = {"truncated": params_text[:MAX_AUDIT_PARAMS_CHARS]}
+    return {
+        "action": action.action,
+        "target": _clip(action.target, MAX_AUDIT_CHARS),
+        "params": params,
+        "approval_id": _clip(action.approval_id, MAX_AUDIT_CHARS),
+        "proposal_digest": _clip(action.proposal_digest, MAX_AUDIT_CHARS),
+        "minute": minute,
+        "ok": ok,
+        "message": _clip(message, 2 * MAX_AUDIT_CHARS),
+    }
+
+
+def _clip(text: str, limit: int) -> str:
+    """At most `limit` characters, with "..." marking a cut."""
+    return text if len(text) <= limit else text[:limit] + "..."
 
 
 def _rollback(state: State, action: AuthorizedAction, minute: int) -> Result:
