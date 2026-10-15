@@ -68,7 +68,8 @@ Three gaps in V1's recovery lifecycle:
 ## Amended after the M1 review
 
 Three independent reviews (security, correctness, test quality) of the M1 fixes found edge
-cases in this lifecycle. Each is fixed, and each fix has a test that fails without it:
+cases in this lifecycle. Each is fixed, with a test that fails without the fix, except the
+crash on a reported time, which went away with the code that read that time:
 
 - **The epoch boundary is a trusted time.** It used to be the `executed_at` that the target
   reported about itself, which is untrusted output: an absurd value crashed the run right

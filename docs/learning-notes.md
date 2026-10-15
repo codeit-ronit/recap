@@ -4238,7 +4238,9 @@ record; the wait for a live target could outlive the run's budget; the epoch bou
 from a time the target reported about itself; NaN in tool data could fail a whole
 investigation round; refused writes could grow the simulated world without limit; a symlinked
 or world-readable token file was accepted; and several tests could not fail at all. Each is
-now fixed, with a test that fails if the fix is reverted. Details:
+now fixed. Every code fix that has a test was checked by reverting it (25 checks, all caught);
+the dev server's host check was verified by hand, and the crash on a reported time went away
+with the code that read it. Details:
 [status.md](status.md#review-hardening-after-the-m1-fixes) and
 [ADR 0013's amendment](decisions/0013-stabilization-epochs-and-deadlines.md#amended-after-the-m1-review).
 

@@ -329,8 +329,8 @@ Each finding was first reproduced as a test that failed on the V1 code
 ### The M1 review: hardening the fixes themselves
 
 Three independent reviews (security, correctness, test quality) then examined the M1 changes.
-What they found, and what stops it now. Each fix was checked by reverting it for a moment:
-the test named here then fails on its intended assertion.
+What they found, and what stops it now. Each fix that has a test was checked by reverting it
+for a moment: the test named here then fails on its intended assertion.
 
 | Threat | Example | Mitigation (where in code) | Test that proves it |
 |---|---|---|---|

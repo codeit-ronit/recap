@@ -175,15 +175,17 @@ configuration. What changed:
 ### Review hardening (after the M1 fixes)
 
 Three independent reviews (security, correctness, test quality) examined the M1 changes.
-Every confirmed finding was fixed with a regression test, and each fix was checked by
-reverting it for a moment: the matching test then fails on its intended assertion. The
-numbers in this section replace the M1 numbers above.
+Every confirmed finding was fixed. Each code fix with a test was checked by reverting it for
+a moment: the matching test then fails on its intended assertion (25 such checks, all
+caught). Two items have no automated test, and the table says so: the dev server's host
+check was verified by hand, and the crash on a target-reported time disappeared with the code
+that read that time. The numbers in this section replace the M1 numbers above.
 
 | Area | What the review found | What changed | Tests |
 |---|---|---|---|
 | Cancel or stop during a write | A run cancelled while its write was in flight lost that write from the record | Write-ahead `mitigation.started` event; the gateway waits for the outcome; the controller records the fix as `error`, "recovery not verified", with its used approval | `test_cancelling_while_a_fix_is_being_sent_still_records_that_fix` |
 | Waiting for a live target | The wait could outlive the run's budget; a refused write waited the full window | The wait ends at the window or the run's deadline (BUDGET_EXHAUSTED, fix recorded); a refused write is judged with one probe | 3 new tests in `tests/e2e/test_audit_retry_and_stabilization.py` |
-| Epoch boundary | It came from the target's own `executed_at`; an absurd value crashed the run after the write | The oracle's "before" probe time; a namespace-wide action marks every service | `test_a_fix_marks_exactly_the_services_it_changed` |
+| Epoch boundary | It came from the target's own `executed_at`; an absurd value crashed the run after the write | The oracle's "before" probe time (the code that read the target's time is gone); a namespace-wide action marks every service | `test_a_fix_marks_exactly_the_services_it_changed` (which services; the removed code has no test) |
 | Deadlines | A provider's own `TimeoutError` could pass for the run's deadline | Only the run's clock gives BUDGET_EXHAUSTED; with no time left no agent starts | 2 in `tests/unit/test_orchestrator.py`, 1 end to end |
 | Verifier | Blame toward a "fixed" dependency was dropped; a slow dependency counted as healthy; stale logs or events after a fix contradicted a claim | Blame counts until fresh platform evidence shows the dependency healthy; healthy needs p95 latency within 500 ms; stale data leaves a claim insufficient | 8 new tests in `tests/unit/test_verifier.py` |
 | Summaries and packing | NaN or infinity in tool data failed the investigation round; newer warnings could crowd out the newest ERROR; the injection prefix could push a fitted summary into compaction | Finite points only, a raw fallback, a "newest ERROR" line, room kept for the prefix | 5 new in `tests/unit/test_summaries.py`, 1 in `tests/unit/test_packer.py` |
