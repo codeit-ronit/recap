@@ -1,0 +1,134 @@
+# recap/knowledge: static RAG over runbooks
+
+This package gives RECAP its **document knowledge**: a handful of Markdown runbooks that
+are split into citable chunks and searched with BM25. It is separate from episodic memory
+(`recap/memory`), which stores what happened in past runs.
+
+```
+fixtures/knowledge/*.md
+   | load_documents()            ingest.py: one chunk per "## " section, with provenance
+   v
+DocChunk[]  --->  KnowledgeRetriever.search(query)
+                   1. BM25 candidates (bm25.py)  [+ dense ranking fused by RRF, optional]
+                   2. LexicalReranker            (retriever.py)
+   v
+RetrievedChunk[]  --->  controller (RETRIEVING stage)  --->  context pack, as UNTRUSTED text
+                   --->  scripted policy reads "Recommended action:" lines (hints.py)
+                   --->  the safety gateway, not the document, decides what may run
+```
+
+| File | What it does |
+|---|---|
+| `ingest.py` | Markdown files to `DocChunk`s: stable IDs, repo-relative path, title, heading, checksum, provenance |
+| `bm25.py` | Tokenizer and an Okapi BM25 index written from scratch (no search library) |
+| `retriever.py` | `KnowledgeRetriever` (the `RetrievalIndex`) and `LexicalReranker` (the `Reranker`) |
+| `embeddings.py` | Optional dense embeddings, cosine similarity, reciprocal rank fusion |
+| `hints.py` | Parses the `Mechanism:` / `Recommended action:` lines in runbooks |
+
+## Usage
+
+```python
+from recap.core.config import load_settings
+from recap.knowledge.retriever import KnowledgeRetriever
+
+settings = load_settings()
+retriever = KnowledgeRetriever.from_directory(
+    settings.paths.knowledge_dir,
+    root=settings.paths.root,  # store repo-relative paths
+    enable_embeddings=settings.features.embeddings,  # False unless RECAP_ENABLE_EMBEDDINGS=1
+)
+for hit in retriever.search("bad_deployment remediation", k=3):
+    print(hit.rank, hit.chunk.chunk_id, hit.retriever, hit.reranker)
+# 1 runbook-bad-deployment#remediation-1 bm25 lexical-heading-boost
+# 2 runbook-bad-deployment#overview-1 bm25 lexical-heading-boost
+# 3 runbook-bad-deployment#diagnosis-1 bm25 lexical-heading-boost
+```
+
+## From Markdown to chunks
+
+* The first `# ` line is the document title; each `## ` section becomes one chunk. Text
+  between the title and the first section becomes an `Overview` chunk.
+* Chunk IDs are `<file stem>#<heading slug>-<n>`, for example
+  `runbook-bad-deployment#remediation-1`. They are stable, so a citation stays valid
+  across runs.
+* A section longer than 180 words is split into windows of 180 words that overlap by 30.
+  Windows are slices of the original text, so line breaks (and therefore hint lines) survive.
+* Every chunk records `checksum` (first 12 hex characters of the file's SHA-256, which
+  changes when the file is edited) and `provenance`
+  (`source`, `kind: synthetic runbook authored for RECAP V1`, `license`).
+
+## How BM25 scores a chunk
+
+For every query word found in the chunk, BM25 adds
+`IDF * tf * (k1 + 1) / (tf + k1 * (1 - b + b * length / average_length))`:
+
+* **Rare words weigh more.** `IDF = ln(1 + (N - df + 0.5) / (df + 0.5))`, where `N` is the
+  number of chunks and `df` how many contain the word. "oomkilled" outweighs "service".
+* **Repetition saturates** (`k1 = 1.5`). A word that appears five times helps more than
+  once, but far less than five times as much.
+* **Long chunks are discounted** (`b = 0.75`), so a long section does not win just by
+  containing more words.
+
+Worked example (from `tests/unit/test_bm25.py`): three documents of 2, 3 and 4 tokens, and the
+query `rollback`, which appears in two of them. `IDF = ln(1.6) = 0.470`. The document with
+`rollback` twice scores `0.470 * 5 / 3.875 = 0.606`; the shorter one with it once scores
+`0.470 * 2.5 / 2.125 = 0.553`; the third shares no word and is left out.
+
+Tokenizing lowercases text, drops a small stopword list and one-letter tokens, and keeps
+names like `execute_rollback` whole while also adding `execute` and `rollback`, so both an
+exact tool or mechanism name and plain words match. Ties are broken by chunk ID, so the
+same query always returns the same order.
+
+## Reranking and hybrid retrieval
+
+* `LexicalReranker` multiplies each candidate's score by
+  `1 + 0.25 * (share of query words found in the chunk's heading or document title)`.
+  It is a simple lexical heuristic, **not** a neural reranker. The `Reranker` interface in
+  `recap/core/interfaces.py` is where a cross-encoder could plug in later.
+* The first stage hands up to 20 candidates (or `k`, if larger) to the reranker, the usual
+  retrieve-then-rerank pattern.
+* With `enable_embeddings=True`, chunks are also ranked by cosine similarity of
+  sentence-transformers vectors (`all-MiniLM-L6-v2`, CPU), and the two rankings are merged
+  with reciprocal rank fusion: each chunk earns `1 / (60 + rank)` per ranking. This needs
+  `pip install -e '.[embeddings]'` and downloads the model on first use; without the
+  package a `ConfigError` explains how to install it. The default demo never downloads
+  anything. Tests cover the hybrid path with a fake embedder only.
+
+## Runbook convention
+
+Remediation sections carry two plain lines that the scripted (non-LLM) policy parses:
+
+```
+Mechanism: bad_deployment
+Recommended action: execute_rollback
+```
+
+| Mechanism | Hint | Where |
+|---|---|---|
+| `bad_deployment` | `execute_rollback` | `runbook-bad-deployment.md` |
+| `resource_pressure` | `restart_service` | `runbook-memory-pressure.md` |
+| `dependency_failure` | none on purpose: fix the dependency, not the caller | `guide-cascading-failures.md` |
+
+The docs are generic operational knowledge, not answer keys: tests check that they contain
+no release versions or scenario-specific names, and that only `shop-architecture.md`
+names services.
+
+## Retrieved text is untrusted
+
+Retrieval ranks by relevance, not by trust. `tests/adversarial/test_poisoned_runbook.py`
+adds a poisoned runbook that recommends `delete_namespace` and says "Ignore previous
+instructions...". It is retrieved, sometimes above the real runbook, and this package
+returns it unchanged. Safety comes from the layers after retrieval:
+`recap/safety/injection.py` flags the text as a suspected injection, the scripted policy
+ignores hints whose action is not in the trusted remediation catalog
+(`configs/policies.yaml`), and the safety gateway always denies destructive tools.
+
+## Limitations
+
+* No stemming: "restart" and "restarts" are different words to BM25.
+* Lexical matching misses synonyms ("heap exhaustion" and "out of memory") unless hybrid
+  retrieval is turned on.
+* The knowledge base is small and synthetic: 7 documents and 42 chunks written for
+  ShopSim, the simulated shop.
+* The index is rebuilt in memory at startup. That is fine for 42 chunks; a large corpus
+  would need a persistent index.
