@@ -69,6 +69,8 @@ from recap.safety.approvals import ApprovalStore
 from recap.telemetry.tracer import TraceCategory as C
 from tests.fakes import BAD, FakeEnvironment
 
+pytestmark = pytest.mark.e2e  # every test here runs a real incident end to end
+
 AUTO_NO_MEMORY = RunConfig(approval_mode="auto", memory_write=False)
 
 

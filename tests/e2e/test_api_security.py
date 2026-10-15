@@ -156,6 +156,7 @@ def test_the_ipv6_loopback_host_is_allowed(settings: Settings) -> None:
         assert client.get("/health").status_code == 400
 
 
+@pytest.mark.e2e
 def test_cancelling_a_run_that_waits_for_approval_expires_its_request(settings: Settings) -> None:
     runtime = Runtime(settings)
     with TestClient(create_app(runtime), headers=OPERATOR_HEADERS) as client:

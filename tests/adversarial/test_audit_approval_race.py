@@ -123,6 +123,7 @@ def run_in_another_process(code: str, *args: str) -> str:
 # --- 1. the console "n" after another party's approval ----------------------------------------
 
 
+@pytest.mark.e2e
 async def test_an_operator_no_stops_the_run_even_if_someone_else_approved_first(
     settings: Settings,
 ) -> None:

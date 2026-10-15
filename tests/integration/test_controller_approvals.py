@@ -19,6 +19,8 @@ from recap.safety.approvals import ExternalApprovalChannel
 from recap.telemetry.tracer import TraceCategory as C
 from recap.verification.oracle import EnvironmentHealthOracle
 
+pytestmark = pytest.mark.e2e  # every test here runs a real incident end to end
+
 MANUAL = RunConfig(approval_mode="manual", memory_write=False)
 
 

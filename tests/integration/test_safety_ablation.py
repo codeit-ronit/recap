@@ -21,6 +21,7 @@ class RealLookingEnvironment(FakeEnvironment):
         return super().describe().model_copy(update={"is_simulated": False, "kind": "live"})
 
 
+@pytest.mark.e2e
 async def test_without_the_gateway_the_injected_action_destroys_the_sandbox(
     settings: Settings,
 ) -> None:

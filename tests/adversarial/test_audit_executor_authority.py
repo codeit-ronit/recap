@@ -209,6 +209,7 @@ async def test_a_second_server_process_for_the_same_run_cannot_write(tmp_path: P
 # and proposal digest, so anyone who can read the dashboard knows them.
 
 
+@pytest.mark.e2e
 async def test_an_approval_from_a_finished_run_cannot_unlock_a_different_write(
     settings: Settings,
 ) -> None:
@@ -228,6 +229,7 @@ async def test_an_approval_from_a_finished_run_cannot_unlock_a_different_write(
     assert await sandbox_facts(sandbox) == before
 
 
+@pytest.mark.e2e
 async def test_a_used_approval_cannot_be_replayed_straight_to_the_server(
     settings: Settings,
 ) -> None:
@@ -271,6 +273,7 @@ async def test_a_read_tool_rejects_an_argument_it_does_not_define(
 # --- control: the legitimate path must keep working ------------------------------------------
 
 
+@pytest.mark.e2e
 async def test_control_a_write_approved_through_recaps_gateway_still_reaches_the_sandbox(
     settings: Settings,
 ) -> None:

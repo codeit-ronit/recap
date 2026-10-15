@@ -40,6 +40,8 @@ import dataclasses
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from recap.core.config import Settings
 from recap.core.interfaces import TargetEnvironment
 from recap.core.models import (
@@ -55,6 +57,8 @@ from recap.providers.deterministic import DeterministicProvider
 from recap.providers.prompts import render_investigation_prompt, render_proposal_prompt
 from recap.runtime import Runtime
 from recap.verification.oracle import EnvironmentHealthOracle
+
+pytestmark = pytest.mark.e2e  # every test here runs a real incident end to end
 
 ORACLE_SENTINEL = "oracle-only-sentinel"  # a "service" that exists only in oracle output
 SCENARIO_ID_SENTINEL = "scenario-id-sentinel"  # a scenario id that appears nowhere else

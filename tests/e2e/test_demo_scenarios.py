@@ -14,6 +14,8 @@ from recap.core.models import IncidentState, RunConfig, RunRecord, StrategyMode
 from recap.runtime import Runtime
 from recap.telemetry.tracer import TraceCategory as C
 
+pytestmark = pytest.mark.e2e  # every test here runs a real incident end to end
+
 AUTO = RunConfig(approval_mode="auto")
 
 

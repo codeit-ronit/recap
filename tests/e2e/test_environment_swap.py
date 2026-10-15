@@ -11,9 +11,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from recap.core.config import EnvironmentConfig, Settings
 from recap.core.models import IncidentState, RunConfig
 from recap.runtime import Runtime
+
+pytestmark = pytest.mark.e2e  # every test here runs a real incident end to end
 
 
 async def test_full_pipeline_runs_on_a_different_environment(

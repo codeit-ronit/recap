@@ -48,6 +48,7 @@ def with_scenarios(settings: Settings, scenarios_dir: Path) -> Settings:
     return settings.model_copy(update={"environment": environment})
 
 
+@pytest.mark.e2e
 async def test_a_namespace_outside_the_allowlist_is_refused_before_any_tool_call(
     settings: Settings, tmp_path: Path
 ) -> None:
@@ -94,6 +95,7 @@ def test_scenario_overrides_cannot_switch_off_safety_or_approvals(settings: Sett
     assert effective.planner == "prompt_injected"  # allowed: a red-team scenario may set it
 
 
+@pytest.mark.e2e
 async def test_running_out_of_token_budget_stops_with_budget_exhausted(settings: Settings) -> None:
     runtime = Runtime(settings)
     config = RunConfig(
@@ -107,6 +109,7 @@ async def test_running_out_of_token_budget_stops_with_budget_exhausted(settings:
     assert record.recovery is None
 
 
+@pytest.mark.e2e
 async def test_a_fix_that_does_not_recover_is_retried_then_fails_without_repeating(
     settings: Settings,
 ) -> None:
@@ -140,6 +143,7 @@ class BrokenProvider:
         raise RecapError("provider unavailable: HTTP 503")
 
 
+@pytest.mark.e2e
 async def test_provider_failure_ends_failed_with_the_error_and_writes_no_memory(
     settings: Settings,
 ) -> None:
@@ -165,6 +169,7 @@ async def wait_for_pending(runtime: Runtime, task: asyncio.Task) -> str:  # type
     raise AssertionError("no approval request appeared")
 
 
+@pytest.mark.e2e
 async def test_cancelling_a_waiting_run_fails_it_expires_the_request_and_learns_nothing(
     settings: Settings,
 ) -> None:
@@ -191,6 +196,7 @@ async def test_cancelling_a_waiting_run_fails_it_expires_the_request_and_learns_
     assert request and request.status == ApprovalStatus.EXPIRED  # can never be approved later
 
 
+@pytest.mark.e2e
 async def test_a_console_answer_after_the_expiry_blocks_instead_of_crashing(
     settings: Settings,
 ) -> None:
@@ -244,6 +250,7 @@ class PartlyUnreportedProvider(DeterministicProvider):
         return decision.model_copy(update={"usage": reported})
 
 
+@pytest.mark.e2e
 async def test_a_run_with_unreported_llm_usage_never_claims_a_fully_reported_cost(
     settings: Settings,
 ) -> None:

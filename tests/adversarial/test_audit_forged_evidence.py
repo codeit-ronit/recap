@@ -40,6 +40,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
 import yaml
 from pydantic import BaseModel
 
@@ -124,6 +125,7 @@ def forged_scenario(settings: Settings, tmp_path: Path) -> Settings:
     return with_scenarios(settings, scenarios)
 
 
+@pytest.mark.e2e
 async def test_forged_log_lines_never_cause_a_write_to_a_healthy_service(
     settings: Settings, tmp_path: Path
 ) -> None:

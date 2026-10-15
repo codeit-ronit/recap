@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 
+import pytest
 from fastapi.testclient import TestClient
 
 from apps.api.main import create_app
@@ -22,6 +23,7 @@ def wait_for(predicate, timeout: float = 60.0, interval: float = 0.1):  # type: 
     raise AssertionError("condition not met in time")
 
 
+@pytest.mark.e2e
 def test_dashboard_flow_over_http(settings: Settings) -> None:
     with TestClient(create_app(Runtime(settings)), headers=OPERATOR_HEADERS) as client:
         assert client.get("/health").json()["label"].startswith("SIMULATED")

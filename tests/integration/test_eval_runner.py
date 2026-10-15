@@ -54,6 +54,7 @@ def evaluation(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, EvalRepo
 # --- the leakage protocol -------------------------------------------------------------------
 
 
+@pytest.mark.e2e
 def test_memory_holds_one_train_episode_per_train_scenario_and_nothing_else(
     evaluation: tuple[Path, EvalReport],
 ) -> None:
@@ -64,6 +65,7 @@ def test_memory_holds_one_train_episode_per_train_scenario_and_nothing_else(
     assert {e.origin_run_id for e in episodes} == {c.run_id for c in report.train}
 
 
+@pytest.mark.e2e
 def test_scored_runs_read_train_memory_only_and_write_nothing(
     evaluation: tuple[Path, EvalReport],
 ) -> None:
@@ -95,6 +97,7 @@ def test_a_yaml_cannot_turn_memory_writes_on_while_scoring() -> None:
 # --- the report -----------------------------------------------------------------------------
 
 
+@pytest.mark.e2e
 def test_the_report_scores_every_test_scenario_and_is_written_to_disk(
     evaluation: tuple[Path, EvalReport],
 ) -> None:

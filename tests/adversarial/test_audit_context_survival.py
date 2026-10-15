@@ -407,6 +407,7 @@ class PackRecordingProvider(DeterministicProvider):
         return await super().propose_mitigation(request)
 
 
+@pytest.mark.e2e
 async def test_a_real_run_shows_its_provider_the_newest_inventory_error(
     settings: Settings,
 ) -> None:
