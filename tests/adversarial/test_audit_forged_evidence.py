@@ -28,9 +28,10 @@ How these tests reproduce it
 * Two guard tests (they pass today) keep the fix narrow: real OOM kills and a dependency
   that really fails must still count.
 
-The reproducing tests are marked xfail(strict=True) until milestone M1 fixes the verifier.
-"strict" means pytest reports a failure as soon as they start passing, so the marks get
-removed together with the fix.
+Status: the reproductions were strict xfails in M0. M1 fixed the verifier (rule
+V6-conflict-resolution: platform signals outrank log text; OOM text alone is insufficient;
+blame toward a dependency observed healthy does not count), so they now pass and stay as
+regression tests.
 """
 
 from __future__ import annotations
@@ -39,7 +40,6 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import pytest
 import yaml
 from pydantic import BaseModel
 
@@ -124,10 +124,6 @@ def forged_scenario(settings: Settings, tmp_path: Path) -> Settings:
     return with_scenarios(settings, scenarios)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUDIT-2.2: forged OOM/upstream log lines get healthy payment restarted; fixed in M1",
-)
 async def test_forged_log_lines_never_cause_a_write_to_a_healthy_service(
     settings: Settings, tmp_path: Path
 ) -> None:
@@ -327,10 +323,6 @@ def checkout_bad_release(run: Run) -> tuple[str, str]:
 # V3: resource pressure
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUDIT-2.2: V3 trusts OOM log text before its own low-memory check; fixed in M1",
-)
 def test_oom_text_cannot_outweigh_low_memory_and_quiet_cluster_events() -> None:
     """Forged OutOfMemoryError lines alone must not prove memory pressure on payment."""
     run = Run()
@@ -366,10 +358,6 @@ def test_oom_text_backed_by_oom_kills_still_supports_resource_pressure() -> None
 # V2: upstream dominance
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="AUDIT-2.2: V2 never checks the blamed dependency is unhealthy; fixed in M1",
-)
 def test_upstream_lines_blaming_a_healthy_dependency_do_not_contradict_a_bad_deployment() -> None:
     """Forged 'upstream payment call failed' lines must not clear checkout's bad release."""
     run = Run()

@@ -34,14 +34,22 @@ is how one agent's evidence can contradict another agent's claim.
 > This is structural / evidence-rule validation, **not proof of causation**. A supported
 > claim agrees with simple rules about timing and platform signals; it is not proven.
 
+**Observed healthy** (used by V2, V3, V4 and the ranking): at least one health snapshot or
+`error_rate` series exists for the service, every snapshot shows `Running` with all replicas
+ready and an error rate at or below 5%, and no `error_rate` point goes above 5%. Log lines are
+text that anyone can write (audit finding 2.2: three forged `OutOfMemoryError` lines got a
+healthy service restarted in V1), so they never outweigh what the platform itself reports.
+Blame toward an observed-healthy service also gives it no "deepest root cause" bonus.
+
 | Rule | A claim passes when... | Example line shown in the dashboard |
 |---|---|---|
 | `V1-structural` | it names a target and a known mechanism, cites evidence, and every cited ID exists in **this** run | `the claim cites evidence that is not in this run: ev-made-up-1` |
 | `V2-deploy-timing` | bad_deployment(S, v): S deployed v, and S's errors began 5 min before to 30 min after it | `errors on checkout began 90 min after v2.5.0 was deployed (allowed window -5..+30 min)` |
-| `V2-upstream-dominance` | ...and fewer than half of S's ERROR lines blame a dependency | `7 of 7 ERROR lines of checkout say 'upstream ... call failed': its errors come from payment` |
-| `V3-resource` | resource_pressure(S): OOM kills, memory ≥ 90% of the limit, or OOM log lines (contradicted when memory stays < 70% and the events show no OOM kill) | `payment's memory reached 98% of its 512 MB limit (pressure from 90%)` |
-| `V4-dependency` | dependency_failure(S → D): S's logs show `upstream D call failed`. Never a fix target by itself: it points the search at D | `not actionable by itself, and nothing on payment is supported yet` |
+| `V2-upstream-dominance` | ...and fewer than half of S's ERROR lines blame a dependency that is **not observed healthy** | `7 of 7 ERROR lines of checkout say 'upstream ... call failed': its errors come from payment` |
+| `V3-resource` | resource_pressure(S): OOM kills or memory ≥ 90% of the limit. OOM log lines only corroborate: alone they leave the claim insufficient (contradicted when memory stays < 70% and the events show no OOM kill, or when S is observed healthy) | `payment's memory reached 98% of its 512 MB limit (pressure from 90%)` |
+| `V4-dependency` | dependency_failure(S → D): S's logs show `upstream D call failed` and D is not observed healthy. Never a fix target by itself: it points the search at D | `not actionable by itself, and nothing on payment is supported yet` |
 | `V5-memory` | a remembered claim faces the same rules: no free pass | `live evidence does not confirm what ep-057647f525 remembered` |
+| `V6-conflict-resolution` | when log **text** disagrees with platform signals (health snapshots, metrics, cluster events), the platform signals win, and the check names the evidence on both sides | `24 ERROR lines of checkout blame payment, but payment is observed healthy (ev-1-007, ev-1-008); platform signals outrank log text, so they are not counted` |
 
 Status of one hypothesis: **one contradiction rejects it** (CONTRADICTED); otherwise any missing
 piece leaves it INSUFFICIENT; only a claim with everything in place is SUPPORTED. An error onset

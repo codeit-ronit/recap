@@ -14,16 +14,29 @@ independently, so a mistake in the policy's heuristics is not repeated in the ch
 
     V1-structural          a target, a known mechanism, cited evidence that exists in THIS run
     V2-deploy-timing       bad_deployment(S, v): S's errors began -5..+30 min around its deploy
-    V2-upstream-dominance  ... and fewer than half of S's ERROR lines blame a dependency
-    V3-resource            resource_pressure(S): OOM kills, memory >= 90% of limit or OOM logs
-                           (contradicted: memory stays < 70% and events show no OOM kill)
-    V4-dependency          dependency_failure(S -> D): S's logs show "upstream D call failed";
-                           never actionable by itself, it points the search at D
+    V2-upstream-dominance  ... and fewer than half of S's ERROR lines blame a dependency that
+                           is not observed healthy
+    V3-resource            resource_pressure(S): OOM kills or memory >= 90% of its limit;
+                           OOM log lines only corroborate (contradicted: memory stays < 70%
+                           and events show no OOM kill)
+    V4-dependency          dependency_failure(S -> D): S's logs show "upstream D call failed"
+                           and D is not observed healthy; never actionable by itself, it
+                           points the search at D
     V5-memory              a remembered claim faces the same rules (no free pass)
+    V6-conflict-resolution when log TEXT disagrees with platform signals (health snapshots,
+                           metrics, cluster events), the platform signals win, and the check
+                           says so with the evidence IDs of both sides
+
+Why V6 exists (audit finding 2.2): a log line is text that a buggy library, a compromised
+service or a user can write. V1 let 3 forged "OutOfMemoryError" lines prove memory pressure
+on a healthy service, and forged "upstream payment call failed" lines clear the real bad
+release, so RECAP restarted the wrong service. Platform signals come from the platform
+itself (the orchestrator, the metrics pipeline), so they are much harder to fake.
 
 One contradiction rejects a claim; a missing piece leaves it INSUFFICIENT. The best claim is
 a SUPPORTED bad_deployment or resource_pressure, preferring the deepest root cause (the
 service other services' upstream errors point at), then more evidence, then live over memory.
+Statuses are supported / contradicted / insufficient: never "proven".
 """
 
 from __future__ import annotations
@@ -57,6 +70,7 @@ from recap.core.observations import (
     DeploymentList,
     DeploymentRecord,
     EventList,
+    HealthSnapshot,
     LogLine,
     LogQueryResult,
     MetricSeries,
@@ -64,6 +78,7 @@ from recap.core.observations import (
 
 V1, V2_TIMING, V2_UPSTREAM = "V1-structural", "V2-deploy-timing", "V2-upstream-dominance"
 V3, V4, V5 = "V3-resource", "V4-dependency", "V5-memory"
+V6 = "V6-conflict-resolution"
 PROPOSAL_RULES = ("VP1-evidence-exists", "VP2-target-matches-diagnosis", "VP3-action-named")
 
 SUPPORTED, CONTRADICTED = HypothesisStatus.SUPPORTED, HypothesisStatus.CONTRADICTED
@@ -78,6 +93,7 @@ _TOOL_MODELS: dict[str, type[BaseModel]] = {
     "get_service_logs": LogQueryResult,
     "get_service_metrics": MetricSeries,
     "get_k8s_like_events": EventList,
+    "get_service_health": HealthSnapshot,
 }
 # Which service a call asked about, read from its canonical source_ref (see tool_source_ref).
 _SERVICE_ARG = re.compile(r"[(,]service=([^,)]+)")
@@ -161,6 +177,7 @@ class _Observations:
         self.logs: list[tuple[str, LogQueryResult]] = []
         self.metrics: list[tuple[str, MetricSeries]] = []
         self.events: list[tuple[str, str | None, EventList]] = []  # (id, service asked, list)
+        self.health: list[tuple[str, HealthSnapshot]] = []
         for item in evidence:
             # Only live tool results count: a runbook or a memory can never prove anything.
             model = _TOOL_MODELS.get(item.tool_name or "")
@@ -174,6 +191,8 @@ class _Observations:
             elif isinstance(parsed, EventList):
                 asked = _SERVICE_ARG.search(item.source_ref)
                 self.events.append((item.id, asked.group(1) if asked else None, parsed))
+            elif isinstance(parsed, HealthSnapshot):
+                self.health.append((item.id, parsed))
 
     def release(self, service: str, version: str | None) -> tuple[str, DeploymentRecord] | None:
         """The newest deployment of `service` (of `version`, when given) and its evidence ID."""
@@ -209,9 +228,39 @@ class _Observations:
         return found
 
     def upstream_graph(self) -> dict[str, set[str]]:
-        """Caller -> the dependencies its ERROR lines blame: who points at whom."""
+        """Caller -> the dependencies its ERROR lines blame: who points at whom.
+
+        Blame toward a dependency the platform shows healthy is left out (V6): text alone
+        must not make a healthy service look like the deepest root cause.
+        """
         callers = sorted({result.service for _, result in self.logs})
-        return {caller: {dep for _, dep in self.upstream_errors(caller)} for caller in callers}
+        return {
+            caller: {
+                dep for _, dep in self.upstream_errors(caller) if not self.healthy_evidence(dep)
+            }
+            for caller in callers
+        }
+
+    def healthy_evidence(self, service: str) -> list[str]:
+        """IDs of platform evidence that shows `service` working normally; [] if it does not.
+
+        "Observed healthy" needs at least one health snapshot or error_rate series for the
+        service, and EVERY one of them must look healthy: snapshots Running with all
+        replicas ready and an error rate at or below ERROR_RATE_THRESHOLD, and no error_rate
+        point above it. One unhealthy observation, or none at all, gives [].
+        """
+        threshold = signals.ERROR_RATE_THRESHOLD
+        snapshots = [(eid, s) for eid, s in self.health if s.service == service]
+        rates = self.series(service, "error_rate")
+        if not snapshots and not rates:
+            return []
+        for _, snapshot in snapshots:
+            ready = snapshot.replicas > 0 and snapshot.ready_replicas >= snapshot.replicas
+            if snapshot.status != "Running" or not ready or snapshot.error_rate > threshold:
+                return []
+        if any(point.value > threshold for _, series in rates for point in series.points):
+            return []
+        return _union([eid for eid, _ in snapshots], [eid for eid, _ in rates])
 
     def oom_events(self, service: str) -> list[ClusterEvent]:
         """OOMKilled/BackOff events of `service`. An event listed twice counts once."""
@@ -439,14 +488,18 @@ def _error_onset(
 
 
 def _upstream_dominance(check: _Check, observed: _Observations) -> None:
-    """V2 (d): a service whose ERROR lines mostly blame a dependency is a victim, not the cause."""
+    """V2 (d): a service whose ERROR lines mostly blame a dependency is a victim, not the cause.
+
+    Only blame toward a dependency that is NOT observed healthy counts (V6): "upstream D
+    call failed" is log text, and the platform's own health signals for D outrank it.
+    """
     service = check.target
     if not observed.log_ids(service):
         message = f"no log evidence for {service}: errors from its dependencies are not ruled out"
         check.lack(V2_UPSTREAM, message, [service])
         return
     errors = sum(1 for _, line in observed.lines(service) if line.level == "ERROR")
-    upstream = observed.upstream_errors(service)
+    upstream = _discount_healthy_blame(check, observed, observed.upstream_errors(service))
     counted = f"{len(upstream)} of {errors} ERROR lines of {service}"
     if len(upstream) < UPSTREAM_SHARE * errors or not upstream:
         check.ok(V2_UPSTREAM, f"{counted} blame a dependency (under {UPSTREAM_SHARE:.0%})")
@@ -456,8 +509,34 @@ def _upstream_dominance(check: _Check, observed: _Observations) -> None:
     check.contradict(V2_UPSTREAM, message, [eid for eid, _ in upstream], focus=blamed)
 
 
+def _discount_healthy_blame(
+    check: _Check, observed: _Observations, upstream: list[tuple[str, str]]
+) -> list[tuple[str, str]]:
+    """V6 for V2: drop blame toward dependencies the platform shows healthy, and say so."""
+    kept: list[tuple[str, str]] = []
+    dropped: dict[str, list[str]] = {}  # healthy dependency -> evidence IDs of the blame lines
+    for eid, dependency in upstream:
+        if observed.healthy_evidence(dependency):
+            dropped.setdefault(dependency, []).append(eid)
+        else:
+            kept.append((eid, dependency))
+    for dependency, line_ids in dropped.items():
+        proof = ", ".join(observed.healthy_evidence(dependency))
+        check.ok(
+            V6,
+            f"{len(line_ids)} ERROR lines of {check.target} blame {dependency}, but {dependency} "
+            f"is observed healthy ({proof}); platform signals outrank log text, so they are "
+            f"not counted (lines in {', '.join(_union(line_ids))})",
+        )
+    return kept
+
+
 def _resource_pressure(check: _Check, observed: _Observations) -> None:
-    """V3: platform signals show memory trouble: OOM kills, memory at the limit, OOM logs."""
+    """V3: platform signals show memory trouble: OOM kills or memory at the limit.
+
+    Out-of-memory LOG LINES only corroborate. On their own they leave the claim INSUFFICIENT,
+    and when platform signals disagree with them the claim is CONTRADICTED (V6).
+    """
     service = check.target
     oom_events = observed.oom_events(service)
     memory = observed.memory(service)
@@ -468,10 +547,10 @@ def _resource_pressure(check: _Check, observed: _Observations) -> None:
     if memory is not None and near_limit:
         limit = f"{memory.limit_mb:g} MB limit (pressure from {signals.MEMORY_PRESSURE_RATIO:.0%})"
         check.ok(V3, f"{service}'s memory reached {memory.peak:.0%} of its {limit}")
-    if oom_lines:
-        check.ok(V3, f"{len(oom_lines)} out-of-memory errors in {service}'s logs")
-    if oom_events or near_limit or oom_lines:
-        return  # any one platform signal is enough
+    if oom_events or near_limit:
+        if oom_lines:  # text that agrees with a platform signal adds corroboration
+            check.ok(V3, f"{len(oom_lines)} out-of-memory errors in {service}'s logs")
+        return  # a platform signal is enough
     covering = observed.events_covering(service)
     relaxed = signals.MEMORY_RELAXED_RATIO
     if memory is not None and memory.peak < relaxed and covering:
@@ -480,11 +559,40 @@ def _resource_pressure(check: _Check, observed: _Observations) -> None:
             "and the cluster events show no OOMKilled/BackOff for it"
         )
         check.contradict(V3, message, [*memory.evidence_ids, *covering])
+        if oom_lines:
+            _text_loses(check, oom_lines, [*memory.evidence_ids, *covering])
+        return
+    healthy = observed.healthy_evidence(service)
+    if oom_lines and healthy:
+        # The platform reports a service that runs normally: text alone cannot outweigh it.
+        message = (
+            f"{len(oom_lines)} log lines of {service} claim out-of-memory, but health and "
+            "error-rate evidence show it running normally"
+        )
+        check.contradict(V3, message, healthy)
+        _text_loses(check, oom_lines, healthy)
+        return
+    if oom_lines:
+        message = (
+            f"only log text claims out-of-memory on {service} ({len(oom_lines)} lines); a memory "
+            "metric near its limit or OOMKilled/BackOff events must confirm it"
+        )
+        check.lack(V3, message, [service])
         return
     gaps = [f"memory peaks at {memory.peak:.0%} of its limit" if memory else "no memory metric"]
     gaps += [] if covering else ["no cluster events cover it"]
     message = f"cannot confirm or rule out memory pressure on {service}: {', '.join(gaps)}"
     check.lack(V3, message, [service])
+
+
+def _text_loses(check: _Check, text_ids: Sequence[str], platform_ids: Sequence[str]) -> None:
+    """V6: record that log text lost to platform signals, naming the evidence on both sides."""
+    check.note(
+        V6,
+        f"log text ({', '.join(_union(text_ids))}) conflicts with platform signals "
+        f"({', '.join(_union(platform_ids))}); the platform signals win",
+        good=False,
+    )
 
 
 def _dependency_failure(check: _Check, observed: _Observations) -> None:
@@ -495,12 +603,21 @@ def _dependency_failure(check: _Check, observed: _Observations) -> None:
         return
     dependency = _named_dependency(check.hypothesis, observed)
     failures = [eid for eid, dep in observed.upstream_errors(service) if dep == dependency]
-    if failures:
-        quote = f"'upstream {dependency} call failed'"
-        check.ok(V4, f"{len(failures)} ERROR lines of {service} say {quote}")
-    else:
+    if not failures:
         message = f"{service}'s logs show no 'upstream {dependency or '...'} call failed' errors"
         check.contradict(V4, message, observed.log_ids(service))
+        return
+    quote = f"'upstream {dependency} call failed'"
+    healthy = observed.healthy_evidence(dependency or "")
+    if healthy:
+        message = (
+            f"{len(failures)} ERROR lines of {service} say {quote}, but {dependency} is "
+            "observed healthy"
+        )
+        check.contradict(V4, message, healthy)
+        _text_loses(check, failures, healthy)
+        return
+    check.ok(V4, f"{len(failures)} ERROR lines of {service} say {quote}")
 
 
 def _resolve_dependencies(

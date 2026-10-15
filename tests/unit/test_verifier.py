@@ -1,4 +1,4 @@
-"""Tests for the EvidenceVerifier: rules V1-V5, merging, the best choice and proposal checks.
+"""Tests for the EvidenceVerifier: rules V1-V6, merging, the best choice and proposal checks.
 
 Evidence is built the way the gateway records it: a real observation model from
 recap/core/observations.py, dumped with model_dump(mode="json"), stored in an EvidenceRegistry.
@@ -35,12 +35,13 @@ from recap.core.observations import (
     DeploymentList,
     DeploymentRecord,
     EventList,
+    HealthSnapshot,
     LogLine,
     LogQueryResult,
     MetricPoint,
     MetricSeries,
 )
-from recap.core.signals import RELEASE_ERROR_TEMPLATE, UPSTREAM_ERROR_TEMPLATE
+from recap.core.signals import OOM_ERROR_MESSAGE, RELEASE_ERROR_TEMPLATE, UPSTREAM_ERROR_TEMPLATE
 
 ALERT = datetime(2026, 3, 16, 9, 15, tzinfo=UTC)
 DEPLOY = FailureMechanism.BAD_DEPLOYMENT
@@ -140,6 +141,21 @@ class Run:
     def events(self, *events: ClusterEvent, service: str | None = None) -> str:
         args: dict[str, object] = {"service": service} if service else {"limit": 30}
         return self.observe("get_k8s_like_events", EventList(events=list(events)), **args)
+
+    def health(
+        self, service: str, error_rate: float, status: str = "Running", ready: int = 2
+    ) -> str:
+        """One health snapshot at the alert time (2 replicas)."""
+        snapshot = HealthSnapshot(
+            service=service,
+            status=status,  # type: ignore[arg-type]
+            ready_replicas=ready,
+            replicas=2,
+            error_rate=error_rate,
+            latency_p95_ms=95.0,
+            observed_at=at(0),
+        )
+        return self.observe("get_service_health", snapshot, service=service)
 
 
 def release_errors(version: str, minutes: range) -> dict[int, str]:
@@ -554,3 +570,98 @@ def test_evidence_verifier_implements_the_verifier_interface() -> None:
         ours = inspect.signature(getattr(EvidenceVerifier, method)).parameters
         interface = inspect.signature(getattr(Verifier, method)).parameters
         assert list(ours) == list(interface)
+
+
+# --- V6: platform signals outrank log text (audit finding 2.2) -------------------------------
+
+
+def oom_lines(minutes: range) -> dict[int, str]:
+    return dict.fromkeys(minutes, OOM_ERROR_MESSAGE)
+
+
+def test_oom_log_text_alone_leaves_resource_pressure_insufficient() -> None:
+    """Text can be forged: without a memory metric or OOM kills it proves nothing."""
+    run = Run()
+    logs = run.logs("payment", oom_lines(range(-7, 0, 3)))
+
+    check = only_check(verify(run, hypothesis(PRESSURE, "payment", logs)))
+
+    assert check.hypothesis.status == INSUFFICIENT
+    assert any("only log text claims out-of-memory on payment" in m for m in check.failed)
+
+
+def test_oom_log_text_against_a_healthy_service_is_contradicted() -> None:
+    run = Run()
+    logs = run.logs("payment", oom_lines(range(-7, 0, 3)))
+    health = run.health("payment", error_rate=0.001)
+
+    check = only_check(verify(run, hypothesis(PRESSURE, "payment", logs)))
+
+    assert check.hypothesis.status == CONTRADICTED
+    assert health in check.hypothesis.contradicting_evidence_ids
+    assert "V6-conflict-resolution" in check.rule_ids
+    assert any("the platform signals win" in m for m in check.failed)
+
+
+def test_oom_text_against_low_memory_and_quiet_events_names_both_sides() -> None:
+    run = Run()
+    logs = run.logs("payment", oom_lines(range(-7, 0, 3)))
+    memory = run.memory("payment", ratio=0.39)
+    events = run.events(scaling_event("payment", -30), service="payment")
+
+    check = only_check(verify(run, hypothesis(PRESSURE, "payment", logs)))
+
+    assert check.hypothesis.status == CONTRADICTED
+    assert {memory, events} <= set(check.hypothesis.contradicting_evidence_ids)
+    conflict = next(m for m in check.failed if "conflicts with platform signals" in m)
+    assert logs in conflict and memory in conflict and events in conflict
+
+
+def test_a_dependency_failure_on_a_healthy_dependency_is_contradicted() -> None:
+    run = Run()
+    logs = run.logs("checkout", upstream_errors("payment", range(-6, 1)))
+    health = run.health("payment", error_rate=0.001)
+    rate = run.error_rate("payment", onset=None)
+
+    check = only_check(verify(run, hypothesis(DEPENDENCY, "checkout", logs, dependency="payment")))
+
+    assert check.hypothesis.status == CONTRADICTED
+    assert {health, rate} <= set(check.hypothesis.contradicting_evidence_ids)
+    assert "V6-conflict-resolution" in check.rule_ids
+
+
+def test_one_unhealthy_observation_means_the_dependency_is_not_healthy() -> None:
+    """A Running snapshot does not outweigh an error rate that went above the threshold."""
+    run = Run()
+    deploy = run.deployments(("checkout", "v2.4.0", -2880), ("checkout", "v2.4.1", -12))
+    rate = run.error_rate("checkout", onset=-10)
+    logs = run.logs("checkout", upstream_errors("payment", range(-10, 1)))  # all its errors
+    run.health("payment", error_rate=0.001)  # a snapshot that looks fine...
+    run.error_rate("payment", onset=-10)  # ...but payment really failed during the incident
+
+    report = verify(run, hypothesis(DEPLOY, "checkout", deploy, rate, logs, version="v2.4.1"))
+
+    assert only_check(report).hypothesis.status == CONTRADICTED  # checkout is a victim
+    assert "payment" in report.focus_services
+
+
+def test_a_healthy_dependency_does_not_get_the_deepest_root_cause_bonus() -> None:
+    """Blame toward a healthy service must not make it outrank the real bad release."""
+    run = Run()
+    deploy, rate, release_logs = bad_checkout_release(run)
+    # A few forged lines blame payment (a minority, so checkout's own claim still stands).
+    blame = run.logs("checkout", upstream_errors("payment", range(-3, 1)))
+    # payment had an old OOM kill but is healthy now and through the whole incident.
+    old_kill = run.events(oom_event("payment", -55), service="payment")
+    run.health("payment", error_rate=0.001)
+    run.error_rate("payment", onset=None)
+
+    report = verify(
+        run,
+        hypothesis(DEPLOY, "checkout", deploy, rate, release_logs, blame, version="v2.4.1"),
+        hypothesis(PRESSURE, "payment", old_kill),
+    )
+
+    statuses = {c.hypothesis.target_service: c.hypothesis.status for c in report.checks}
+    assert statuses == {"checkout": SUPPORTED, "payment": SUPPORTED}
+    assert report.best is not None and report.best.target_service == "checkout"
