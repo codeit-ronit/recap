@@ -848,6 +848,9 @@ class ProviderInfo(Contract):
     replay_of: dict[str, Any] | None = None  # a replay's provenance: original provider, model, ...
     recording: str | None = None  # where this run's model exchanges are recorded (or replayed from)
     red_team: bool = False  # a deliberately compromised planner wraps the provider (tests, evals)
+    # What the model server reported before the first request, e.g. for Ollama: its version,
+    # the model's capabilities, context window, size, quantization and weights digest.
+    server: dict[str, Any] | None = None
 
 
 class ModelCall(Contract):

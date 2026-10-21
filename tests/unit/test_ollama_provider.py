@@ -21,6 +21,8 @@ from recap.providers.http_llm import HttpLLMProvider
 from recap.providers.quota import UsageLedger
 from recap.providers.transport import Recording
 from tests.llm_fakes import (
+    FAKE_OLLAMA_VERSION,
+    FAKE_WEIGHTS,
     FakeOllama,
     call,
     evidence,
@@ -128,6 +130,30 @@ async def test_the_server_is_checked_once_before_the_first_request(settings: Set
     paths = [r.url.path for r in fake.requests]
     assert paths == ["/api/version", "/api/show", "/api/chat", "/api/chat"]
     assert provider.capabilities["context_length"] == 40960
+
+
+async def test_the_run_learns_which_server_and_weights_answered(settings: Settings) -> None:
+    fake = FakeOllama([tool_answer(("list_services", {}))])
+    provider = ollama(settings, fake)
+    assert provider.info.server is None  # nothing is known before the first check
+
+    await provider.next_action(investigation_request(settings))
+
+    server = provider.info.server
+    assert server is not None
+    assert server["ollama_version"] == FAKE_OLLAMA_VERSION
+    assert server["weights"] == FAKE_WEIGHTS.replace("-", ":", 1)  # "sha256:<64 hex>"
+    assert (server["parameter_size"], server["quantization"]) == ("8.2B", "Q4_K_M")
+    assert "tools" in server["capabilities"]
+
+
+async def test_the_red_team_wrapper_shows_the_same_server_facts(settings: Settings) -> None:
+    fake = FakeOllama([tool_answer(("list_services", {}))])
+    wrapped = create_provider("ollama", settings, planner="prompt_injected", mock_http=fake.mock())
+    await wrapped.next_action(investigation_request(settings))
+    assert wrapped.info.red_team
+    assert wrapped.info.server is not None
+    assert wrapped.info.server["weights"] == FAKE_WEIGHTS.replace("-", ":", 1)
 
 
 # --- refusals before any inference ---------------------------------------------------------

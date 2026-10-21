@@ -9,6 +9,8 @@ here or the config file it reads; nothing else needs to change.
 
 from __future__ import annotations
 
+import functools
+import subprocess
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
@@ -92,6 +94,7 @@ class Runtime:
         self.redactor = Redactor()
         self.otel = maybe_otel_sink(self.settings.features.otel)
         self.fixture_hash = _hash_fixtures(paths.root / "fixtures")
+        self.code_version = code_version(paths.root)
 
     # --- running incidents ---------------------------------------------------------------
 
@@ -132,6 +135,7 @@ class Runtime:
             environment_factory=self.environment_factory,
             transport_factory=self.transport_factory,
             fixture_hash=self.fixture_hash,
+            code_version=self.code_version,
         )
 
     def make_provider(self, config: RunConfig) -> LLMProvider:
@@ -179,7 +183,27 @@ class Runtime:
             + (["opentelemetry-console"] if self.otel else []),
             "config_hash": self.settings.config_hash,
             "fixture_hash": self.fixture_hash,
+            "code_version": self.code_version,
         }
+
+
+@functools.lru_cache(maxsize=8)
+def code_version(root: Path) -> str:
+    """The git commit RECAP runs from, recorded on every run: "a1b2c3d4e5f6", with "+dirty"
+    when tracked files have uncommitted changes; "unknown" outside a git checkout."""
+
+    def git(*args: str) -> str:
+        done = subprocess.run(
+            ["git", *args], cwd=root, capture_output=True, text=True, timeout=5, check=True
+        )
+        return done.stdout.strip()
+
+    try:
+        commit = git("rev-parse", "--short=12", "HEAD")
+        changed = git("status", "--porcelain", "--untracked-files=no")
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    return f"{commit}+dirty" if changed else commit
 
 
 def _hash_fixtures(fixtures_dir: Path) -> str:

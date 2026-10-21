@@ -41,7 +41,7 @@ LINE = "═" * 78
 # What each run origin means, in the words the dashboard's badge uses.
 ORIGIN_TEXT = {
     "scripted": "SCRIPTED baseline policy, NOT an LLM",
-    "local_llm": "LOCAL LLM: real inference on this machine (Ollama), no API, $0",
+    "local_llm": "LOCAL LLM: real inference on this machine (Ollama), no paid API, $0",
     "free_hosted_llm": "FREE HOSTED LLM: real inference on a free plan, checked every call",
     "replay": "REPLAY of a recorded LLM run: no model is called",
     "paid_llm": "PAID LLM API (disabled for this $0 project)",
@@ -244,7 +244,11 @@ async def main() -> int:
         "--strategy", choices=["adaptive", "single", "parallel"], default="adaptive"
     )
     parser.add_argument("--no-rag", action="store_true", help="disable runbook retrieval")
-    parser.add_argument("--no-memory", action="store_true", help="disable experience memory")
+    parser.add_argument(
+        "--no-memory",
+        action="store_true",
+        help="do not read experience memory (a verified run is still saved to it)",
+    )
     parser.add_argument("--latency-ms", type=int, default=None, help="simulated tool latency")
     parser.add_argument(
         "--provider",
@@ -253,6 +257,10 @@ async def main() -> int:
         "deterministic), e.g. ollama, groq, replay",
     )
     args = parser.parse_args()
+    if args.approve == "ask" and not sys.stdin.isatty():
+        print("--approve ask needs an interactive terminal (a person reads and answers).")
+        print("For unattended simulation runs use --approve auto.")
+        return 2
 
     sink = ConsoleSink()
     runtime = Runtime(extra_sinks=[sink])

@@ -28,6 +28,7 @@ from recap.providers.quota import OPT_IN_ENV, UsageLedger
 from recap.providers.transport import LiveTransport, Recording
 from tests.llm_fakes import (
     FAKE_GROQ_KEY,
+    FAKE_WEIGHTS,
     FakeGroq,
     FakeOllama,
     call,
@@ -305,14 +306,16 @@ async def test_a_recording_drops_the_model_files_and_the_home_folder(settings: S
     await provider.next_action(investigation_request(settings))
     assert provider.info.recording is not None
     text = (settings.paths.root / provider.info.recording).read_text()
-    for unwanted in ("LICENSE TEXT", "{{ .System }}", str(Path.home()), FAKE_GROQ_KEY, "modelfile"):
+    for unwanted in ("LICENSE TEXT", "{{ .System }}", str(Path.home()), FAKE_GROQ_KEY, "blobs/"):
         assert unwanted not in text, unwanted
     show = next(
         e
         for e in Recording.load(settings.paths.root / provider.info.recording).exchanges
         if e["path"] == "/api/show"
     )
-    assert set(show["response"]["body"]) == {"capabilities", "details", "model_info"}
+    body = show["response"]["body"]
+    assert set(body) == {"capabilities", "details", "model_info", "modelfile"}
+    assert body["modelfile"] == f"FROM {FAKE_WEIGHTS}"  # the weights' name, never their path
 
 
 # --- 9. parser gaps ---------------------------------------------------------------------------

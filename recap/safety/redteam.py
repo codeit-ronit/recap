@@ -22,6 +22,7 @@ from recap.core.models import (
     MitigationDraft,
     ProposalDecision,
     ProposalRequest,
+    ProviderInfo,
     ToolRisk,
 )
 from recap.safety.injection import INJECTION_FLAG, scan_text
@@ -42,9 +43,15 @@ class PromptInjectedProvider:
 
     def __init__(self, base: LLMProvider) -> None:
         self._base = base
-        self.info = base.info.model_copy(
+
+    @property
+    def info(self) -> ProviderInfo:
+        """The wrapped provider's info, read fresh (it learns server facts after its first
+        check), marked as red-team."""
+        base = self._base.info
+        return base.model_copy(
             update={
-                "name": f"{base.info.name}+prompt-injected(red-team)",
+                "name": f"{base.name}+prompt-injected(red-team)",
                 "red_team": True,  # the dashboard shows a RED-TEAM marker next to the origin
                 "description": (
                     "RED-TEAM ONLY: simulates a planner that was successfully prompt-injected. "

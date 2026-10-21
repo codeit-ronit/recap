@@ -40,7 +40,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import sqlite3
+import sys
 import threading
+import time
 import unicodedata
 from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta
@@ -190,16 +192,19 @@ class ApprovalStore:
         proposal_digest: str,
         actor: str,
         now: datetime | None = None,
+        note: str = "",
     ) -> Approval:
         """Record a human (or auto-approver) decision on one request.
 
         Approve: only a pending request. Reject: a pending request, or an approved one whose
         approval was not used yet (a revocation: "no" wins until the approval is used). Anything
         else raises ApprovalError, and the refused attempt is still written to the log.
+        `note` says how the decision was made (the console: "interactive terminal; answered
+        after 53.4 s"); it goes into the decision log with the decision.
         """
         now = now or utcnow()
         with self._transaction() as conn:
-            outcome = self._decide(conn, proposal_id, decision, proposal_digest, actor, now)
+            outcome = self._decide(conn, proposal_id, decision, proposal_digest, actor, now, note)
         if isinstance(outcome, str):
             raise ApprovalError(outcome)
         self._wake(proposal_id)
@@ -213,6 +218,7 @@ class ApprovalStore:
         digest: str,
         actor: str,
         now: datetime,
+        note: str = "",
     ) -> Approval | str:
         """The decision inside the write transaction: an Approval, or the refusal reason."""
         attempt = {"proposal_digest": digest}
@@ -233,7 +239,7 @@ class ApprovalStore:
             reason = "approval request expired before a decision was made"
             return _refuse(conn, proposal_id, actor, now, attempt, reason)
         if status == PENDING:
-            return self._record(conn, row, decision, actor, now)
+            return self._record(conn, row, decision, actor, now, note)
         if status == APPROVED and decision == "rejected":
             return self._revoke(conn, row, actor, now)
         return _refuse(
@@ -247,6 +253,7 @@ class ApprovalStore:
         decision: Decision,
         actor: str,
         now: datetime,
+        note: str = "",
     ) -> Approval:
         """pending -> approved | rejected, with the decision row and its log entry."""
         approval = Approval(
@@ -264,7 +271,7 @@ class ApprovalStore:
         if moved.rowcount != 1:  # pragma: no cover - impossible under BEGIN IMMEDIATE
             raise ApprovalError("approval request was decided or expired concurrently")
         conn.execute(_INSERT_APPROVAL, approval.model_dump(mode="json"))
-        _event(conn, approval.proposal_id, decision, actor, now, request, "")
+        _event(conn, approval.proposal_id, decision, actor, now, request, note)
         return approval
 
     def _revoke(
@@ -535,21 +542,44 @@ class ConsoleApprovalChannel:
         self._output = output_fn
 
     async def notify(self, request: ApprovalRequest) -> None:
-        """Show the proposal, ask y/N, and record the answer (anything but y/yes rejects)."""
+        """Show the proposal, ask y/N, and record the answer (anything but y/yes rejects).
+
+        The real prompt needs an interactive terminal: when input is piped in (or missing),
+        nobody can be reading the proposal, so the request is rejected without reading it.
+        "console-user" therefore always means someone answered at a terminal. The decision
+        log also records how the answer came: "interactive terminal; answered after 53.4 s".
+        """
         for line in _describe(request):
             self._output(line)
-        try:
-            # input() blocks, so it runs in a thread and the event loop keeps running.
-            answer = await asyncio.to_thread(self._input, "Approve this exact action? [y/N] ")
-        except EOFError:  # no terminal attached: treat as "no"
-            answer = ""
-        approved = str(answer).strip().lower() in {"y", "yes"}
+        real_prompt = self._input is input
+        if real_prompt and not _interactive_terminal():
+            self._output("No interactive terminal: the request is rejected unread.")
+            approved, note = False, "rejected unread: no interactive terminal"
+        else:
+            started = time.monotonic()
+            try:
+                # input() blocks, so it runs in a thread and the event loop keeps running.
+                answer = await asyncio.to_thread(self._input, "Approve this exact action? [y/N] ")
+            except EOFError:  # input ended: treat as "no"
+                answer = ""
+            approved = str(answer).strip().lower() in {"y", "yes"}
+            where = "interactive terminal; " if real_prompt else ""
+            note = f"{where}answered after {time.monotonic() - started:.1f} s"
         self._store.decide(
             request.proposal_id,
             decision="approved" if approved else "rejected",
             proposal_digest=request.proposal_digest,
             actor="console-user",
+            note=note,
         )
+
+
+def _interactive_terminal() -> bool:
+    """True if standard input is a terminal a person can type into (not a pipe or a file)."""
+    try:
+        return sys.stdin is not None and sys.stdin.isatty()
+    except ValueError:  # standard input was closed
+        return False
 
 
 class ExternalApprovalChannel:

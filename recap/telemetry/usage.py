@@ -48,7 +48,7 @@ def cost_label(usage: Usage, origin: str, *, free_status_lost: str | None = None
     if origin == "replay":
         return REPLAY_COST_LABEL
     if origin == "local_llm":
-        return f"$0.00 - local model on this machine, no API; {_tokens(usage)}"
+        return f"$0.00 - local model on this machine, no paid or remote API; {_tokens(usage)}"
     if origin == "free_hosted_llm":
         return (
             "$0.00 - free plan (owner-confirmed; every response's limit header matched the "

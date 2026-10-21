@@ -131,6 +131,7 @@ class ControllerDeps:
     environment_factory: Callable[[EnvironmentConfig, str], TargetEnvironment]
     transport_factory: TransportFactory
     fixture_hash: str = ""
+    code_version: str = ""  # the git commit RECAP runs from ("+dirty" with uncommitted changes)
     # (environment, max_error_rate) -> oracle. A benchmark adapter can bring its own judge.
     oracle_factory: Callable[[TargetEnvironment, float], RecoveryOracle] = EnvironmentHealthOracle
 
@@ -636,6 +637,13 @@ class IncidentController:
             self._finish(S.BLOCKED, "approval request expired")
             return None
         self.record.approvals.append(approval)
+        # How the decision was made, from the append-only decision log (the console records
+        # "interactive terminal; answered after 53.4 s"; other channels leave it empty).
+        logged = [
+            event.detail
+            for event in self.deps.approvals.events(proposal.proposal_id)
+            if event.kind == approval.decision
+        ]
         self.tracer.emit(
             TraceCategory.APPROVAL_DECIDED,
             {
@@ -643,6 +651,7 @@ class IncidentController:
                 "actor": approval.actor,
                 "approval_id": approval.approval_id,
                 "proposal_id": approval.proposal_id,
+                "note": logged[-1] if logged else "",
             },
         )
         if approval.decision != "approved":
@@ -933,6 +942,8 @@ class IncidentController:
     def _checkpoint(self) -> None:
         self.record.updated_at = utcnow()
         self.record.usage = self._usage()
+        # A model provider learns its server's facts (version, weights) at its first request.
+        self.record.provider_info = self.provider.info
         self.deps.runs.save(self.record)
 
     def _usage(self) -> Usage:
@@ -1100,6 +1111,7 @@ class IncidentController:
             "prompt_version": self.provider.info.prompt_version or PROMPT_VERSION,
             "config_hash": self.settings.config_hash,
             "fixture_hash": self.deps.fixture_hash,
+            "code_version": self.deps.code_version,
             "policy_version": self.settings.policies.version,
             "router": self.deps.router.name,
             "verifier": self.deps.verifier.name,

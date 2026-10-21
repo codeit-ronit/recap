@@ -48,8 +48,9 @@ from recap.core.models import Contract
 RECORDING_SCHEMA = "recap-recording-v1"
 MAX_ERROR_TEXT = 300  # characters of a non-JSON error body kept for messages
 
-# Response headers worth keeping: the rate-limit picture and request IDs. Nothing else
-# (cookies, auth echoes) is stored or recorded.
+# Response headers worth keeping: the rate-limit picture (the free-plan tripwire and replays
+# need it). Nothing else is stored or recorded: no cookies, no auth echoes, and no request
+# IDs, which could link a published recording to the account that made it.
 KEPT_HEADERS = (
     "retry-after",
     "x-ratelimit-limit-requests",
@@ -58,7 +59,6 @@ KEPT_HEADERS = (
     "x-ratelimit-remaining-tokens",
     "x-ratelimit-reset-requests",
     "x-ratelimit-reset-tokens",
-    "x-request-id",
 )
 
 # Values that differ between two runs of the same incident without changing its meaning.

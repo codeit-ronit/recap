@@ -311,7 +311,7 @@ def test_only_a_simulated_environment_is_called_a_simulation(context: ContextPac
 
 
 def test_prompt_version_is_defined() -> None:
-    assert PROMPT_VERSION == "prompts-v3"
+    assert PROMPT_VERSION == "prompts-v3.1"
 
 
 def test_prompts_contain_no_secrets(context: ContextPack, monkeypatch: pytest.MonkeyPatch) -> None:

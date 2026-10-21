@@ -29,6 +29,7 @@ from recap.telemetry.redact import Redactor
 from recap.telemetry.usage import cost_label
 from tests.llm_fakes import (
     FAKE_GROQ_KEY,
+    FAKE_REQUEST_ID,
     FakeGroq,
     call,
     error,
@@ -164,6 +165,19 @@ async def test_the_request_has_only_allowlisted_fields_and_strict_json(
     )
     assert "maxItems" not in json.dumps(response_format)
     assert decision.tool_calls[0].tool_name == "list_services"
+
+
+async def test_a_recording_keeps_the_rate_limits_but_no_request_id(
+    settings: Settings, groq_env: None
+) -> None:
+    """A provider's request ID could link a published recording to the owner's account."""
+    fake = FakeGroq([LIST_SERVICES])
+    provider = groq(settings, fake)
+    await provider.next_action(investigation_request(settings))
+    assert provider.info.recording is not None
+    text = (settings.paths.root / provider.info.recording).read_text(encoding="utf-8")
+    assert "x-ratelimit-limit-requests" in text  # the tripwire's evidence is kept
+    assert FAKE_REQUEST_ID not in text and "x-request-id" not in text
 
 
 async def test_tools_mode_requires_a_tool_call(settings: Settings, groq_env: None) -> None:

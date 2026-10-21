@@ -27,6 +27,7 @@ Rules that keep it local, honest and safe:
 
 from __future__ import annotations
 
+import re
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -136,7 +137,11 @@ class OllamaProvider(HttpLLMProvider):
             "context_length": window,
             "parameter_size": details.get("parameter_size"),
             "quantization": details.get("quantization_level"),
+            # The exact weights file, so a run names the model it used beyond its tag.
+            "weights": _weights_digest(body),
         }
+        # The run record shows these facts (ProviderInfo.server) once they are known.
+        self.info = self.info.model_copy(update={"server": dict(self.capabilities)})
         return self.capabilities
 
     async def _send(
@@ -256,7 +261,7 @@ def trim_for_recording(path: str, body: Any) -> Any:
     if path != "/api/show" or not isinstance(body, dict):
         return body
     details = body.get("details") or {}
-    return {
+    kept: dict[str, Any] = {
         "capabilities": body.get("capabilities"),
         "details": {
             key: details.get(key) for key in ("family", "parameter_size", "quantization_level")
@@ -267,6 +272,16 @@ def trim_for_recording(path: str, body: Any) -> Any:
             if key.endswith(".context_length")
         },
     }
+    weights = _weights_digest(body)
+    if weights is not None:  # the weights file's name only, never its local path
+        kept["modelfile"] = "FROM " + weights.replace(":", "-")
+    return kept
+
+
+def _weights_digest(show: dict[str, Any]) -> str | None:
+    """The model's weights file digest, from the FROM line of /api/show's modelfile."""
+    match = re.search(r"sha256[-:]([0-9a-f]{64})", str(show.get("modelfile") or ""))
+    return f"sha256:{match.group(1)}" if match else None
 
 
 def _tool_call(raw: dict[str, Any]) -> dict[str, Any]:

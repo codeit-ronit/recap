@@ -78,7 +78,7 @@ from recap.providers.prompts import (
 
 # Recorded on every run that uses this protocol. Bump it whenever the text, the schemas or
 # the parsing rules change, so a trace always says which protocol produced a decision.
-PROMPT_VERSION = "prompts-v4.1"  # v4.1 (M2 review): stable tool definitions, safer feedback
+PROMPT_VERSION = "prompts-v4.2"  # v4.2: no example value that could be a scenario's answer
 
 Mode = Literal["json", "tools"]
 Message = dict[str, Any]  # {"role": "system" | "user", "content": "..."}
@@ -415,7 +415,9 @@ def _hypothesis_schema(services: list[str], evidence_ids: list[str]) -> dict[str
             "mechanism": _enum([mechanism.value for mechanism in FailureMechanism]),
             "target_service": _nullable(service, "The service that must be fixed."),
             "version": _nullable(
-                {"type": "string"}, 'bad_deployment only: the bad release, e.g. "v2.4.1".'
+                {"type": "string"},
+                "bad_deployment only: the bad release, exactly as the deployment evidence "
+                "names it.",
             ),
             "dependency": _nullable(
                 service, "dependency_failure only: the failing service that it calls."
@@ -450,7 +452,13 @@ def _arg_schema(rule: dict[str, Any]) -> dict[str, Any]:
         bounds = f"from {rule.get('min', 'any')} to {rule.get('max', 'any')}"
         return {"type": "integer", "description": f"A whole number {bounds}."}
     if rule.get("type") == "version":
-        return {"type": "string", "description": 'A release such as "v2.4.0", from the evidence.'}
+        # No example value: a concrete version here could be some scenario's answer.
+        return {
+            "type": "string",
+            "description": (
+                "The release to roll back to, exactly as the deployment evidence names it."
+            ),
+        }
     return {"type": "string"}
 
 

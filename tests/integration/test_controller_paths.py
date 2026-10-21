@@ -6,6 +6,7 @@ Each test runs the real controller against the simulator through a real MCP subp
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -292,6 +293,25 @@ async def test_a_console_answer_after_the_expiry_blocks_instead_of_crashing(
     assert record.state == IncidentState.BLOCKED
     assert record.outcome_note == "approval request expired"
     assert record.error is None and record.recovery is None
+
+
+@pytest.mark.e2e
+async def test_the_trace_says_how_a_console_approval_was_given(settings: Settings) -> None:
+    runtime = Runtime(settings)
+    channel = ConsoleApprovalChannel(
+        runtime.approvals, input_fn=lambda prompt: "y", output_fn=lambda *a: None
+    )
+    record = await runtime.run_incident(
+        "bad-deployment",
+        RunConfig(approval_mode="manual", memory_write=False),
+        approval_channel=channel,
+    )
+    assert record.state == IncidentState.RESOLVED
+    [decided] = [
+        e for e in runtime.events.list_events(record.run_id) if e.category == "approval.decided"
+    ]
+    assert decided.payload["actor"] == "console-user"
+    assert re.fullmatch(r"answered after \d+\.\d s", decided.payload["note"])
 
 
 @pytest.fixture(autouse=True)

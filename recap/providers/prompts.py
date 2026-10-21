@@ -43,7 +43,7 @@ from recap.core.models import (
 )
 from recap.safety.injection import injection_flags
 
-PROMPT_VERSION = "prompts-v3"
+PROMPT_VERSION = "prompts-v3.1"  # v3.1: placeholders instead of example values
 
 # Static on purpose: no per-run values here, so the same system prompt is sent every time.
 # Which environment RECAP works on is stated in each request's incident section instead.
@@ -70,8 +70,8 @@ INVESTIGATION_INSTRUCTIONS = [
 PROPOSAL_INSTRUCTIONS = [
     "Propose exactly one action from the list above that fixes the verified root cause.",
     "Set target to the service to fix; RECAP fills it into the tool's service argument.",
-    'Put the other arguments in params_json, e.g. {"to_version": "v2.4.0"} for',
-    "execute_rollback, and take versions only from the evidence.",
+    'Put the other arguments in params_json, e.g. {"to_version": "<a release from the',
+    'evidence>"} for execute_rollback, and take versions only from the evidence.',
     "Never propose an action that already failed in this run.",
     "If no listed action is justified by the evidence, set propose to false and say why.",
 ]
@@ -105,8 +105,9 @@ class HypothesisOutput(Contract):
     )
     details_json: str = Field(
         description=(
-            'Extra facts as a JSON object string, e.g. {"version": "v2.4.1"} for a bad '
-            'deployment or {"dependency": "payment"} for a dependency failure; "{}" if none.'
+            'Extra facts as a JSON object string, e.g. {"version": "<the bad release>"} for a '
+            'bad deployment or {"dependency": "<the failing service>"} for a dependency '
+            'failure; "{}" if none.'
         )
     )
 
@@ -128,7 +129,10 @@ class ProposalOutput(Contract):
     action: str = Field(description="Exact name of one listed remediation tool.")
     target: str = Field(description="The service the action applies to.")
     params_json: str = Field(
-        description='Other arguments as a JSON object string, e.g. {"to_version": "v2.4.0"}.'
+        description=(
+            'Other arguments as a JSON object string, e.g. {"to_version": "<a release from the '
+            'evidence>"}.'
+        )
     )
     rationale: str = Field(description="Why this action fixes the verified root cause.")
     evidence_ids: list[str] = Field(description="Evidence IDs that justify the action.")

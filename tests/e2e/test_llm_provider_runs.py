@@ -10,6 +10,7 @@ test_recorded_model_runs.py.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 from datetime import date
 from pathlib import Path
@@ -33,6 +34,7 @@ from tests.adversarial.test_audit_oracle_isolation import (
 )
 from tests.llm_fakes import (
     FAKE_GROQ_KEY,
+    Answer,
     FakeGroq,
     FakeOllama,
     OperatorApproves,
@@ -78,6 +80,10 @@ async def test_a_model_driven_run_resolves_through_mcp_with_an_operator_approval
     assert record.recovery is not None and record.recovery.verified  # the oracle's own check
     assert record.provider_info is not None and record.provider_info.origin == "local_llm"
     assert record.versions["prompt_version"] == PROMPT_VERSION
+    # Provenance: which server and weights answered, and which code ran.
+    assert record.provider_info.server is not None
+    assert record.provider_info.server["weights"].startswith("sha256:")
+    assert record.versions["code_version"] not in ("", "unknown")
     assert [(a.action, a.target, a.result) for a in record.actions] == [
         ("execute_rollback", "checkout", "recovered")
     ]
@@ -254,3 +260,91 @@ async def test_a_paid_plan_response_makes_the_run_say_cost_unknown(
     assert summary.payload["cost"].startswith("cost unknown")
     assert record.provider_info is not None
     assert record.provider_info.red_team is (planner == "prompt_injected")
+
+
+# --- the shareable export of a run (scripts/export_run_trace.py) ------------------------------
+
+
+def load_export_script() -> Any:
+    """scripts/ is not a package: load scripts/export_run_trace.py from its path."""
+    path = Path(__file__).resolve().parents[2] / "scripts" / "export_run_trace.py"
+    spec = importlib.util.spec_from_file_location("export_run_trace", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class KeyInTheRationale(ScriptedModel):
+    """Writes a key-shaped string into its proposal, as a confused or injected model might."""
+
+    def _proposal(self, schema: dict[str, Any]) -> Answer:
+        answer = super()._proposal(schema)
+        assert isinstance(answer, dict)
+        body = json.loads(answer["content"])
+        body["rationale"] = f"roll back the bad release (deployed with {FAKE_GROQ_KEY})"
+        return {"content": json.dumps(body)}
+
+
+async def test_the_exported_run_holds_the_evidence_and_no_secrets(
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = Runtime(settings)
+    use_fake_model(runtime, "ollama", FakeOllama(responder=KeyInTheRationale()))
+    record = await run(runtime, "bad-deployment", LOCAL)
+    assert FAKE_GROQ_KEY in record.proposals[0].rationale  # the stored record still has it
+
+    export = load_export_script()
+    out = tmp_path / "export"
+    written = export.export_run(settings, record.run_id, out)
+
+    assert written == ["trace.jsonl", "run.json", "recording.jsonl", "README.md"]
+    texts = {name: (out / name).read_text(encoding="utf-8") for name in written}
+    for name, text in texts.items():
+        assert FAKE_GROQ_KEY not in text, name
+        assert str(Path.home()) not in text, name
+        assert str(settings.paths.data_dir) not in text, name  # the data folder is "data"
+    # The raw exchanges travel with the trace: one recorded chat per model request.
+    recording = [json.loads(line) for line in texts["recording.jsonl"].splitlines()]
+    assert recording[0]["type"] == "header"
+    chats = [line for line in recording[1:] if line["path"] == "/api/chat"]
+    assert len(chats) == record.usage.model_requests
+    # The README says who decided what, how the approval was given, and what was written.
+    readme = texts["README.md"]
+    assert "`recording.jsonl` in this folder" in readme
+    assert "in JSON-schema mode" in readme  # the proposal's mode, not the provider's default
+    assert "approved by `test-operator` (another approval channel)" in readme
+    assert "Approval decision log" in readme and "consumed by `recap`" in readme
+    reads = len(events(runtime, record, C.TOOL_CALL))
+    assert f"{record.usage.tool_calls} tool calls ({reads} reads, 1 approved write)" in readme
+    assert "decided by `R12-approval-binding`" in readme
+    assert "## Scope and caveats" in readme and "One run of one simulated scenario" in readme
+    note = "interactive terminal; answered after 53.4 s"
+    assert export.approval_channel("console-user", note).endswith(note)
+    assert "did not record" in export.approval_channel("console-user")
+    assert "not a person" in export.approval_channel("auto-approver[simulation]")
+    assert "signed-in operator" in export.approval_channel("operator:alice")
+
+    # Whatever cleaning misses, nothing is written: an environment secret, a key-shaped
+    # string, the login name, or a missing model recording.
+    class MissesEverything:
+        def redact_text(self, text: str) -> str:
+            return text
+
+    refused = tmp_path / "refused"
+    monkeypatch.setattr(export, "Redactor", MissesEverything)
+    monkeypatch.setenv("RECAP_EXPORT_TEST_TOKEN", record.run_id)
+    with pytest.raises(SystemExit, match="value of \\$RECAP_EXPORT_TEST_TOKEN"):
+        export.export_run(settings, record.run_id, refused)
+    monkeypatch.delenv("RECAP_EXPORT_TEST_TOKEN")
+    with pytest.raises(SystemExit, match="contains a Groq key"):
+        export.export_run(settings, record.run_id, refused)
+    monkeypatch.undo()  # the real redactor again
+    monkeypatch.setattr(export.getpass, "getuser", lambda: "bad.deployment")  # in the data
+    with pytest.raises(SystemExit, match="login name"):
+        export.export_run(settings, record.run_id, refused)
+    monkeypatch.undo()
+    (settings.paths.root / str(record.versions["recording"])).unlink()
+    with pytest.raises(SystemExit, match="recording .* is missing"):
+        export.export_run(settings, record.run_id, refused)
+    assert not refused.exists()

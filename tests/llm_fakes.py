@@ -41,6 +41,9 @@ T0 = datetime(2026, 3, 14, 10, 0, tzinfo=UTC)
 OLLAMA_MODEL = "qwen3:8b"
 GROQ_MODEL = "openai/gpt-oss-120b"
 FAKE_GROQ_KEY = "gsk_" + "TESTKEYnotREAL" * 3  # shaped like a Groq key, never valid
+FAKE_REQUEST_ID = "req_01FAKEACCOUNTLINK0000000000"  # shaped like a Groq request ID
+FAKE_OLLAMA_VERSION = "0.0.0-fake"  # never a real Ollama version: fake runs stay recognizable
+FAKE_WEIGHTS = "sha256-" + "fa4e" * 16  # a weights file name as /api/show's modelfile gives it
 
 # An answer is a dict for the next 200 reply, or a ready httpx.Response (errors, 429s...).
 Answer = dict[str, Any] | httpx.Response
@@ -156,7 +159,7 @@ class FakeOllama:
         self.requests.append(request)
         path = request.url.path
         if path == "/api/version":
-            return httpx.Response(200, json={"version": "0.34.4"})
+            return httpx.Response(200, json={"version": FAKE_OLLAMA_VERSION})
         if path == "/api/tags":
             models = [{"name": self.model}] if self.installed else []
             return httpx.Response(200, json={"models": [*models, {"name": "llama3.2:3b"}]})
@@ -172,7 +175,7 @@ class FakeOllama:
                     # What a real server also returns, and a recording must NOT keep:
                     "license": "LICENSE TEXT that RECAP never needs",
                     "template": "{{ .System }} {{ .Prompt }}",
-                    "modelfile": f"FROM {Path.home()}/.ollama/models/blobs/sha256-abc123",
+                    "modelfile": f"FROM {Path.home()}/.ollama/models/blobs/{FAKE_WEIGHTS}",
                     "parameters": f"stop <|im_end|>\nnote {FAKE_GROQ_KEY}",
                 },
             )
@@ -301,6 +304,7 @@ class FakeGroq:
             "x-ratelimit-limit-tokens": "8000",
             "x-ratelimit-remaining-tokens": "7000",
             "x-ratelimit-reset-tokens": "7.5s",
+            "x-request-id": FAKE_REQUEST_ID,  # real servers send one; recordings must not keep it
         }
 
 

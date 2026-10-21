@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import re
+import sys
 import time
 from datetime import timedelta
 from pathlib import Path
@@ -305,6 +308,38 @@ async def test_console_channel_strips_control_characters_and_handles_eof(
     )
     assert store.approvals_for("inc-1")[0].decision == "rejected"
     assert not any(ch in "\n".join(printed) for ch in ("\x1b", "‮"))
+
+
+async def test_the_real_prompt_rejects_unread_without_a_terminal(
+    store: ApprovalStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Piped input is not a person: "console-user" must always mean someone at a terminal."""
+    piped = io.StringIO("y\n")  # e.g. `yes | python scripts/demo.py --approve ask`
+    monkeypatch.setattr(sys, "stdin", piped)
+    request = store.create_request(make_proposal(), run_id="run-1", ttl_seconds=900)
+    await ConsoleApprovalChannel(store, output_fn=lambda *a: None).notify(request)  # real input()
+    (approval,) = store.approvals_for("inc-1")
+    assert approval.decision == "rejected" and approval.actor == "console-user"
+    assert piped.read() == "y\n"  # the piped answer was never read
+    assert (
+        store.events(request.proposal_id)[-1].detail == "rejected unread: no interactive terminal"
+    )
+
+
+async def test_a_terminal_answer_is_logged_with_how_it_came(
+    store: ApprovalStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Terminal(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setattr(sys, "stdin", Terminal("y\n"))
+    request = store.create_request(make_proposal(), run_id="run-1", ttl_seconds=900)
+    await ConsoleApprovalChannel(store, output_fn=lambda *a: None).notify(request)  # real input()
+    (approval,) = store.approvals_for("inc-1")
+    assert approval.decision == "approved" and approval.actor == "console-user"
+    detail = store.events(request.proposal_id)[-1].detail
+    assert re.fullmatch(r"interactive terminal; answered after \d+\.\d s", detail)
 
 
 async def test_external_channel_leaves_the_decision_to_the_api(store: ApprovalStore) -> None:
