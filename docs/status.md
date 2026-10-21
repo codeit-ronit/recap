@@ -456,6 +456,7 @@ Test results after the run reviews:
 | Dashboard | `npm test`, `npm run build` | 19 passed; strict build passes |
 | Smoke test | `.venv/bin/python scripts/smoke_test.py` | `RESOLVED (67 trace events, simulated environment)` (unchanged) |
 | Published files | `tests/unit/test_published_artifacts.py` | the replay fixture and the three exports in `evals/live/` |
+| Evaluation (scripted) | `.venv/bin/python scripts/evaluate.py` | report `20261021-104555-1da3c9` at git `fb51dca`: every outcome, diagnosis, tool-call, step and token number identical to the M1-review report; only wall-clock latency and the fixture hash (it covers the re-recorded model run) differ |
 
 ### What genuinely ran
 
