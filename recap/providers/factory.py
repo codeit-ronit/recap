@@ -35,6 +35,7 @@ from recap.core.config import ProviderSettings, Settings
 from recap.core.errors import ConfigError
 from recap.core.ids import new_id, utcnow
 from recap.core.interfaces import LLMProvider
+from recap.knowledge.embeddings import Embedder
 from recap.providers.quota import UsageLedger
 from recap.providers.transport import (
     LiveTransport,
@@ -92,6 +93,34 @@ def create_provider(
     if planner == "prompt_injected":
         provider = _red_team(provider)
     return provider
+
+
+def create_embedder(
+    settings: Settings,
+    provider: LLMProvider | None,
+    *,
+    mock_http: httpx.MockTransport | None = None,
+) -> Embedder:
+    """The run's embedder for hybrid retrieval, on the same footing as the run's model.
+
+      a replay run              answers from the same recording, with no network
+      a provider that records   live loopback requests, recorded in the same file
+      any other provider        live loopback requests, not recorded (the scripted policy)
+
+    Tests only: `mock_http` stands in for the local server.
+    """
+    from recap.knowledge.ollama_embedder import OllamaEmbedder
+
+    spec = settings.retrieval.embedder
+    transport = getattr(provider, "transport", None)  # the provider's own HTTP transport
+    wired: ModelTransport
+    if isinstance(transport, ReplayTransport):
+        wired = transport
+    else:
+        live = LiveTransport(spec.base_url, mock=mock_http)
+        recording = isinstance(transport, RecordingTransport)
+        wired = RecordingTransport(live, transport.recorder) if recording else live
+    return OllamaEmbedder(spec, wired)
 
 
 def describe_providers(settings: Settings) -> list[dict[str, Any]]:
@@ -231,7 +260,15 @@ def _maybe_record(
     def scrub(text: str) -> str:  # secrets, then the user's home folder (recordings may be shared)
         return redactor.redact_text(text).replace(home, "~")
 
-    recorder = Recorder(path, header, redact=scrub, trim=trim)
+    from recap.providers.ollama_provider import trim_for_recording as ollama_trim
+
+    def trimmed(path: str, body: Any) -> Any:
+        # The run's embedder (local Ollama) records into the same file whatever the chat
+        # provider is, so Ollama's responses are always trimmed too (never its license or
+        # a local model path).
+        return ollama_trim(path, trim(path, body) if trim is not None else body)
+
+    recorder = Recorder(path, header, redact=scrub, trim=trimmed)
     root = settings.paths.root
     shown = str(path.relative_to(root)) if path.is_relative_to(root) else str(path)
     return RecordingTransport(live, recorder), shown

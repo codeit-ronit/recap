@@ -47,6 +47,7 @@ KEEP_ALIVE = "10m"  # keep the model in memory between the steps of a run
 # are full of JSON and IDs, which tokenize more densely than prose (about 3 chars/token).
 SAFE_CHARS_PER_TOKEN = 3
 PROBE_TIMEOUT_SECONDS = 10.0
+EMBED_FIELDS = ("model", "embeddings", "prompt_eval_count", "error")  # kept in recordings
 
 
 def check_local_settings(settings: ProviderSettings) -> None:
@@ -150,7 +151,7 @@ class OllamaProvider(HttpLLMProvider):
             "parameter_size": details.get("parameter_size"),
             "quantization": details.get("quantization_level"),
             # The exact weights file, so a run names the model it used beyond its tag.
-            "weights": _weights_digest(body),
+            "weights": weights_digest(body),
         }
         # The run record shows these facts (ProviderInfo.server) once they are known.
         self.info = self.info.model_copy(update={"server": dict(self.capabilities)})
@@ -265,11 +266,15 @@ class OllamaProvider(HttpLLMProvider):
 
 
 def trim_for_recording(path: str, body: Any) -> Any:
-    """What a recording keeps of an Ollama response: only the fields this provider reads.
+    """What a recording keeps of an Ollama response: only the fields RECAP reads.
 
     /api/show also returns the model's license, chat template, parameters and modelfile
-    (which names a local file path); none of it is needed to replay a run.
+    (which names a local file path); none of it is needed to replay a run. An /api/embed
+    answer keeps its vectors, the model and the token count. Other paths pass unchanged, so
+    any run's recorder can apply this to the embedder's requests (recap/providers/factory.py).
     """
+    if path == "/api/embed" and isinstance(body, dict):
+        return {key: body[key] for key in EMBED_FIELDS if key in body}
     if path != "/api/show" or not isinstance(body, dict):
         return body
     details = body.get("details") or {}
@@ -284,13 +289,13 @@ def trim_for_recording(path: str, body: Any) -> Any:
             if key.endswith(".context_length")
         },
     }
-    weights = _weights_digest(body)
+    weights = weights_digest(body)
     if weights is not None:  # the weights file's name only, never its local path
         kept["modelfile"] = "FROM " + weights.replace(":", "-")
     return kept
 
 
-def _weights_digest(show: dict[str, Any]) -> str | None:
+def weights_digest(show: dict[str, Any]) -> str | None:
     """The model's weights file digest, from the FROM line of /api/show's modelfile.
 
     Only a line that starts with FROM counts: the modelfile also holds comments, and a

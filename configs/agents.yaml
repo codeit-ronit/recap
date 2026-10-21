@@ -1,11 +1,13 @@
 # Investigation agents. Every tool listed here is READ-ONLY; workers can never write.
 # Only the controller executes mitigations, and only through the safety gateway.
+# search_runbooks is answered by RECAP's own runbook index, not by the environment, so the
+# specialists may share it: their ENVIRONMENT tools stay disjoint.
 
 agents:
   investigator:
     goal: "Investigate the incident end to end with read-only tools and propose root-cause hypotheses."
     tools: [list_services, get_service_health, get_service_logs, get_service_metrics,
-            get_recent_deployments, get_k8s_like_events, propose_rollback]
+            get_recent_deployments, get_k8s_like_events, propose_rollback, search_runbooks]
     max_steps: 10
 
   # The two specialists see different things, so each can conclude only what it can
@@ -16,7 +18,7 @@ agents:
       - "Measure the symptoms over time: error rate, latency and memory, and when they began."
       - "Read the failing services' logs: name the error signature and which service the errors point to."
       - "You cannot see releases, rollouts or cluster events. If the symptoms suggest one, say so in next_checks for the infrastructure investigator instead of claiming it."
-    tools: [get_service_logs, get_service_metrics]
+    tools: [get_service_logs, get_service_metrics, search_runbooks]
     mechanisms: [resource_pressure, dependency_failure, unknown]
     max_steps: 8
 
@@ -27,7 +29,7 @@ agents:
       - "Check cluster events (restarts, OOM kills, failed probes), each service's health and what it depends on."
       - "You cannot read logs or metrics. If a cause needs them to be confirmed, name it in next_checks for the telemetry investigator."
     tools: [list_services, get_service_health, get_recent_deployments, get_k8s_like_events,
-            propose_rollback]
+            propose_rollback, search_runbooks]
     mechanisms: [bad_deployment, resource_pressure, dependency_failure, unknown]
     max_steps: 8
 

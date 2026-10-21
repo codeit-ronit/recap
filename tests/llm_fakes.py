@@ -9,6 +9,7 @@ can check exactly what RECAP sent to a model.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections import deque
@@ -45,6 +46,7 @@ FAKE_REQUEST_ID = "req_01FAKEACCOUNTLINK0000000000"  # shaped like a Groq reques
 FAKE_COMPLETION_ID = "chatcmpl-0f4e5a6b-fake-4c1d-9e8f-account0link"  # an answer's own ID
 FAKE_OLLAMA_VERSION = "0.0.0-fake"  # never a real Ollama version: fake runs stay recognizable
 FAKE_WEIGHTS = "sha256-" + "fa4e" * 16  # a weights file name as /api/show's modelfile gives it
+FAKE_EMBED_WEIGHTS = "sha256-" + "e3be" * 16  # the embedding model's
 
 # An answer is a dict for the next 200 reply, or a ready httpx.Response (errors, 429s...).
 Answer = dict[str, Any] | httpx.Response
@@ -125,11 +127,19 @@ def proposal(
 # --- fake servers ---------------------------------------------------------------------------
 
 
+def hashed_vector(text: str, dimensions: int = 768) -> list[float]:
+    """A fake embedding: deterministic for the text, unrelated to its meaning."""
+    seed = hashlib.sha256(text.encode("utf-8")).digest()
+    return [((seed[i % 32] + i * 37) % 251) / 251 - 0.5 for i in range(dimensions)]
+
+
 class FakeOllama:
-    """An Ollama server: /api/version, /api/show and /api/chat answered from a script.
+    """An Ollama server: /api/version, /api/show, /api/chat and /api/embed from a script.
 
     `answers` is consumed in order (one per /api/chat request); a callable `responder` is
-    asked when the script is empty. Every /api/chat body is kept in `chats`.
+    asked when the script is empty. Every /api/chat body is kept in `chats`, every
+    /api/embed body in `embeds`. `embed_vector(text)` gives each input's vector (by
+    default a hash of the text: deterministic, but meaningless).
     """
 
     def __init__(
@@ -144,6 +154,8 @@ class FakeOllama:
         prompt_tokens: int = 1200,
         output_tokens: int = 80,
         answered_by: str | None = None,
+        embed_model: str = "nomic-embed-text",
+        embed_vector: Callable[[str], list[float]] | None = None,
     ) -> None:
         self.answers: deque[Answer] = deque(answers)
         self.responder = responder
@@ -156,6 +168,9 @@ class FakeOllama:
         self.answered_by = answered_by or model
         self.requests: list[httpx.Request] = []
         self.chats: list[dict[str, Any]] = []
+        self.embed_model = embed_model
+        self.embed_vector = embed_vector or hashed_vector
+        self.embeds: list[dict[str, Any]] = []
 
     def mock(self) -> httpx.MockTransport:
         return httpx.MockTransport(self.handle)
@@ -168,6 +183,30 @@ class FakeOllama:
         if path == "/api/tags":
             models = [{"name": self.model}] if self.installed else []
             return httpx.Response(200, json={"models": [*models, {"name": "llama3.2:3b"}]})
+        if path == "/api/show" and json.loads(request.content).get("model") == self.embed_model:
+            return httpx.Response(
+                200,
+                json={
+                    "capabilities": ["embedding"],
+                    "details": {"parameter_size": "137M", "quantization_level": "F16"},
+                    "model_info": {"nomic-bert.context_length": 2048},
+                    "license": "LICENSE TEXT that RECAP never needs",
+                    "modelfile": f"FROM {Path.home()}/.ollama/models/blobs/{FAKE_EMBED_WEIGHTS}",
+                },
+            )
+        if path == "/api/embed":
+            body = json.loads(request.content)
+            self.embeds.append(body)
+            inputs = list(body.get("input") or [])
+            return httpx.Response(
+                200,
+                json={
+                    "model": body.get("model"),
+                    "embeddings": [self.embed_vector(text) for text in inputs],
+                    "prompt_eval_count": sum(len(text.split()) for text in inputs),
+                    "total_duration": 1234,
+                },
+            )
         if path == "/api/show":
             if not self.installed:
                 return httpx.Response(404, json={"error": f"model '{self.model}' not found"})

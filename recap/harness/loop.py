@@ -115,6 +115,8 @@ class AgentHarness:
         history: list[ToolCallRecord] = []
         collected: list[str] = []
         doc_refs: list[str] = []  # runbook chunks this agent saw: its citations
+        # Runbook sections this agent found itself (search_runbooks): in ITS context only.
+        own_docs: dict[str, RetrievedChunk] = {}
         usage = Usage()
         self.tracer.emit(
             TraceCategory.AGENT_START,
@@ -139,10 +141,12 @@ class AgentHarness:
             # shrunk to fit the run budget: when the budget cannot pay for a normal pack,
             # charge_tokens raises BudgetExhausted and the run stops honestly.
             visible, observed = self.visible(role)
+            shared = {doc.chunk.chunk_id for doc in self.docs}
+            searched = [doc for cid, doc in own_docs.items() if cid not in shared]
             pack = self.packer.build(
                 incident=self.agent_incident,
                 evidence=visible,
-                docs=self.docs,
+                docs=[*self.docs, *searched],
                 memories=memories,
                 max_tokens=self.pack_tokens,
                 focus_services=plan.focus_services,
@@ -227,6 +231,8 @@ class AgentHarness:
                 )
                 if result.evidence_id:
                     collected.append(result.evidence_id)
+                for doc in result.docs:  # only a local read tool returns documents
+                    own_docs.setdefault(doc.chunk.chunk_id, doc)
 
         hypotheses = final.hypotheses if final and final.action == "finish" else []
         # The role's contract holds for every provider: a claim outside the mechanisms this

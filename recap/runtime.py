@@ -31,10 +31,11 @@ from recap.core.models import EnvironmentInfo, RunConfig, RunRecord, ScenarioInf
 from recap.environments.registry import create_environment
 from recap.harness.controller import ControllerDeps, IncidentController, TransportFactory
 from recap.harness.store import RunStore
+from recap.knowledge.embeddings import Embedder
 from recap.knowledge.retriever import KnowledgeRetriever
 from recap.memory.consolidation import Consolidator
 from recap.memory.store import ExperienceStore
-from recap.providers.factory import create_provider, describe_providers
+from recap.providers.factory import create_embedder, create_provider, describe_providers
 from recap.providers.quota import UsageLedger
 from recap.routing.router import RulesRouter
 from recap.safety.approvals import ApprovalStore
@@ -82,10 +83,16 @@ class Runtime:
         # Counts every live LLM request and enforces free-tier caps and stops. It is the
         # user's ledger (paths.usage_ledger), shared by every RECAP process and data folder.
         self.ledger = UsageLedger(paths.usage_ledger)
+        retrieval = self.settings.retrieval
+        vectors = paths.root / retrieval.embedder.vectors
         self.knowledge = KnowledgeRetriever.from_directory(
             paths.knowledge_dir,
             root=paths.root,
-            enable_embeddings=self.settings.features.embeddings,
+            # The stored chunk vectors (scripts/build_vector_index.py); hybrid search is
+            # possible only when they cover every chunk (`hybrid_ready`).
+            vectors_path=vectors if vectors.is_file() else None,
+            min_dense_similarity=retrieval.min_dense_similarity,
+            candidate_pool=retrieval.candidate_pool,
         )
         self.router = RulesRouter(self.settings.budget.routing, agent_specs(self.settings))
         self.verifier = EvidenceVerifier()
@@ -132,6 +139,7 @@ class Runtime:
             trace_sinks=self.trace_sinks,
             redactor=self.redactor,
             provider_factory=self.make_provider,
+            embedder_factory=self.make_embedder,
             environment_factory=self.environment_factory,
             transport_factory=self.transport_factory,
             fixture_hash=self.fixture_hash,
@@ -141,6 +149,10 @@ class Runtime:
     def make_provider(self, config: RunConfig) -> LLMProvider:
         name = config.provider or self.settings.providers.default
         return create_provider(name, self.settings, planner=config.planner, ledger=self.ledger)
+
+    def make_embedder(self, provider: LLMProvider) -> Embedder:
+        """The run's embedder for hybrid retrieval (recorded and replayed like its model)."""
+        return create_embedder(self.settings, provider)
 
     def trace_sinks(self, run_id: str) -> list[TraceSink]:
         """Every run writes to SQLite and JSONL; plus the live stream and OTel when enabled."""
@@ -172,6 +184,8 @@ class Runtime:
             "provider": provider,
             "providers_available": describe_providers(self.settings),
             "retriever": self.knowledge.name,
+            "retrieval_mode": self.settings.retrieval.mode,
+            "embedder": self.knowledge.embedder_name,
             "knowledge_chunks": len(self.knowledge.chunks),
             "router": self.router.name,
             "safety_policy": f"{self.policy.name} ({self.policy.version})",

@@ -447,6 +447,9 @@ class RawToolResult(Contract):
     structured: dict[str, Any] | None = None
     text: str = ""
     error: str | None = None
+    # Reference documents a LOCAL read tool found (search_runbooks). The gateway keeps them
+    # only for local tools: an MCP server can never put documents into an agent's context.
+    docs: list[RetrievedChunk] = Field(default_factory=list)
 
 
 class ToolSpecView(Contract):
@@ -456,6 +459,7 @@ class ToolSpecView(Contract):
     description: str
     risk: ToolRisk
     args: dict[str, Any] = Field(default_factory=dict)
+    source: Literal["mcp", "local"] = "mcp"  # local: answered by RECAP itself
 
 
 class ToolCall(Contract):
@@ -513,6 +517,7 @@ class ToolResult(Contract):
     evidence_id: str | None = None
     truncated: bool = False
     decision: SafetyDecision | None = None
+    docs: list[RetrievedChunk] = Field(default_factory=list)  # from a local read tool only
 
 
 class Approval(Contract):
@@ -677,8 +682,23 @@ class RetrievedChunk(Contract):
     chunk: DocChunk
     score: float
     rank: int
-    retriever: str  # "bm25" or "hybrid"
+    retriever: str  # "bm25" or "hybrid-bm25-embeddings": how this search ranked it
     reranker: str | None = None
+    # Why it ranked here: bm25_rank / bm25 (keyword score), dense_rank / cosine (meaning),
+    # rrf (the fused score). Only the rankings a search actually used appear.
+    signals: dict[str, float] = Field(default_factory=dict)
+
+
+class RetrievalInfo(Contract):
+    """How a run searched the runbooks (RunRecord.retrieval)."""
+
+    mode: Literal["bm25", "hybrid"]
+    embedder: str | None = None  # e.g. "ollama:nomic-embed-text" (hybrid only)
+    server: dict[str, Any] | None = None  # what Ollama reported: version, weights file, size
+    embedding_requests: int = 0  # /api/embed requests answered (live or from a recording)
+    embedding_input_tokens: int | None = None  # as the server reported them
+    replayed_requests: int = 0  # of those, answered from a recording
+    agent_searches: int = 0  # search_runbooks calls answered for the agents
 
 
 class EvidenceSummary(Contract):
@@ -1024,6 +1044,9 @@ class RunConfig(Contract):
 
     strategy: Literal["adaptive", "single", "parallel"] = "adaptive"
     use_rag: bool = True
+    # How runbooks are searched: bm25 (keywords) or hybrid (keywords + a local embedding
+    # model). None -> configs/retrieval.yaml (RECAP_ENABLE_EMBEDDINGS=1 makes it hybrid).
+    retrieval: Literal["bm25", "hybrid"] | None = None
     use_memory: bool = True
     memory_write: bool = True
     memory_read_partitions: list[MemoryPartition] = Field(
@@ -1062,6 +1085,7 @@ class RunRecord(Contract):
     findings: list[AgentFinding] = Field(default_factory=list)
     verification: VerificationReport | None = None
     retrieved_docs: list[RetrievedChunk] = Field(default_factory=list)
+    retrieval: RetrievalInfo | None = None
     memory_hits: list[MemoryHit] = Field(default_factory=list)
     proposals: list[MitigationProposal] = Field(default_factory=list)
     safety_decisions: list[SafetyDecision] = Field(default_factory=list)

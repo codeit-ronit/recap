@@ -28,12 +28,22 @@ Everything below runs against a **simulated** environment; nothing repairs a rea
 - **Verifier rules:** V1-grounding (a supported claim cites evidence its rules used), V6 on
   the target (a service the platform shows healthy is no root cause), V7-deepest-cause, and
   VP4-restore-point (a rollback restores the version the evidence names).
+- **Hybrid retrieval** ([ADR 0022](docs/decisions/0022-hybrid-retrieval-with-a-local-embedder-and-agent-search.md)):
+  `nomic-embed-text` on loopback through the recorded model transport, stored chunk vectors
+  (`scripts/build_vector_index.py`), BM25 fused with a cosine ranking (cutoff 0.55, RRF),
+  ranking signals on every result, `configs/retrieval.yaml`, and `RunConfig.retrieval`.
+  BM25 stays the default: on the scenarios' alert queries hybrid found the right runbook
+  less often (7 of 15 against 9), while it helped on paraphrased questions.
+- **`search_runbooks`**: agents search the runbooks themselves (a local read tool answered
+  by RECAP, 6 searches per run); the sections join only that agent's context and its
+  citations; the receipt is DOC evidence, never proof.
 
 ### Changed
 
 - prompts-v4.3: each role's goal, responsibilities and allowed mechanisms, and the
-  verifier's open questions. The CI replay fixture was re-recorded with it (a local
-  `qwen3:8b` run, 5 requests, $0).
+  verifier's open questions; prompts-v4.4: the search tool, and free text a model wrote
+  (a search query) shown only as data, with hashed values in "already observed" refs. The
+  CI replay fixture was re-recorded after each (local `qwen3:8b` runs, 5 and 6 requests, $0).
 - Ties between different supported root causes are no longer broken by how much evidence a
   claim cites; they stay an open conflict.
 - A parallel agent may use at most 70% of the run's remaining time; findings other agents

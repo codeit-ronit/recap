@@ -67,6 +67,11 @@ class ToolRegistry:
         policy = self._tools.get(name)
         return policy.risk if policy else None
 
+    def is_local(self, name: str) -> bool:
+        """True for a read tool RECAP answers itself (`source: local`), never the server."""
+        policy = self._tools.get(name)
+        return policy is not None and policy.source == "local"
+
     # --- what providers are told about tools ---------------------------------------------
 
     def view(self, name: str) -> ToolSpecView:
@@ -79,6 +84,7 @@ class ToolRegistry:
             description=policy.description,  # from trusted config, never from the server
             risk=policy.risk,
             args={arg: self._describe_arg(rule) for arg, rule in policy.args.items()},
+            source=policy.source,
         )
 
     def views(self, names: Iterable[str]) -> list[ToolSpecView]:
@@ -156,13 +162,28 @@ class ToolRegistry:
     def compare(self, transport: str, tools: list[DiscoveredTool]) -> DiscoveryReport:
         """Compare what a server advertises with the trusted catalog. Nothing is believed."""
         names = [tool.name for tool in tools]
+        served = [name for name in self._tools if not self.is_local(name)]
+        # A server offering a tool RECAP answers itself is noted; its version is never called.
+        shadowing = [
+            f"{name}: the server offers it, but RECAP answers it itself; the server's is never used"
+            for name in names
+            if self.is_local(name)
+        ]
         return DiscoveryReport(
             transport=transport,
             advertised=names,
-            usable=[name for name in names if name in self._tools],
+            usable=[name for name in names if name in served],
             unknown_tools=[name for name in names if name not in self._tools],
-            missing_tools=[name for name in self._tools if name not in names],
-            annotation_mismatches=[p for tool in tools for p in self._hint_mismatches(tool)],
+            missing_tools=[name for name in served if name not in names],
+            annotation_mismatches=[
+                *shadowing,
+                *(
+                    problem
+                    for tool in tools
+                    if not self.is_local(tool.name)
+                    for problem in self._hint_mismatches(tool)
+                ),
+            ],
         )
 
     def _hint_mismatches(self, tool: DiscoveredTool) -> list[str]:

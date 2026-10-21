@@ -1,9 +1,10 @@
 {
-  "run_id": "run-1c2c921054",
+  "run_id": "run-3b99d10bab",
   "scenario_id": "bad-deployment",
   "config": {
     "strategy": "adaptive",
     "use_rag": true,
+    "retrieval": null,
     "use_memory": true,
     "memory_write": true,
     "memory_read_partitions": [
@@ -21,7 +22,7 @@
     "label": ""
   },
   "incident": {
-    "incident_id": "inc-177c4a4179",
+    "incident_id": "inc-15e50da5f8",
     "scenario_id": "bad-deployment",
     "service": "checkout",
     "affected_services": [
@@ -49,42 +50,42 @@
   "history": [
     {
       "state": "CREATED",
-      "at": "2026-10-21T13:18:13.977720Z",
+      "at": "2026-10-21T14:14:00.653203Z",
       "reason": "incident created"
     },
     {
       "state": "RETRIEVING",
-      "at": "2026-10-21T13:18:14.402093Z",
+      "at": "2026-10-21T14:14:01.199646Z",
       "reason": "gather runbooks and past experience"
     },
     {
       "state": "INVESTIGATING",
-      "at": "2026-10-21T13:18:14.404232Z",
+      "at": "2026-10-21T14:14:01.201676Z",
       "reason": "investigate with read-only tools"
     },
     {
       "state": "PROPOSING",
-      "at": "2026-10-21T13:18:14.498426Z",
+      "at": "2026-10-21T14:14:01.360198Z",
       "reason": "diagnosis: checkout v2.4.1, deployed 12 min before the alert, may have introduced the errors"
     },
     {
       "state": "AWAITING_APPROVAL",
-      "at": "2026-10-21T13:18:14.500967Z",
+      "at": "2026-10-21T14:14:01.363685Z",
       "reason": "approval required for execute_rollback"
     },
     {
       "state": "MITIGATING",
-      "at": "2026-10-21T13:18:14.502177Z",
+      "at": "2026-10-21T14:14:01.365144Z",
       "reason": "execute_rollback on checkout"
     },
     {
       "state": "VERIFYING",
-      "at": "2026-10-21T13:18:14.508339Z",
+      "at": "2026-10-21T14:14:01.372948Z",
       "reason": "independent oracle checks recovery"
     },
     {
       "state": "RESOLVED",
-      "at": "2026-10-21T13:18:14.509510Z",
+      "at": "2026-10-21T14:14:01.374722Z",
       "reason": "oracle verified recovery (simulated environment)"
     }
   ],
@@ -152,13 +153,13 @@
     {
       "agent_role": "investigator",
       "evidence_ids": [
-        "ev-1c2c92-001",
-        "ev-1c2c92-002",
-        "ev-1c2c92-003",
-        "ev-1c2c92-004",
-        "ev-1c2c92-005",
-        "ev-1c2c92-006",
-        "ev-1c2c92-007"
+        "ev-3b99d1-001",
+        "ev-3b99d1-002",
+        "ev-3b99d1-003",
+        "ev-3b99d1-004",
+        "ev-3b99d1-005",
+        "ev-3b99d1-006",
+        "ev-3b99d1-007"
       ],
       "doc_refs": [
         "shop-architecture#service-level-objectives-1",
@@ -172,10 +173,10 @@
           "mechanism": "bad_deployment",
           "target_service": "checkout",
           "supporting_evidence_ids": [
-            "ev-1c2c92-004",
-            "ev-1c2c92-002",
-            "ev-1c2c92-003",
-            "ev-1c2c92-001"
+            "ev-3b99d1-004",
+            "ev-3b99d1-002",
+            "ev-3b99d1-003",
+            "ev-3b99d1-001"
           ],
           "contradicting_evidence_ids": [],
           "status": "proposed",
@@ -203,8 +204,8 @@
       },
       "summary": "Finished: every check in the playbook is done. Read-only calls by this agent: 7 (checkout). Hypotheses for the verifier: 1.",
       "error": null,
-      "started_at": "2026-10-21T13:18:14.405146Z",
-      "finished_at": "2026-10-21T13:18:14.497177Z",
+      "started_at": "2026-10-21T14:14:01.202554Z",
+      "finished_at": "2026-10-21T14:14:01.358624Z",
       "round": 1
     }
   ],
@@ -215,10 +216,10 @@
       "mechanism": "bad_deployment",
       "target_service": "checkout",
       "supporting_evidence_ids": [
-        "ev-1c2c92-004",
-        "ev-1c2c92-002",
-        "ev-1c2c92-003",
-        "ev-1c2c92-001"
+        "ev-3b99d1-004",
+        "ev-3b99d1-002",
+        "ev-3b99d1-003",
+        "ev-3b99d1-001"
       ],
       "contradicting_evidence_ids": [],
       "status": "supported",
@@ -237,10 +238,10 @@
           "mechanism": "bad_deployment",
           "target_service": "checkout",
           "supporting_evidence_ids": [
-            "ev-1c2c92-004",
-            "ev-1c2c92-002",
-            "ev-1c2c92-003",
-            "ev-1c2c92-001"
+            "ev-3b99d1-004",
+            "ev-3b99d1-002",
+            "ev-3b99d1-003",
+            "ev-3b99d1-001"
           ],
           "contradicting_evidence_ids": [],
           "status": "supported",
@@ -271,21 +272,21 @@
           "investigator"
         ],
         "basis_evidence_ids": [
-          "ev-1c2c92-004",
-          "ev-1c2c92-003",
-          "ev-1c2c92-002"
+          "ev-3b99d1-004",
+          "ev-3b99d1-003",
+          "ev-3b99d1-002"
         ]
       }
     ],
     "unknown_evidence_ids": [],
     "merged_evidence_ids": [
-      "ev-1c2c92-001",
-      "ev-1c2c92-002",
-      "ev-1c2c92-003",
-      "ev-1c2c92-004",
-      "ev-1c2c92-005",
-      "ev-1c2c92-006",
-      "ev-1c2c92-007"
+      "ev-3b99d1-001",
+      "ev-3b99d1-002",
+      "ev-3b99d1-003",
+      "ev-3b99d1-004",
+      "ev-3b99d1-005",
+      "ev-3b99d1-006",
+      "ev-3b99d1-007"
     ],
     "focus_services": [],
     "summary": "Best supported root cause: bad deployment on checkout (1 supported).",
@@ -310,7 +311,11 @@
       "score": 12.022455387416487,
       "rank": 1,
       "retriever": "bm25",
-      "reranker": "lexical-heading-boost"
+      "reranker": "lexical-heading-boost",
+      "signals": {
+        "bm25_rank": 1.0,
+        "bm25": 12.0225
+      }
     },
     {
       "chunk": {
@@ -330,7 +335,11 @@
       "score": 8.074069375816332,
       "rank": 2,
       "retriever": "bm25",
-      "reranker": "lexical-heading-boost"
+      "reranker": "lexical-heading-boost",
+      "signals": {
+        "bm25_rank": 2.0,
+        "bm25": 8.0741
+      }
     },
     {
       "chunk": {
@@ -350,7 +359,11 @@
       "score": 7.575642167510665,
       "rank": 3,
       "retriever": "bm25",
-      "reranker": "lexical-heading-boost"
+      "reranker": "lexical-heading-boost",
+      "signals": {
+        "bm25_rank": 3.0,
+        "bm25": 7.5756
+      }
     },
     {
       "chunk": {
@@ -370,7 +383,11 @@
       "score": 6.0449279582933295,
       "rank": 4,
       "retriever": "bm25",
-      "reranker": "lexical-heading-boost"
+      "reranker": "lexical-heading-boost",
+      "signals": {
+        "bm25_rank": 4.0,
+        "bm25": 5.8975
+      }
     },
     {
       "chunk": {
@@ -390,7 +407,11 @@
       "score": 12.224812468723727,
       "rank": 1,
       "retriever": "bm25",
-      "reranker": "lexical-heading-boost"
+      "reranker": "lexical-heading-boost",
+      "signals": {
+        "bm25_rank": 1.0,
+        "bm25": 10.4784
+      }
     },
     {
       "chunk": {
@@ -410,9 +431,22 @@
       "score": 8.530640500239272,
       "rank": 2,
       "retriever": "bm25",
-      "reranker": "lexical-heading-boost"
+      "reranker": "lexical-heading-boost",
+      "signals": {
+        "bm25_rank": 2.0,
+        "bm25": 7.8744
+      }
     }
   ],
+  "retrieval": {
+    "mode": "bm25",
+    "embedder": null,
+    "server": null,
+    "embedding_requests": 0,
+    "embedding_input_tokens": null,
+    "replayed_requests": 0,
+    "agent_searches": 0
+  },
   "memory_hits": [],
   "proposals": [
     {
@@ -423,11 +457,11 @@
       },
       "rationale": "The evidence supports: checkout v2.4.1, deployed 12 min before the alert, may have introduced the errors. Runbook runbook-bad-deployment#remediation-1 recommends execute_rollback for bad deployment. Roll checkout back to v2.4.0 (the version the propose_rollback dry run names).",
       "evidence_ids": [
-        "ev-1c2c92-004",
-        "ev-1c2c92-002",
-        "ev-1c2c92-003",
-        "ev-1c2c92-001",
-        "ev-1c2c92-007"
+        "ev-3b99d1-004",
+        "ev-3b99d1-002",
+        "ev-3b99d1-003",
+        "ev-3b99d1-001",
+        "ev-3b99d1-007"
       ],
       "expected_health_change": "error rate on checkout back under 5% and all replicas ready",
       "rollback_hint": "redeploy v2.4.1 after a fix",
@@ -437,9 +471,9 @@
       "citations": [
         "runbook-bad-deployment#remediation-1"
       ],
-      "proposal_id": "prop-a9e706538e",
-      "incident_id": "inc-177c4a4179",
-      "created_at": "2026-10-21T13:18:14.500067Z"
+      "proposal_id": "prop-8dcc9150e1",
+      "incident_id": "inc-15e50da5f8",
+      "created_at": "2026-10-21T14:14:01.362381Z"
     }
   ],
   "safety_decisions": [
@@ -466,22 +500,22 @@
       "risk": "reversible_write",
       "caller": "controller",
       "policy_version": "policy-v1",
-      "decided_at": "2026-10-21T13:18:14.500347Z"
+      "decided_at": "2026-10-21T14:14:01.362776Z"
     }
   ],
   "pending_approval": null,
   "approvals": [
     {
-      "approval_id": "apr-c9e9d3074e",
-      "incident_id": "inc-177c4a4179",
-      "proposal_id": "prop-a9e706538e",
-      "proposal_digest": "f5f60838aed6d4f346c5b00f64520d880aa5151bc8d30b3e8c16e0c4e9cc2152",
+      "approval_id": "apr-3ae24eeb3d",
+      "incident_id": "inc-15e50da5f8",
+      "proposal_id": "prop-8dcc9150e1",
+      "proposal_digest": "ff7ccfa61cab5e9103e8232ea15705721a4177f3c5953f945da27cf4ee7f852a",
       "scope": "single_action",
       "decision": "approved",
       "actor": "auto-approver[simulation]",
-      "decided_at": "2026-10-21T13:18:14.501769Z",
-      "expires_at": "2026-10-21T13:33:14.501255Z",
-      "consumed_at": "2026-10-21T13:18:14.503527Z"
+      "decided_at": "2026-10-21T14:14:01.364694Z",
+      "expires_at": "2026-10-21T14:29:01.364119Z",
+      "consumed_at": "2026-10-21T14:14:01.367001Z"
     }
   ],
   "actions": [
@@ -492,7 +526,7 @@
         "to_version": "v2.4.0"
       },
       "result": "recovered",
-      "at": "2026-10-21T13:18:14.509501Z",
+      "at": "2026-10-21T14:14:01.374713Z",
       "note": ""
     }
   ],
@@ -586,7 +620,7 @@
       "payment"
     ]
   },
-  "episode_id": "ep-195da63178",
+  "episode_id": "ep-7ebbc47228",
   "usage": {
     "steps": 9,
     "tool_calls": 8,
@@ -604,9 +638,9 @@
     "recap": "0.3.0",
     "schema": "recap.v1",
     "prompt_version": "prompts-v3.2",
-    "config_hash": "af64b2220730a2bc",
-    "fixture_hash": "39947d2d73461692",
-    "code_version": "3a58ac5291f3+dirty",
+    "config_hash": "2590a3ea0ee17de0",
+    "fixture_hash": "41f6ad73b242108d",
+    "code_version": "8eb0c38e76dd+dirty",
     "policy_version": "policy-v1",
     "router": "rules-router-v1",
     "verifier": "evidence-rule-verifier-v1",
@@ -617,6 +651,6 @@
     "seed": 11,
     "transport": "mcp-stdio"
   },
-  "created_at": "2026-10-21T13:18:13.978061Z",
-  "updated_at": "2026-10-21T13:18:14.570604Z"
+  "created_at": "2026-10-21T14:14:00.653616Z",
+  "updated_at": "2026-10-21T14:14:01.443469Z"
 }

@@ -5,10 +5,10 @@
     "mechanism": "bad_deployment",
     "target_service": "checkout",
     "supporting_evidence_ids": [
-      "ev-1c2c92-004",
-      "ev-1c2c92-002",
-      "ev-1c2c92-003",
-      "ev-1c2c92-001"
+      "ev-3b99d1-004",
+      "ev-3b99d1-002",
+      "ev-3b99d1-003",
+      "ev-3b99d1-001"
     ],
     "contradicting_evidence_ids": [],
     "status": "supported",
@@ -27,10 +27,10 @@
         "mechanism": "bad_deployment",
         "target_service": "checkout",
         "supporting_evidence_ids": [
-          "ev-1c2c92-004",
-          "ev-1c2c92-002",
-          "ev-1c2c92-003",
-          "ev-1c2c92-001"
+          "ev-3b99d1-004",
+          "ev-3b99d1-002",
+          "ev-3b99d1-003",
+          "ev-3b99d1-001"
         ],
         "contradicting_evidence_ids": [],
         "status": "supported",
@@ -61,21 +61,21 @@
         "investigator"
       ],
       "basis_evidence_ids": [
-        "ev-1c2c92-004",
-        "ev-1c2c92-003",
-        "ev-1c2c92-002"
+        "ev-3b99d1-004",
+        "ev-3b99d1-003",
+        "ev-3b99d1-002"
       ]
     }
   ],
   "unknown_evidence_ids": [],
   "merged_evidence_ids": [
-    "ev-1c2c92-001",
-    "ev-1c2c92-002",
-    "ev-1c2c92-003",
-    "ev-1c2c92-004",
-    "ev-1c2c92-005",
-    "ev-1c2c92-006",
-    "ev-1c2c92-007"
+    "ev-3b99d1-001",
+    "ev-3b99d1-002",
+    "ev-3b99d1-003",
+    "ev-3b99d1-004",
+    "ev-3b99d1-005",
+    "ev-3b99d1-006",
+    "ev-3b99d1-007"
   ],
   "focus_services": [],
   "summary": "Best supported root cause: bad deployment on checkout (1 supported).",

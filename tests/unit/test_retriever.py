@@ -12,7 +12,12 @@ from recap.core.errors import ConfigError
 from recap.core.interfaces import Reranker, RetrievalIndex
 from recap.core.models import DocChunk, RetrievedChunk
 from recap.knowledge.bm25 import BM25Index
-from recap.knowledge.embeddings import INSTALL_HINT, cosine, reciprocal_rank_fusion
+from recap.knowledge.embeddings import (
+    INSTALL_HINT,
+    SentenceTransformerEmbedder,
+    cosine,
+    reciprocal_rank_fusion,
+)
 from recap.knowledge.hints import ActionHint, parse_action_hints
 from recap.knowledge.ingest import load_documents
 from recap.knowledge.retriever import KnowledgeRetriever, LexicalReranker
@@ -42,17 +47,12 @@ def _result(chunk_id: str, heading: str, title: str, score: float, rank: int) ->
     )
 
 
-class KeywordEmbedder:
-    """Fake embedder: one dimension per concept, so 'heap' and 'memory' land close together."""
+CONCEPTS = (("memory", "heap", "oom"), ("release", "deploy", "rollback"), ("upstream",))
 
-    name = "fake-keyword-embedder"
-    concepts = (("memory", "heap", "oom"), ("release", "deploy", "rollback"), ("upstream",))
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        return [
-            [float(any(word in text.lower() for word in words)) for words in self.concepts]
-            for text in texts
-        ]
+def keyword_vector(text: str) -> list[float]:
+    """Fake embedding: one dimension per concept, so 'heap' and 'memory' land close together."""
+    return [float(any(word in text.lower() for word in words)) for words in CONCEPTS]
 
 
 # --- default BM25 retriever over the real runbooks ----------------------------------------
@@ -182,14 +182,21 @@ def test_hybrid_retrieval_finds_a_match_that_bm25_misses() -> None:
 
     assert KnowledgeRetriever(chunks).search(query) == []
 
-    hybrid = KnowledgeRetriever(chunks, embedder=KeywordEmbedder())
-    results = hybrid.search(query)
+    vectors = {chunk.chunk_id: keyword_vector(f"{chunk.heading} {chunk.text}") for chunk in chunks}
+    hybrid = KnowledgeRetriever(chunks, vectors=vectors)
+    assert hybrid.hybrid_ready and hybrid.name == "hybrid-bm25-embeddings"
+    assert hybrid.search(query) == []  # without the query's vector it is BM25 alone
+    results = hybrid.search(query, query_vector=keyword_vector(query))
 
-    assert hybrid.name == "hybrid-bm25-embeddings"
     assert [(r.chunk.chunk_id, r.retriever) for r in results] == [
         ("c#s-1", "hybrid-bm25-embeddings")
     ]
     assert results[0].score == pytest.approx(1 / 61)  # RRF: rank 1 in the dense list only
+    assert results[0].signals == {
+        "dense_rank": 1,
+        "cosine": 1.0,
+        "rrf": pytest.approx(1 / 61, abs=1e-6),
+    }
 
 
 def test_reciprocal_rank_fusion_rewards_agreement_and_breaks_ties_by_id() -> None:
@@ -213,7 +220,7 @@ def test_cosine_similarity() -> None:
         cosine([1.0], [1.0, 2.0])
 
 
-def test_enabling_embeddings_without_the_package_is_a_config_error(
+def test_the_sentence_transformers_embedder_without_its_package_is_a_config_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # A None entry in sys.modules makes `import sentence_transformers` fail, as if the
@@ -221,4 +228,4 @@ def test_enabling_embeddings_without_the_package_is_a_config_error(
     monkeypatch.setitem(sys.modules, "sentence_transformers", None)
 
     with pytest.raises(ConfigError, match=re.escape(INSTALL_HINT)):
-        KnowledgeRetriever.from_directory(KNOWLEDGE_DIR, root=REPO_ROOT, enable_embeddings=True)
+        SentenceTransformerEmbedder()

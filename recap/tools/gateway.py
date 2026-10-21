@@ -18,6 +18,13 @@ Two deliberately separate paths:
 Workers only ever get a `ReadOnlyTools` handle, which cannot express a write. What the
 server advertises (names, descriptions, annotations) is compared with the trusted registry
 and reported, but it never decides anything.
+
+A few read tools are answered by RECAP itself (`source: local` in configs/policies.yaml,
+e.g. search_runbooks over the runbook index). They take the same read path (policy,
+argument checks, timeout, redaction, bounds, injection flags, audit), but a handler the
+controller registers answers them instead of the MCP server, they do not use the
+environment's tool-call budget (each handler keeps its own), and their results are
+recorded as DOC evidence, which the verifier never counts as proof.
 """
 
 from __future__ import annotations
@@ -26,12 +33,12 @@ import asyncio
 import json
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from recap.context.evidence import EvidenceRegistry, tool_source_ref
 from recap.core.config import PolicyLimits
-from recap.core.errors import ApprovalError, ConfigError
+from recap.core.errors import ApprovalError, BudgetExhausted, ConfigError, ReplayMismatch
 from recap.core.ids import new_id
 from recap.core.interfaces import SafetyPolicy, ToolTransport
 from recap.core.models import (
@@ -68,6 +75,9 @@ MAX_ERROR_CHARS = 500
 # Chronological lists (oldest first) keep their LAST items, i.e. the most recent ones.
 # Every other list (deployments, events, services: newest first) keeps its FIRST items.
 _CHRONOLOGICAL_LISTS = frozenset({"lines", "points"})
+
+# Answers one local read tool: (validated arguments, the calling agent) -> its raw result.
+LocalTool = Callable[[dict[str, Any], AgentRole], Awaitable[RawToolResult]]
 
 
 class RemediationLocks:
@@ -143,6 +153,8 @@ class ToolGateway:
         locks: RemediationLocks | None = None,
         redact: Callable[[Any], Any] | None = None,
         capabilities: CapabilityIssuer | None = None,
+        local_tools: Mapping[str, LocalTool] | None = None,
+        local_timeout_seconds: float | None = None,
     ) -> None:
         self.registry = registry
         self.results: list[ToolResult] = []  # every call in this run, denied ones included
@@ -165,6 +177,10 @@ class ToolGateway:
         # environment refuses it (fail closed), so a gateway built without one cannot write.
         self._capabilities = capabilities
         self.last_write: ToolResult | None = None  # the outcome of the latest write sent
+        # Handlers for the tools RECAP answers itself, and how long one may take (a local
+        # model call, e.g. embedding a query, can take longer than an MCP read).
+        self._local = dict(local_tools or {})
+        self._local_timeout = local_timeout_seconds or limits.tool_timeout_seconds
 
     async def discover(self) -> DiscoveryReport:
         """Ask the server what it offers and compare that with the trusted registry."""
@@ -190,7 +206,8 @@ class ToolGateway:
             return self._denied(invocation_id, decision)
 
         clean_args, _ = self.registry.validate_args(tool_name, args)
-        self._budget.reserve_tool_call()  # raises BudgetExhausted before anything is sent
+        if not self.registry.is_local(tool_name):  # a local tool's handler has its own budget
+            self._budget.reserve_tool_call()  # raises BudgetExhausted before anything is sent
         request = self._tool_request(invocation_id, tool_name, clean_args, caller)
         # Key names are a contract with the dashboard: it reads invocation_id, tool, caller
         # and args, and pairs tool.call with tool.result by invocation_id. Never rename them.
@@ -422,7 +439,10 @@ class ToolGateway:
     ) -> tuple[ToolResult, list[str]]:
         """Send one call; a successful output is redacted, bounded, flagged and kept as evidence."""
         started = time.perf_counter()
-        raw = await self._send(request.tool_name, {**request.args, **(transport_extra or {})})
+        if self.registry.is_local(request.tool_name):
+            raw = await self._send_local(request)
+        else:
+            raw = await self._send(request.tool_name, {**request.args, **(transport_extra or {})})
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
         identity = {
             "invocation_id": request.invocation_id,
@@ -434,6 +454,7 @@ class ToolGateway:
             error = self._redact(raw.error or raw.text or "tool call failed")[:MAX_ERROR_CHARS]
             return ToolResult(**identity, ok=False, error=error, duration_ms=duration_ms), []
         output, evidence, truncated = self._record(request, raw)
+        local = self.registry.is_local(request.tool_name)
         result = ToolResult(
             **identity,
             ok=True,
@@ -441,6 +462,7 @@ class ToolGateway:
             duration_ms=duration_ms,
             evidence_id=evidence.id,
             truncated=truncated,
+            docs=raw.docs if local else [],  # documents only ever come from RECAP's own index
         )
         return result, list(evidence.flags)
 
@@ -455,6 +477,26 @@ class ToolGateway:
         except Exception as exc:  # a broken transport or server must not crash the run
             return RawToolResult(ok=False, error=f"transport error: {type(exc).__name__}: {exc}")
 
+    async def _send_local(self, request: ToolRequest) -> RawToolResult:
+        """Answer a local read tool with its handler, under the local timeout."""
+        handler = self._local.get(request.tool_name)
+        if handler is None:
+            error = f"{request.tool_name} is not available in this run"
+            return RawToolResult(ok=False, error=error)
+        timeout = self._local_timeout
+        try:
+            return await asyncio.wait_for(handler(dict(request.args), request.caller), timeout)
+        except TimeoutError:
+            error = f"{request.tool_name} timed out after {timeout:g}s"
+            return RawToolResult(ok=False, error=error)
+        except (BudgetExhausted, ReplayMismatch):
+            # The run's own limits, or a replay asked for something it never recorded: these
+            # stop the whole run (as they do for a model call), not just this one call.
+            raise
+        except Exception as exc:  # anything else fails this call only, like a broken server
+            error = f"{request.tool_name} failed: {type(exc).__name__}: {exc}"
+            return RawToolResult(ok=False, error=error)
+
     def _record(
         self, request: ToolRequest, raw: RawToolResult
     ) -> tuple[dict[str, Any], Evidence, bool]:
@@ -465,9 +507,14 @@ class ToolGateway:
         content, text_cut = _render(data, self._limits.max_output_chars)
         truncated = lists_cut or text_cut
         flags = injection_flags(content) + ([TRUNCATED_FLAG] if truncated else [])
+        local = self.registry.is_local(request.tool_name)
         evidence = self._evidence.add(
-            source_type=SourceType.TOOL,
-            source_ref=tool_source_ref(request.tool_name, request.args),
+            # A local tool reads RECAP's own reference data (runbooks): DOC evidence, which
+            # the verifier never counts as a live observation.
+            source_type=SourceType.DOC if local else SourceType.TOOL,
+            source_ref=tool_source_ref(
+                request.tool_name, request.args, scheme="local" if local else "mcp"
+            ),
             content=content,
             data=data,
             tool_name=request.tool_name,

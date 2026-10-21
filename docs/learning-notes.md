@@ -4691,3 +4691,69 @@ by evidence: a contradicted claim loses, a claim must cite the evidence its rule
 the deepest root cause wins. It never votes and never breaks ties by how much a claim
 cites. When two different causes are equally supported, it asks one targeted follow-up
 question, and if that doesn't settle it, a human decides. I'd rather hand over than guess."
+
+### M3, step 3 — Meaning-based runbook search, and agents that look things up
+
+**What changed, in one paragraph.** RECAP could only find a runbook by its words (BM25), and
+only the controller searched. Now a local embedding model (`nomic-embed-text`, through Ollama
+on this machine) turns a query into a vector; the runbook sections' vectors were computed
+once and stored in the repository; a hybrid search ranks sections both by words and by
+meaning and fuses the two rankings. Agents also got a `search_runbooks` tool, so a
+specialist can look something up in the middle of its investigation, and every section it
+reads becomes one of its citations.
+
+**Why each change matters.**
+
+| Piece | Problem it solves | Read |
+|---|---|---|
+| `OllamaEmbedder` | "Pods keep getting killed" shares no word with "OOMKilled"; a meaning-based ranking can still connect them | `recap/knowledge/ollama_embedder.py`, [ADR 0022](decisions/0022-hybrid-retrieval-with-a-local-embedder-and-agent-search.md) |
+| The model transport, reused | A run that embeds must still replay offline in CI | `create_embedder` in `recap/providers/factory.py` |
+| Stored chunk vectors | Embedding every runbook at each start is slow and needs the model in CI | `recap/knowledge/vectors.py`, `scripts/build_vector_index.py` |
+| A cutoff before fusion | "How do I bake sourdough bread" must not pull in the "closest" runbook | `min_dense_similarity` in `configs/retrieval.yaml` |
+| Ranking signals | A reader must see why a section ranked where it did | `RetrievedChunk.signals` |
+| `search_runbooks` (local) | Agents could not ask for knowledge; the environment must not answer that question | `source: local` in `configs/policies.yaml`, `ToolGateway._send_local` |
+| Hashed free text | A model's query is the first free text that could land in trusted prompt text | `tool_source_ref`, `call_line` |
+
+**The idea most worth understanding: measure before you switch the default.** Hybrid
+search sounds strictly better, so it would be easy to turn it on everywhere. Measured on
+RECAP's own queries, it is not: it found the right runbook for questions written in other
+words, but on the alert queries (lists of exact symptom words) BM25 did slightly better (9
+of 15 against 7). Reciprocal rank fusion rewards sections that BOTH rankings found, so a
+section only the meaning-based ranking finds can lose to weak keyword matches. So BM25
+stays the default, hybrid is a per-run choice, and the weakness is pinned by a test instead
+of hidden by tuning the fusion until seven queries look good.
+
+**How the replay still works.** Every request to the embedding model goes through the same
+transport as the chat model's requests. In a recorded run, the `/api/embed` exchanges land
+in the same recording (trimmed to the vectors, the model name and the token count); in a
+replay, the same recording answers them. The runbook vectors themselves come from the
+committed file, keyed by a hash of exactly what was embedded, so a changed runbook can never
+be searched with a stale vector: the run fails and says to rebuild the file.
+
+**Inputs → outputs.**
+
+- `OllamaEmbedder.embed_query(text)` → one 768-number vector (`search_query: ` prefix);
+  `embed_documents(texts)` → one per text (`search_document: ` prefix).
+- `VectorIndex.build(texts, embedder, ...)` / `.load(path)` / `.vector(text)`.
+- `KnowledgeRetriever.search(query, k, query_vector=None)` → ranked `RetrievedChunk`s with
+  signals; BM25 alone without a vector.
+- `search_runbooks(query, k)` → a receipt (DOC evidence) plus sections for the calling agent.
+- `RunRecord.retrieval` → mode, embedder, its weights, embedding requests and tokens.
+
+**Reproduce.**
+
+```bash
+.venv/bin/python scripts/build_vector_index.py --check   # is the stored index current?
+.venv/bin/python -m pytest tests/unit/test_hybrid_retrieval.py tests/e2e/test_runbook_search.py
+```
+
+**Interview version.** "I added meaning-based retrieval with a small local embedding model,
+but I treated it as a hypothesis, not an upgrade. I stored the runbook vectors once and
+captured real query vectors, so the tests check the ranking offline. Hybrid search helped on
+paraphrased questions but did slightly worse on the alert text itself, because rank fusion
+favours documents both rankings found. So I kept keyword search as the default and made
+hybrid a per-run option, mostly useful for the agents' own searches. The agents' search
+tool goes through the same safety gateway as every other tool, has its own budget, and the
+environment can't answer it. And because a search query is free text a model wrote, it
+never appears in the trusted part of a prompt: it's hashed in references and shown as data
+in the history."

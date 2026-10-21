@@ -27,6 +27,7 @@ from typing import Literal
 
 from pydantic import Field
 
+from recap.context.evidence import is_plain_value
 from recap.core.ids import canonical_json
 from recap.core.models import (
     ActionRecord,
@@ -269,17 +270,22 @@ def context_section(pack: ContextPack) -> str:
 def call_line(number: int, call: ToolCallRecord) -> str:
     """One earlier call. A successful call ran with arguments the gateway validated."""
     summary = f"{call.tool_name} {canonical_json(call.args)}"
-    if call.ok:
+    if call.ok and all(is_plain_value(value) for value in call.args.values()):
         evidence = f", evidence {call.evidence_id}" if call.evidence_id else ""
         return f"{number}. {summary} -> ok{evidence}"
+    if call.ok:  # free text a model wrote (a search query) stays data, even when valid
+        evidence = f" -> ok, evidence {call.evidence_id}" if call.evidence_id else " -> ok"
+        return f"{number}. call:\n{untrusted(f'call-{number}', 'call', summary)}{evidence}"
     # A failed call has unvalidated arguments and error text from the tool server.
     failure = f"{summary} failed: {call.error or 'unknown error'}"
     return f"{number}. failed call:\n{untrusted(f'call-{number}', 'failed_call', failure)}"
 
 
 def tool_refs(observed_refs: Sequence[str]) -> list[str]:
-    # Only tool calls can be repeated, so list just the "mcp:" references, once each.
-    return [f"- {ref}" for ref in dict.fromkeys(observed_refs) if ref.startswith("mcp:")]
+    # Only tool calls can be repeated, so list just their references, once each. A ref
+    # never holds free text (tool_source_ref hashes it), so it is safe as trusted text.
+    calls = ("mcp:", "local:")
+    return [f"- {ref}" for ref in dict.fromkeys(observed_refs) if ref.startswith(calls)]
 
 
 def failed_line(number: int, action: ActionRecord) -> str:

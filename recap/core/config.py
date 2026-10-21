@@ -100,6 +100,15 @@ class ToolPolicy(Contract):
     risk: ToolRisk
     description: str = ""
     args: dict[str, ArgRule] = Field(default_factory=dict)
+    # mcp: served by the environment's MCP server; local: answered by RECAP itself (a read
+    # over its own data, such as the runbook index). A server can never serve a local tool.
+    source: Literal["mcp", "local"] = "mcp"
+
+    @model_validator(mode="after")
+    def _local_tools_only_read(self) -> ToolPolicy:
+        if self.source == "local" and self.risk != ToolRisk.READ:
+            raise ValueError("a local tool must be a read tool")
+        return self
 
 
 class PolicyLimits(Contract):
@@ -221,8 +230,39 @@ class ProvidersConfig(Contract):
     providers: dict[str, ProviderSettings]
 
 
+class EmbedderSettings(Contract):
+    """The local embedding model behind hybrid retrieval (configs/retrieval.yaml)."""
+
+    api: Literal["ollama"] = "ollama"
+    base_url: str = "http://127.0.0.1:11434"
+    model: str = "nomic-embed-text"
+    dimensions: int = Field(default=768, gt=0)
+    query_prefix: str = "search_query: "
+    document_prefix: str = "search_document: "
+    request_timeout_seconds: float = Field(default=60.0, gt=0)
+    vectors: str = "fixtures/knowledge/vectors/nomic-embed-text.json"  # repo-relative
+
+
+class AgentSearchSettings(Contract):
+    """The search_runbooks tool's own budget."""
+
+    max_per_run: int = Field(default=6, ge=0)
+    k: int = Field(default=3, ge=1, le=8)
+
+
+class RetrievalSettings(Contract):
+    """configs/retrieval.yaml."""
+
+    mode: Literal["bm25", "hybrid"] = "bm25"
+    k: int = Field(default=4, ge=1)
+    candidate_pool: int = Field(default=20, ge=1)
+    min_dense_similarity: float = Field(default=0.55, ge=-1, le=1)
+    embedder: EmbedderSettings = Field(default_factory=EmbedderSettings)
+    agent_search: AgentSearchSettings = Field(default_factory=AgentSearchSettings)
+
+
 class Features(Contract):
-    embeddings: bool = False
+    embeddings: bool = False  # RECAP_ENABLE_EMBEDDINGS=1: hybrid retrieval by default
     otel: bool = False
 
 
@@ -248,6 +288,7 @@ class Settings(Contract):
     agents: dict[AgentRole, AgentSpec]
     policies: PolicySettings
     providers: ProvidersConfig
+    retrieval: RetrievalSettings = Field(default_factory=RetrievalSettings)
     features: Features = Field(default_factory=Features)
     config_hash: str
 
@@ -285,7 +326,14 @@ def load_settings(root: Path | None = None, *, data_dir: Path | None = None) -> 
     """Read configs/*.yaml under `root` (the repo root by default) into `Settings`."""
     root = (root or REPO_ROOT).resolve()
     config_dir = root / "configs"
-    names = ["environment.yaml", "budget.yaml", "agents.yaml", "policies.yaml", "providers.yaml"]
+    names = [
+        "environment.yaml",
+        "budget.yaml",
+        "agents.yaml",
+        "policies.yaml",
+        "providers.yaml",
+        "retrieval.yaml",
+    ]
     raw = {name: _read_yaml(config_dir / name) for name in names}
     config_hash = sha256_hex("".join((config_dir / n).read_text(encoding="utf-8") for n in names))[
         :16
@@ -331,6 +379,11 @@ def load_settings(root: Path | None = None, *, data_dir: Path | None = None) -> 
     policies = PolicySettings.model_validate(raw["policies.yaml"])
     _check_agents_are_read_only(agents, policies)
 
+    retrieval = RetrievalSettings.model_validate(raw["retrieval.yaml"].get("retrieval", {}))
+    embeddings = _env_flag("RECAP_ENABLE_EMBEDDINGS")
+    if embeddings:  # the owner's switch: hybrid retrieval by default (a run can still choose)
+        retrieval = retrieval.model_copy(update={"mode": "hybrid"})
+
     return Settings(
         paths=paths,
         environment=environment,
@@ -338,9 +391,8 @@ def load_settings(root: Path | None = None, *, data_dir: Path | None = None) -> 
         agents=agents,
         policies=policies,
         providers=providers,
-        features=Features(
-            embeddings=_env_flag("RECAP_ENABLE_EMBEDDINGS"), otel=_env_flag("RECAP_ENABLE_OTEL")
-        ),
+        retrieval=retrieval,
+        features=Features(embeddings=embeddings, otel=_env_flag("RECAP_ENABLE_OTEL")),
         config_hash=config_hash,
     )
 

@@ -78,7 +78,9 @@ from recap.providers.prompts import (
 
 # Recorded on every run that uses this protocol. Bump it whenever the text, the schemas or
 # the parsing rules change, so a trace always says which protocol produced a decision.
-PROMPT_VERSION = "prompts-v4.3"  # v4.3 (M3): role contracts, independent views, findings
+# v4.3 (M3): role contracts, independent views, findings, the verifier's open questions.
+# v4.4: the search_runbooks tool; free text a model wrote is shown only as data.
+PROMPT_VERSION = "prompts-v4.4"
 
 Mode = Literal["json", "tools"]
 Message = dict[str, Any]  # {"role": "system" | "user", "content": "..."}
@@ -812,7 +814,7 @@ def _tool_calls(
         if missing:
             notes.append(f"dropped a {name} call without its required {', '.join(missing)}")
             continue
-        ref = tool_source_ref(name, args)
+        ref = tool_source_ref(name, args, scheme=tool.source)
         if ref in seen:
             notes.append(f"dropped a repeat of {ref}")
             continue

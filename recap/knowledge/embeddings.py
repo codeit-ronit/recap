@@ -1,17 +1,24 @@
-"""Optional dense embeddings for hybrid retrieval (off by default).
+"""Dense embeddings for hybrid retrieval: the pluggable interface and the math around it.
 
 BM25 only matches exact words, so a query about "heap exhaustion" misses a runbook that
 says "out of memory". An embedding model maps texts to vectors whose closeness reflects
-meaning, which closes that gap. `KnowledgeRetriever` can fuse such a dense ranking with
-the BM25 ranking using reciprocal rank fusion (RRF).
+meaning, which closes that gap. `KnowledgeRetriever` fuses such a dense ranking with the
+BM25 ranking using reciprocal rank fusion (RRF).
 
-This is a feature flag (RECAP_ENABLE_EMBEDDINGS / `enable_embeddings=True`). The default
-demo never imports sentence-transformers and never downloads a model. When the flag is on,
-the model is fetched from the Hugging Face hub on first use and then runs on CPU.
+Any model with the `Embedder` shape can plug in:
+
+    OllamaEmbedder              (ollama_embedder.py) nomic-embed-text on this machine, through
+                                the same recorded, replayable HTTP transport as the models
+    SentenceTransformerEmbedder an optional CPU model (needs the `embeddings` extra)
+
+Documents and queries are embedded separately because some models (nomic-embed-text among
+them) were trained with a task prefix on each side ("search_document: ...",
+"search_query: ..."); a model that needs none just ignores the difference.
 """
 
 from __future__ import annotations
 
+import asyncio
 import math
 from collections.abc import Sequence
 from typing import Protocol
@@ -23,15 +30,17 @@ INSTALL_HINT = "pip install -e '.[embeddings]'"
 
 
 class Embedder(Protocol):
-    """Turns texts into dense vectors. Any model with this shape can plug in."""
+    """Turns texts into dense vectors. `name` identifies the model (it keys the vector cache)."""
 
     name: str
 
-    def embed(self, texts: list[str]) -> list[list[float]]: ...
+    async def embed_documents(self, texts: list[str]) -> list[list[float]]: ...
+
+    async def embed_query(self, text: str) -> list[float]: ...
 
 
 class SentenceTransformerEmbedder:
-    """Embedder backed by the optional sentence-transformers package (CPU)."""
+    """Embedder backed by the optional sentence-transformers package (CPU, no prefixes)."""
 
     def __init__(self, model_name: str = DEFAULT_MODEL) -> None:
         # Imported here, never at module import, so RECAP runs without the package.
@@ -39,13 +48,20 @@ class SentenceTransformerEmbedder:
             from sentence_transformers import SentenceTransformer
         except ImportError as exc:
             raise ConfigError(
-                f"hybrid retrieval needs the optional embeddings extra: {INSTALL_HINT}"
+                f"hybrid retrieval with sentence-transformers needs the optional extra: "
+                f"{INSTALL_HINT}"
             ) from exc
-        self.name = model_name
+        self.name = f"sentence-transformers:{model_name}"
         self._model = SentenceTransformer(model_name)
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        """One vector per text, as plain Python floats."""
+    async def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        """One vector per text (the model runs in a worker thread, off the event loop)."""
+        return await asyncio.to_thread(self._encode, texts)
+
+    async def embed_query(self, text: str) -> list[float]:
+        return (await asyncio.to_thread(self._encode, [text]))[0]
+
+    def _encode(self, texts: list[str]) -> list[list[float]]:
         vectors = self._model.encode(texts, show_progress_bar=False)
         return [[float(value) for value in vector] for vector in vectors]
 

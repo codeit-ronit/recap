@@ -60,6 +60,7 @@ from recap.core.models import (
     SCHEMA_VERSION,
     ActionRecord,
     AgentFinding,
+    AgentRole,
     Approval,
     EnvironmentInfo,
     Evidence,
@@ -69,6 +70,8 @@ from recap.core.models import (
     MitigationProposal,
     OracleProbe,
     ProposalRequest,
+    RawToolResult,
+    RetrievalInfo,
     RetrievedChunk,
     RunBudget,
     RunConfig,
@@ -82,6 +85,7 @@ from recap.core.models import (
 from recap.harness.budget import BudgetTracker
 from recap.harness.loop import AgentHarness
 from recap.harness.store import RunStore
+from recap.knowledge.embeddings import Embedder
 from recap.knowledge.hints import parse_action_hints
 from recap.memory.consolidation import Consolidator
 from recap.memory.similarity import MemoryQuery
@@ -134,6 +138,9 @@ class ControllerDeps:
     code_version: str = ""  # the git commit RECAP runs from ("+dirty" with uncommitted changes)
     # (environment, max_error_rate) -> oracle. A benchmark adapter can bring its own judge.
     oracle_factory: Callable[[TargetEnvironment, float], RecoveryOracle] = EnvironmentHealthOracle
+    # The run's embedder for hybrid retrieval, built around the run's provider so its
+    # requests are recorded (or replayed) with the model's. None: hybrid is unavailable.
+    embedder_factory: Callable[[LLMProvider], Embedder] | None = None
 
 
 class IncidentController:
@@ -179,6 +186,10 @@ class IncidentController:
         self.remediated: dict[str, datetime] = {}
         # The fix being sent right now, so a cancellation can record what happened to it.
         self.mitigating: MitigationProposal | None = None
+        # Hybrid retrieval: the run's embedder (built on first use) and what it did.
+        self.embedder: Embedder | None = None
+        self.retrieval = RetrievalInfo(mode="bm25")
+        self._last_embed_call: dict[str, Any] | None = None  # for the next retrieval event
 
     # ==================================================================================
     # Entry point
@@ -227,6 +238,8 @@ class IncidentController:
             provider_info=self.provider.info,
             versions=self._versions(seed),
         )
+        self.retrieval = RetrievalInfo(mode=self.config.retrieval or self.settings.retrieval.mode)
+        self.record.retrieval = self.retrieval
         self.tracer = Tracer(
             self.run_id, sinks=self.deps.trace_sinks(self.run_id), redact=self.deps.redactor
         )
@@ -283,17 +296,11 @@ class IncidentController:
         knowledge = self.deps.knowledge
         if self.config.use_rag and knowledge is not None:
             query = " ".join([incident.service, *incident.symptoms])
-            docs = knowledge.search(query, k=4)
-            self.record.retrieved_docs = docs
-            self.tracer.emit(
-                TraceCategory.RETRIEVAL,
-                {
-                    "stage": "initial",
-                    "reason": "look up runbooks relevant to the alert",
-                    "query": query,
-                    "retriever": knowledge.name,
-                    "results": [_doc_ref(d) for d in docs],
-                },
+            self.record.retrieved_docs = await self._search(
+                query,
+                self.settings.retrieval.k,
+                stage="initial",
+                reason="look up runbooks relevant to the alert",
             )
         else:
             self.tracer.emit(
@@ -522,7 +529,7 @@ class IncidentController:
         """PROPOSING: draft a fix, then pass it through the policy and the evidence check."""
         best = report.best
         assert best is not None
-        self._maybe_retrieve_runbook(best)
+        await self._maybe_retrieve_runbook(best)
 
         target = best.target_service
         priority = [*best.supporting_evidence_ids, *_contradicting_ids(report)]
@@ -812,6 +819,8 @@ class IncidentController:
             safety_enabled=self.config.safety_enabled,
             redact=self.deps.redactor,
             capabilities=self.capabilities,
+            local_tools={"search_runbooks": self._search_runbooks},
+            local_timeout_seconds=self.settings.retrieval.embedder.request_timeout_seconds,
         )
         self.record.versions["transport"] = getattr(transport, "transport_name", "unknown")
         self.harness = AgentHarness(
@@ -876,7 +885,7 @@ class IncidentController:
             },
         )
 
-    def _maybe_retrieve_runbook(self, best: Hypothesis) -> None:
+    async def _maybe_retrieve_runbook(self, best: Hypothesis) -> None:
         """Agentic RAG: retrieve a remediation runbook only if none for this mechanism is loaded."""
         knowledge = self.deps.knowledge
         if not self.config.use_rag or knowledge is None:
@@ -899,19 +908,117 @@ class IncidentController:
             return
         query = f"{mechanism.replace('_', ' ')} remediation recommended action runbook"
         known = {d.chunk.chunk_id for d in self.record.retrieved_docs}
-        new_docs = [d for d in knowledge.search(query, k=2) if d.chunk.chunk_id not in known]
+        found = await self._search(
+            query, 2, stage="proposal", reason=f"no runbook for {mechanism} in context yet"
+        )
+        new_docs = [d for d in found if d.chunk.chunk_id not in known]
         self.record.retrieved_docs = [*self.record.retrieved_docs, *new_docs]
         self.harness.docs = self.record.retrieved_docs
+
+    async def _search(
+        self, query: str, k: int, *, stage: str, reason: str, agent: AgentRole | None = None
+    ) -> list[RetrievedChunk]:
+        """One runbook search (BM25, or hybrid with the query embedded), traced in full."""
+        knowledge = self.deps.knowledge
+        assert knowledge is not None
+        vector = None
+        embedding = None
+        if self.retrieval.mode == "hybrid":
+            embedder = self._hybrid_embedder()
+            vector = await self._before_deadline(embedder.embed_query(query), "embedding a query")
+            embedding = self._last_embed_call
+        docs = knowledge.search(query, k=k, query_vector=vector)
         self.tracer.emit(
             TraceCategory.RETRIEVAL,
             {
-                "stage": "proposal",
-                "reason": f"no runbook for {mechanism} in context yet",
+                "stage": stage,
+                "reason": reason,
                 "query": query,
+                "mode": self.retrieval.mode,
                 "retriever": knowledge.name,
-                "results": [_doc_ref(d) for d in new_docs],
+                "embedding": embedding,
+                "results": [_doc_ref(d) for d in docs],
             },
+            agent=agent.value if agent else None,
         )
+        return docs
+
+    def _hybrid_embedder(self) -> Embedder:
+        """The run's embedder; hybrid search needs it AND a vector for every runbook chunk."""
+        knowledge = self.deps.knowledge
+        if knowledge is None or not knowledge.hybrid_ready:
+            missing = len(getattr(knowledge, "dense_missing", []) or [])
+            raise ConfigError(
+                "hybrid retrieval was asked for, but the stored runbook vectors "
+                + (f"lack {missing} chunks" if missing else "are not loaded")
+                + ": run scripts/build_vector_index.py (or use retrieval: bm25)"
+            )
+        if self.embedder is None:
+            if self.deps.embedder_factory is None:
+                raise ConfigError("hybrid retrieval needs an embedder; none is configured")
+            self.embedder = self.deps.embedder_factory(self.provider)
+            self.embedder.on_call = self._on_embed  # type: ignore[attr-defined]
+            self.retrieval = self.retrieval.model_copy(update={"embedder": self.embedder.name})
+            self.record.retrieval = self.retrieval
+        return self.embedder
+
+    def _on_embed(self, call: dict[str, Any]) -> None:
+        """Count one embedding request in the run's retrieval record."""
+        self._last_embed_call = call
+        info = self.retrieval
+        tokens = call.get("input_tokens")
+        total = info.embedding_input_tokens
+        if isinstance(tokens, int):
+            total = (total or 0) + tokens
+        server = getattr(self.embedder, "server", None)
+        self.retrieval = info.model_copy(
+            update={
+                "embedding_requests": info.embedding_requests + 1,
+                "embedding_input_tokens": total,
+                "replayed_requests": info.replayed_requests + (1 if call.get("replayed") else 0),
+                "server": dict(server) if server else info.server,
+            }
+        )
+        self.record.retrieval = self.retrieval
+
+    async def _search_runbooks(self, args: dict[str, Any], caller: AgentRole) -> RawToolResult:
+        """The search_runbooks tool: an agent searches the runbooks itself, within a budget.
+
+        It answers with a receipt (which sections, how they ranked) that becomes DOC
+        evidence, and the sections themselves, which join THIS agent's context only.
+        """
+        limits = self.settings.retrieval.agent_search
+        if not self.config.use_rag or self.deps.knowledge is None:
+            return RawToolResult(ok=False, error="runbook search is turned off for this run")
+        if self.retrieval.agent_searches >= limits.max_per_run:
+            return RawToolResult(
+                ok=False,
+                error=f"the runbook search budget is used up ({limits.max_per_run} per run)",
+            )
+        self.retrieval = self.retrieval.model_copy(
+            update={"agent_searches": self.retrieval.agent_searches + 1}
+        )
+        self.record.retrieval = self.retrieval
+        query = str(args["query"])
+        k = min(int(args.get("k") or limits.k), limits.k)
+        reason = f"{caller.value} asked"
+        docs = await self._search(query, k, stage="agent", reason=reason, agent=caller)
+        receipt = {
+            "query": query,
+            "mode": self.retrieval.mode,
+            "results": [
+                {
+                    "chunk_id": d.chunk.chunk_id,
+                    "title": d.chunk.title,
+                    "heading": d.chunk.heading,
+                    "rank": d.rank,
+                    "score": round(d.score, 4),
+                    "signals": d.signals,
+                }
+                for d in docs
+            ],
+        }
+        return RawToolResult(ok=True, structured=receipt, docs=docs)
 
     def _proposal_evidence(self, packed_ids: list[str], best: Hypothesis) -> dict[str, Evidence]:
         """Packed evidence plus the diagnosis' cited evidence and the target's rollback plans."""
@@ -1213,6 +1320,8 @@ def _doc_ref(doc: RetrievedChunk) -> dict[str, Any]:
         "heading": doc.chunk.heading,
         "score": round(doc.score, 3),
         "rank": doc.rank,
+        "retriever": doc.retriever,
+        "signals": doc.signals,
     }
 
 

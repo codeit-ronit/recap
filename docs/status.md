@@ -547,18 +547,39 @@ files and every commit: run on 2026-10-21 over 34 commits and 346 files, nothing
   stayed open through the follow-up round and the run ended FAILED for a person
   (`tests/e2e/test_disagreement_follow_up.py`).
 
+### Step 3: hybrid retrieval and agent search ([ADR 0022](decisions/0022-hybrid-retrieval-with-a-local-embedder-and-agent-search.md))
+
+- `OllamaEmbedder` (`nomic-embed-text`, 137M parameters, F16, weights
+  `sha256:970aa74c0a90…`; the first request loaded it in 20.7 s), recorded and replayed with
+  the model's exchanges; stored chunk vectors (`scripts/build_vector_index.py`: 42 chunks,
+  173 KB); hybrid search with a 0.55 cosine cutoff, RRF and the lexical reranker; a
+  budgeted `search_runbooks` tool answered by RECAP itself; free text a model wrote kept out
+  of trusted prompt text (prompts-v4.4).
+- **Measured** with real vectors (no tuning on them):
+  - paraphrased queries: hybrid put the meant runbook first for 3 of 5 where BM25 did not;
+    for 1 ("which team must approve a risky change") the dense ranking's best chunk
+    dropped out of the fused top 3; unrelated queries got no dense match;
+  - the 15 scenarios' alert queries: the diagnosed mechanism's runbook was in the top 4 for
+    **9 with BM25 and 7 with hybrid**. BM25 therefore stays the default; hybrid is per run.
+- Scripted baseline: **0 differences in 45 runs** (the scripted policy never calls the
+  search tool). A hybrid run with the fake model server was recorded and replayed offline
+  with the same retrieved sections and decisions (`tests/e2e/test_runbook_search.py`).
+
 ### Real model runs in M3 (simulated environment)
 
 | Run | Model | Requests | Tokens in / out (reported) | Outcome |
 |---|---|---|---|---|
 | local 7 (the CI fixture since prompts-v4.3, recording `20261021-134004-ollama-5f0326`) | `qwen3:8b` (Ollama 0.34.4, `tools` mode) | 5 | 13,234 / 703 | `bad-deployment`, memory off, simulation auto-approver: RESOLVED in about 3.3 min, one round, one investigator (RT7). The same five reads as local 5 (health and the error rate; deployments and events; logs), a diagnosis citing 3 evidence IDs, all three in its rules' basis (V1-grounding passed), a rollback to `v2.4.0` (VP4: the release before the bad one); the oracle verified recovery |
 
-This run re-recorded the CI replay fixture for prompts-v4.3; it is single-agent, so it does
-not yet exercise the specialists. The real multi-agent runs (several scenarios, at least one
+| local 8 (the CI fixture since prompts-v4.4, recording `20261021-141657-ollama-874b7e`) | `qwen3:8b` | 6 | 16,311 / 759 | `bad-deployment`, memory off, BM25: RESOLVED in about 3.8 min, one investigator. The same five reads in another order (health and the error rate; events; deployments; logs); offered `search_runbooks`, it did not use it; a diagnosis citing 3 evidence IDs (grounded), a rollback to `v2.4.0` |
+
+Both runs re-recorded the CI replay fixture after a prompt change; they are single-agent, so
+they do not yet exercise the specialists. The real multi-agent runs (several scenarios, at least one
 unfamiliar and one adversarial) come after the retrieval, memory and context steps.
 
 ### Tests so far
 
-`pytest`: **1256 passed, 1 skipped** (the skip needs the optional `otel` extra).
-`ruff check` and `ruff format --check`: clean. Requests in M3 so far: the 5 chat requests of
-local 7 and local checks that `nomic-embed-text` answers, all on loopback ($0).
+`pytest`: **1281 passed, 1 skipped** (the skip needs the optional `otel` extra).
+`ruff check` and `ruff format --check`: clean. Requests in M3 so far: the 11 chat requests of
+local 7 and 8, the embedding requests that built the stored vectors and captured the seven
+test query vectors, and a few checks that `nomic-embed-text` answers; all on loopback ($0).

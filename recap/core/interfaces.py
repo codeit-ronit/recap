@@ -186,11 +186,18 @@ class LLMProvider(Protocol):
 
 @runtime_checkable
 class RetrievalIndex(Protocol):
-    """Searches the static knowledge base (runbooks) and returns cited chunks."""
+    """Searches the static knowledge base (runbooks) and returns cited chunks.
+
+    `query_vector` (the query's embedding) turns on hybrid search when the index has the
+    chunks' vectors; `hybrid_ready` says whether it has all of them.
+    """
 
     name: str
+    hybrid_ready: bool
 
-    def search(self, query: str, k: int = 4) -> list[RetrievedChunk]: ...
+    def search(
+        self, query: str, k: int = 4, query_vector: Sequence[float] | None = None
+    ) -> list[RetrievedChunk]: ...
 
 
 @runtime_checkable

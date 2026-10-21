@@ -14,6 +14,8 @@ order). Both make a recorded parallel run replay the same way whatever the timin
 
 from __future__ import annotations
 
+import hashlib
+import re
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -29,14 +31,35 @@ _ROLE_CODES = {
 }
 
 
-def tool_source_ref(tool_name: str, args: dict[str, Any]) -> str:
+# A plain value: a service name, an enum value, a version, a number. Prompts show source
+# refs as trusted text ("already observed"), so any other value (free text a model wrote,
+# such as a search query) is never repeated in one: it becomes "#" and the first 8 hex
+# characters of its SHA-256, which still compares exactly.
+_PLAIN_VALUE = re.compile(r"[A-Za-z0-9._:+-]{1,64}")
+
+
+def is_plain_value(value: Any) -> bool:
+    """True for a value safe to show as trusted text (see _PLAIN_VALUE)."""
+    return isinstance(value, int | float | str) and bool(_PLAIN_VALUE.fullmatch(str(value)))
+
+
+def tool_source_ref(tool_name: str, args: dict[str, Any], scheme: str = "mcp") -> str:
     """Canonical reference for a tool call, e.g. 'mcp:get_service_logs(service=checkout)'.
 
     The gateway stamps it on tool evidence and providers use it to avoid repeating a
     call that was already made in this run. Arguments are sorted so order never matters.
+    `scheme` is "local" for a tool RECAP answers itself (search_runbooks).
     """
-    inner = ",".join(f"{key}={args[key]}" for key in sorted(args) if args[key] is not None)
-    return f"mcp:{tool_name}({inner})"
+    inner = ",".join(
+        f"{key}={_ref_value(args[key])}" for key in sorted(args) if args[key] is not None
+    )
+    return f"{scheme}:{tool_name}({inner})"
+
+
+def _ref_value(value: Any) -> str:
+    if is_plain_value(value):
+        return str(value)
+    return "#" + hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:8]
 
 
 class EvidenceRegistry:

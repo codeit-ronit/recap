@@ -292,6 +292,33 @@ def _action_outcome(outcome: ActionOutcome, alert: datetime | None, limit: int) 
     return out
 
 
+class _SearchHit(BaseModel):
+    chunk_id: str
+    title: str = ""
+    heading: str = ""
+    rank: int = 0
+
+
+class RunbookSearch(BaseModel):
+    """The receipt of one search_runbooks call (written by RECAP, see the controller)."""
+
+    query: str
+    mode: str = "bm25"
+    results: list[_SearchHit] = []
+
+
+def _runbook_search(search: RunbookSearch, alert: datetime | None, limit: int) -> list[str]:
+    """Which sections a search returned; their text reaches the agent as runbook items."""
+    del alert
+    found = _count(len(search.results), "section")
+    out = [f"Runbook search ({search.mode}) for {_message(search.query)!r}: {found}"]
+    out += [
+        f"- {hit.chunk_id}: {_message(hit.title)} > {_message(hit.heading)}"
+        for hit in search.results[:limit]
+    ]
+    return out
+
+
 Renderer = Callable[[Any, datetime | None, int], list[str]]
 
 # Tool name (RECAP's trusted catalog) -> the observation model its data holds, and its renderer.
@@ -303,6 +330,7 @@ _SUMMARIES: dict[str, tuple[type[BaseModel], Renderer]] = {
     "get_k8s_like_events": (EventList, _events),
     "list_services": (ServiceList, _services),
     "propose_rollback": (RollbackPlan, _rollback_plan),
+    "search_runbooks": (RunbookSearch, _runbook_search),
     "execute_rollback": (ActionOutcome, _action_outcome),
     "restart_service": (ActionOutcome, _action_outcome),
     "delete_namespace": (ActionOutcome, _action_outcome),

@@ -27,6 +27,7 @@ these notes explain why RECAP looks the way it does.
 | [0018](0018-record-every-model-exchange-and-replay-in-ci.md) | Record every model exchange, and replay real model runs offline in CI | accepted | HTTP-level recordings without keys; fingerprint matching; a `REPLAY`-labeled provider runs a real qwen3:8b run in CI at $0 (M2). |
 | [0019](0019-checkable-evidence-of-a-real-model-run.md) | A real-model run is evidence only if a reader can check it | accepted | No example value in fixed prompt text (guard test); console approvals need a terminal and log how they came; code version and model weights on every run; a complete export that refuses to write secrets or local traces (M2). |
 | [0020](0020-independent-specialists-with-role-contracts.md) | Parallel specialists work independently, under role contracts, with order-free evidence IDs | accepted | Each specialist sees pre-round evidence plus its own; disjoint tools; it may conclude only what its tools can observe; per-agent IDs make a parallel run replayable (M3). |
+| [0022](0022-hybrid-retrieval-with-a-local-embedder-and-agent-search.md) | Hybrid retrieval with a local embedding model, and agents that search the runbooks themselves | accepted | nomic-embed-text on loopback, recorded and replayed; stored chunk vectors; BM25 stays the default (measured); a budgeted `search_runbooks` tool answered by RECAP; free text a model wrote stays data (M3). |
 | [0021](0021-evidence-rules-settle-disagreements-never-votes.md) | Evidence rules settle the agents' disagreements, never votes | accepted | Claims merged by version and dependency; V1-grounding, V6 on the target, V7 without tie-breaks; typed disagreement records; an open conflict gets one follow-up question, then a person; VP4 restore points (M3). |
 
 ## How the decisions fit together
@@ -51,6 +52,9 @@ these notes explain why RECAP looks the way it does.
 - **0020 and 0021** make the two specialists real (M3). 0020 gives each an independent view
   and a role it cannot leave; 0021 decides how their claims combine: by evidence rules
   only, with every disagreement recorded, and a person deciding what the rules cannot.
+- **0022** gives retrieval a meaning-based ranking from a local model and lets agents search
+  themselves, without letting either the environment or a model's free text into trusted
+  context.
 
 The [threat model](../threat-model.md) builds on 0004, 0005, 0007, 0014 and 0015. It lists
 every threat RECAP defends against, where the defense lives in the code, and the test that

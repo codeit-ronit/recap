@@ -34,7 +34,7 @@ flowchart TD
     ENV -->|"AlertSignal"| CTL
     CTL -->|"bind_executor(public key)"| ENV
 
-    CTL -->|"RETRIEVING"| RAG["BM25 runbook search"]
+    CTL -->|"RETRIEVING"| RAG["Runbook search: BM25, or hybrid with a local embedder"]
     KB --> RAG
     CTL --> MEMS["Experience memory search"]
 
@@ -148,11 +148,16 @@ and streamed live to the dashboard.
 ### Stage 3. Look things up (RETRIEVING)
 
 - **Input:** the incident's service and symptoms.
-- **Code:** `_retrieve`: BM25 search over the runbooks
-  ([recap/knowledge/](../recap/knowledge/)) and a similarity search over remembered
-  episodes the run may read ([recap/memory/store.py](../recap/memory/store.py)).
-- **Output:** `RetrievedChunk`s and `MemoryHit`s on the run record; `retrieval.docs` and
-  `memory.search` events.
+- **Code:** `_retrieve`: a runbook search ([recap/knowledge/](../recap/knowledge/)) and a
+  similarity search over remembered episodes the run may read
+  ([recap/memory/store.py](../recap/memory/store.py)). The search is BM25 by default; with
+  `retrieval: hybrid` the controller first embeds the query with the run's local
+  `nomic-embed-text` embedder (recorded with the model's exchanges, so a replay needs no
+  model) and the retriever fuses BM25 with a cosine ranking over the stored chunk vectors
+  (ADR 0022). Each result carries its ranking signals.
+- **Output:** `RetrievedChunk`s and `MemoryHit`s on the run record, and `RunRecord.retrieval`
+  (mode, embedder, embedding requests and tokens); `retrieval.docs` and `memory.search`
+  events.
 - **Next:** both are handed to the agent harness for stage 4.
 
 ### Stage 4. Investigate (INVESTIGATING)
@@ -185,7 +190,10 @@ and streamed live to the dashboard.
        ([recap/tools/gateway.py](../recap/tools/gateway.py)): policy (`policy.decision`),
        budget reservation, `tool.call`, the MCP call with a hard timeout, then the result is
        redacted, bounded (keeping the head and the tail), flagged and stored as `Evidence`
-       → `tool.result`.
+       → `tool.result`. One read tool is answered by RECAP itself: `search_runbooks` takes
+       the same path, then the controller searches the runbooks (`retrieval.docs`, stage
+       `agent`). Its receipt is DOC evidence (never proof), it has its own budget, and the
+       sections it found join only this agent's context.
   4. When the provider finishes, it returns hypotheses that cite evidence IDs →
      `agent.finish` (with how the agent ended, and any claim dropped because the role may
      not make it); the orchestrator emits `orchestration.summary` (with the measured

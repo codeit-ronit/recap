@@ -44,7 +44,12 @@ METRICS = evidence("ev-abc123-002", "mcp:get_service_metrics(service=checkout)",
 
 def test_the_specialists_share_no_environment_tool(settings: Settings) -> None:
     telemetry, infrastructure = settings.agents[TEL], settings.agents[INFRA]
-    assert set(telemetry.tools).isdisjoint(infrastructure.tools)
+
+    def environment_tools(tools: list[str]) -> set[str]:  # search_runbooks is RECAP's own
+        return {t for t in tools if settings.policies.tools[t].source == "mcp"}
+
+    assert environment_tools(telemetry.tools).isdisjoint(environment_tools(infrastructure.tools))
+    assert "search_runbooks" in telemetry.tools and "search_runbooks" in infrastructure.tools
     assert "get_recent_deployments" not in telemetry.tools  # it cannot see releases ...
     assert FailureMechanism.BAD_DEPLOYMENT not in telemetry.mechanisms  # ... nor claim one
     assert FailureMechanism.BAD_DEPLOYMENT in infrastructure.mechanisms

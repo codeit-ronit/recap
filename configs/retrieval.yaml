@@ -1,0 +1,29 @@
+# Runbook retrieval (static RAG). Retrieved text is UNTRUSTED data: it is ranked and cited,
+# never obeyed; the safety policy decides what may run.
+retrieval:
+  # bm25: keyword ranking only (offline, needs no model; the default and the CI path).
+  # hybrid: BM25 fused with a dense ranking from a local embedding model (needs Ollama and
+  # the stored chunk vectors below). A run can choose either (RunConfig.retrieval).
+  mode: bm25
+  k: 4                       # chunks per search
+  candidate_pool: 20         # first-stage candidates per ranking, before fusion and reranking
+  # A dense candidate below this cosine similarity is dropped before fusion. Measured on
+  # 2026-10-21 with nomic-embed-text over these runbooks (10 queries): the right chunk scored
+  # 0.62 to 0.79, unrelated queries ("bake sourdough bread", "quarterly sales report")
+  # topped out at 0.486 and 0.536. A small margin: tests/unit/test_hybrid_retrieval.py
+  # pins it with stored real query vectors.
+  min_dense_similarity: 0.55
+  embedder:
+    api: ollama
+    base_url: http://127.0.0.1:11434   # loopback only
+    model: nomic-embed-text            # 137M parameters, F16, 274 MB; installed by the owner
+    dimensions: 768
+    query_prefix: "search_query: "        # nomic-embed-text's task prefixes
+    document_prefix: "search_document: "
+    request_timeout_seconds: 60
+    vectors: fixtures/knowledge/vectors/nomic-embed-text.json  # scripts/build_vector_index.py
+  # The search_runbooks tool: agents may look things up themselves, within a budget of its
+  # own (it never uses up the environment-read budget).
+  agent_search:
+    max_per_run: 6
+    k: 3

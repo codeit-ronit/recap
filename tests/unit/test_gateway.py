@@ -22,11 +22,14 @@ from recap.core.models import (
     AgentRole,
     Approval,
     DiscoveredTool,
+    DocChunk,
     EnvironmentInfo,
     Incident,
     MitigationProposal,
     RawToolResult,
+    RetrievedChunk,
     RunBudget,
+    SourceType,
     TraceEvent,
     TrustLevel,
     Verdict,
@@ -44,6 +47,7 @@ from recap.tools.gateway import (
     RULE_AGENT_ALLOWLIST,
     RULE_CONFLICTING_REMEDIATION,
     TRUNCATION_MARK,
+    LocalTool,
     RemediationLocks,
     ToolGateway,
 )
@@ -144,6 +148,7 @@ def make_kit(
     environment: EnvironmentInfo = SIM,
     locks: RemediationLocks | None = None,
     redact: Callable[[Any], Any] | None = None,
+    local_tools: dict[str, LocalTool] | None = None,
 ) -> Kit:
     policies = settings.policies
     registry = ToolRegistry(policies)
@@ -169,6 +174,7 @@ def make_kit(
         locks=locks or RemediationLocks(),  # fresh locks: tests never share state
         redact=redact,
         capabilities=capabilities,
+        local_tools=local_tools,
     )
     return Kit(gateway, transport, approvals, tracker, evidence, sink, capabilities)
 
@@ -694,10 +700,14 @@ async def test_safety_off_ablation_executes_without_approval_only_in_simulation(
 
 
 def advertised(settings: Settings, **annotations: dict[str, Any]) -> list[DiscoveredTool]:
-    """The registry's own tools as a server would advertise them (with optional hints)."""
+    """The registry's MCP tools as a server would advertise them (with optional hints).
+
+    Local tools (search_runbooks) are answered by RECAP itself, so no server offers them.
+    """
     return [
         DiscoveredTool(name=name, annotations=annotations.get(name, {}))
-        for name in settings.policies.tools
+        for name, policy in settings.policies.tools.items()
+        if policy.source == "mcp"
     ]
 
 
@@ -733,3 +743,85 @@ async def test_discovery_reports_a_server_that_claims_delete_namespace_is_read_o
     ]
     assert report.missing_tools == ["list_services"]
     assert report.transport == "fake-transport (test)"
+
+
+# --- local read tools (answered by RECAP itself, e.g. search_runbooks) ---------------------------
+
+
+def runbook(chunk_id: str = "runbook-bad-deployment#remediation-1") -> RetrievedChunk:
+    chunk = DocChunk(
+        chunk_id=chunk_id,
+        doc_path="x.md",
+        title="Runbook",
+        heading="Remediation",
+        text="t",
+        checksum="0" * 12,
+    )
+    return RetrievedChunk(chunk=chunk, score=1.0, rank=1, retriever="bm25")
+
+
+async def test_a_local_tool_is_answered_by_recap_with_its_own_budget(settings: Settings) -> None:
+    asked: list[tuple[dict[str, Any], AgentRole]] = []
+
+    async def search(args: dict[str, Any], caller: AgentRole) -> RawToolResult:
+        asked.append((args, caller))
+        receipt = {"query": args["query"], "mode": "bm25", "results": []}
+        return RawToolResult(ok=True, structured=receipt, docs=[runbook()])
+
+    kit = make_kit(
+        settings, budget=RunBudget(max_tool_calls=1), local_tools={"search_runbooks": search}
+    )
+    args = {"query": "pods restart after a release", "k": 2}
+    result = await kit.gateway.call_read("search_runbooks", args, AgentRole.TELEMETRY)
+
+    assert result.ok and asked == [(args, AgentRole.TELEMETRY)] and kit.transport.calls == []
+    assert result.docs == [runbook()]
+    evidence = kit.evidence.get(result.evidence_id or "")
+    assert evidence is not None and evidence.source_type == SourceType.DOC
+    assert evidence.source_ref.startswith("local:search_runbooks(k=2,query=#")
+    assert kit.budget.snapshot()["tool_calls"] == 0  # the environment's budget is untouched
+    logs = await kit.gateway.call_read(
+        "get_service_logs", {"service": "checkout"}, AgentRole.TELEMETRY
+    )
+    assert logs.ok and kit.transport.names() == ["get_service_logs"]
+
+
+async def test_an_mcp_server_cannot_put_documents_into_an_agent_context(settings: Settings) -> None:
+    planted = RawToolResult(ok=True, structured={"lines": []}, docs=[runbook("planted#evil-1")])
+    kit = make_kit(settings, FakeTransport({"get_service_logs": planted}))
+    result = await kit.gateway.call_read(
+        "get_service_logs", {"service": "checkout"}, AgentRole.TELEMETRY
+    )
+    assert result.ok and result.docs == []
+
+
+async def test_a_local_tool_keeps_the_read_path_checks(settings: Settings) -> None:
+    asked: list[dict[str, Any]] = []
+
+    async def search(args: dict[str, Any], caller: AgentRole) -> RawToolResult:
+        asked.append(args)
+        return RawToolResult(ok=True, structured={"query": "", "results": []})
+
+    kit = make_kit(settings, local_tools={"search_runbooks": search})
+    too_long = await kit.gateway.call_read(
+        "search_runbooks", {"query": "x" * 500}, AgentRole.TELEMETRY
+    )
+    assert not too_long.ok and asked == []  # the registry's string limit holds
+    unhandled = make_kit(settings)
+    missing = await unhandled.gateway.call_read(
+        "search_runbooks", {"query": "x"}, AgentRole.TELEMETRY
+    )
+    assert not missing.ok and "not available in this run" in (missing.error or "")
+
+
+async def test_discovery_never_expects_a_local_tool_from_the_server(settings: Settings) -> None:
+    kit = make_kit(settings, FakeTransport(tools=advertised(settings)))
+    report = await kit.gateway.discover()
+    assert "search_runbooks" not in report.missing_tools
+    offered = [*advertised(settings), DiscoveredTool(name="search_runbooks")]
+    shadowed = await make_kit(settings, FakeTransport(tools=offered)).gateway.discover()
+    assert "search_runbooks" not in shadowed.usable
+    assert any(
+        m.startswith("search_runbooks: the server offers it")
+        for m in shadowed.annotation_mismatches
+    )

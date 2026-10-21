@@ -1,20 +1,25 @@
 # recap/knowledge: static RAG over runbooks
 
 This package gives RECAP its **document knowledge**: a handful of Markdown runbooks that
-are split into citable chunks and searched with BM25. It is separate from episodic memory
-(`recap/memory`), which stores what happened in past runs.
+are split into citable chunks and searched with BM25, or with BM25 and a local embedding
+model together (hybrid). It is separate from episodic memory (`recap/memory`), which stores
+what happened in past runs.
 
 ```
 fixtures/knowledge/*.md
    | load_documents()            ingest.py: one chunk per "## " section, with provenance
    v
-DocChunk[]  --->  KnowledgeRetriever.search(query)
-                   1. BM25 candidates (bm25.py)  [+ dense ranking fused by RRF, optional]
+DocChunk[]  --->  KnowledgeRetriever.search(query, k, query_vector=None)
+                   1. BM25 candidates (bm25.py)
+                      [hybrid: + cosine ranking over the stored chunk vectors (vectors.py),
+                       cut at min_dense_similarity, fused by RRF (embeddings.py)]
                    2. LexicalReranker            (retriever.py)
    v
-RetrievedChunk[]  --->  controller (RETRIEVING stage)  --->  context pack, as UNTRUSTED text
-                   --->  scripted policy reads "Recommended action:" lines (hints.py)
-                   --->  the safety gateway, not the document, decides what may run
+RetrievedChunk[] (with signals: bm25_rank, dense_rank, cosine, rrf)
+   --->  controller (initial and proposal searches)   --->  every agent's context pack
+   --->  search_runbooks tool (an agent asks itself)  --->  THAT agent's context pack
+   --->  scripted policy reads "Recommended action:" lines (hints.py)
+   --->  everything stays UNTRUSTED text: the safety gateway decides what may run
 ```
 
 | File | What it does |
@@ -22,7 +27,9 @@ RetrievedChunk[]  --->  controller (RETRIEVING stage)  --->  context pack, as UN
 | `ingest.py` | Markdown files to `DocChunk`s: stable IDs, repo-relative path, title, heading, checksum, provenance |
 | `bm25.py` | Tokenizer and an Okapi BM25 index written from scratch (no search library) |
 | `retriever.py` | `KnowledgeRetriever` (the `RetrievalIndex`) and `LexicalReranker` (the `Reranker`) |
-| `embeddings.py` | Optional dense embeddings, cosine similarity, reciprocal rank fusion |
+| `embeddings.py` | The `Embedder` interface (async; query and document sides), cosine similarity, reciprocal rank fusion, an optional sentence-transformers embedder |
+| `ollama_embedder.py` | `OllamaEmbedder`: `nomic-embed-text` on loopback through the recordable model transport |
+| `vectors.py` | `VectorIndex`: chunk vectors stored once (base64 float32), keyed by a hash of what was embedded |
 | `hints.py` | Parses the `Mechanism:` / `Recommended action:` lines in runbooks |
 
 ## Usage
@@ -35,14 +42,20 @@ settings = load_settings()
 retriever = KnowledgeRetriever.from_directory(
     settings.paths.knowledge_dir,
     root=settings.paths.root,  # store repo-relative paths
-    enable_embeddings=settings.features.embeddings,  # False unless RECAP_ENABLE_EMBEDDINGS=1
+    # The stored chunk vectors make hybrid search possible (retriever.hybrid_ready).
+    vectors_path=settings.paths.root / settings.retrieval.embedder.vectors,
+    min_dense_similarity=settings.retrieval.min_dense_similarity,
 )
-for hit in retriever.search("bad_deployment remediation", k=3):
+for hit in retriever.search("bad_deployment remediation", k=3):  # no query vector: BM25
     print(hit.rank, hit.chunk.chunk_id, hit.retriever, hit.reranker)
 # 1 runbook-bad-deployment#remediation-1 bm25 lexical-heading-boost
 # 2 runbook-bad-deployment#overview-1 bm25 lexical-heading-boost
 # 3 runbook-bad-deployment#diagnosis-1 bm25 lexical-heading-boost
 ```
+
+In a run, the controller embeds the query with the run's `OllamaEmbedder` (its requests
+are recorded with the model's and replay offline) and passes the vector in; see
+[docs/flow.md](../../docs/flow.md), stage 3.
 
 ## From Markdown to chunks
 
@@ -87,12 +100,40 @@ same query always returns the same order.
   `recap/core/interfaces.py` is where a cross-encoder could plug in later.
 * The first stage hands up to 20 candidates (or `k`, if larger) to the reranker, the usual
   retrieve-then-rerank pattern.
-* With `enable_embeddings=True`, chunks are also ranked by cosine similarity of
-  sentence-transformers vectors (`all-MiniLM-L6-v2`, CPU), and the two rankings are merged
-  with reciprocal rank fusion: each chunk earns `1 / (60 + rank)` per ranking. This needs
-  `pip install -e '.[embeddings]'` and downloads the model on first use; without the
-  package a `ConfigError` explains how to install it. The default demo never downloads
-  anything. Tests cover the hybrid path with a fake embedder only.
+* **Hybrid** (`retrieval: hybrid` in a run, or `RECAP_ENABLE_EMBEDDINGS=1`): chunks are also
+  ranked by cosine similarity between the query's `nomic-embed-text` vector and the stored
+  chunk vectors (`fixtures/knowledge/vectors/nomic-embed-text.json`, built by
+  `scripts/build_vector_index.py` with the local model). Dense candidates below
+  `min_dense_similarity` (0.55) are dropped, and the two rankings are merged with
+  reciprocal rank fusion: each chunk earns `1 / (60 + rank)` per ranking.
+* nomic-embed-text expects task prefixes: chunks were embedded as `search_document: ...`,
+  queries are embedded as `search_query: ...`.
+* Each result's `signals` say why it ranked where it did: `bm25_rank`, `bm25`,
+  `dense_rank`, `cosine`, `rrf` (only the rankings that search used).
+* A vector is keyed by a hash of exactly what was embedded, so an edited runbook section
+  has no vector: `hybrid_ready` turns False, and a run that asks for hybrid fails with
+  "run scripts/build_vector_index.py" instead of searching with stale vectors.
+  `tests/unit/test_hybrid_retrieval.py` fails while the stored file is stale.
+
+### What hybrid search does better, and what it does not (measured 2026-10-21)
+
+On seven queries with stored real query vectors (`tests/fixtures/retrieval/`):
+
+* paraphrases with few shared words: for "heap exhaustion makes the container restart over
+  and over", "errors started right after we shipped a new build" and "a downstream service
+  is slow so every caller times out", hybrid puts the runbook the query means first, where
+  BM25 put a guide or the wrong runbook first;
+* for "which team must approve a risky change" the dense ranking's best chunk (the change
+  policy) is missing from hybrid's top 3: RRF favours chunks found by both rankings, and
+  weak keyword matches outnumber it. This is pinned by a test, not fixed by tuning;
+* unrelated queries: nothing for "how do I bake sourdough bread"; only keyword matches
+  for "quarterly sales report for the marketing department" (the cutoff drops every dense
+  candidate).
+
+On the 15 scenarios' own alert queries (service plus symptom lines, keyword-rich), the
+diagnosed mechanism's runbook was in the top 4 for 9 scenarios with BM25 and 7 with
+hybrid. So BM25 stays the default, and hybrid is a per-run choice: it helps most for
+questions written in sentences, such as an agent's own `search_runbooks` queries.
 
 ## Runbook convention
 
@@ -127,8 +168,13 @@ ignores hints whose action is not in the trusted remediation catalog
 
 * No stemming: "restart" and "restarts" are different words to BM25.
 * Lexical matching misses synonyms ("heap exhaustion" and "out of memory") unless hybrid
-  retrieval is turned on.
+  retrieval is turned on, and hybrid's fusion can still bury a chunk only the dense
+  ranking finds (see above).
+* The 0.55 similarity cutoff was measured on 10 queries over this corpus: relevant chunks
+  scored 0.62 to 0.79, unrelated queries at most 0.536. A small margin; a larger corpus
+  would need it measured again.
 * The knowledge base is small and synthetic: 7 documents and 42 chunks written for
   ShopSim, the simulated shop.
-* The index is rebuilt in memory at startup. That is fine for 42 chunks; a large corpus
-  would need a persistent index.
+* The BM25 index is rebuilt in memory at startup, and cosine similarity is computed in
+  plain Python over all 42 vectors. That is fine at this size; a large corpus would need a
+  vector database.
