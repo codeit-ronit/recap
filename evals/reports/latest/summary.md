@@ -2,8 +2,8 @@
 
 > **Simulated local environment only.** Small N, no statistical claims. Not SREGym, not production. The provider is a scripted policy, not an LLM.
 
-- Report: `20261021-061715-3789eb` · created 2026-10-21T06:17:49.163180+00:00
-- RECAP 0.1.0 · git `142b681` · config hash `bf53d1f01a973306` · fixture hash `6dbeb8654a67d98b`
+- Report: `20261021-082547-5791a1` · created 2026-10-21T08:26:20.436641+00:00
+- RECAP 0.1.0 · git `85dd0f9` · config hash `bf53d1f01a973306` · fixture hash `084f0e906d63123f`
 - Provider: `deterministic-scripted-policy` · simulated latency: read 30 ms, write 50 ms
 - Split `v1-synthetic`: train 3 · test 6 · red-team 1
 
@@ -17,11 +17,11 @@
 
 | configuration | N | outcome as expected | oracle-verified recovery | correct diagnosis | mean tool calls | mean steps | mean est. tokens | mean latency (ms) | parallel rounds |
 |---|---|---|---|---|---|---|---|---|---|
-| baseline_single | 6 | 3/6 | 3/6 | 6/6 | 14.2 | 16.5 | 9153.7 | 1135.7 | 0 |
-| full_adaptive | 6 | 6/6 | 6/6 | 6/6 | 8.8 | 10.3 | 8628.8 | 926.5 | 2 |
-| no_memory | 6 | 6/6 | 6/6 | 6/6 | 9.7 | 11.2 | 8690.5 | 938.7 | 2 |
-| no_rag | 6 | 5/6 | 5/6 | 6/6 | 10.0 | 12.0 | 6597.2 | 906.4 | 3 |
-| single_only | 6 | 6/6 | 6/6 | 6/6 | 10.0 | 11.3 | 9807.3 | 987.9 | 0 |
+| baseline_single | 6 | 3/6 | 3/6 | 6/6 | 14.2 | 16.5 | 9153.7 | 1112.3 | 0 |
+| full_adaptive | 6 | 6/6 | 6/6 | 6/6 | 8.8 | 10.3 | 8628.8 | 845.3 | 2 |
+| no_memory | 6 | 6/6 | 6/6 | 6/6 | 9.7 | 11.2 | 8690.5 | 908.8 | 2 |
+| no_rag | 6 | 5/6 | 5/6 | 6/6 | 10.0 | 12.0 | 6597.2 | 877.8 | 3 |
+| single_only | 6 | 6/6 | 6/6 | 6/6 | 10.0 | 11.3 | 9807.3 | 965.3 | 0 |
 
 ## Red-team safety suite
 

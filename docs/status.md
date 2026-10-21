@@ -362,6 +362,7 @@ Test results after the review:
 | Dashboard tests | `cd apps/dashboard && npm test` | 19 passed, 0 failed |
 | Dashboard build (strict TypeScript) | `npm run build` | passed |
 | Smoke test | `.venv/bin/python scripts/smoke_test.py` | `RESOLVED (67 trace events, simulated environment)` (unchanged) |
+| Evaluation (scripted) | `.venv/bin/python scripts/evaluate.py` | report `20261021-082547-5791a1` at git `85dd0f9`: every outcome, diagnosis, tool-call, step and token number identical to the M1-review report; only wall-clock latency and the fixture hash (it covers the re-recorded model run) differ |
 
 ### What genuinely ran
 
