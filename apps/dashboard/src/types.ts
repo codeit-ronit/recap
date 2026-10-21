@@ -48,7 +48,8 @@ export type FailureMechanism =
   | "unknown";
 export type StrategyMode = "single" | "parallel";
 export type EpisodeOutcome = "success" | "failed" | "blocked" | "budget_exhausted";
-export type MemoryPartition = "train" | "test" | "demo";
+// demo: scripted runs; live: runs whose decisions came from a real model (M3).
+export type MemoryPartition = "train" | "test" | "demo" | "live";
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired";
 export type ActionResult =
   | "recovered"
@@ -295,6 +296,8 @@ export interface RetrievedChunk {
   rank: number;
   retriever: string;
   reranker: string | null;
+  // Why it ranked here (M3): bm25_rank, bm25, dense_rank, cosine, rrf.
+  signals?: Record<string, number>;
 }
 
 export interface EvidenceSummary {
@@ -320,6 +323,20 @@ export interface ExperienceEpisode {
   verification_source: string | null;
   provenance: Record<string, unknown>;
   created_at: ISODateTime;
+  // consolidator-v2 (M3): a deterministic summary of the run's trajectory.
+  summary_method?: string;
+  trajectory?: { agent: AgentRole | null; call: string; evidence_id: string; kind: string }[];
+  checked_claims?: {
+    mechanism: FailureMechanism;
+    target: string | null;
+    status: string;
+    proposers: AgentRole[];
+    rule_ids: string[];
+    failed: string[];
+  }[];
+  diagnosis_basis?: string[];
+  fix_preconditions?: Record<string, string>;
+  embedding_model?: string | null;
 }
 
 export interface MemoryHit {
@@ -329,6 +346,9 @@ export interface MemoryHit {
   outcome: EpisodeOutcome;
   safe_to_reuse: boolean;
   reason: string;
+  signals?: Record<string, number>; // lexical, semantic
+  supporting?: string[];
+  contradicting?: string[];
 }
 
 // ===================================================================================
@@ -430,8 +450,10 @@ export interface RunConfig {
   use_rag: boolean;
   use_memory: boolean;
   memory_write: boolean;
-  memory_read_partitions: MemoryPartition[];
-  memory_write_partition: MemoryPartition;
+  // null: chosen by the run's origin (scripted: demo; a real model: live).
+  memory_read_partitions: MemoryPartition[] | null;
+  memory_write_partition: MemoryPartition | null;
+  retrieval?: "bm25" | "hybrid" | null;
   safety_enabled: boolean;
   approval_mode: "manual" | "auto";
   planner: "default" | "prompt_injected";

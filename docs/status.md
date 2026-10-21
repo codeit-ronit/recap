@@ -565,6 +565,30 @@ files and every commit: run on 2026-10-21 over 34 commits and 346 files, nothing
   search tool). A hybrid run with the fake model server was recorded and replayed offline
   with the same retrieved sections and decisions (`tests/e2e/test_runbook_search.py`).
 
+### Step 4: episodic memory ([ADR 0023](decisions/0023-memory-partitions-by-origin-and-evidence-checked-reuse.md))
+
+- Partitions by origin: DEMO for the scripted policy, the new LIVE for real models, no
+  writes from a replay; consolidator-v2 (trajectory, judged claims, diagnosis basis, fix
+  preconditions, model info; deterministic extraction); reuse v2 (same mechanism, same
+  service, a rollback version today's evidence names); re-ranking by what live evidence
+  confirmed; semantic recall for hybrid runs; only plain values from an episode in trusted
+  prompt text (prompts-v4.5).
+- **Measured:** over the 15 scenarios' alerts, same-cause and different-cause pairs are
+  equally alike (cosine median 0.777 against 0.761; word overlap median 0.273 against
+  0.333), and several different-cause alerts are identical. Similarity is therefore never
+  evidence of a cause.
+- Scripted baseline with memory on (train scenarios first, then all 15; adaptive and
+  parallel; 30 runs) on the previous commit and this one: the same end state, diagnosis,
+  routing, actions and proposal source in every run. 16 hits changed their reuse verdict,
+  all from "safe" to "not safe" or by re-ranking, and each was checked: a fix for another
+  service (a cart restart for inventory, a checkout rollback for payment) or a rollback to
+  a version today's evidence does not name (`v3.1.4` or `v2.0.0` from another scenario's
+  history) is no longer "safe". The genuinely matching ones (cart for cart, payment for
+  payment) stay safe and now rank first.
+- Revert checks: each of 6 safeguards (the target condition, the stale-rollback condition,
+  plain values in the reuse verdict and in memory lines, no writes from a replay, LIVE for
+  model runs) was undone on its own; its guarding tests failed every time, files restored.
+
 ### Real model runs in M3 (simulated environment)
 
 | Run | Model | Requests | Tokens in / out (reported) | Outcome |
@@ -573,13 +597,16 @@ files and every commit: run on 2026-10-21 over 34 commits and 346 files, nothing
 
 | local 8 (the CI fixture since prompts-v4.4, recording `20261021-141657-ollama-874b7e`) | `qwen3:8b` | 6 | 16,311 / 759 | `bad-deployment`, memory off, BM25: RESOLVED in about 3.8 min, one investigator. The same five reads in another order (health and the error rate; events; deployments; logs); offered `search_runbooks`, it did not use it; a diagnosis citing 3 evidence IDs (grounded), a rollback to `v2.4.0` |
 
-Both runs re-recorded the CI replay fixture after a prompt change; they are single-agent, so
-they do not yet exercise the specialists. The real multi-agent runs (several scenarios, at least one
+| local 9 (the CI fixture since prompts-v4.5, recording `20261021-144429-ollama-a118d0`) | `qwen3:8b` | 6 | 16,311 / 790 | `bad-deployment`, memory off: RESOLVED in about 4.1 min. Its prompts were byte-identical to local 8's (v4.5 changed only how memory is shown), yet the proposal answer was 351 tokens instead of 320: local inference is not exactly repeatable even at temperature 0 |
+
+These runs re-recorded the CI replay fixture after each prompt change; they are
+single-agent, so they do not yet exercise the specialists. The real multi-agent runs (several scenarios, at least one
 unfamiliar and one adversarial) come after the retrieval, memory and context steps.
 
 ### Tests so far
 
-`pytest`: **1281 passed, 1 skipped** (the skip needs the optional `otel` extra).
-`ruff check` and `ruff format --check`: clean. Requests in M3 so far: the 11 chat requests of
-local 7 and 8, the embedding requests that built the stored vectors and captured the seven
-test query vectors, and a few checks that `nomic-embed-text` answers; all on loopback ($0).
+`pytest`: **1299 passed, 1 skipped** (the skip needs the optional `otel` extra).
+`ruff check` and `ruff format --check`: clean. Dashboard: `npm run build` and its 19 tests
+pass. Requests in M3 so far: the 17 chat requests of local 7 to 9, and embedding requests
+that built the stored vectors, captured the seven test query vectors, compared the
+scenarios' alert queries and checked that `nomic-embed-text` answers; all on loopback ($0).

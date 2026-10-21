@@ -304,10 +304,12 @@ def test_memory_text_never_reveals_evaluation_labels() -> None:
     assert texts == [
         "Past episode ep-0000000001 (similarity 0.71, outcome success, oracle-verified yes): "
         "service checkout; diagnosed bad_deployment on checkout; "
-        "fix execute_rollback on checkout -> recovered; failed attempts: none",
+        "fix execute_rollback on checkout -> recovered; failed attempts: none; "
+        "RECAP's reuse check: not yet compared with live evidence",
         "Past episode ep-0000000002 (similarity 0.50, outcome failed, oracle-verified no): "
         "service checkout; diagnosed unknown; fix none; "
-        "failed attempts: restart_service on checkout -> not_recovered",
+        "failed attempts: restart_service on checkout -> not_recovered; "
+        "RECAP's reuse check: not yet compared with live evidence",
     ]
     for text in texts:
         for label in ("scn-hidden-label-42", "family-hidden-label", "train"):

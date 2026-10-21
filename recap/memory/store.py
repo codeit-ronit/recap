@@ -7,41 +7,57 @@ index instead; this store only holds what RECAP itself experienced.
 
 Three rules keep memory honest:
   1. Similar is not safe. `search` returns hits marked "not yet checked". Later,
-     `assess_reuse` compares each hit with the live verification report, and only a
-     verified success whose mechanism matches today's evidence is safe to reuse.
+     `assess_reuse` compares each hit with the live verification report: only a verified
+     success whose mechanism AND target match today's evidence, and whose fix still fits
+     it (a rollback must restore a version today's evidence names), is safe to reuse.
+     Measured on the scenarios: alerts with different causes can read exactly alike, so
+     no similarity, lexical or semantic, is ever evidence of the cause.
   2. No contamination. A `MemoryAccess` says which partitions a run may read and where
      it may write. Evaluation test runs read TRAIN only and never write, held-out test
      scenarios never become episodes (see consolidation.py), and `add` refuses any
-     TEST-partition episode.
+     TEST-partition episode. Scripted runs use DEMO, real-model runs LIVE, by default.
   3. Success needs proof. An episode can be stored as SUCCESS only if the independent
      recovery oracle verified it. Failed runs are kept as cautionary cases.
+
+Search uses word overlap (`similarity`, which routing and the scripted policy use) and,
+when the run embeds its incident, a semantic signal that can only ADD candidates: an
+episode whose text means nearly the same (cosine >= SEMANTIC_RECALL) is returned even when
+few words match, but its decision-relevant `similarity` stays the lexical one.
 
 Memory is historical data, not instructions: agents must treat hits as untrusted text.
 """
 
 from __future__ import annotations
 
+import base64
 import sqlite3
+import struct
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
+from recap.context.evidence import is_plain_value
 from recap.core.db import connect
 from recap.core.models import (
     Contract,
     EpisodeOutcome,
     ExperienceEpisode,
-    FailureMechanism,
     MemoryHit,
     MemoryPartition,
+    ProviderOrigin,
     RunConfig,
     VerificationReport,
 )
+from recap.knowledge.embeddings import cosine
 from recap.memory.similarity import MemoryQuery, episode_similarity
 
 ALL_PARTITIONS = tuple(MemoryPartition)
 UNCHECKED_REASON = "similar symptoms; not yet checked against live evidence"
+# A semantic match this close adds an episode even when few words match (a paraphrased
+# alert). Not tuned on the scenarios: there, every pair of alerts already shares words.
+SEMANTIC_RECALL = 0.8
+MODEL_ORIGINS = ("local_llm", "free_hosted_llm", "paid_llm")
 
 # The metadata columns make the file easy to inspect and filter with plain SQL;
 # `json` holds the complete episode. `created_at` is fixed-width UTC text, so
@@ -96,12 +112,31 @@ class MemoryAccess(Contract):
         )
 
     @classmethod
+    def for_origin(cls, origin: ProviderOrigin) -> MemoryAccess:
+        """The default for a run whose decisions come from `origin`.
+
+        scripted: TRAIN + DEMO, writes DEMO. A real model: TRAIN + LIVE, writes LIVE (its
+        episodes never mix with the scripted policy's). A replay reproduces a recorded run:
+        it reads like the model it replays and never writes (it is not new experience).
+        """
+        if origin == "scripted":
+            return cls.default()
+        live = cls(
+            readable_partitions=[MemoryPartition.TRAIN, MemoryPartition.LIVE],
+            write_partition=MemoryPartition.LIVE,
+        )
+        if origin == "replay":
+            return live.model_copy(update={"write_enabled": False})
+        return live
+
+    @classmethod
     def from_run_config(cls, config: RunConfig) -> MemoryAccess:
-        """Translate a run's memory switches into an access rule."""
+        """Translate a run's memory switches into an access rule (unset: the DEMO default)."""
+        default = cls.default()
         return cls(
-            readable_partitions=list(config.memory_read_partitions),
+            readable_partitions=list(config.memory_read_partitions or default.readable_partitions),
             write_enabled=config.memory_write,
-            write_partition=config.memory_write_partition,
+            write_partition=config.memory_write_partition or default.write_partition,
         )
 
 
@@ -180,17 +215,26 @@ class ExperienceStore:
         *,
         k: int = 3,
         min_similarity: float = 0.2,
+        query_vector: Sequence[float] | None = None,
+        embedding_model: str | None = None,
     ) -> list[MemoryHit]:
         """Up to `k` readable episodes at least `min_similarity` alike, most similar first.
 
-        Every hit starts as "similar but unchecked" (safe_to_reuse=False). Only
-        `assess_reuse` can mark it safe, after comparing it with live evidence.
+        With `query_vector` (the incident embedded by `embedding_model`), an episode
+        embedded by the same model also counts when its cosine is at least
+        SEMANTIC_RECALL. Every hit starts as "similar but unchecked" (safe_to_reuse=False).
+        Only `assess_reuse` can mark it safe, after comparing it with live evidence.
         """
         candidates = self._select(access.readable_partitions)
         hits: list[MemoryHit] = []
         for episode in candidates:
             similarity = episode_similarity(query, episode)
-            if similarity >= min_similarity:
+            signals = {"lexical": similarity}
+            semantic = _semantic(query_vector, embedding_model, episode)
+            if semantic is not None:
+                signals["semantic"] = round(semantic, 3)
+            close = semantic is not None and semantic >= SEMANTIC_RECALL
+            if similarity >= min_similarity or close:
                 hits.append(
                     MemoryHit(
                         episode=episode,
@@ -199,6 +243,7 @@ class ExperienceStore:
                         outcome=episode.outcome,
                         safe_to_reuse=False,
                         reason=UNCHECKED_REASON,
+                        signals=signals,
                     )
                 )
         # Candidates arrive newest first (then by ID), and Python's sort is stable,
@@ -222,22 +267,48 @@ class ExperienceStore:
         return [ExperienceEpisode.model_validate_json(row["json"]) for row in rows]
 
 
-def assess_reuse(hit: MemoryHit, report: VerificationReport) -> MemoryHit:
+def assess_reuse(
+    hit: MemoryHit, report: VerificationReport, restore_points: Sequence[str] | None = None
+) -> MemoryHit:
     """Decide whether a *similar* past episode is also *safe to reuse* today.
 
-    Safe needs all three: the past run succeeded, the oracle verified its recovery,
-    and its diagnosed mechanism matches what live evidence supports now.
+    Safe needs every condition: the past run succeeded, the oracle verified its recovery,
+    live evidence supports the same mechanism on the same service, and the remembered fix
+    still fits today's evidence. For a rollback that means its version is one of today's
+    `restore_points` (the versions the deployment evidence or a dry run names) and not
+    the release diagnosed as bad. A high similarity never outweighs a failed condition.
     Returns a new hit; the one passed in is not changed.
     """
+    supporting, contradicting = _conditions(hit, report, restore_points)
     live = report.best.mechanism if report.best is not None else None
     mechanism_match = live is not None and live == hit.episode.failure_mechanism
-    safe = hit.outcome == EpisodeOutcome.SUCCESS and hit.episode.verified and mechanism_match
+    safe = not contradicting
+    if safe:
+        reason = "safe to reuse: " + " and ".join(supporting)
+    else:
+        reason = (
+            " and ".join(["similar symptoms", *supporting]) + ", but " + "; ".join(contradicting)
+        )
     return hit.model_copy(
         update={
             "mechanism_match": mechanism_match,
             "safe_to_reuse": safe,
-            "reason": _reuse_reason(hit, live, safe),
+            "reason": reason,
+            "supporting": supporting,
+            "contradicting": contradicting,
         }
+    )
+
+
+def rank_hits(hits: Sequence[MemoryHit]) -> list[MemoryHit]:
+    """Assessed hits, best first: safe to reuse, then a matching mechanism, then similarity.
+
+    Re-ranking by what live evidence confirmed, not by look-alike symptoms (stable sort:
+    equal hits keep their search order).
+    """
+    return sorted(
+        hits,
+        key=lambda hit: (not hit.safe_to_reuse, hit.mechanism_match is not True, -hit.similarity),
     )
 
 
@@ -267,30 +338,97 @@ def _check_storable(episode: ExperienceEpisode, access: MemoryAccess) -> None:
         raise ValueError("an episode is a success only after independent recovery verification")
 
 
-def _reuse_reason(hit: MemoryHit, live: FailureMechanism | None, safe: bool) -> str:
-    """Explain in plain words which reuse conditions passed and which failed."""
-    past = hit.episode.failure_mechanism
-    passed: list[str] = []
-    failed: list[str] = []
+def _conditions(
+    hit: MemoryHit, report: VerificationReport, restore_points: Sequence[str] | None
+) -> tuple[list[str], list[str]]:
+    """(conditions that hold, conditions that argue against reuse), in plain words."""
+    episode, best = hit.episode, report.best
+    supporting: list[str] = []
+    contradicting: list[str] = []
+    past = episode.failure_mechanism
+    live = best.mechanism if best is not None else None
     if live is None:
-        failed.append("live evidence has not confirmed a mechanism yet")
-    elif live == past:
-        passed.append(f"live evidence also points to {_words(live)}")
+        contradicting.append("live evidence has not confirmed a mechanism yet")
     elif past is None:
-        failed.append("the past episode has no verified diagnosis to compare")
+        contradicting.append("the past episode has no verified diagnosis to compare")
+    elif live == past:
+        supporting.append(f"live evidence also points to {_words(live)}")
+        target = best.target_service if best is not None else None
+        if episode.mechanism_target and target and episode.mechanism_target != target:
+            remembered = _shown(episode.mechanism_target)
+            contradicting.append(f"the live diagnosis is on {_shown(target)}, not on {remembered}")
     else:
-        failed.append(f"live evidence points to {_words(live)}, not {_words(past)}")
+        contradicting.append(f"live evidence points to {_words(live)}, not {_words(past)}")
 
     if hit.outcome != EpisodeOutcome.SUCCESS:
-        failed.append(f"the past attempt ended as {_words(hit.outcome)} (a caution, not a recipe)")
-    elif hit.episode.verified:
-        passed.append("the past fix was independently verified")
+        contradicting.append(
+            f"the past attempt ended as {_words(hit.outcome)} (a caution, not a recipe)"
+        )
+    elif episode.verified:
+        supporting.append("the past fix was independently verified")
     else:
-        failed.append("the past success was never independently verified")
+        contradicting.append("the past success was never independently verified")
 
-    if safe:
-        return "safe to reuse: " + " and ".join(passed)
-    return " and ".join(["similar symptoms", *passed]) + ", but " + "; ".join(failed)
+    contradicting += _stale_fix(hit, report, restore_points)
+    return supporting, contradicting
+
+
+def _stale_fix(
+    hit: MemoryHit, report: VerificationReport, restore_points: Sequence[str] | None
+) -> list[str]:
+    """A remembered rollback whose version no longer fits today's evidence."""
+    fix = hit.episode.successful_action
+    version = str(fix.params.get("to_version") or "") if fix is not None else ""
+    if not version:
+        return []
+    best = report.best
+    bad = str(best.details.get("version") or "") if best is not None else ""
+    if bad and version == bad:
+        return [
+            f"the remembered rollback restores {_shown(version)}, the release diagnosed as bad now"
+        ]
+    if restore_points is not None and version not in restore_points:
+        named = ", ".join(_shown(point) for point in restore_points) or "no version"
+        restored = _shown(version)
+        return [f"the remembered rollback restores {restored}, but today's evidence names {named}"]
+    return []
+
+
+def _shown(value: str) -> str:
+    """A value safe to repeat in RECAP's reuse verdict, which prompts show as trusted text.
+
+    Episodes come from a file on disk: a tampered one could hold instruction text in a
+    "service name". Only plain identifiers (service names, versions) are repeated.
+    """
+    return value if is_plain_value(value) else "(withheld)"
+
+
+def _semantic(
+    query_vector: Sequence[float] | None, model: str | None, episode: ExperienceEpisode
+) -> float | None:
+    """Cosine of the query and the episode's stored embedding, when the same model made both."""
+    if query_vector is None or not model or episode.embedding_model != model:
+        return None
+    vector = decode_vector(episode.embedding)
+    if vector is None or len(vector) != len(query_vector):
+        return None
+    return cosine(query_vector, vector)
+
+
+def encode_vector(vector: Sequence[float]) -> str:
+    """A vector as base64 float32 (how an episode stores its embedding)."""
+    return base64.b64encode(struct.pack(f"<{len(vector)}f", *vector)).decode("ascii")
+
+
+def decode_vector(blob: str | None) -> list[float] | None:
+    """The stored embedding back as floats; None if absent or unreadable."""
+    if not blob:
+        return None
+    try:
+        raw = base64.b64decode(blob, validate=True)
+        return list(struct.unpack(f"<{len(raw) // 4}f", raw))
+    except (ValueError, struct.error):
+        return None
 
 
 def _words(label: str) -> str:

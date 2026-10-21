@@ -37,13 +37,23 @@ Everything below runs against a **simulated** environment; nothing repairs a rea
 - **`search_runbooks`**: agents search the runbooks themselves (a local read tool answered
   by RECAP, 6 searches per run); the sections join only that agent's context and its
   citations; the receipt is DOC evidence, never proof.
+- **Episodic memory v2** ([ADR 0023](docs/decisions/0023-memory-partitions-by-origin-and-evidence-checked-reuse.md)):
+  a LIVE partition for real-model runs (scripted runs keep DEMO; replays never write);
+  consolidator-v2 episodes with the trajectory, judged claims, diagnosis basis and fix
+  preconditions (deterministic extraction); reuse only with the same mechanism, the same
+  service and a fix that still fits today's evidence; hits re-ranked by what live evidence
+  confirmed; semantic recall in hybrid runs; poisoned-memory tests.
 
 ### Changed
 
 - prompts-v4.3: each role's goal, responsibilities and allowed mechanisms, and the
   verifier's open questions; prompts-v4.4: the search tool, and free text a model wrote
-  (a search query) shown only as data, with hashed values in "already observed" refs. The
-  CI replay fixture was re-recorded after each (local `qwen3:8b` runs, 5 and 6 requests, $0).
+  (a search query) shown only as data, with hashed values in "already observed" refs;
+  prompts-v4.5: memory shown with RECAP's reuse verdict, and only plain values from an
+  episode in trusted text. The CI replay fixture was re-recorded after each (local
+  `qwen3:8b` runs, 5, 6 and 6 requests, $0).
+- "Safe to reuse" is stricter: a verified fix for another service, or a rollback to a
+  version today's evidence does not name, no longer counts.
 - Ties between different supported root causes are no longer broken by how much evidence a
   claim cites; they stay an open conflict.
 - A parallel agent may use at most 70% of the run's remaining time; findings other agents

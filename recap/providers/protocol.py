@@ -80,7 +80,9 @@ from recap.providers.prompts import (
 # the parsing rules change, so a trace always says which protocol produced a decision.
 # v4.3 (M3): role contracts, independent views, findings, the verifier's open questions.
 # v4.4: the search_runbooks tool; free text a model wrote is shown only as data.
-PROMPT_VERSION = "prompts-v4.4"
+# v4.5: memory items carry RECAP's reuse verdict and the checks a past run made; trusted
+#       memory lines repeat only plain values from an episode.
+PROMPT_VERSION = "prompts-v4.5"
 
 Mode = Literal["json", "tools"]
 Message = dict[str, Any]  # {"role": "system" | "user", "content": "..."}

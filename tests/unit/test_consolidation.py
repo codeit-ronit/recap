@@ -16,15 +16,18 @@ import pytest
 from recap.core.models import (
     TERMINAL_STATES,
     ActionRecord,
+    AgentRole,
     EpisodeOutcome,
     Evidence,
     ExperienceEpisode,
     FailureMechanism,
     Hypothesis,
+    HypothesisCheck,
     HypothesisStatus,
     Incident,
     IncidentState,
     MemoryPartition,
+    ProviderInfo,
     RecoveryResult,
     RunBudget,
     RunConfig,
@@ -229,13 +232,71 @@ def test_episode_carries_incident_labels_and_provenance() -> None:
         "simulated": True,
         "environment": "fake",
         "provider": "deterministic-scripted-policy",
+        # This record names no provider info or retrieval mode (a scripted run would).
+        "origin": None,
+        "model": None,
+        "prompt_version": None,
+        "weights": None,
+        "retrieval": None,
+        "code_version": None,
         "seed": 11,
         "config_hash": "cfg-hash",
         "fixture_hash": "fix-hash",
         "origin_run_id": "run-abc123",
-        "created_by": "consolidator-v1",
+        "created_by": "consolidator-v2",
         "trace": "runs/run-abc123/events",
     }
+
+
+def test_a_v2_episode_summarizes_the_trajectory_by_deterministic_extraction() -> None:
+    record = make_record().model_copy(
+        update={
+            "provider_info": ProviderInfo(
+                name="ollama:qwen3:8b",
+                kind="llm",
+                origin="local_llm",
+                model="qwen3:8b",
+                prompt_version="prompts-v4.4",
+                server={"weights": "sha256:" + "a" * 64},
+            ),
+            "verification": VerificationReport(
+                status="supported",
+                best=BEST.model_copy(update={"details": {"version": "v2.4.1"}}),
+                checks=[
+                    HypothesisCheck(
+                        hypothesis=BEST,
+                        passed=["errors on checkout began 2 min after v2.4.1 was deployed"],
+                        rule_ids=["V1-structural", "V2-deploy-timing"],
+                        proposers=[AgentRole.INFRASTRUCTURE],
+                    )
+                ],
+            ),
+        }
+    )
+    episode = consolidate(record)
+
+    assert episode.summary_method == "deterministic-extraction"
+    assert [step.call for step in episode.trajectory] == [e.source_ref for e in EVIDENCE]
+    assert [c.proposers for c in episode.checked_claims] == [[AgentRole.INFRASTRUCTURE]]
+    assert episode.diagnosis_basis == ["errors on checkout began 2 min after v2.4.1 was deployed"]
+    assert episode.fix_preconditions == {
+        "action": "execute_rollback",
+        "target": "checkout",
+        "mechanism": "bad_deployment",
+        "bad_version": "v2.4.1",
+        "to_version": "v2.4.0",
+    }
+    model = {k: episode.provenance[k] for k in ("origin", "model", "prompt_version", "weights")}
+    assert model == {
+        "origin": "local_llm",
+        "model": "qwen3:8b",
+        "prompt_version": "prompts-v4.4",
+        "weights": "sha256:" + "a" * 64,
+    }
+    # What a provider sees: the checks the past run made, never the labels.
+    view = episode.agent_view()
+    assert view.checks == [e.source_ref for e in EVIDENCE]
+    assert not hasattr(view, "provenance") and not hasattr(view, "scenario_id")
 
 
 def test_run_without_oracle_has_no_verification_source() -> None:

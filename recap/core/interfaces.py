@@ -265,6 +265,12 @@ class Verifier(Protocol):
         self, proposal: MitigationDraft, report: VerificationReport, registry: EvidenceRegistry
     ) -> ProposalCheck: ...
 
+    def restore_points(
+        self, target: str, report: VerificationReport, registry: EvidenceRegistry
+    ) -> list[str]:
+        """The versions the run's evidence names as a rollback target for `target`."""
+        ...
+
 
 @runtime_checkable
 class TraceSink(Protocol):

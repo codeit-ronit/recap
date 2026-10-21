@@ -1,13 +1,13 @@
 {
   "agent_role": "investigator",
   "evidence_ids": [
-    "ev-3b99d1-001",
-    "ev-3b99d1-002",
-    "ev-3b99d1-003",
-    "ev-3b99d1-004",
-    "ev-3b99d1-005",
-    "ev-3b99d1-006",
-    "ev-3b99d1-007"
+    "ev-6481ca-001",
+    "ev-6481ca-002",
+    "ev-6481ca-003",
+    "ev-6481ca-004",
+    "ev-6481ca-005",
+    "ev-6481ca-006",
+    "ev-6481ca-007"
   ],
   "doc_refs": [
     "shop-architecture#service-level-objectives-1",
@@ -21,10 +21,10 @@
       "mechanism": "bad_deployment",
       "target_service": "checkout",
       "supporting_evidence_ids": [
-        "ev-3b99d1-004",
-        "ev-3b99d1-002",
-        "ev-3b99d1-003",
-        "ev-3b99d1-001"
+        "ev-6481ca-004",
+        "ev-6481ca-002",
+        "ev-6481ca-003",
+        "ev-6481ca-001"
       ],
       "contradicting_evidence_ids": [],
       "status": "proposed",
@@ -52,7 +52,7 @@
   },
   "summary": "Finished: every check in the playbook is done. Read-only calls by this agent: 7 (checkout). Hypotheses for the verifier: 1.",
   "error": null,
-  "started_at": "2026-10-21T14:14:01.202554Z",
-  "finished_at": "2026-10-21T14:14:01.358624Z",
+  "started_at": "2026-10-21T14:40:45.173350Z",
+  "finished_at": "2026-10-21T14:40:45.269778Z",
   "round": 1
 }

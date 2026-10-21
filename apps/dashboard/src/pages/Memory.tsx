@@ -86,6 +86,7 @@ function EpisodesCard() {
           options={[
             { value: "all", label: "All" },
             { value: "demo", label: "Demo" },
+            { value: "live", label: "Live model" },
             { value: "train", label: "Train" },
           ]}
         />

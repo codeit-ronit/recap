@@ -1,6 +1,6 @@
 {
-  "episode_id": "ep-7ebbc47228",
-  "origin_run_id": "run-3b99d10bab",
+  "episode_id": "ep-b8bb2d348b",
+  "origin_run_id": "run-6481ca9c0c",
   "scenario_id": "bad-deployment",
   "failure_family": "bad_deployment",
   "partition": "demo",
@@ -13,19 +13,19 @@
   "mechanism_target": "checkout",
   "verified_evidence": [
     {
-      "evidence_id": "ev-3b99d1-004",
+      "evidence_id": "ev-6481ca-004",
       "summary": "{\"deployments\":[{\"service\":\"checkout\",\"version\":\"v2.4.1\",\"previous_version\":\"v2.4.0\",\"deployed_at\":\"2026-03-14T09:48:00Z\",\"status\":\"complete\",\"change_summary\":\""
     },
     {
-      "evidence_id": "ev-3b99d1-002",
+      "evidence_id": "ev-6481ca-002",
       "summary": "{\"service\":\"checkout\",\"lines\":[{\"timestamp\":\"2026-03-14T09:00:00Z\",\"level\":\"INFO\",\"service\":\"checkout\",\"message\":\"GET /api/checkout/orders 200 in 95ms\"},{\"times"
     },
     {
-      "evidence_id": "ev-3b99d1-003",
+      "evidence_id": "ev-6481ca-003",
       "summary": "{\"service\":\"checkout\",\"metric\":\"error_rate\",\"unit\":\"ratio\",\"points\":[{\"timestamp\":\"2026-03-14T09:00:00Z\",\"value\":0.0},{\"timestamp\":\"2026-03-14T09:05:00Z\",\"value"
     },
     {
-      "evidence_id": "ev-3b99d1-001",
+      "evidence_id": "ev-6481ca-001",
       "summary": "{\"service\":\"checkout\",\"status\":\"Running\",\"ready_replicas\":3,\"replicas\":3,\"error_rate\":0.3177,\"latency_p95_ms\":1599.8,\"observed_at\":\"2026-03-14T10:00:00Z\"}"
     }
   ],
@@ -37,7 +37,7 @@
       "to_version": "v2.4.0"
     },
     "result": "recovered",
-    "at": "2026-10-21T14:14:01.374713Z",
+    "at": "2026-10-21T14:40:45.287850Z",
     "note": ""
   },
   "outcome": "success",
@@ -47,12 +47,103 @@
     "simulated": true,
     "environment": "simulated",
     "provider": "deterministic-scripted-policy",
+    "origin": "scripted",
+    "model": null,
+    "prompt_version": null,
+    "weights": null,
+    "retrieval": "bm25",
+    "code_version": "7b556811dfc9+dirty",
     "seed": 11,
     "config_hash": "2590a3ea0ee17de0",
-    "fixture_hash": "41f6ad73b242108d",
-    "origin_run_id": "run-3b99d10bab",
-    "created_by": "consolidator-v1",
-    "trace": "runs/run-3b99d10bab/events"
+    "fixture_hash": "1204748c26992366",
+    "origin_run_id": "run-6481ca9c0c",
+    "created_by": "consolidator-v2",
+    "trace": "runs/run-6481ca9c0c/events"
   },
-  "created_at": "2026-10-21T14:14:01.440921Z"
+  "created_at": "2026-10-21T14:40:45.353187Z",
+  "summary_method": "deterministic-extraction",
+  "trajectory": [
+    {
+      "agent": "investigator",
+      "call": "mcp:get_service_health(service=checkout)",
+      "evidence_id": "ev-6481ca-001",
+      "kind": "tool"
+    },
+    {
+      "agent": "investigator",
+      "call": "mcp:get_service_logs(service=checkout)",
+      "evidence_id": "ev-6481ca-002",
+      "kind": "tool"
+    },
+    {
+      "agent": "investigator",
+      "call": "mcp:get_service_metrics(metric=error_rate,service=checkout)",
+      "evidence_id": "ev-6481ca-003",
+      "kind": "tool"
+    },
+    {
+      "agent": "investigator",
+      "call": "mcp:get_recent_deployments(service=checkout)",
+      "evidence_id": "ev-6481ca-004",
+      "kind": "tool"
+    },
+    {
+      "agent": "investigator",
+      "call": "mcp:get_k8s_like_events(service=checkout)",
+      "evidence_id": "ev-6481ca-005",
+      "kind": "tool"
+    },
+    {
+      "agent": "investigator",
+      "call": "mcp:get_service_metrics(metric=memory_mb,service=checkout)",
+      "evidence_id": "ev-6481ca-006",
+      "kind": "tool"
+    },
+    {
+      "agent": "investigator",
+      "call": "mcp:propose_rollback(service=checkout)",
+      "evidence_id": "ev-6481ca-007",
+      "kind": "tool"
+    },
+    {
+      "agent": "controller",
+      "call": "mcp:execute_rollback(service=checkout,to_version=v2.4.0)",
+      "evidence_id": "ev-6481ca-008",
+      "kind": "tool"
+    }
+  ],
+  "checked_claims": [
+    {
+      "mechanism": "bad_deployment",
+      "target": "checkout",
+      "status": "supported",
+      "proposers": [
+        "investigator"
+      ],
+      "rule_ids": [
+        "V1-structural",
+        "V2-deploy-timing",
+        "V2-upstream-dominance",
+        "V1-grounding"
+      ],
+      "failed": []
+    }
+  ],
+  "diagnosis_basis": [
+    "every cited evidence ID exists in this run (4 checked)",
+    "deployment evidence shows checkout v2.4.1 deployed 12 min before the alert",
+    "checkout's error_rate is first seen above 5% 10 min before the alert",
+    "errors on checkout began 2 min after v2.4.1 was deployed (allowed window -5..+30 min)",
+    "0 of 12 ERROR lines of checkout blame a dependency (under 50%)",
+    "the claim cites 3 of the 3 evidence items its rules relied on"
+  ],
+  "fix_preconditions": {
+    "action": "execute_rollback",
+    "target": "checkout",
+    "mechanism": "bad_deployment",
+    "bad_version": "v2.4.1",
+    "to_version": "v2.4.0"
+  },
+  "embedding": null,
+  "embedding_model": null
 }

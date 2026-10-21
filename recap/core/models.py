@@ -145,11 +145,17 @@ class EpisodeOutcome(StrEnum):
 
 
 class MemoryPartition(StrEnum):
-    """Memory isolation label. Evaluation test runs may only read TRAIN episodes."""
+    """Memory isolation label. Evaluation test runs may only read TRAIN episodes.
+
+    TRAIN and TEST belong to the evaluation (a test run never writes, and never reads its
+    own split); DEMO holds the scripted policy's runs; LIVE holds runs whose decisions came
+    from a real model. A run reads and writes the partitions of its own kind by default.
+    """
 
     TRAIN = "train"
     TEST = "test"
     DEMO = "demo"
+    LIVE = "live"
 
 
 class ApprovalStatus(StrEnum):
@@ -706,6 +712,26 @@ class EvidenceSummary(Contract):
     summary: str
 
 
+class TrajectoryStep(Contract):
+    """One observation a past run made, extracted from its evidence (no model text)."""
+
+    agent: AgentRole | None = None
+    call: str  # the canonical source ref, e.g. "mcp:get_service_logs(service=checkout)"
+    evidence_id: str
+    kind: SourceType = SourceType.TOOL
+
+
+class ClaimRecord(Contract):
+    """One root-cause claim a past run checked, and how the verifier judged it."""
+
+    mechanism: FailureMechanism
+    target: str | None = None
+    status: HypothesisStatus
+    proposers: list[AgentRole] = Field(default_factory=list)
+    rule_ids: list[str] = Field(default_factory=list)
+    failed: list[str] = Field(default_factory=list)  # the rules' own lines (RECAP's text)
+
+
 class ExperienceEpisode(Contract):
     """A consolidated past run. `outcome=success` requires independent verification.
 
@@ -730,6 +756,18 @@ class ExperienceEpisode(Contract):
     verification_source: str | None = None  # oracle name
     provenance: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
+    # Since consolidator-v2 (M3). How the summary below was made: by deterministic
+    # extraction from the run's own records, never by a model writing about itself.
+    summary_method: str = "deterministic-extraction"
+    trajectory: list[TrajectoryStep] = Field(default_factory=list)  # what it observed
+    checked_claims: list[ClaimRecord] = Field(default_factory=list)  # every claim it judged
+    diagnosis_basis: list[str] = Field(default_factory=list)  # the passing rules' lines
+    # What must hold for the fix to apply again, e.g. {"action": "execute_rollback",
+    # "target": "checkout", "bad_version": "v2.4.1", "to_version": "v2.4.0"}.
+    fix_preconditions: dict[str, str] = Field(default_factory=dict)
+    # The incident's text embedded by the run's embedder (base64 float32), when it had one.
+    embedding: str | None = None
+    embedding_model: str | None = None
 
     def agent_view(self) -> AgentEpisode:
         """The episode as a provider may see it: the observable story, never the answer key.
@@ -752,6 +790,7 @@ class ExperienceEpisode(Contract):
             verified=self.verified,
             verification_source=self.verification_source,
             created_at=self.created_at,
+            checks=[step.call for step in self.trajectory if step.kind == SourceType.TOOL],
         )
 
 
@@ -770,6 +809,7 @@ class AgentEpisode(Contract):
     verified: bool = False
     verification_source: str | None = None
     created_at: datetime
+    checks: list[str] = Field(default_factory=list)  # what the past run observed (source refs)
 
 
 class MemoryHit(Contract):
@@ -781,6 +821,12 @@ class MemoryHit(Contract):
     outcome: EpisodeOutcome
     safe_to_reuse: bool = False  # success + verified + mechanism matches live evidence
     reason: str = ""
+    # How the hit was found: lexical (word overlap, the `similarity` above) and, when the
+    # run embeds, semantic (cosine). Only `similarity` drives routing and the scripted policy.
+    signals: dict[str, float] = Field(default_factory=dict)
+    # After the live check: the conditions that held, and the ones that argue against reuse.
+    supporting: list[str] = Field(default_factory=list)
+    contradicting: list[str] = Field(default_factory=list)
 
     def agent_view(self) -> AgentMemoryHit:
         """The hit with its episode reduced to the provider-facing view."""
@@ -791,6 +837,8 @@ class MemoryHit(Contract):
             outcome=self.outcome,
             safe_to_reuse=self.safe_to_reuse,
             reason=self.reason,
+            supporting=list(self.supporting),
+            contradicting=list(self.contradicting),
         )
 
 
@@ -803,6 +851,8 @@ class AgentMemoryHit(Contract):
     outcome: EpisodeOutcome
     safe_to_reuse: bool = False
     reason: str = ""
+    supporting: list[str] = Field(default_factory=list)
+    contradicting: list[str] = Field(default_factory=list)
 
 
 def _as_agent_incident(value: Any) -> Any:
@@ -1049,10 +1099,11 @@ class RunConfig(Contract):
     retrieval: Literal["bm25", "hybrid"] | None = None
     use_memory: bool = True
     memory_write: bool = True
-    memory_read_partitions: list[MemoryPartition] = Field(
-        default_factory=lambda: [MemoryPartition.TRAIN, MemoryPartition.DEMO]
-    )
-    memory_write_partition: MemoryPartition = MemoryPartition.DEMO
+    # None: chosen by where the run's decisions come from (the controller resolves it):
+    # the scripted policy reads TRAIN + DEMO and writes DEMO; a real model reads TRAIN +
+    # LIVE and writes LIVE; a replay writes nothing. The evaluation sets both explicitly.
+    memory_read_partitions: list[MemoryPartition] | None = None
+    memory_write_partition: MemoryPartition | None = None
     safety_enabled: bool = True  # may be False only in a simulated environment
     approval_mode: Literal["manual", "auto"] = "manual"  # auto = simulation auto-approver
     planner: Literal["default", "prompt_injected"] = "default"  # red-team compromised planner

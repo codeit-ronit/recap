@@ -89,7 +89,13 @@ from recap.knowledge.embeddings import Embedder
 from recap.knowledge.hints import parse_action_hints
 from recap.memory.consolidation import Consolidator
 from recap.memory.similarity import MemoryQuery
-from recap.memory.store import ExperienceStore, MemoryAccess, assess_reuse
+from recap.memory.store import (
+    ExperienceStore,
+    MemoryAccess,
+    assess_reuse,
+    encode_vector,
+    rank_hits,
+)
 from recap.providers.prompts import PROMPT_VERSION
 from recap.routing.orchestrator import Orchestrator
 from recap.routing.signals import compute_signals
@@ -190,6 +196,7 @@ class IncidentController:
         self.embedder: Embedder | None = None
         self.retrieval = RetrievalInfo(mode="bm25")
         self._last_embed_call: dict[str, Any] | None = None  # for the next retrieval event
+        self._incident_vector: list[float] | None = None  # the alert's embedding (hybrid only)
 
     # ==================================================================================
     # Entry point
@@ -204,6 +211,7 @@ class IncidentController:
         self.info = self.environment.describe()  # is_simulated is fixed per adapter
         self._check_safety_scope()
         self.provider = self.deps.provider_factory(self.config)
+        self.config = _memory_defaults(self.config, self.provider.info.origin)
         seed = self._seed()
 
         # Inject the scenario's fault (trusted) and turn its alert into a typed incident.
@@ -310,13 +318,18 @@ class IncidentController:
 
         if self.config.use_memory:
             access = MemoryAccess.from_run_config(self.config)
+            embedder = self.embedder.name if self.embedder and self._incident_vector else None
             self.record.memory_hits = self.deps.memory.search(
-                MemoryQuery.from_incident(incident), access
+                MemoryQuery.from_incident(incident),
+                access,
+                query_vector=self._incident_vector,
+                embedding_model=embedder,
             )
             self.tracer.emit(
                 TraceCategory.MEMORY_SEARCH,
                 {
                     "readable_partitions": [p.value for p in access.readable_partitions],
+                    "semantic": embedder,
                     "hits": [_hit_ref(h) for h in self.record.memory_hits],
                 },
             )
@@ -867,7 +880,12 @@ class IncidentController:
         """Re-label memory hits once live evidence is verified: similar is not safe-to-reuse."""
         if not self.record.memory_hits:
             return
-        self.record.memory_hits = [assess_reuse(h, report) for h in self.record.memory_hits]
+        points = None
+        if report.best is not None and report.best.target_service:
+            target = report.best.target_service
+            points = self.deps.verifier.restore_points(target, report, self.evidence)
+        assessed = [assess_reuse(h, report, points) for h in self.record.memory_hits]
+        self.record.memory_hits = rank_hits(assessed)
         self.harness.memory_hits = self.record.memory_hits
         self.tracer.emit(
             TraceCategory.MEMORY_ASSESS,
@@ -879,9 +897,12 @@ class IncidentController:
                         "mechanism_match": h.mechanism_match,
                         "safe_to_reuse": h.safe_to_reuse,
                         "reason": h.reason,
+                        "supporting": h.supporting,
+                        "contradicting": h.contradicting,
                     }
                     for h in self.record.memory_hits
-                ]
+                ],
+                "restore_points": points,
             },
         )
 
@@ -927,6 +948,8 @@ class IncidentController:
             embedder = self._hybrid_embedder()
             vector = await self._before_deadline(embedder.embed_query(query), "embedding a query")
             embedding = self._last_embed_call
+            if stage == "initial":  # the incident as text: memory searches and stores it too
+                self._incident_vector = vector
         docs = knowledge.search(query, k=k, query_vector=vector)
         self.tracer.emit(
             TraceCategory.RETRIEVAL,
@@ -1123,6 +1146,11 @@ class IncidentController:
             )
             return
         access = MemoryAccess.from_run_config(self.config)
+        if self.provider.info.origin == "replay":
+            # A replay re-runs recorded model answers: the experience was the original run's.
+            reason = "a replay reproduces a recorded run; it is not new experience"
+            self.tracer.emit(TraceCategory.MEMORY_SKIP, {"reason": reason})
+            return
         if not access.write_enabled:
             self.tracer.emit(
                 TraceCategory.MEMORY_SKIP,
@@ -1134,9 +1162,11 @@ class IncidentController:
                 record=self.record,
                 evidence=self.evidence.all(),
                 scenario=self.scenario,
-                partition=self.config.memory_write_partition,
+                partition=access.write_partition,
                 simulated=self.info.is_simulated,
                 environment_kind=self.info.kind,
+                embedding=encode_vector(self._incident_vector) if self._incident_vector else None,
+                embedding_model=self.embedder.name if self.embedder else None,
             )
             stored = self.deps.memory.add(episode, access)
         except ValueError as exc:
@@ -1273,6 +1303,21 @@ class IncidentController:
 # --- small pure helpers -----------------------------------------------------------------------
 
 
+def _memory_defaults(config: RunConfig, origin: str) -> RunConfig:
+    """Fill in the memory partitions a run did not choose, by where its decisions come from
+    (MemoryAccess.for_origin): scripted runs use DEMO, real models LIVE; a replay never
+    writes."""
+    default = MemoryAccess.for_origin(origin)  # type: ignore[arg-type]
+    update: dict[str, Any] = {}
+    if config.memory_read_partitions is None:
+        update["memory_read_partitions"] = list(default.readable_partitions)
+    if config.memory_write_partition is None:
+        update["memory_write_partition"] = default.write_partition
+    if not default.write_enabled:
+        update["memory_write"] = False
+    return config.model_copy(update=update) if update else config
+
+
 def _unwrap_group(exc: BaseException) -> BaseException:
     """Async libraries may wrap one error in an ExceptionGroup; look inside single-error groups."""
     while isinstance(exc, BaseExceptionGroup) and len(exc.exceptions) == 1:
@@ -1334,6 +1379,8 @@ def _hit_ref(hit: Any) -> dict[str, Any]:
         "verified": episode.verified,
         "mechanism": episode.failure_mechanism,
         "service": episode.service,
+        "partition": episode.partition.value,
+        "signals": hit.signals,
     }
 
 

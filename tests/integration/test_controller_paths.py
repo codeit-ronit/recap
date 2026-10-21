@@ -94,7 +94,9 @@ def test_scenario_overrides_cannot_switch_off_safety_or_approvals(settings: Sett
     assert effective.safety_enabled is True
     assert effective.approval_mode == "manual"
     assert effective.provider is None
-    assert effective.memory_write_partition == MemoryPartition.DEMO
+    # Not "train": the scenario's override is ignored. The partition stays the run's own
+    # choice (unset here), which the controller fills in from the provider's origin.
+    assert effective.memory_write_partition is None
     assert effective.planner == "prompt_injected"  # allowed: a red-team scenario may set it
 
 

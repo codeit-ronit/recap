@@ -210,6 +210,12 @@ class EvidenceVerifier:
             problems += _restore_point_problems(str(restore), proposal.target, report, registry)
         return ProposalCheck(ok=not problems, problems=problems, rule_ids=list(PROPOSAL_RULES))
 
+    def restore_points(
+        self, target: str, report: VerificationReport, registry: EvidenceRegistry
+    ) -> list[str]:
+        """The versions this run's evidence names as a rollback target (see VP4)."""
+        return restore_points(target, report, registry)[0]
+
 
 # --- the run's evidence, parsed back into observation models ------------------------------------
 
@@ -880,19 +886,24 @@ def _depth(
     return len(callers), _union(lines)
 
 
-def _restore_point_problems(
-    version: str, target: str, report: VerificationReport, registry: EvidenceRegistry
-) -> list[str]:
-    """VP4: a fix that restores a version must restore one the evidence names.
+def restore_points(
+    target: str, report: VerificationReport, registry: EvidenceRegistry
+) -> tuple[list[str], str | None]:
+    """(the versions the evidence names as a restore point for `target`, the bad version).
 
-    Named versions: the version before the diagnosed release in the deployment evidence,
-    and the target of a propose_rollback dry run for the service. Restoring the release
-    the diagnosis blames is never right.
+    Named versions: the version before the diagnosed release in the deployment evidence
+    (its `previous_version`, or the release deployed just before it) and the target of a
+    propose_rollback dry run for the service. The bad version is the diagnosed release
+    when the diagnosis is a bad deployment of `target` (None otherwise).
     """
     observed = _Observations(registry.all())
     best = report.best
     bad = None
-    if best is not None and best.mechanism == FailureMechanism.BAD_DEPLOYMENT:
+    if (
+        best is not None
+        and best.mechanism == FailureMechanism.BAD_DEPLOYMENT
+        and best.target_service == target
+    ):
         bad = _claim_detail(best, observed) or None
     release = observed.release(target, bad)
     earlier = []  # the release deployed just before the bad one, if the history shows it
@@ -914,6 +925,15 @@ def _restore_point_problems(
             if plan.service == target and plan.possible and plan.target_version
         ],
     )
+    return named, bad
+
+
+def _restore_point_problems(
+    version: str, target: str, report: VerificationReport, registry: EvidenceRegistry
+) -> list[str]:
+    """VP4: a fix that restores a version must restore one the evidence names, and never
+    the release the diagnosis blames."""
+    named, bad = restore_points(target, report, registry)
     if bad is not None and version == bad:
         return [f"the proposal restores {version}, the release the diagnosis blames"]
     if not named:

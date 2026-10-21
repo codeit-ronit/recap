@@ -29,7 +29,9 @@ from recap.memory.store import (
     ExperienceStore,
     MemoryAccess,
     assess_reuse,
+    encode_vector,
     memory_conflict,
+    rank_hits,
 )
 
 T0 = datetime(2026, 3, 14, 10, 0, tzinfo=UTC)
@@ -299,3 +301,126 @@ def test_assess_reuse_returns_a_new_hit(store: ExperienceStore) -> None:
     assert assessed is not original
     assert original.safe_to_reuse is False
     assert original.reason == UNCHECKED_REASON
+
+
+# --- M3: stricter reuse, re-ranking, partitions by origin, semantic recall ---------------------
+
+
+def report_on(
+    target: str, mechanism: FailureMechanism = DEPLOY, version: str = ""
+) -> VerificationReport:
+    best = Hypothesis(
+        claim="live diagnosis",
+        mechanism=mechanism,
+        target_service=target,
+        status=HypothesisStatus.SUPPORTED,
+        details={"version": version} if version else {},
+    )
+    return VerificationReport(status="supported", best=best)
+
+
+def test_the_same_mechanism_on_another_service_is_not_safe(store: ExperienceStore) -> None:
+    hit = search_one(store, make_episode())  # a verified rollback of checkout
+    assessed = assess_reuse(hit, report_on("payment"))
+    assert assessed.mechanism_match is True and assessed.safe_to_reuse is False
+    assert "the live diagnosis is on payment, not on checkout" in assessed.contradicting
+
+
+def test_a_remembered_rollback_to_a_version_that_is_now_bad_is_unsafe(
+    store: ExperienceStore,
+) -> None:
+    """The unsafe-to-reuse rollback memory: checkout was fixed by rolling back to v2.4.0,
+    but today v2.4.0 is the bad release (it came back), and the evidence names v2.3.9."""
+    hit = search_one(store, make_episode())
+    assert hit.similarity == 1.0  # it looks exactly like today's incident
+    today = report_on("checkout", version="v2.4.0")
+    assessed = assess_reuse(hit, today, restore_points=["v2.3.9"])
+    assert not assessed.safe_to_reuse
+    assert assessed.contradicting == [
+        "the remembered rollback restores v2.4.0, the release diagnosed as bad now"
+    ]
+    assert "live evidence also points to bad deployment" in assessed.supporting
+
+
+def test_a_remembered_rollback_the_evidence_no_longer_names_is_unsafe(
+    store: ExperienceStore,
+) -> None:
+    hit = search_one(store, make_episode())
+    today = report_on("checkout", version="v2.5.0")  # a newer bad release
+    assessed = assess_reuse(hit, today, restore_points=["v2.4.1"])
+    assert not assessed.safe_to_reuse
+    assert assessed.contradicting == [
+        "the remembered rollback restores v2.4.0, but today's evidence names v2.4.1"
+    ]
+    still = assess_reuse(hit, report_on("checkout", version="v2.4.1"), restore_points=["v2.4.0"])
+    assert still.safe_to_reuse  # the same fix, when today's evidence names it again
+
+
+def test_assessed_hits_rank_by_what_live_evidence_confirmed_not_similarity() -> None:
+    look_alike = make_hit(0.95, PRESSURE, SUCCESS)  # very similar, wrong mechanism
+    matching = make_hit(0.4, DEPLOY, SUCCESS)
+    caution = make_hit(0.9, DEPLOY, FAILED)
+    report = live_report(DEPLOY)
+    ranked = rank_hits([assess_reuse(h, report) for h in (look_alike, caution, matching)])
+    assert [(h.similarity, h.safe_to_reuse) for h in ranked] == [
+        (0.4, True),
+        (0.9, False),  # mechanism matches, but it is a caution
+        (0.95, False),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("origin", "reads", "writes", "write"),
+    [
+        ("scripted", ["train", "demo"], "demo", True),
+        ("local_llm", ["train", "live"], "live", True),
+        ("free_hosted_llm", ["train", "live"], "live", True),
+        ("replay", ["train", "live"], "live", False),  # a replay is not new experience
+    ],
+)
+def test_each_kind_of_run_uses_its_own_memory_partitions(
+    origin: str, reads: list[str], writes: str, write: bool
+) -> None:
+    access = MemoryAccess.for_origin(origin)  # type: ignore[arg-type]
+    assert [p.value for p in access.readable_partitions] == reads
+    assert (access.write_partition.value, access.write_enabled) == (writes, write)
+    assert MemoryPartition.TEST not in access.readable_partitions
+
+
+def test_a_live_episode_is_invisible_to_scripted_runs(store: ExperienceStore) -> None:
+    live = make_episode("ep-live", partition=MemoryPartition.LIVE)
+    assert store.add(live, MemoryAccess.for_origin("local_llm"))
+    assert store.search(QUERY, MemoryAccess.for_origin("scripted")) == []
+    [hit] = store.search(QUERY, MemoryAccess.for_origin("local_llm"))
+    assert hit.episode.episode_id == "ep-live"
+
+
+def test_a_semantic_match_adds_a_paraphrased_episode_but_not_its_similarity(
+    store: ExperienceStore,
+) -> None:
+    vector = [1.0, 0.0, 0.0]
+    paraphrase = make_episode("ep-para", symptoms=["shoppers cannot finish buying anything"])
+    paraphrase = paraphrase.model_copy(
+        update={"embedding": encode_vector([0.99, 0.1, 0.0]), "embedding_model": "fake-model"}
+    )
+    store.add(paraphrase, MemoryAccess.default())
+    # Same service, few shared words: 0.3 lexically (the service part alone), so a 0.5
+    # cutoff misses it unless the semantic signal finds it.
+    lexical_only = store.search(QUERY, MemoryAccess.default(), min_similarity=0.5)
+    assert lexical_only == []  # few shared words: lexically it is not similar enough
+    [hit] = store.search(
+        QUERY,
+        MemoryAccess.default(),
+        min_similarity=0.5,
+        query_vector=vector,
+        embedding_model="fake-model",
+    )
+    assert hit.signals["semantic"] >= 0.99 and hit.similarity == hit.signals["lexical"] < 0.5
+    other_model = store.search(
+        QUERY,
+        MemoryAccess.default(),
+        min_similarity=0.5,
+        query_vector=vector,
+        embedding_model="another-model",
+    )
+    assert other_model == []  # vectors from another model are never compared

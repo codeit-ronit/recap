@@ -44,6 +44,7 @@ from recap.core.models import (
     ContextItem,
     ContextPack,
     Evidence,
+    MemoryHit,
     RetrievedChunk,
     TrustLevel,
 )
@@ -118,6 +119,9 @@ class ContextPacker:
         # Room for one item's text, minus what flagging may add in front of it, so the
         # prefix can never push a fitted summary into compaction.
         item_chars = self.max_item_tokens * CHARS_PER_TOKEN - len(UNTRUSTED_PREFIX)
+        # Defense in depth: a full MemoryHit handed in by mistake is reduced to its
+        # label-free view first, so evaluation labels can never reach a pack.
+        memories = [m.agent_view() if isinstance(m, MemoryHit) else m for m in memories]
         drafts = _unique(
             [
                 *_evidence_drafts(evidence, incident.created_at, item_chars),
@@ -226,12 +230,18 @@ def _render_memory(hit: AgentMemoryHit) -> str:
     fix = _render_action(episode.successful_action) if episode.successful_action else "none"
     failed = ", ".join(_render_action(action) for action in episode.unsuccessful_actions)
     verified = "yes" if episode.verified else "no"
-    return (
+    text = (
         f"Past episode {episode.episode_id} (similarity {hit.similarity:.2f}, "
         f"outcome {hit.outcome.value}, oracle-verified {verified}): "
         f"service {episode.service}; diagnosed {diagnosis}; fix {fix}; "
         f"failed attempts: {failed or 'none'}"
     )
+    if episode.checks:
+        text += f"; it checked: {', '.join(episode.checks[:6])}"
+    if hit.mechanism_match is None:  # RECAP has not compared it with live evidence yet
+        return text + "; RECAP's reuse check: not yet compared with live evidence"
+    verdict = "safe to reuse" if hit.safe_to_reuse else "NOT safe to reuse"
+    return text + f"; RECAP's reuse check: {verdict} ({hit.reason})"
 
 
 def _render_action(action: ActionRecord) -> str:

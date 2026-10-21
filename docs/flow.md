@@ -155,6 +155,11 @@ and streamed live to the dashboard.
   `nomic-embed-text` embedder (recorded with the model's exchanges, so a replay needs no
   model) and the retriever fuses BM25 with a cosine ranking over the stored chunk vectors
   (ADR 0022). Each result carries its ranking signals.
+- **Memory:** hits from the partitions this kind of run may read, found by word overlap (and,
+  in hybrid mode, also by an embedding of the alert). Every hit starts "not yet checked":
+  after each verification `assess_reuse` marks it safe only when live evidence confirms the
+  same mechanism on the same service and the fix still fits (a rollback must restore a
+  version today's evidence names), then re-ranks the hits (`memory.assessment`).
 - **Output:** `RetrievedChunk`s and `MemoryHit`s on the run record, and `RunRecord.retrieval`
   (mode, embedder, embedding requests and tokens); `retrieval.docs` and `memory.search`
   events.
@@ -372,7 +377,11 @@ free-plan header checked. Details in [status.md](status.md).
 - **Code:** `_consolidate` and `Consolidator.build_episode`
   ([recap/memory/consolidation.py](../recap/memory/consolidation.py)).
 - **Output:** an `ExperienceEpisode` in `data/memory.db` (outcome `success` only if the
-  oracle verified recovery; never for a held-out test scenario) → `memory.consolidated`;
+  oracle verified recovery; never for a held-out test scenario) → `memory.consolidated`.
+  It lands in the run's own partition: DEMO for the scripted policy, LIVE for a real model
+  (a replay writes nothing). Consolidator v2 adds the trajectory, every judged claim, the
+  rules' lines behind the diagnosis and the fix's preconditions, all extracted from RECAP's
+  own records (ADR 0023);
   then `run.summary` (state, attempts, unsafe actions, budget, cost label) and the final
   checkpoint. A run that crashed, was cancelled or was **deferred** (`QUOTA_EXHAUSTED`: a
   free model's quota ran out) writes no episode: it says nothing about the incident.

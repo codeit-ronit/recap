@@ -298,17 +298,28 @@ def failed_line(number: int, action: ActionRecord) -> str:
 
 def memory_line(hit: AgentMemoryHit) -> str:
     # Outcome, verification and "safe to reuse" are RECAP's own judgements, not episode text.
+    # The section is trusted text, but an episode is read from a file that could have been
+    # tampered with, so only plain values (IDs, service names, versions) are repeated here.
     episode = hit.episode
     line = (
-        f"- {episode.episode_id} (similarity {hit.similarity:.2f}): outcome {hit.outcome.value}, "
-        f"oracle-verified {_yes_no(episode.verified)}, safe to reuse {_yes_no(hit.safe_to_reuse)}"
+        f"- {_plain(episode.episode_id)} (similarity {hit.similarity:.2f}): outcome "
+        f"{hit.outcome.value}, oracle-verified {_yes_no(episode.verified)}, "
+        f"safe to reuse {_yes_no(hit.safe_to_reuse)}"
     )
     if hit.reason:
         line += f" ({hit.reason})"
     fix = episode.successful_action
     if fix is not None:
-        line += f"; fix that worked: {fix.action} on {fix.target} {canonical_json(fix.params)}"
+        params = {key: _plain(str(value)) for key, value in fix.params.items()}
+        line += (
+            f"; fix that worked: {_plain(fix.action)} on {_plain(fix.target)} "
+            f"{canonical_json(params)}"
+        )
     return line
+
+
+def _plain(value: str) -> str:
+    return value if is_plain_value(value) else "(withheld)"
 
 
 def _yes_no(flag: bool) -> str:

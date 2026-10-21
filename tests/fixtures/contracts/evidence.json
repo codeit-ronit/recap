@@ -1,9 +1,9 @@
 {
-  "id": "ev-3b99d1-001",
-  "incident_id": "inc-15e50da5f8",
+  "id": "ev-6481ca-001",
+  "incident_id": "inc-bfa747a919",
   "source_type": "tool",
   "source_ref": "mcp:get_service_health(service=checkout)",
-  "timestamp": "2026-10-21T14:14:01.316511Z",
+  "timestamp": "2026-10-21T14:40:45.233049Z",
   "content": "{\"service\":\"checkout\",\"status\":\"Running\",\"ready_replicas\":3,\"replicas\":3,\"error_rate\":0.3177,\"latency_p95_ms\":1599.8,\"observed_at\":\"2026-03-14T10:00:00Z\"}",
   "data": {
     "service": "checkout",

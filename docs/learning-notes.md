@@ -4757,3 +4757,63 @@ tool goes through the same safety gateway as every other tool, has its own budge
 environment can't answer it. And because a search query is free text a model wrote, it
 never appears in the trusted part of a prompt: it's hashed in references and shown as data
 in the history."
+
+### M3, step 4 — Memory that keeps its kinds apart and never trusts a look-alike
+
+**What changed, in one paragraph.** RECAP remembers every finished run as an episode, and
+looks for similar episodes when a new incident arrives. Now each kind of run keeps its own
+memory: the scripted policy's runs go to DEMO, a real model's runs to a new LIVE partition,
+and a replay (recorded answers played back) writes nothing. An episode now also records
+what the run checked, every claim it judged, the rule lines behind its diagnosis and what
+must hold for its fix to apply again. And "safe to reuse" got stricter: the same cause is
+not enough; it must be on the same service, and a remembered rollback must still restore a
+version today's evidence names.
+
+**The idea most worth understanding: similar symptoms are not evidence.** I measured it:
+over the 15 scenarios, alerts with the same cause and alerts with different causes are
+equally alike, by words and by meaning, and some alerts with different causes are word for
+word identical (the `memory-caution` scenario reads exactly like `bad-deployment`, but the
+cause is payment running out of memory). So memory can only suggest where to look. Whether
+a past fix applies is decided after the live evidence is verified, condition by condition:
+
+| Condition | Why |
+|---|---|
+| The past run succeeded, verified by the oracle | A failed attempt is a caution, not a recipe |
+| Live evidence supports the same mechanism | Look-alike alerts can have different causes |
+| On the same service | A checkout rollback does not fix payment |
+| The fix still fits | A rollback to `v2.4.0` is wrong once `v2.4.0` is the bad release, or once the evidence names another restore point |
+
+Each hit records which conditions held and which did not, and the hits are re-ranked: safe
+first, then a matching cause, then similarity.
+
+**Why memory text is treated like any other data.** Memory is a file on disk. If someone
+could change it, they could plant a "verified success" (rejected: live evidence decides), or
+put instructions into an episode's fields. So the parts of a prompt that RECAP marks as its
+own trusted text repeat only plain identifiers from an episode; anything else becomes
+"(withheld)", and the full episode is shown only inside the untrusted-data wrapper.
+
+**Inputs → outputs.**
+
+- `MemoryAccess.for_origin(origin)` → which partitions a run reads and writes.
+- `Consolidator.build_episode(...)` → an `ExperienceEpisode` with `trajectory`,
+  `checked_claims`, `diagnosis_basis`, `fix_preconditions`, `summary_method`.
+- `ExperienceStore.search(query, access, query_vector=..., embedding_model=...)` → hits with
+  `signals` (lexical, semantic).
+- `assess_reuse(hit, report, restore_points)` → `safe_to_reuse`, `supporting`,
+  `contradicting`, `reason`; `rank_hits(hits)` → safe first.
+
+**Reproduce.**
+
+```bash
+.venv/bin/python -m pytest tests/unit/test_memory_store.py tests/unit/test_consolidation.py \
+  tests/adversarial/test_poisoned_memory.py tests/e2e/test_live_memory.py
+```
+
+**Interview version.** "My agent remembers past incidents, but I measured that symptom
+similarity doesn't tell causes apart: some of my scenarios have identical alerts with
+different root causes. So memory only suggests; a past fix is reused only after today's
+verified evidence shows the same mechanism on the same service, and the fix itself still
+fits. A remembered rollback to a version that's now the bad release gets rejected with the
+reason. Real-model runs keep their own memory partition, replays never write, and test
+runs never read their own split. And because the memory file is data, nothing from it can
+become trusted prompt text."
