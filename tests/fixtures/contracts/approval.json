@@ -1,12 +1,12 @@
 {
-  "approval_id": "apr-cdf8b85719",
-  "incident_id": "inc-129e886fe9",
-  "proposal_id": "prop-f0f662fa87",
-  "proposal_digest": "c3d730b61e5d915ef25ee9e4fce35d1015d68f983c0a010f2938968b0481f7fe",
+  "approval_id": "apr-07511f06e6",
+  "incident_id": "inc-ada773223d",
+  "proposal_id": "prop-db6e5bb8f1",
+  "proposal_digest": "c9da28d39493fe5bd2862abba27584efc4416ad7770e224ad88ab2c074ac2a33",
   "scope": "single_action",
   "decision": "approved",
   "actor": "auto-approver[simulation]",
-  "decided_at": "2026-10-21T10:26:13.338844Z",
-  "expires_at": "2026-10-21T10:41:13.338348Z",
-  "consumed_at": "2026-10-21T10:26:13.340915Z"
+  "decided_at": "2026-10-21T11:56:03.318139Z",
+  "expires_at": "2026-10-21T12:11:03.317598Z",
+  "consumed_at": "2026-10-21T11:56:03.320251Z"
 }

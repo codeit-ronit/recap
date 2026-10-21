@@ -1,5 +1,7 @@
 # RECAP — Experience-Learning Autonomous Reliability Agent (Prototype)
 
+**Version 0.3.0** (milestone M2) · [Changelog](CHANGELOG.md) · [Releases](https://github.com/codeit-ronit/recap/releases)
+
 > **V1 prototype: runs on a simulated local environment; nothing here repairs a real cluster.**
 > Hardened in milestone M1 (October 2026) after an independent audit. Since M2 a **real model** can make the decisions at $0: `qwen3:8b` on this machine (Ollama) or `gpt-oss-120b` on Groq's free plan. One such run, approved by the owner at the terminal, is exported for anyone to check (and replay offline) in [evals/live/](evals/live/README.md). See [docs/status.md](docs/status.md) for measured results and [docs/flow.md](docs/flow.md) for one incident end to end.
 
@@ -408,6 +410,8 @@ CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on every push and
 - [docs/threat-model.md](docs/threat-model.md): what can go wrong and what stops it
 - [docs/benchmark-plan.md](docs/benchmark-plan.md): the plan for a real SREGym benchmark
 - [docs/provider-options.md](docs/provider-options.md): free LLM inference options (researched; Ollama and Groq Free in use since M2)
+- [CHANGELOG.md](CHANGELOG.md): what each version (milestone) changed; each version is a git tag and a GitHub release
+- [evals/live/](evals/live/README.md): exported real-model runs, including the human-approved M2 deliverable
 - [docs/decisions/](docs/decisions/): architecture decision records
 - Module READMEs: [harness](recap/harness/README.md) · [environments](recap/environments/README.md) · [tools](recap/tools/README.md) · [safety](recap/safety/README.md) · [knowledge](recap/knowledge/README.md) · [memory](recap/memory/README.md) · [context](recap/context/README.md) · [routing](recap/routing/README.md) · [agents](recap/agents/README.md) · [verification](recap/verification/README.md) · [providers](recap/providers/README.md) · [telemetry](recap/telemetry/README.md) · [API](apps/api/README.md) · [dashboard](apps/dashboard/README.md) · [SREGym adapter](integrations/sregym/README.md) · [infra](infra/README.md)
 

@@ -1,20 +1,20 @@
 {
-  "event_id": "evt-9736e63bba",
-  "run_id": "run-b6fc88e4ab",
+  "event_id": "evt-ddb5164cf0",
+  "run_id": "run-31c1cdb9b1",
   "seq": 13,
   "stage": "INVESTIGATING",
-  "ts": "2026-10-21T10:26:13.244385Z",
+  "ts": "2026-10-21T11:56:03.218768Z",
   "agent": "investigator",
   "category": "tool.call",
   "payload": {
-    "invocation_id": "call-5bd67807f8",
+    "invocation_id": "call-b8c90bb27f",
     "tool": "get_service_health",
     "caller": "investigator",
     "args": {
       "service": "checkout"
     },
-    "incident_id": "inc-129e886fe9",
-    "requested_at": "2026-10-21T10:26:13.244377Z"
+    "incident_id": "inc-ada773223d",
+    "requested_at": "2026-10-21T11:56:03.218760Z"
   },
   "duration_ms": null,
   "usage": null,
