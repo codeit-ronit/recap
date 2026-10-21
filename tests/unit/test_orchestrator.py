@@ -264,3 +264,45 @@ async def test_with_no_time_left_on_the_run_no_agent_is_started() -> None:
         await orchestrator.execute(decision())
 
     assert agents.plans == []  # not one agent was started
+
+
+# --- M3: per-agent time slices and partial findings ------------------------------------------
+
+
+async def test_a_slow_specialist_ends_as_an_error_while_the_other_finding_survives() -> None:
+    agents = FakeAgents({TELEMETRY: sleep_for(0.6), INFRA: sleep_for(0.05)})
+    orchestrator = Orchestrator(
+        agents,
+        SPECS,
+        recording_tracer(),
+        agent_timeout_seconds=60,
+        remaining_seconds=lambda: 1.0,  # the run has 1 s left: each agent gets 0.5 s
+        parallel_time_share=0.5,
+    )
+    telemetry, infra = await orchestrator.execute(decision())
+    assert telemetry.error == "timeout after 0.5s" and telemetry.outcome == "error"
+    assert infra.error is None and infra.summary == "infrastructure_investigator done"
+
+
+async def test_the_time_share_applies_only_to_parallel_rounds() -> None:
+    agents = FakeAgents({INVESTIGATOR: sleep_for(0.3)})
+    orchestrator = Orchestrator(
+        agents,
+        SPECS,
+        recording_tracer(),
+        agent_timeout_seconds=60,
+        remaining_seconds=lambda: 1.0,
+        parallel_time_share=0.1,  # 0.1 s would stop a parallel agent
+    )
+    [finding] = await orchestrator.execute(decision([INVESTIGATOR], StrategyMode.SINGLE))
+    assert finding.error is None  # a single agent may use all the time left
+
+
+async def test_findings_completed_before_a_stop_travel_with_it() -> None:
+    from recap.core.errors import QuotaExhausted
+
+    agents = FakeAgents({TELEMETRY: fail_with(QuotaExhausted("groq", "daily cap reached"))})
+    with pytest.raises(QuotaExhausted) as stop:
+        await Orchestrator(agents, SPECS, recording_tracer()).execute(decision())
+    [kept] = stop.value.partial_findings  # type: ignore[attr-defined]
+    assert kept.agent_role == INFRA and kept.error is None

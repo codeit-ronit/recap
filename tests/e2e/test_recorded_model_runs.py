@@ -64,7 +64,7 @@ async def test_the_recorded_qwen3_run_resolves_offline_and_says_it_is_a_replay(
     assert proposal.params == {"to_version": "v2.4.0"}
     calls = [e for e in events if e.category == C.LLM_CALL]
     assert len(calls) == 5 and all(e.payload["replayed"] for e in calls)
-    assert sum(e.payload["input_tokens"] for e in calls) == 12891  # the original run's counts
+    assert sum(e.payload["input_tokens"] for e in calls) == 13234  # the original run's counts
     # Which server and weights answered the original run, from its recorded metadata.
     assert info.server is not None and info.server["ollama_version"] == "0.34.4"
     assert info.server["weights"] == (

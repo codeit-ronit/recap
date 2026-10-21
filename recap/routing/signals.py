@@ -47,6 +47,7 @@ def compute_signals(
     routing: RoutingSettings,
     prior_failed_attempts: int = 0,
     escalation: bool = False,
+    disagreement: bool = False,
 ) -> RoutingSignals:
     """Collect the routing signals for one investigation round."""
     similar = [hit for hit in memory_hits if hit.similarity >= routing.familiar_similarity]
@@ -61,6 +62,7 @@ def compute_signals(
         memory_conflict=memory_conflict(memory_hits, routing.conflict_similarity),
         prior_failed_attempts=prior_failed_attempts + failed_before,
         escalation=escalation,
+        disagreement=disagreement,
         remaining_tool_calls=budget.remaining_tool_calls(),
         remaining_steps=budget.remaining_steps(),
         max_parallel_agents=budget.budget.max_parallel_agents,

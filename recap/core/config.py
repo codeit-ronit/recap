@@ -16,7 +16,14 @@ from pydantic import Field, model_validator
 
 from recap.core.errors import ConfigError
 from recap.core.ids import sha256_hex
-from recap.core.models import AgentRole, Contract, ProviderOrigin, RunBudget, ToolRisk
+from recap.core.models import (
+    AgentRole,
+    Contract,
+    FailureMechanism,
+    ProviderOrigin,
+    RunBudget,
+    ToolRisk,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -40,6 +47,9 @@ class RoutingSettings(Contract):
     parallel_min_tool_calls: int = 10
     familiar_similarity: float = 0.6
     conflict_similarity: float = 0.45
+    # In a parallel round each agent may use at most this share of the run's remaining
+    # time: a slow specialist then ends as an error finding, and the other's survives.
+    parallel_agent_time_share: float = Field(default=0.7, gt=0, le=1)
 
 
 class RetrySettings(Contract):
@@ -68,6 +78,10 @@ class AgentSpec(Contract):
     goal: str
     tools: list[str] = Field(default_factory=list)
     max_steps: int = 8
+    # The role's contract: shown to a model as its responsibilities, and the failure
+    # mechanisms it may conclude (empty: any). Enforced by the harness for every provider.
+    responsibilities: list[str] = Field(default_factory=list)
+    mechanisms: list[FailureMechanism] = Field(default_factory=list)
 
 
 class ArgRule(Contract):

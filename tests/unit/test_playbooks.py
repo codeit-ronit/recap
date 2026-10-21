@@ -289,7 +289,7 @@ def test_calls_already_made_are_never_planned_again(settings: Settings) -> None:
 
 def test_targets_are_capped_at_three_services(settings: Settings) -> None:
     affected = ["checkout", "frontend", "cart"]
-    for role, per_service in ((INV, 6), (TEL, 3)):
+    for role, per_service in ((INV, 6), (TEL, 2)):  # telemetry: logs and error rate
         plan = plan_next_calls(
             make_request(settings, role, affected=affected, focus=["payment"]), FAMILIAR
         )
@@ -325,14 +325,14 @@ def test_infrastructure_starts_cluster_wide_then_follows_up(settings: Settings) 
 
 
 def test_telemetry_reads_memory_only_when_health_or_logs_hint_at_it(settings: Settings) -> None:
-    telemetry_checks = checks("checkout")[:3]
+    telemetry_checks = checks("checkout")[1:3]  # logs and error rate (health is infrastructure's)
     memory = "mcp:get_service_metrics(metric=memory_mb,service=checkout)"
     assert refs(plan_next_calls(make_request(settings, TEL), FAMILIAR)) == telemetry_checks
 
-    crashing = Recorder()
+    crashing = Recorder()  # health evidence another agent recorded before this round
     crashing.health("checkout", status="CrashLoopBackOff", ready=1)
     plan = refs(plan_next_calls(make_request(settings, TEL, evidence=crashing.evidence), FAMILIAR))
-    assert plan == [*telemetry_checks[1:], memory]
+    assert plan == [*telemetry_checks, memory]
 
     heap = Recorder()
     heap.logs("checkout", ("WARN", HEAP_WARNING_TEMPLATE.format(percent=93)))
@@ -419,7 +419,9 @@ def test_memory_guidance_needs_a_close_verified_fix_and_a_fresh_look(
 
     request = make_request(settings, role, memory=[hit], focus=focus)
 
-    assert refs(plan_next_calls(request, FAMILIAR))[0] == "mcp:get_service_health(service=checkout)"
+    # No memory shortcut: the role's normal checklist starts (telemetry's starts with logs).
+    first = "get_service_logs" if role == TEL else "get_service_health"
+    assert refs(plan_next_calls(request, FAMILIAR))[0] == f"mcp:{first}(service=checkout)"
     assert memory_confirmation_done(request, FAMILIAR) == (False, "")
 
 

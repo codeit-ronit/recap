@@ -402,3 +402,16 @@ async def test_the_caps_count_a_typical_answer_not_the_largest(
     expected = estimate_tokens(canonical_json(fake.chats[0])) + free_tier.reserved_output_tokens
     assert reserved == expected
     assert free_tier.reserved_output_tokens < settings.providers.providers["groq"].max_output_tokens
+
+
+async def test_parallel_first_steps_share_one_model_list_check(
+    settings: Settings, groq_env: None
+) -> None:
+    import asyncio
+
+    fake = FakeGroq([LIST_SERVICES, LIST_SERVICES])
+    provider = groq(settings, fake)
+    request = investigation_request(settings)
+    await asyncio.gather(provider.next_action(request), provider.next_action(request))
+    assert [r.url.path for r in fake.requests].count("/openai/v1/models") == 1
+    assert len(chat_requests(fake)) == 2

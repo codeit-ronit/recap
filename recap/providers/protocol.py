@@ -78,7 +78,7 @@ from recap.providers.prompts import (
 
 # Recorded on every run that uses this protocol. Bump it whenever the text, the schemas or
 # the parsing rules change, so a trace always says which protocol produced a decision.
-PROMPT_VERSION = "prompts-v4.2"  # v4.2: no example value that could be a scenario's answer
+PROMPT_VERSION = "prompts-v4.3"  # v4.3 (M3): role contracts, independent views, findings
 
 Mode = Literal["json", "tools"]
 Message = dict[str, Any]  # {"role": "system" | "user", "content": "..."}
@@ -177,9 +177,13 @@ def correction(problem: str) -> Message:
 
 def render_investigation(request: InvestigationRequest, mode: Mode) -> str:
     """The user message for one step: stable sections first, changing ones last."""
+    role = [f"Role: {request.role.value}", f"Goal: {request.goal}"]
+    role += [f"- {line}" for line in request.responsibilities]
+    if request.mechanisms:
+        role.append("You may conclude only: " + ", ".join(m.value for m in request.mechanisms))
     sections = [
         "# Investigation",
-        section("Your role", [f"Role: {request.role.value}", f"Goal: {request.goal}"]),
+        section("Your role", role),
         incident_section(request.incident),
     ]
     if request.focus_services:
@@ -187,13 +191,19 @@ def render_investigation(request: InvestigationRequest, mode: Mode) -> str:
         # recovery oracle (whose findings are ground truth no agent may see).
         title = "Services to examine first (named by RECAP's verifier or by an earlier fix attempt)"
         sections.append(section(title, [", ".join(request.focus_services)]))
+    if request.open_questions:
+        # Built by the verifier from checked values only (mechanisms, service names,
+        # versions), never from tool output or model text, so it may sit outside the
+        # untrusted data. Agreeing with another agent settles nothing: evidence does.
+        title = "Open questions from RECAP's verifier (answer them with evidence)"
+        sections.append(section(title, [f"- {q}" for q in request.open_questions]))
     if mode == "json":
         # In tools mode the server shows the model the tool definitions itself.
         sections.append(tools_section("Tools you may call (all read-only)", request.tools))
     history = [call_line(number, call) for number, call in enumerate(request.history, 1)]
     sections += [
         section("Your previous calls", history),
-        section("Already observed in this run by any agent", tool_refs(request.observed_refs)),
+        section("Already observed (do not repeat these calls)", tool_refs(request.observed_refs)),
         context_section(request.context),
         section(
             "What to return", JSON_STEP_INSTRUCTIONS if mode == "json" else TOOLS_STEP_INSTRUCTIONS
@@ -237,7 +247,9 @@ def _system() -> Message:
 def step_schema(request: InvestigationRequest) -> dict[str, Any]:
     """JSON schema for one investigation step in json mode."""
     kinds = FINAL_KINDS if is_last_step(request) else STEP_KINDS
-    hypothesis = _hypothesis_schema(_services(request.tools), visible_evidence_ids(request))
+    hypothesis = _hypothesis_schema(
+        _services(request.tools), visible_evidence_ids(request), _mechanisms(request)
+    )
     return _object(
         {
             # Summary first: a short look at the evidence before the model commits to a kind.
@@ -263,7 +275,7 @@ def tool_definitions(request: InvestigationRequest) -> list[dict[str, Any]]:
     drops unknown IDs. Keeping the definitions the same from step to step lets a local
     server reuse its cache for the start of the prompt, where its template puts the tools.
     """
-    hypothesis = _hypothesis_schema(_services(request.tools), [])
+    hypothesis = _hypothesis_schema(_services(request.tools), [], _mechanisms(request))
     finish = _function(
         FINISH_TOOL,
         "Finish this investigation: give root-cause hypotheses that cite evidence IDs, or say "
@@ -407,12 +419,20 @@ def _merged_arg_schema(rules: list[dict[str, Any]]) -> dict[str, Any]:
     return {"type": "string"}
 
 
-def _hypothesis_schema(services: list[str], evidence_ids: list[str]) -> dict[str, Any]:
+def _mechanisms(request: InvestigationRequest) -> list[str]:
+    """The failure mechanisms this role may conclude (all of them when none are listed)."""
+    allowed = request.mechanisms or list(FailureMechanism)
+    return [mechanism.value for mechanism in allowed]
+
+
+def _hypothesis_schema(
+    services: list[str], evidence_ids: list[str], mechanisms: list[str]
+) -> dict[str, Any]:
     service = _enum(services) if services else {"type": "string"}
     return _object(
         {
             "claim": _text("The root cause in one sentence."),
-            "mechanism": _enum([mechanism.value for mechanism in FailureMechanism]),
+            "mechanism": _enum(mechanisms),
             "target_service": _nullable(service, "The service that must be fixed."),
             "version": _nullable(
                 {"type": "string"},
@@ -424,6 +444,12 @@ def _hypothesis_schema(services: list[str], evidence_ids: list[str]) -> dict[str
             ),
             "supporting_evidence_ids": _array(
                 _ids(evidence_ids), "Evidence IDs that support the claim.", 8
+            ),
+            "contradicting_evidence_ids": _array(
+                _ids(evidence_ids), "Evidence IDs that argue against the claim; [] if none.", 4
+            ),
+            "confidence_note": _text(
+                "In one sentence: how sure you are, and what would change your mind."
             ),
         }
     )
@@ -549,6 +575,8 @@ class _HypothesisAnswer(_Answer):
     version: str | None = None
     dependency: str | None = None
     supporting_evidence_ids: list[str] = Field(default_factory=list)
+    contradicting_evidence_ids: list[str] = Field(default_factory=list)
+    confidence_note: str = ""
 
 
 class _StepAnswer(_Answer):
@@ -711,29 +739,44 @@ def _step_decision(answer: _StepAnswer, request: InvestigationRequest, notes: li
             )
             return Parsed(None, answer.kind, notes, problem=problem)
         decision = InvestigationDecision(
-            action="call_tools", tool_calls=calls, summary=summary, next_steps=next_steps
+            action="call_tools",
+            tool_calls=calls,
+            summary=summary,
+            next_steps=next_steps,
+            kind=answer.kind,
         )
         return Parsed(decision, answer.kind, notes)
     if answer.kind == "hypothesis":
         services = set(_services(request.tools))
         known = set(visible_evidence_ids(request))
-        hypotheses = [
-            _hypothesis(raw, services, known, notes)
-            for raw in answer.hypotheses
-            if raw.claim.strip()
-        ]
+        allowed = set(_mechanisms(request))
+        hypotheses = []
+        for raw in answer.hypotheses:
+            if not raw.claim.strip():
+                continue
+            if raw.mechanism.value not in allowed:  # tools mode: servers do not enforce enums
+                notes.append(f"dropped a {raw.mechanism.value} claim this role may not make")
+                continue
+            hypotheses.append(_hypothesis(raw, services, known, notes))
         if not hypotheses:
             problem = 'kind is "hypothesis" but no hypothesis with a claim was given.'
             return Parsed(None, answer.kind, notes, problem=problem)
         decision = InvestigationDecision(
-            action="finish", hypotheses=hypotheses, summary=summary, next_steps=next_steps
+            action="finish",
+            hypotheses=hypotheses,
+            summary=summary,
+            next_steps=next_steps,
+            kind=answer.kind,
         )
         return Parsed(decision, answer.kind, notes)
     # need_more_evidence and stop finish without a diagnosis. The verifier then finds the
     # evidence insufficient, and the controller escalates or hands over to a human.
     said = "needs more evidence" if answer.kind == "need_more_evidence" else "stopped"
     decision = InvestigationDecision(
-        action="finish", summary=f"The model {said}: {summary}".strip(), next_steps=next_steps
+        action="finish",
+        summary=f"The model {said}: {summary}".strip(),
+        next_steps=next_steps,
+        kind=answer.kind,
     )
     return Parsed(decision, answer.kind, notes)
 
@@ -804,7 +847,9 @@ def _hypothesis(
         mechanism=raw.mechanism,
         target_service=target,
         supporting_evidence_ids=_known(raw.supporting_evidence_ids, known_ids, notes),
+        contradicting_evidence_ids=_known(raw.contradicting_evidence_ids, known_ids, notes),
         details=details,
+        confidence_note=_clip(raw.confidence_note, 200),
     )
 
 

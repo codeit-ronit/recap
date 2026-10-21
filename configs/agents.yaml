@@ -8,15 +8,27 @@ agents:
             get_recent_deployments, get_k8s_like_events, propose_rollback]
     max_steps: 10
 
+  # The two specialists see different things, so each can conclude only what it can
+  # observe; the verifier then judges every claim against BOTH agents' evidence.
   telemetry_investigator:
-    goal: "Use health, logs and metrics to find which service is failing and when it started."
-    tools: [get_service_health, get_service_logs, get_service_metrics]
+    goal: "From logs and metrics, find which service is failing, how, and since when."
+    responsibilities:
+      - "Measure the symptoms over time: error rate, latency and memory, and when they began."
+      - "Read the failing services' logs: name the error signature and which service the errors point to."
+      - "You cannot see releases, rollouts or cluster events. If the symptoms suggest one, say so in next_checks for the infrastructure investigator instead of claiming it."
+    tools: [get_service_logs, get_service_metrics]
+    mechanisms: [resource_pressure, dependency_failure, unknown]
     max_steps: 8
 
   infrastructure_investigator:
-    goal: "Use deployments, cluster events and topology to find risky changes or resource problems."
-    tools: [list_services, get_recent_deployments, get_k8s_like_events, propose_rollback,
-            get_service_health]
+    goal: "From releases, cluster events, health and topology, find what changed or broke in the platform."
+    responsibilities:
+      - "Check recent releases and rollouts of the affected services, and when each happened."
+      - "Check cluster events (restarts, OOM kills, failed probes), each service's health and what it depends on."
+      - "You cannot read logs or metrics. If a cause needs them to be confirmed, name it in next_checks for the telemetry investigator."
+    tools: [list_services, get_service_health, get_recent_deployments, get_k8s_like_events,
+            propose_rollback]
+    mechanisms: [bad_deployment, resource_pressure, dependency_failure, unknown]
     max_steps: 8
 
   evidence_verifier:

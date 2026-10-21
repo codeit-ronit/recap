@@ -12,6 +12,7 @@ wins; its rule ID and a plain-English reason are traced and shown in the dashboa
     RT0-forced              the run configuration forces "single" or "parallel"
     RT1-budget-floor        too little budget left for two agents             -> single
     RT2-cross-service       two or more services affected                     -> parallel
+    RT3-disagreement        last round left a conflict no evidence rule settled -> parallel
     RT3-escalation          last round inconclusive, or a fix already failed  -> parallel
     RT4-memory-conflict     similar past incidents disagree                   -> parallel
     RT5-ambiguous-symptoms  symptoms span three or more categories            -> parallel
@@ -78,6 +79,13 @@ class RulesRouter:
                 "RT2-cross-service",
                 f"{s.services_affected} services are affected: look at telemetry and "
                 "infrastructure side by side",
+            )
+        if s.disagreement:
+            return (
+                PARALLEL,
+                "RT3-disagreement",
+                "the last round left supported claims that conflict and no evidence rule "
+                "settles: ask both specialists again, with the verifier's open questions",
             )
         if s.escalation or s.prior_failed_attempts > 0:
             return (

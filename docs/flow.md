@@ -42,15 +42,16 @@ flowchart TD
     RTR --> ORC["Orchestrator"]
     ORC --> AG["Agent harness loop (one per agent)"]
     AG -->|"ContextPacker: summaries, label-free views"| PRV["Provider: scripted policy, Ollama, Groq Free, or a replay"]
-    PRV -->|"prompts-v4.1 + a schema built from the trusted catalog"| LLM["Model server: Ollama on loopback, or Groq Free behind the free-tier guard"]
+    PRV -->|"prompts-v4.3 + a schema built from the trusted catalog"| LLM["Model server: Ollama on loopback, or Groq Free behind the free-tier guard"]
     LLM -->|"answer: tool_request / hypothesis / need_more_evidence / stop"| PRV
     PRV -.->|"every exchange, without the key"| REC["Recording: data/recordings/*.jsonl"]
     PRV -->|"read tool calls"| GW["ToolGateway"]
     GW -->|"MCP over stdio"| SRV["MCP server subprocess"]
     SRV -->|"observe_*"| ENV
     GW -->|"bounded, redacted Evidence"| REG["EvidenceRegistry"]
-    AG -->|"AgentFinding (hypotheses citing evidence IDs)"| VER["EvidenceVerifier (V1-V6)"]
+    AG -->|"AgentFinding (hypotheses citing evidence IDs)"| VER["Merger + EvidenceVerifier (V1-V7)"]
     REG --> VER
+    VER -.->|"open conflict: one question for the next round"| RTR
 
     VER -->|"best supported hypothesis"| PROP["PROPOSING: provider drafts one fix"]
     PROP --> POL{"Safety policy"}
@@ -159,13 +160,21 @@ and streamed live to the dashboard.
 - **Input:** routing signals (services affected, memory hits, budget left, prior failures).
 - **Code:**
   1. `RulesRouter.decide` ([recap/routing/router.py](../recap/routing/router.py)) picks one
-     generalist or two specialists in parallel → `routing.decision`, `investigation.round`.
+     generalist or two specialists in parallel → `routing.decision`, `investigation.round`
+     (with the verifier's open questions from the previous round, if any).
   2. The `Orchestrator` runs the agents (concurrently in parallel mode), each with a
-     deadline: its own limit or the time left on the run, whichever is shorter.
+     deadline: its own limit or the time left on the run, whichever is shorter (in a
+     parallel round at most 70% of the time left). The two specialists have disjoint tools
+     and a role contract ([configs/agents.yaml](../configs/agents.yaml)): telemetry reads
+     logs and metrics and may not claim a bad release; infrastructure reads releases,
+     events, health and topology (ADR 0020).
   3. Each agent runs the harness loop ([recap/harness/loop.py](../recap/harness/loop.py)),
      one **step** at a time:
-     - **observe:** `ContextPacker.build` ([recap/context/packer.py](../recap/context/packer.py))
-       turns the run's evidence into structured summaries
+     - **observe:** in a parallel round an agent sees the evidence from before the round
+       plus its own, never the other specialist's in-flight results (`AgentHarness.visible`;
+       evidence IDs like `ev-3f9a2c-r2t01` are per agent, so timing cannot change them).
+       `ContextPacker.build` ([recap/context/packer.py](../recap/context/packer.py))
+       turns that evidence into structured summaries
        ([recap/context/summaries.py](../recap/context/summaries.py)), adds runbook chunks
        and label-free memory views, ranks and fits them into the token budget →
        `context.pack`;
@@ -178,7 +187,8 @@ and streamed live to the dashboard.
        redacted, bounded (keeping the head and the tail), flagged and stored as `Evidence`
        → `tool.result`.
   4. When the provider finishes, it returns hypotheses that cite evidence IDs →
-     `agent.finish`; the orchestrator emits `orchestration.summary` (with the measured
+     `agent.finish` (with how the agent ended, and any claim dropped because the role may
+     not make it); the orchestrator emits `orchestration.summary` (with the measured
      overlap of parallel agents).
   5. With a real model, every request behind a decision is also traced as `llm.call`
      (model, exact tokens, time, what it chose), right before the `agent.decision` it
@@ -195,10 +205,11 @@ deployments, events, the memory metric, and a rollback dry run (`propose_rollbac
   context pack, the agent's tools, its history, the step number).
 - **Code:** `HttpLLMProvider.next_action` ([recap/providers/http_llm.py](../recap/providers/http_llm.py)):
   1. **render** ([recap/providers/protocol.py](../recap/providers/protocol.py),
-     prompts-v4.1): a static system prompt (rules, and RECAP's failure mechanisms in generic
-     terms), then one user message: role, incident, focus, tools, previous calls, what any
-     agent already observed, the context pack (every item inside `<untrusted_data>`), what
-     to return, and "step N of M" last;
+     prompts-v4.3): a static system prompt (rules, and RECAP's failure mechanisms in generic
+     terms), then one user message: role (goal, responsibilities, the mechanisms it may
+     conclude), incident, focus, the verifier's open questions, tools, previous calls, what
+     this agent may count as already observed, the context pack (every item inside
+     `<untrusted_data>`), what to return, and "step N of M" last;
   2. **constrain**: in `json` mode a JSON schema built for this request (tool names,
      services, metrics and mechanisms as enums; evidence IDs as an enum of the IDs this
      agent can see; at most 2 calls); in `tools` mode the read tools as native functions
@@ -242,15 +253,26 @@ free-plan header checked. Details in [status.md](status.md).
 
 - **Input:** the findings of this epoch, every piece of evidence of the run, the incident,
   and `remediated` (the time of each fix already executed in this run).
-- **Code:** `EvidenceVerifier.verify` ([recap/agents/verifier.py](../recap/agents/verifier.py))
-  applies rules V1 to V6: structure, deploy timing, upstream dominance, resource pressure,
-  dependency failure, remembered claims, and conflict resolution (platform signals outrank
-  log text). After a fix, the fixed service's older state observations no longer count.
+- **Code:** `EvidenceVerifier.verify` ([recap/agents/verifier.py](../recap/agents/verifier.py)).
+  1. The merger ([recap/agents/merger.py](../recap/agents/merger.py)) pools the agents'
+     claims: the same claim (mechanism, target, release version or dependency) from two
+     agents becomes one, listing both as proposers → `verification.merge`.
+  2. The rules judge each claim: V1 structure and grounding (it must cite evidence its rules
+     used), V2 deploy timing and upstream dominance, V3 resource pressure, V4 dependency
+     failure, V5 remembered claims, V6 platform signals outrank log text (and a target the
+     platform shows healthy is no root cause). After a fix, the fixed service's older state
+     observations no longer count.
+  3. V7 picks the deepest supported root cause. How much a claim cites, or how many agents
+     agree, decides nothing; two different root causes at the same depth stay an open
+     conflict (ADR 0021).
 - **Output:** a `VerificationReport`: every hypothesis supported, contradicted or
-  insufficient (never "proven"), the best actionable one, and where to look next →
-  `verification.evidence`. Memory hits are re-assessed against it (`memory.assessment`).
+  insufficient (never "proven") with its proposers and basis, the best actionable one,
+  where to look next, and every disagreement between agents with the rule that settled it
+  → `verification.evidence`. Memory hits are re-assessed against it (`memory.assessment`).
 - **Next:** a supported best hypothesis goes to stage 6; otherwise another round of stage 4
-  (bounded by `max_investigation_rounds`), then FAILED.
+  (bounded by `max_investigation_rounds`). An open conflict's question goes to that round
+  (`RT3-disagreement`); if it is still open at the end, the run is FAILED and a person
+  decides. Otherwise FAILED with "evidence stayed insufficient".
 
 ### Stage 6. Propose one fix (PROPOSING)
 
@@ -266,7 +288,8 @@ free-plan header checked. Details in [status.md](status.md).
      fingerprint of incident, action, target and params) → `mitigation.proposed`.
   5. The safety policy judges it from trusted inputs only → `policy.decision`
      ([recap/safety/policy.py](../recap/safety/policy.py)). DENY ends the run BLOCKED.
-  6. The verifier checks the proposal cites real evidence and targets the diagnosis →
+  6. The verifier checks the proposal cites real evidence, targets the diagnosis, names an
+     action and, for a rollback, restores a version the evidence names (VP1 to VP4) →
      `verification.evidence`.
 - **Output:** a proposal that needs approval (or, only in the simulation-only safety-off
   ablation, is allowed directly).
@@ -430,7 +453,7 @@ Reproduce it:
 | Routing and concurrency | [recap/routing/router.py](../recap/routing/router.py), [recap/routing/orchestrator.py](../recap/routing/orchestrator.py) |
 | What a provider sees | [recap/core/models.py](../recap/core/models.py) (views), [recap/context/packer.py](../recap/context/packer.py), [recap/context/summaries.py](../recap/context/summaries.py), [recap/providers/prompts.py](../recap/providers/prompts.py) |
 | The scripted provider | [recap/providers/deterministic.py](../recap/providers/deterministic.py), [playbooks.py](../recap/providers/playbooks.py), [heuristics.py](../recap/providers/heuristics.py) |
-| Real model providers | [recap/providers/protocol.py](../recap/providers/protocol.py) (prompts-v4.1, schemas, parsing), [http_llm.py](../recap/providers/http_llm.py) (the shared loop), [ollama_provider.py](../recap/providers/ollama_provider.py), [openai_compatible.py](../recap/providers/openai_compatible.py), [factory.py](../recap/providers/factory.py) |
+| Real model providers | [recap/providers/protocol.py](../recap/providers/protocol.py) (prompts-v4.3, schemas, parsing), [http_llm.py](../recap/providers/http_llm.py) (the shared loop), [ollama_provider.py](../recap/providers/ollama_provider.py), [openai_compatible.py](../recap/providers/openai_compatible.py), [factory.py](../recap/providers/factory.py) |
 | Free-tier guard, recordings, replay | [recap/providers/quota.py](../recap/providers/quota.py), [transport.py](../recap/providers/transport.py), [catalog.py](../recap/providers/catalog.py) (`GET /providers`) |
 | Tool boundary | [recap/tools/gateway.py](../recap/tools/gateway.py), [registry.py](../recap/tools/registry.py), [actions.py](../recap/tools/actions.py), [mcp_client.py](../recap/tools/mcp_client.py), [mcp_server.py](../recap/tools/mcp_server.py) |
 | Safety | [recap/safety/policy.py](../recap/safety/policy.py), [approvals.py](../recap/safety/approvals.py), [capabilities.py](../recap/safety/capabilities.py) |

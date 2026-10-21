@@ -81,6 +81,7 @@ class FreeHostedProvider(HttpLLMProvider):
         super().__init__(name, settings, transport, **kwargs)
         self.guard = guard
         self._model_checked = False
+        self._check_lock = asyncio.Lock()
 
     @property
     def free_status_lost(self) -> str | None:
@@ -88,9 +89,16 @@ class FreeHostedProvider(HttpLLMProvider):
         return self.guard.tripped if self.guard is not None else None
 
     async def check_model(self) -> None:
-        """Before the first request: the model is listed and active (metadata, not inference)."""
+        """Before the first request: the model is listed and active (metadata, not inference).
+
+        Parallel agents share one provider, so a lock lets one of them do the check."""
         if self._model_checked:
             return
+        async with self._check_lock:
+            if not self._model_checked:
+                await self._check_model()
+
+    async def _check_model(self) -> None:
         if self.guard is not None:
             self.guard.check_allowed(self.model)  # no request of any kind before the checks
         listing = await self.transport.request("GET", "/models", timeout=PROBE_TIMEOUT_SECONDS)

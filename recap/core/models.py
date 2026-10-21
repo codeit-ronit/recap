@@ -299,6 +299,9 @@ class Hypothesis(Contract):
     details: dict[str, Any] = Field(default_factory=dict)  # e.g. {"version": "v2.4.1"}
     origin: Literal["investigation", "memory"] = "investigation"
     proposed_by: AgentRole | None = None
+    # The model's own words on how sure it is and what would change its mind. Untrusted
+    # model text: shown to people, never used to decide anything (no fabricated scores).
+    confidence_note: str = ""
 
 
 class Usage(Contract):
@@ -343,6 +346,11 @@ class AgentFinding(Contract):
     doc_refs: list[str] = Field(default_factory=list)  # runbook chunk IDs the agent saw (citations)
     hypotheses: list[Hypothesis] = Field(default_factory=list)
     proposed_next_steps: list[str] = Field(default_factory=list)
+    # How the agent ended: with hypotheses, asking for more evidence, by stopping, at its
+    # step limit, without any usable model answer, or with an error.
+    outcome: Literal[
+        "", "hypothesis", "need_more_evidence", "stop", "step_limit", "no_usable_answer", "error"
+    ] = ""
     usage: Usage = Field(default_factory=Usage)
     summary: str = ""
     error: str | None = None  # e.g. "timeout" if the agent failed
@@ -358,6 +366,36 @@ class HypothesisCheck(Contract):
     passed: list[str] = Field(default_factory=list)
     failed: list[str] = Field(default_factory=list)
     rule_ids: list[str] = Field(default_factory=list)
+    # Every agent that made this claim (agents making the same claim pool their evidence).
+    proposers: list[AgentRole] = Field(default_factory=list)
+    # The evidence the passing rules relied on. A claim must cite at least one of these
+    # (V1-grounding): support it never looked at does not count as its own.
+    basis_evidence_ids: list[str] = Field(default_factory=list)
+
+
+class Disagreement(Contract):
+    """Where the agents' claims conflict, and how the verifier's rules settled it, if they did.
+
+    The rules decide, never how many agents agree or how much evidence a claim cites.
+      detail_conflict            same mechanism on the same service, but details that cannot
+                                 both be true (e.g. which release is bad)
+      competing_root_causes      two different actionable root causes are both supported
+      cross_agent_contradiction  evidence one agent recorded contradicts another's claim
+      missing_view               an agent of this epoch ended without a usable finding
+    An open disagreement carries a question for the next round. Its text is built by
+    trusted code from checked values only (mechanism names, service names, versions).
+    """
+
+    kind: Literal[
+        "detail_conflict", "competing_root_causes", "cross_agent_contradiction", "missing_view"
+    ]
+    claims: list[str] = Field(default_factory=list)  # e.g. "bad deployment on checkout (v2.4.1)"
+    agents: list[AgentRole] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)  # what decided it, or what is disputed
+    resolved: bool
+    rule_id: str = ""  # the rule that settled it; empty while it is open
+    resolution: str = ""  # one plain sentence for people
+    question: str = ""  # an open disagreement: what the next round must find out
 
 
 class VerificationReport(Contract):
@@ -370,6 +408,13 @@ class VerificationReport(Contract):
     merged_evidence_ids: list[str] = Field(default_factory=list)
     focus_services: list[str] = Field(default_factory=list)  # where to look next
     summary: str = ""
+    disagreements: list[Disagreement] = Field(default_factory=list)
+
+    def open_questions(self) -> list[str]:
+        """Questions of the disagreements no rule settled, for the next round (trusted text)."""
+        return list(
+            dict.fromkeys(d.question for d in self.disagreements if not d.resolved and d.question)
+        )
 
 
 class ProposalCheck(Contract):
@@ -803,6 +848,8 @@ class RoutingSignals(Contract):
     memory_conflict: bool = False  # similar episodes disagree on mechanism or outcome
     prior_failed_attempts: int = 0
     escalation: bool = False  # the previous investigation round was inconclusive
+    # The previous round left a disagreement between agents that no evidence rule settled.
+    disagreement: bool = False
     remaining_tool_calls: int
     remaining_steps: int
     max_parallel_agents: int
@@ -906,6 +953,14 @@ class InvestigationRequest(Contract):
     # Services to examine first: named by RECAP's evidence verifier or by an earlier fix
     # attempt in this run. Never the oracle's list of unhealthy services.
     focus_services: list[str] = Field(default_factory=list)
+    # The role's contract (configs/agents.yaml): what it is responsible for, and the
+    # failure mechanisms it may conclude (empty: any). A specialist that cannot see
+    # deployments, for example, may not claim a bad release.
+    responsibilities: list[str] = Field(default_factory=list)
+    mechanisms: list[FailureMechanism] = Field(default_factory=list)
+    # Questions RECAP's verifier left open after the previous round: a disagreement between
+    # agents that no evidence rule settled. Trusted text, built only from checked values.
+    open_questions: list[str] = Field(default_factory=list)
 
 
 class InvestigationDecision(Contract):
@@ -917,6 +972,9 @@ class InvestigationDecision(Contract):
     summary: str = ""
     next_steps: list[str] = Field(default_factory=list)
     usage: Usage = Field(default_factory=Usage)
+    # What the decision was: tool_request, hypothesis, need_more_evidence, stop, or
+    # no_usable_answer when a model gave nothing RECAP could use.
+    kind: str = ""
     model_calls: list[ModelCall] = Field(default_factory=list)  # the LLM requests behind it
 
 

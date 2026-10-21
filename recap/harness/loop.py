@@ -26,7 +26,11 @@ from recap.core.ids import utcnow
 from recap.core.interfaces import LLMProvider
 from recap.core.models import (
     AgentFinding,
+    AgentRole,
+    Evidence,
+    Hypothesis,
     Incident,
+    InvestigationDecision,
     InvestigationRequest,
     MemoryHit,
     ModelCall,
@@ -83,6 +87,25 @@ class AgentHarness:
         # Evidence recorded before this index belongs to an earlier "epoch" (before a
         # mitigation changed the system), so agents may observe those things again.
         self.epoch_start = 0
+        # During a parallel round: where the round's evidence starts. Each specialist then
+        # sees what was known before the round plus its own results, never the other
+        # specialist's in-flight evidence (independent views; replays that do not depend on
+        # which agent finished first). The verifier still reads all of it.
+        self.round_start: int | None = None
+
+    def visible(self, role: AgentRole) -> tuple[list[Evidence], list[str]]:
+        """The evidence an agent may see now, and the tool calls it counts as already made
+        (this epoch's source refs among them)."""
+        items = self.evidence.all()
+        start = self.round_start
+        shown = [start is None or i < start or e.agent_role == role for i, e in enumerate(items)]
+        visible = [e for e, keep in zip(items, shown, strict=True) if keep]
+        observed = [
+            e.source_ref
+            for i, (e, keep) in enumerate(zip(items, shown, strict=True))
+            if keep and i >= self.epoch_start
+        ]
+        return visible, observed
 
     async def run_agent(self, spec: AgentSpec, plan: AgentRunPlan) -> AgentFinding:
         """Run one agent until it finishes or its step allocation is used up."""
@@ -100,6 +123,7 @@ class AgentHarness:
                 "round": plan.round,
                 "max_steps": plan.max_steps,
                 "focus_services": plan.focus_services,
+                "questions": plan.questions,
                 "tools": spec.tools,
             },
             agent=role.value,
@@ -114,9 +138,10 @@ class AgentHarness:
             # 1. observe: a bounded view of everything recorded so far. The pack is never
             # shrunk to fit the run budget: when the budget cannot pay for a normal pack,
             # charge_tokens raises BudgetExhausted and the run stops honestly.
+            visible, observed = self.visible(role)
             pack = self.packer.build(
                 incident=self.agent_incident,
-                evidence=self.evidence.all(),
+                evidence=visible,
                 docs=self.docs,
                 memories=memories,
                 max_tokens=self.pack_tokens,
@@ -148,11 +173,14 @@ class AgentHarness:
                 evidence={e.id: e for e in self.evidence.by_ids(pack.ids("evidence"))},
                 tools=tools.specs(),
                 history=history,
-                observed_refs=[e.source_ref for e in self.evidence.all()[self.epoch_start :]],
+                observed_refs=observed,
                 step=step,
                 max_steps=plan.max_steps,
                 memory_hints=memories,
                 focus_services=plan.focus_services,
+                responsibilities=spec.responsibilities,
+                mechanisms=spec.mechanisms,
+                open_questions=plan.questions,
             )
             try:
                 decision = await self.provider.next_action(request)
@@ -201,6 +229,11 @@ class AgentHarness:
                     collected.append(result.evidence_id)
 
         hypotheses = final.hypotheses if final and final.action == "finish" else []
+        # The role's contract holds for every provider: a claim outside the mechanisms this
+        # role may conclude is dropped (a scripted policy or a model could still make one).
+        allowed = set(spec.mechanisms)
+        dropped = [h for h in hypotheses if allowed and h.mechanism not in allowed]
+        hypotheses = [h for h in hypotheses if h not in dropped]
         summary = final.summary if final else ""
         if final and final.action != "finish":
             summary = (summary + " (step limit reached before the agent finished)").strip()
@@ -215,6 +248,7 @@ class AgentHarness:
             started_at=started,
             finished_at=utcnow(),
             round=plan.round,
+            outcome=_outcome(final, hypotheses),
         )
         self.tracer.emit(
             TraceCategory.AGENT_FINISH,
@@ -226,6 +260,8 @@ class AgentHarness:
                 "evidence_ids": collected,
                 "hypotheses": [h.claim for h in finding.hypotheses],
                 "summary": summary,
+                "outcome": finding.outcome,
+                "dropped_out_of_role": [h.mechanism.value for h in dropped],
             },
             agent=role.value,
             usage=finding.usage,
@@ -241,3 +277,12 @@ class AgentHarness:
                 agent=agent,
                 duration_ms=call.duration_ms,
             )
+
+
+def _outcome(final: InvestigationDecision | None, hypotheses: Sequence[Hypothesis]) -> str:
+    """How an agent ended, for its finding (see AgentFinding.outcome)."""
+    if final is None or final.action != "finish":
+        return "step_limit"
+    if final.kind in ("need_more_evidence", "stop", "no_usable_answer"):
+        return final.kind
+    return "hypothesis" if hypotheses else "need_more_evidence"

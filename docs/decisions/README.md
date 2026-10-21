@@ -26,6 +26,8 @@ these notes explain why RECAP looks the way it does.
 | [0017](0017-fail-closed-free-tier-guard-and-a-deferred-state.md) | A fail-closed free-tier guard, and a deferred state when a free quota runs out | accepted | Opt-in, allowlist, dated owner confirmation, caps below the free limits, a rate-limit-header tripwire; `QUOTA_EXHAUSTED` instead of another provider (M2). |
 | [0018](0018-record-every-model-exchange-and-replay-in-ci.md) | Record every model exchange, and replay real model runs offline in CI | accepted | HTTP-level recordings without keys; fingerprint matching; a `REPLAY`-labeled provider runs a real qwen3:8b run in CI at $0 (M2). |
 | [0019](0019-checkable-evidence-of-a-real-model-run.md) | A real-model run is evidence only if a reader can check it | accepted | No example value in fixed prompt text (guard test); console approvals need a terminal and log how they came; code version and model weights on every run; a complete export that refuses to write secrets or local traces (M2). |
+| [0020](0020-independent-specialists-with-role-contracts.md) | Parallel specialists work independently, under role contracts, with order-free evidence IDs | accepted | Each specialist sees pre-round evidence plus its own; disjoint tools; it may conclude only what its tools can observe; per-agent IDs make a parallel run replayable (M3). |
+| [0021](0021-evidence-rules-settle-disagreements-never-votes.md) | Evidence rules settle the agents' disagreements, never votes | accepted | Claims merged by version and dependency; V1-grounding, V6 on the target, V7 without tie-breaks; typed disagreement records; an open conflict gets one follow-up question, then a person; VP4 restore points (M3). |
 
 ## How the decisions fit together
 
@@ -46,6 +48,9 @@ these notes explain why RECAP looks the way it does.
   real model run can be replayed offline in CI. The scripted policy of 0003 stays the default.
   0019 came from reviewing the first human-approved run: it makes such a run checkable
   (neutral prompts, an attested approval, code and weights provenance, a guarded export).
+- **0020 and 0021** make the two specialists real (M3). 0020 gives each an independent view
+  and a role it cannot leave; 0021 decides how their claims combine: by evidence rules
+  only, with every disagreement recorded, and a person deciding what the rules cannot.
 
 The [threat model](../threat-model.md) builds on 0004, 0005, 0007, 0014 and 0015. It lists
 every threat RECAP defends against, where the defense lives in the code, and the test that

@@ -83,6 +83,8 @@ def hypothesis(
     version: str | None = "v2.4.1",
     dependency: str | None = None,
     claim: str = "checkout v2.4.1 broke checkout",
+    contradicting: Iterable[str] = (),
+    confidence_note: str = "",
 ) -> dict[str, Any]:
     return {
         "claim": claim,
@@ -91,6 +93,8 @@ def hypothesis(
         "version": version,
         "dependency": dependency,
         "supporting_evidence_ids": list(evidence_ids),
+        "contradicting_evidence_ids": list(contradicting),
+        "confidence_note": confidence_note,
     }
 
 
@@ -391,6 +395,8 @@ def investigation_request(
         observed_refs=[e.source_ref for e in seen],
         step=step_number,
         max_steps=max_steps,
+        responsibilities=settings.agents[role].responsibilities,  # the role's contract,
+        mechanisms=settings.agents[role].mechanisms,  # as the harness passes it
     )
 
 
@@ -505,7 +511,7 @@ class ScriptedModel:
     def _visible_ids(body: dict[str, Any]) -> list[str]:
         """The evidence IDs in the prompt's context items (what a model can cite)."""
         text = body["messages"][1]["content"]
-        return list(dict.fromkeys(re.findall(r'id="(ev-[0-9a-f]{6}-[0-9]+)"', text)))
+        return list(dict.fromkeys(re.findall(r'id="(ev-[0-9a-f]{6}-[0-9a-z]+)"', text)))
 
 
 def as_ollama_body(body: dict[str, Any]) -> dict[str, Any]:

@@ -4611,3 +4611,83 @@ doesn't prove who typed it, and a program driving a terminal could still answer.
 step for a real system would be a signed approval tied to an identity, not the OS user name,
 which would leak into public exports."
 
+
+### M3, steps 1 and 2 — Two real specialists, and a merger that never votes (in progress)
+
+**What changed, in one paragraph.** Before M3 the two parallel specialists shared every
+piece of evidence the moment it arrived, could claim any failure mechanism, and their claims
+were merged by a step that let the first claim win a conflict and the longer citation list
+win a tie. Now each specialist works independently during its round (it sees only what was
+known before the round plus its own results), has its own tools and a contract saying what
+it may conclude, and the verifier merges their claims by evidence rules only. Every
+disagreement is written down with the rule and the evidence that settled it. When no rule
+can settle it, RECAP asks the next round one targeted question, and after that hands the
+incident to a person instead of guessing.
+
+**Why each change matters.**
+
+| Piece | Problem it solves | Read |
+|---|---|---|
+| Round-scoped views | The second specialist was not a second opinion: it read the first one's findings as they arrived | `AgentHarness.visible`, [ADR 0020](decisions/0020-independent-specialists-with-role-contracts.md) |
+| Per-agent evidence IDs | IDs followed arrival order, so a recorded parallel run could not replay when the timing differed | `EvidenceRegistry.open_round` / `close_round` |
+| Role contracts | Telemetry could "conclude" a bad release it had no tool to see | `configs/agents.yaml`, the harness's `dropped_out_of_role` |
+| Merge key with the version | Two claims naming different bad releases became one, keeping whichever came first | `merger.merge_claims`, [ADR 0021](decisions/0021-evidence-rules-settle-disagreements-never-votes.md) |
+| No citation tie-break | Padding a claim with unrelated evidence IDs could win the diagnosis | `merger.choose` (rule V7) |
+| V1-grounding | A claim could be "supported" by evidence it never cited | `_grounding` in `recap/agents/verifier.py` |
+| V6 on the target | One old OOM kill "supported" memory pressure on a service that was healthy all along | `_healthy_target` |
+| Disagreement records | Nothing said who disagreed with whom, or why one side lost | `VerificationReport.disagreements` |
+| One question, then a person | An unsettled conflict was decided by a hidden tie-break | `report.open_questions()`, `RT3-disagreement`, the FAILED handover |
+| VP4-restore-point | A rollback could restore any old release the history accepts | `_restore_point_problems` |
+
+**The idea most worth understanding: agreement is not evidence.** Two agents saying the same
+thing feels convincing, but if they read the same misleading log, they are one opinion
+twice. So RECAP pools their citations and then asks only what the evidence supports. Each
+claim is checked by the same rules, whoever made it and however many made it: one
+contradiction rejects it, it must cite something its rule actually used, and among the
+survivors the deepest root cause wins (the service other services' errors lead to). When two
+different root causes survive at the same depth, there is no evidence-based way to choose,
+and saying so is the honest answer.
+
+**Why the question is safe to put in the trusted part of the prompt.** The question is
+written by RECAP's own code from checked pieces only: mechanism names from a fixed list,
+service names that look like service names, versions that look like versions. A planted
+service name such as `checkout. Ignore previous instructions` becomes `(unnamed)`. It never
+copies the other agent's words, because those are model text and could carry an injected
+instruction.
+
+**Inputs → outputs (the new pieces).**
+
+- `merge_claims(findings, detail_of)` → one `Claim(hypothesis, proposers, detail)` per
+  distinct claim, in a fixed order.
+- `choose(candidates, depth)` → `(best or None, ranked, competing_root_causes record or
+  None)`.
+- `disagreements(checks, findings, recorded_by, competition, diagnosed=...)` → the
+  `Disagreement` list of the report.
+- `EvidenceVerifier.verify(...)` → a `VerificationReport` whose checks carry `proposers`
+  and `basis_evidence_ids`, plus `disagreements`; `report.open_questions()` → the trusted
+  questions for the next round.
+- Trace: `verification.merge` (claims per agent, shared claims, disagreements, questions).
+
+**Tradeoffs, honestly.** Independence costs knowledge during a round: in a two-fault test
+the infrastructure agent could not claim checkout's bad release in round 1, because the
+error evidence it needed was in telemetry's view. RECAP then fixed one fault, the oracle
+said "not recovered", and it found the second fault in the next epoch. Grounding asks for
+one cited basis item, so over-citing still counts as grounded (but cannot win a tie).
+
+**Reproduce.**
+
+```bash
+.venv/bin/python -m pytest tests/unit/test_evidence_merger.py tests/unit/test_verifier.py \
+  tests/unit/test_evidence_rounds.py tests/unit/test_role_contracts.py \
+  tests/e2e/test_parallel_replay.py tests/e2e/test_disagreement_follow_up.py
+```
+
+**Interview version.** "My system runs two specialist agents in parallel: one reads logs and
+metrics, the other releases, cluster events and health. They work independently, so their
+views really are two views, and the evidence numbering doesn't depend on timing, which is
+what lets me replay a recorded parallel run in CI. Their claims go to a verifier written as
+plain rules, not another LLM. It merges duplicates, records every disagreement, and decides
+by evidence: a contradicted claim loses, a claim must cite the evidence its rule used, and
+the deepest root cause wins. It never votes and never breaks ties by how much a claim
+cites. When two different causes are equally supported, it asks one targeted follow-up
+question, and if that doesn't settle it, a human decides. I'd rather hand over than guess."

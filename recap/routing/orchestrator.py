@@ -62,6 +62,8 @@ class AgentRunPlan(Contract):
     max_steps: int
     # Services to examine first: named by the verifier or by an earlier fix attempt.
     focus_services: list[str] = Field(default_factory=list)
+    # The verifier's open questions from the previous round (trusted text).
+    questions: list[str] = Field(default_factory=list)
 
 
 def _run_stopper(outcomes: Sequence[AgentFinding | Exception]) -> Exception | None:
@@ -84,6 +86,10 @@ def _run_stopper(outcomes: Sequence[AgentFinding | Exception]) -> Exception | No
 
 class _AgentTimedOut(Exception):
     """The agent ran past its own time limit (set by the orchestrator, not the run's deadline)."""
+
+    def __init__(self, seconds: float | None = None) -> None:
+        super().__init__()
+        self.seconds = seconds
 
 
 # Anything that runs one agent: AgentHarness.run_agent in a real run, a fake in tests.
@@ -117,6 +123,7 @@ class Orchestrator:
         *,
         agent_timeout_seconds: float = 60.0,
         remaining_seconds: Callable[[], float] | None = None,
+        parallel_time_share: float = 1.0,
     ) -> None:
         self._runner = runner
         self._specs = dict(specs)
@@ -124,12 +131,20 @@ class Orchestrator:
         self._timeout = agent_timeout_seconds
         # Time left on the run's wall clock (BudgetTracker.remaining_seconds), if bounded.
         self._remaining = remaining_seconds
+        # In a parallel round, each agent's own limit is this share of the time left.
+        self._share = parallel_time_share
 
     async def execute(
-        self, decision: StrategyDecision, focus_services: Sequence[str] = ()
+        self,
+        decision: StrategyDecision,
+        focus_services: Sequence[str] = (),
+        questions: Sequence[str] = (),
     ) -> list[AgentFinding]:
         """Run the selected agents; findings come back in `decision.selected_agents` order."""
-        jobs = [self._job(role, decision, focus_services) for role in decision.selected_agents]
+        jobs = [
+            self._job(role, decision, focus_services, questions)
+            for role in decision.selected_agents
+        ]
         if decision.mode == StrategyMode.PARALLEL:
             runs = await self._run_together(jobs)
         else:
@@ -137,13 +152,23 @@ class Orchestrator:
         self._trace(decision, runs)
         stop = _run_stopper([run.outcome for run in runs])
         if stop is not None:
-            raise stop  # every agent has stopped; the controller ends the run cleanly
+            # Every agent has stopped; the controller ends the run cleanly. Findings other
+            # agents completed travel with the stop, so the record keeps them (labelled as
+            # partial; they never become experience).
+            stop.partial_findings = [  # type: ignore[attr-defined]
+                run.outcome for run in runs if isinstance(run.outcome, AgentFinding)
+            ]
+            raise stop
         return [self._finding(run) for run in runs]
 
     def _job(
-        self, role: AgentRole, decision: StrategyDecision, focus_services: Sequence[str]
+        self,
+        role: AgentRole,
+        decision: StrategyDecision,
+        focus_services: Sequence[str],
+        questions: Sequence[str] = (),
     ) -> tuple[AgentSpec, AgentRunPlan]:
-        """The role's spec plus its own plan (its own copy of the focus list)."""
+        """The role's spec plus its own plan (its own copies of the focus and question lists)."""
         spec = self._specs.get(role)
         if spec is None:
             raise ConfigError(f"no agent spec for role '{role.value}' (see configs/agents.yaml)")
@@ -152,13 +177,14 @@ class Orchestrator:
             round=decision.round,
             max_steps=decision.budget.get(role.value, spec.max_steps),
             focus_services=list(focus_services),
+            questions=list(questions),
         )
         return spec, plan
 
     async def _run_together(self, jobs: list[tuple[AgentSpec, AgentRunPlan]]) -> list[_Run]:
         """Start every agent at once and wait until all of them have stopped."""
         results = await asyncio.gather(
-            *(self._run(spec, plan) for spec, plan in jobs), return_exceptions=True
+            *(self._run(spec, plan, self._share) for spec, plan in jobs), return_exceptions=True
         )
         runs: list[_Run] = []
         for result in results:
@@ -167,17 +193,22 @@ class Orchestrator:
             runs.append(result)
         return runs
 
-    async def _run(self, spec: AgentSpec, plan: AgentRunPlan) -> _Run:
+    async def _run(self, spec: AgentSpec, plan: AgentRunPlan, share: float = 1.0) -> _Run:
         """Run one agent under its timeout. Errors are captured as the outcome, not raised.
 
         The timeout is the agent's own limit or the time left on the run's clock, whichever
-        is shorter. When the run's clock is what ran out, the outcome is BudgetExhausted
-        (a clean stop of the whole run), not an agent failure.
+        is shorter. In a parallel round the agent's own limit is also at most `share` of
+        the time left, so one slow specialist ends as an error finding while the other's
+        finding survives. When the run's clock is what ran out, the outcome is
+        BudgetExhausted (a clean stop of the whole run), not an agent failure.
         """
         started_at, started = utcnow(), time.perf_counter()
         remaining = self._remaining() if self._remaining is not None else None
-        deadline_first = remaining is not None and remaining < self._timeout
-        timeout = remaining if deadline_first and remaining is not None else self._timeout
+        own = self._timeout
+        if remaining is not None and share < 1.0:
+            own = min(own, max(remaining, 0.0) * share)
+        deadline_first = remaining is not None and remaining < own
+        timeout = remaining if deadline_first and remaining is not None else own
         outcome: AgentFinding | Exception
         if deadline_first and timeout is not None and timeout <= 0:
             detail = f"no time was left on the run to start {spec.role.value}"
@@ -195,7 +226,7 @@ class Orchestrator:
                 detail = f"{spec.role.value} was still working when the run's time ran out"
                 outcome = BudgetExhausted("max_elapsed_seconds", detail)
             else:
-                outcome = _AgentTimedOut()
+                outcome = _AgentTimedOut(timeout)
         except Exception as exc:  # CancelledError is not an Exception, so cancelling still works
             outcome = exc
         return _Run(plan, outcome, started_at, utcnow(), started, time.perf_counter())
@@ -210,11 +241,14 @@ class Orchestrator:
             started_at=run.started_at,
             finished_at=run.finished_at,
             round=run.plan.round,
+            outcome="error",
         )
 
     def _error_text(self, error: Exception) -> str:
         if isinstance(error, _AgentTimedOut):
-            return f"timeout after {self._timeout:g}s"
+            return (
+                f"timeout after {error.seconds if error.seconds is not None else self._timeout:g}s"
+            )
         if isinstance(error, BudgetExhausted):
             return str(error)  # not a crash: the shared budget ran out
         return f"agent crashed: {type(error).__name__}: {error}"

@@ -160,7 +160,9 @@ class HttpLLMProvider(ABC):
         if not isinstance(decision, InvestigationDecision):
             # No usable answer: the agent stops here, and the verifier judges what it has.
             summary = f"no usable answer from {self.info.name}: {outcome.problem}"
-            decision = InvestigationDecision(action="finish", summary=summary)
+            decision = InvestigationDecision(
+                action="finish", summary=summary, kind="no_usable_answer"
+            )
         return decision.model_copy(update={"usage": outcome.usage, "model_calls": outcome.calls})
 
     async def propose_mitigation(self, request: ProposalRequest) -> ProposalDecision:

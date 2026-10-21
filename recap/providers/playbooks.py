@@ -83,7 +83,7 @@ ALL_EVENTS = Check(
 )
 
 INVESTIGATOR_CHECKS = (HEALTH, LOGS, ERROR_RATE, DEPLOYMENTS, EVENTS, MEMORY)
-TELEMETRY_CHECKS = (HEALTH, LOGS, ERROR_RATE)
+TELEMETRY_CHECKS = (LOGS, ERROR_RATE)  # health is infrastructure's (configs/agents.yaml)
 CLUSTER_CHECKS = (ALL_SERVICES, ALL_DEPLOYMENTS, ALL_EVENTS)
 # The three checks that can confirm (or refute) a remembered failure mechanism.
 CONFIRMATION_CHECKS: dict[FailureMechanism, tuple[Check, ...]] = {
@@ -175,7 +175,7 @@ def _investigator(request: InvestigationRequest, parsed: ParsedEvidence) -> list
 
 
 def _telemetry(request: InvestigationRequest, parsed: ParsedEvidence) -> list[ToolCall]:
-    """Health, logs and error rate of each target; memory where crashes or OOM hint at it."""
+    """Logs and error rate of each target; memory where crashes or OOM hint at it."""
     targets = _targets(request, parsed)
     calls = [_call(check, target) for target in targets for check in TELEMETRY_CHECKS]
     calls += [_call(MEMORY, t) for t in targets if _memory_suspect(parsed, t)]

@@ -21,6 +21,7 @@
     "memory_conflict": false,
     "prior_failed_attempts": 0,
     "escalation": false,
+    "disagreement": false,
     "remaining_tool_calls": 30,
     "remaining_steps": 30,
     "max_parallel_agents": 2

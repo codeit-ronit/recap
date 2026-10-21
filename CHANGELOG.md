@@ -9,6 +9,36 @@ version from v0.3.0 on.
 
 Everything below runs against a **simulated** environment; nothing repairs a real cluster.
 
+## [Unreleased] — M3 (in progress): real multi-agent intelligence, RAG and episodic memory
+
+### Added
+
+- **Independent specialists** ([ADR 0020](docs/decisions/0020-independent-specialists-with-role-contracts.md)):
+  in a parallel round each specialist sees only the evidence from before the round plus its
+  own; per-agent evidence IDs (`ev-…-r2t01`) in a fixed order, so a recorded parallel run
+  replays offline; disjoint tools and role contracts (responsibilities and the mechanisms a
+  role may conclude, enforced by the harness for every provider); a hypothesis can name
+  contradicting evidence and an untrusted confidence note; `AgentFinding.outcome`.
+- **The evidence merger** ([ADR 0021](docs/decisions/0021-evidence-rules-settle-disagreements-never-votes.md),
+  `recap/agents/merger.py`): claims merged by mechanism, target and release version or
+  dependency, with every proposer; typed disagreement records (`detail_conflict`,
+  `competing_root_causes`, `cross_agent_contradiction`, `missing_view`) with the rule and
+  evidence that settled each; an open conflict's question goes to one follow-up round
+  (`RT3-disagreement`), then a person decides; `verification.merge` trace events.
+- **Verifier rules:** V1-grounding (a supported claim cites evidence its rules used), V6 on
+  the target (a service the platform shows healthy is no root cause), V7-deepest-cause, and
+  VP4-restore-point (a rollback restores the version the evidence names).
+
+### Changed
+
+- prompts-v4.3: each role's goal, responsibilities and allowed mechanisms, and the
+  verifier's open questions. The CI replay fixture was re-recorded with it (a local
+  `qwen3:8b` run, 5 requests, $0).
+- Ties between different supported root causes are no longer broken by how much evidence a
+  claim cites; they stay an open conflict.
+- A parallel agent may use at most 70% of the run's remaining time; findings other agents
+  completed are kept when the shared budget stops the run.
+
 ## [0.3.0] — 2026-10-21 — M2: real models at $0
 
 A real language model can now make RECAP's decisions without spending anything:

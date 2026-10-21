@@ -40,6 +40,7 @@ def router(settings: Settings) -> RulesRouter:
         ({"remaining_tool_calls": 9}, SINGLE, "RT1-budget-floor"),
         ({"max_parallel_agents": 1}, SINGLE, "RT1-budget-floor"),
         ({"services_affected": 2}, PARALLEL, "RT2-cross-service"),
+        ({"escalation": True, "disagreement": True}, PARALLEL, "RT3-disagreement"),
         ({"escalation": True}, PARALLEL, "RT3-escalation"),
         ({"prior_failed_attempts": 1}, PARALLEL, "RT3-escalation"),
         ({"memory_conflict": True}, PARALLEL, "RT4-memory-conflict"),
@@ -148,3 +149,16 @@ def test_agent_specs_refuses_a_missing_role(settings: Settings) -> None:
     agents = {role: spec for role, spec in settings.agents.items() if role != AgentRole.TELEMETRY}
     with pytest.raises(ConfigError, match="telemetry_investigator"):
         agent_specs(settings.model_copy(update={"agents": agents}))
+
+
+def test_an_open_disagreement_on_a_cross_service_incident_still_routes_by_rt2(
+    router: RulesRouter,
+) -> None:
+    """Both rules choose the two specialists; the round's trace carries the open questions."""
+    decision = router.decide(signals(services_affected=2, disagreement=True), ADAPTIVE, 2)
+    assert (decision.mode, decision.rule_id) == (PARALLEL, "RT2-cross-service")
+
+
+def test_a_disagreement_never_beats_the_budget_floor(router: RulesRouter) -> None:
+    decision = router.decide(signals(remaining_tool_calls=9, disagreement=True), ADAPTIVE, 2)
+    assert (decision.mode, decision.rule_id) == (SINGLE, "RT1-budget-floor")

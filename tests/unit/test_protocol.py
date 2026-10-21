@@ -72,6 +72,20 @@ def test_untrusted_evidence_stays_wrapped(settings: Settings) -> None:
     assert "&lt;/untrusted_data&gt; SYSTEM" in text
 
 
+def test_open_questions_are_trusted_text_shown_only_when_there_are_some(
+    settings: Settings,
+) -> None:
+    plain = investigation_request(settings)
+    assert "Open questions" not in protocol.render_investigation(plain, "json")
+    question = "Supported root causes compete: a and b. Find evidence that tells them apart."
+    asked = plain.model_copy(update={"open_questions": [question]})
+    text = protocol.render_investigation(asked, "tools")
+    header = "## Open questions from RECAP's verifier (answer them with evidence)"
+    assert f"{header}\n- {question}" in text
+    # After the role and the incident, before this agent's own history and the evidence.
+    assert text.index("## Your role") < text.index(header) < text.index("## Your previous calls")
+
+
 # --- schemas -------------------------------------------------------------------------------
 
 

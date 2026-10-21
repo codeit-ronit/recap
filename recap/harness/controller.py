@@ -330,6 +330,14 @@ class IncidentController:
         while True:
             self._transition(S.INVESTIGATING, "investigate with read-only tools")
             report = await self._investigate(focus, len(failed_actions))
+            if report is not None and report.best is None and report.open_questions():
+                conflict = next(d for d in report.disagreements if not d.resolved and d.question)
+                self._finish(
+                    S.FAILED,
+                    f"supported root causes still conflict ({'; '.join(conflict.claims)}) and "
+                    "no evidence rule decides between them; a human should take over",
+                )
+                return
             if report is None or report.best is None:
                 self._finish(
                     S.FAILED,
@@ -416,6 +424,7 @@ class IncidentController:
         rounds = self.settings.budget.retries.max_investigation_rounds
         report: VerificationReport | None = None
         escalate = failed_attempts > 0
+        questions: list[str] = []  # the verifier's open questions from the previous round
         for _ in range(rounds):
             self.investigation_round += 1
             signals = compute_signals(
@@ -425,6 +434,7 @@ class IncidentController:
                 routing=self.settings.budget.routing,
                 prior_failed_attempts=failed_attempts,
                 escalation=escalate,
+                disagreement=bool(questions),
             )
             decision = self.deps.router.decide(signals, self.config, self.investigation_round)
             decision = decision.model_copy(update={"provider": self.provider.info.name})
@@ -448,9 +458,34 @@ class IncidentController:
                     "round": self.investigation_round,
                     "focus_services": focus,
                     "escalation": escalate,
+                    "open_questions": questions,
                 },
             )
-            findings = await self.orchestrator.execute(decision, focus)
+            parallel = decision.mode.value == "parallel"
+            if parallel:  # independent views and order-free evidence IDs for this round
+                self.harness.round_start = self.evidence.open_round(
+                    self.investigation_round, decision.selected_agents
+                )
+            try:
+                findings = await self.orchestrator.execute(decision, focus, questions)
+            except BudgetExhausted as stop:  # QuotaExhausted is one too
+                # Keep what other agents completed before the stop, labelled as partial.
+                # (A stopped run is never consolidated into experience.)
+                partial = getattr(stop, "partial_findings", [])
+                if partial:
+                    self._add_findings(partial)
+                    self.tracer.emit(
+                        TraceCategory.ORCHESTRATION,
+                        {
+                            "partial_findings_kept": [f.agent_role.value for f in partial],
+                            "stopped_by": str(stop),
+                        },
+                    )
+                raise
+            finally:
+                if parallel:
+                    self.evidence.close_round(decision.selected_agents)
+                    self.harness.round_start = None
             self._add_findings(findings)
             if findings and all(f.error for f in findings):
                 # Every agent crashed (e.g. the provider is failing): more rounds would only
@@ -465,6 +500,8 @@ class IncidentController:
                 self.epoch_findings, self.evidence, self.incident, remediated=self.remediated
             )
             self.record.verification = report
+            merged = _merge_payload(self.epoch_findings, report)
+            self.tracer.emit(TraceCategory.VERIFY_MERGE, merged)
             self.tracer.emit(TraceCategory.VERIFY_EVIDENCE, _report_payload(report))
             self._assess_memory(report)
             # Later rounds must see the evidence that contradicts a hypothesis.
@@ -474,6 +511,7 @@ class IncidentController:
                 return report
             escalate = True
             focus = report.focus_services or focus
+            questions = report.open_questions()
             if self.budget.remaining_tool_calls() == 0:
                 break
         return report
@@ -793,6 +831,7 @@ class IncidentController:
             self.tracer,
             agent_timeout_seconds=self.incident.budget.max_elapsed_seconds,
             remaining_seconds=self.budget.remaining_seconds,  # no agent outlives the run
+            parallel_time_share=self.settings.budget.routing.parallel_agent_time_share,
         )
 
     def _trace_model_calls(self, calls: list[Any]) -> None:
@@ -1201,6 +1240,8 @@ def _report_payload(report: VerificationReport) -> dict[str, Any]:
                 "target": c.hypothesis.target_service,
                 "origin": c.hypothesis.origin,
                 "status": c.hypothesis.status.value,
+                "proposers": [role.value for role in c.proposers],
+                "basis_evidence_ids": c.basis_evidence_ids,
                 "passed": c.passed,
                 "failed": c.failed,
                 "rule_ids": c.rule_ids,
@@ -1209,6 +1250,33 @@ def _report_payload(report: VerificationReport) -> dict[str, Any]:
         ],
         "unknown_evidence_ids": report.unknown_evidence_ids,
         "focus_services": report.focus_services,
+        "disagreements": [d.model_dump(mode="json") for d in report.disagreements],
+    }
+
+
+def _merge_payload(findings: list[AgentFinding], report: VerificationReport) -> dict[str, Any]:
+    """How many claims each agent made this epoch, what they merged into, and the conflicts."""
+    made: dict[str, int] = {}
+    for finding in findings:
+        role = finding.agent_role.value
+        made[role] = made.get(role, 0) + len(finding.hypotheses)
+    return {
+        "claims_by_agent": made,
+        "merged_claims": len(report.checks),
+        "shared_claims": [
+            {
+                "mechanism": c.hypothesis.mechanism.value,
+                "target": c.hypothesis.target_service,
+                "proposers": [role.value for role in c.proposers],
+            }
+            for c in report.checks
+            if len(c.proposers) > 1
+        ],
+        "disagreements": [
+            {"kind": d.kind, "resolved": d.resolved, "rule_id": d.rule_id, "claims": d.claims}
+            for d in report.disagreements
+        ],
+        "open_questions": report.open_questions(),
     }
 
 

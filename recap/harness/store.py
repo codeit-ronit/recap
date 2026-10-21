@@ -78,6 +78,8 @@ class RunStore:
 
     def evidence(self, run_id: str) -> list[Evidence]:
         rows = self._conn.execute(
-            "SELECT record FROM evidence WHERE run_id = ? ORDER BY evidence_id", (run_id,)
+            # Insertion order: parallel-round IDs ("ev-..-r2t01") do not sort by time.
+            "SELECT record FROM evidence WHERE run_id = ? ORDER BY rowid",
+            (run_id,),
         ).fetchall()
         return [Evidence.model_validate_json(r["record"]) for r in rows]

@@ -27,6 +27,7 @@ Rules that keep it local, honest and safe:
 
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any
 from urllib.parse import urlsplit
@@ -89,10 +90,21 @@ class OllamaProvider(HttpLLMProvider):
         self.ledger = ledger  # counts local requests too, for the dashboard (no caps apply)
         # What the server and model can do; filled by the first readiness check.
         self.capabilities: dict[str, Any] | None = None
+        self._ready_lock = asyncio.Lock()
 
     async def ensure_ready(self) -> dict[str, Any]:
-        """Check the server, the model and its capabilities once (metadata only, no inference)."""
+        """Check the server, the model and its capabilities once (metadata only, no inference).
+
+        Parallel agents share one provider: the lock makes their first steps wait for one
+        check instead of each sending its own metadata requests (which would also change
+        what a recording holds)."""
         if self.capabilities is not None:
+            return self.capabilities
+        async with self._ready_lock:
+            return await self._check_ready()
+
+    async def _check_ready(self) -> dict[str, Any]:
+        if self.capabilities is not None:  # another agent finished the check while we waited
             return self.capabilities
         version = await self.transport.request("GET", "/api/version", timeout=PROBE_TIMEOUT_SECONDS)
         if version.status != 200:

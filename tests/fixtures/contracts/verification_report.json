@@ -5,10 +5,10 @@
     "mechanism": "bad_deployment",
     "target_service": "checkout",
     "supporting_evidence_ids": [
-      "ev-31c1cd-004",
-      "ev-31c1cd-002",
-      "ev-31c1cd-003",
-      "ev-31c1cd-001"
+      "ev-1c2c92-004",
+      "ev-1c2c92-002",
+      "ev-1c2c92-003",
+      "ev-1c2c92-001"
     ],
     "contradicting_evidence_ids": [],
     "status": "supported",
@@ -17,7 +17,8 @@
       "deployed_at": "2026-03-14T09:48:00+00:00"
     },
     "origin": "investigation",
-    "proposed_by": "investigator"
+    "proposed_by": "investigator",
+    "confidence_note": ""
   },
   "checks": [
     {
@@ -26,10 +27,10 @@
         "mechanism": "bad_deployment",
         "target_service": "checkout",
         "supporting_evidence_ids": [
-          "ev-31c1cd-004",
-          "ev-31c1cd-002",
-          "ev-31c1cd-003",
-          "ev-31c1cd-001"
+          "ev-1c2c92-004",
+          "ev-1c2c92-002",
+          "ev-1c2c92-003",
+          "ev-1c2c92-001"
         ],
         "contradicting_evidence_ids": [],
         "status": "supported",
@@ -38,33 +39,45 @@
           "deployed_at": "2026-03-14T09:48:00+00:00"
         },
         "origin": "investigation",
-        "proposed_by": "investigator"
+        "proposed_by": "investigator",
+        "confidence_note": ""
       },
       "passed": [
         "every cited evidence ID exists in this run (4 checked)",
         "deployment evidence shows checkout v2.4.1 deployed 12 min before the alert",
         "checkout's error_rate is first seen above 5% 10 min before the alert",
         "errors on checkout began 2 min after v2.4.1 was deployed (allowed window -5..+30 min)",
-        "0 of 12 ERROR lines of checkout blame a dependency (under 50%)"
+        "0 of 12 ERROR lines of checkout blame a dependency (under 50%)",
+        "the claim cites 3 of the 3 evidence items its rules relied on"
       ],
       "failed": [],
       "rule_ids": [
         "V1-structural",
         "V2-deploy-timing",
-        "V2-upstream-dominance"
+        "V2-upstream-dominance",
+        "V1-grounding"
+      ],
+      "proposers": [
+        "investigator"
+      ],
+      "basis_evidence_ids": [
+        "ev-1c2c92-004",
+        "ev-1c2c92-003",
+        "ev-1c2c92-002"
       ]
     }
   ],
   "unknown_evidence_ids": [],
   "merged_evidence_ids": [
-    "ev-31c1cd-001",
-    "ev-31c1cd-002",
-    "ev-31c1cd-003",
-    "ev-31c1cd-004",
-    "ev-31c1cd-005",
-    "ev-31c1cd-006",
-    "ev-31c1cd-007"
+    "ev-1c2c92-001",
+    "ev-1c2c92-002",
+    "ev-1c2c92-003",
+    "ev-1c2c92-004",
+    "ev-1c2c92-005",
+    "ev-1c2c92-006",
+    "ev-1c2c92-007"
   ],
   "focus_services": [],
-  "summary": "Best supported root cause: bad deployment on checkout (1 supported)."
+  "summary": "Best supported root cause: bad deployment on checkout (1 supported).",
+  "disagreements": []
 }

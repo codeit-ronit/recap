@@ -5,6 +5,10 @@ Where it sits:
     findings (hypotheses citing evidence IDs) + EvidenceRegistry -> [verify] -> VerificationReport
     mitigation draft + report -> [check_proposal] -> ProposalCheck
 
+verify merges the agents' claims first (recap/agents/merger.py: agents making the same claim
+pool their evidence), judges each claim with the rules below, picks the best one and records
+every disagreement between agents and how the rules settled it.
+
 This is structural / evidence-rule validation, NOT proof of causation. Providers propose
 generously (recall); this plain, trusted code decides (precision). It reads ALL tool evidence
 of the run, not only what a claim cites, so one agent's evidence can contradict another
@@ -13,6 +17,7 @@ signal conventions in recap/core/signals.py with the scripted policy; its rules 
 independently, so a mistake in the policy's heuristics is not repeated in the check.
 
     V1-structural          a target, a known mechanism, cited evidence that exists in THIS run
+    V1-grounding           a supported claim cites at least one item its rules relied on
     V2-deploy-timing       bad_deployment(S, v): S's errors began -5..+30 min around its deploy
     V2-upstream-dominance  ... and fewer than half of S's ERROR lines blame a dependency that
                            is not observed healthy
@@ -26,6 +31,16 @@ independently, so a mistake in the policy's heuristics is not repeated in the ch
     V6-conflict-resolution when log TEXT disagrees with platform signals (health snapshots,
                            metrics, cluster events), the platform signals win, and the check
                            says so with the evidence IDs of both sides
+    V7-deepest-cause       of the supported actionable claims, the one the most services'
+                           upstream errors lead to wins; level root causes stay an OPEN
+                           conflict (no vote, no tie-break by how much a claim cites)
+
+    VP1..VP3               a fix cites real evidence, targets the diagnosis, names an action
+    VP4-restore-point      a fix that restores a version restores one the evidence names (the
+                           release before the bad one, or the rollback dry run's target)
+
+V6 also covers the target itself: an actionable claim on a service the platform shows
+healthy is contradicted, because there is nothing on that service to fix.
 
 Why V6 exists (audit finding 2.2): a log line is text that a buggy library, a compromised
 service or a user can write. V1 let 3 forged "OutOfMemoryError" lines prove memory pressure
@@ -42,9 +57,11 @@ counts: a fix on it does not prove it is fixed, so only fresh platform evidence 
 healthy clears that blame (V6). History stays: deployments and when errors first began.
 
 One contradiction rejects a claim; a missing piece leaves it INSUFFICIENT. The best claim is
-a SUPPORTED bad_deployment or resource_pressure, preferring the deepest root cause (the
-service other services' upstream errors point at), then more evidence, then live over memory.
-Statuses are supported / contradicted / insufficient: never "proven".
+a SUPPORTED bad_deployment or resource_pressure: the deepest root cause (V7), live before
+remembered. Before M3 a tie went to the claim citing more evidence, so padding a claim with
+citations could win it; two different root causes that are level now stay an open conflict
+for the next round, and then for a person. Statuses are supported / contradicted /
+insufficient: never "proven".
 """
 
 from __future__ import annotations
@@ -58,10 +75,13 @@ from typing import Any, Literal, NamedTuple
 
 from pydantic import BaseModel, ValidationError
 
+from recap.agents.merger import Claim, choose, disagreements, merge_claims
 from recap.context.evidence import EvidenceRegistry
 from recap.core import signals
 from recap.core.models import (
     AgentFinding,
+    AgentRole,
+    Disagreement,
     Evidence,
     FailureMechanism,
     Hypothesis,
@@ -82,12 +102,19 @@ from recap.core.observations import (
     LogLine,
     LogQueryResult,
     MetricSeries,
+    RollbackPlan,
 )
 
 V1, V2_TIMING, V2_UPSTREAM = "V1-structural", "V2-deploy-timing", "V2-upstream-dominance"
+V1_GROUNDING = "V1-grounding"
 V3, V4, V5 = "V3-resource", "V4-dependency", "V5-memory"
 V6 = "V6-conflict-resolution"
-PROPOSAL_RULES = ("VP1-evidence-exists", "VP2-target-matches-diagnosis", "VP3-action-named")
+PROPOSAL_RULES = (
+    "VP1-evidence-exists",
+    "VP2-target-matches-diagnosis",
+    "VP3-action-named",
+    "VP4-restore-point",
+)
 
 SUPPORTED, CONTRADICTED = HypothesisStatus.SUPPORTED, HypothesisStatus.CONTRADICTED
 INSUFFICIENT = HypothesisStatus.INSUFFICIENT
@@ -102,6 +129,7 @@ _TOOL_MODELS: dict[str, type[BaseModel]] = {
     "get_service_metrics": MetricSeries,
     "get_k8s_like_events": EventList,
     "get_service_health": HealthSnapshot,
+    "propose_rollback": RollbackPlan,
 }
 # Which service a call asked about, read from its canonical source_ref (see tool_source_ref).
 _SERVICE_ARG = re.compile(r"[(,]service=([^,)]+)")
@@ -125,20 +153,24 @@ class EvidenceVerifier:
         `remediated` maps a service to the environment time of the last fix executed on it;
         its state observations from before that time no longer count (see "Epochs" above).
         """
-        observed = _Observations(registry.all(), remediated)
-        proposed = [h for finding in findings for h in finding.hypotheses]
+        evidence = registry.all()
+        observed = _Observations(evidence, remediated)
+        claims = merge_claims(findings, lambda h: _claim_detail(h, observed))
         # Observation timestamps are UTC once parsed; the alert time may still be naive.
         alert_time = signals.as_utc(incident.created_at)
-        checks = [_evaluate(h, registry, observed, alert_time) for h in _merge(proposed)]
+        checks = [_evaluate(claim, registry, observed, alert_time) for claim in claims]
         graph = observed.upstream_graph()
-        candidates = sorted(
-            (c for c in checks if c.status == SUPPORTED and c.hypothesis.mechanism in ACTIONABLE),
-            key=lambda c: _rank(c, graph),
-        )
-        _resolve_dependencies(checks, candidates, observed, graph)
-        best = candidates[0].result().hypothesis if candidates else None
+        candidates = [
+            c for c in checks if c.status == SUPPORTED and c.hypothesis.mechanism in ACTIONABLE
+        ]
+        depth = {c.target: _depth(c.target, observed, graph) for c in candidates}
+        chosen, ranked, competition = choose(candidates, depth)
+        _resolve_dependencies(checks, ranked, observed, graph)
+        best = chosen.result().hypothesis if chosen else None
         status = _report_status(best, checks)
-        focus = [] if best else _focus(checks, incident)
+        open_conflict = competition if competition and not competition.resolved else None
+        focus = [] if best else _focus(checks, incident, open_conflict, ranked)
+        recorded_by = {item.id: item.agent_role for item in evidence}
         return VerificationReport(
             status=status,
             best=best,
@@ -146,7 +178,10 @@ class EvidenceVerifier:
             unknown_evidence_ids=_union(*(check.unknown_ids for check in checks)),
             merged_evidence_ids=_union(*(finding.evidence_ids for finding in findings)),
             focus_services=focus,
-            summary=_summary(status, best, checks, focus),
+            summary=_summary(status, best, checks, focus, open_conflict),
+            disagreements=disagreements(
+                checks, findings, recorded_by, competition, diagnosed=best is not None
+            ),
         )
 
     def check_proposal(
@@ -170,6 +205,9 @@ class EvidenceVerifier:
             problems.append(mismatch)
         if not proposal.action.strip():
             problems.append("the proposal names no action")
+        restore = proposal.params.get("to_version")
+        if restore is not None and diagnosed is not None and proposal.target == diagnosed:
+            problems += _restore_point_problems(str(restore), proposal.target, report, registry)
         return ProposalCheck(ok=not problems, problems=problems, rule_ids=list(PROPOSAL_RULES))
 
 
@@ -199,6 +237,7 @@ class _Observations:
         self.metrics: list[tuple[str, MetricSeries]] = []
         self.events: list[tuple[str, str | None, EventList]] = []  # (id, service asked, list)
         self.health: list[tuple[str, HealthSnapshot]] = []
+        self.rollback_plans: list[tuple[str, RollbackPlan]] = []  # propose_rollback dry runs
         for item in evidence:
             # Only live tool results count: a runbook or a memory can never prove anything.
             model = _TOOL_MODELS.get(item.tool_name or "")
@@ -214,6 +253,8 @@ class _Observations:
                 self.events.append((item.id, asked.group(1) if asked else None, parsed))
             elif isinstance(parsed, HealthSnapshot):
                 self.health.append((item.id, parsed))
+            elif isinstance(parsed, RollbackPlan):
+                self.rollback_plans.append((item.id, parsed))
 
     def fresh(self, service: str, moment: datetime) -> bool:
         """True if an observation of `service` at `moment` is newer than its last fix."""
@@ -319,17 +360,18 @@ class _Observations:
             return []
         return _union([eid for eid, _ in snapshots], [eid for eid, _ in rates])
 
-    def oom_events(self, service: str) -> list[ClusterEvent]:
-        """OOMKilled/BackOff events of `service`. An event listed twice counts once."""
-        unique: dict[tuple[datetime, str, str], ClusterEvent] = {}
-        for _, _, listing in self.events:
+    def oom_events(self, service: str) -> list[tuple[str, ClusterEvent]]:
+        """(evidence ID, event) for OOMKilled/BackOff events of `service`, each event once."""
+        unique: dict[tuple[datetime, str, str], tuple[str, ClusterEvent]] = {}
+        for eid, _, listing in self.events:
             for event in listing.events:
                 if (
                     event.service == service
                     and event.reason in signals.OOM_EVENT_REASONS
                     and self.fresh(service, event.timestamp)  # a fix ended the older kills
                 ):
-                    unique.setdefault((event.timestamp, event.reason, event.object), event)
+                    key = (event.timestamp, event.reason, event.object)
+                    unique.setdefault(key, (eid, event))
         return list(unique.values())
 
     def events_covering(self, service: str) -> list[str]:
@@ -362,13 +404,18 @@ def _parse(model: type[BaseModel] | None, data: dict[str, Any]) -> BaseModel | N
 
 @dataclass
 class _Check:
-    """One hypothesis and every rule outcome about it (becomes a HypothesisCheck)."""
+    """One claim and every rule outcome about it (becomes a HypothesisCheck)."""
 
     hypothesis: Hypothesis
+    proposers: list[AgentRole] = field(default_factory=list)  # every agent that made it
+    detail: str = ""  # the resolved version or dependency (see merger.merge_claims)
     passed: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
     rule_ids: list[str] = field(default_factory=list)
     contradicting_ids: list[str] = field(default_factory=list)
+    # (rule ID, evidence IDs) for each contradiction, so a disagreement can name both.
+    contradictions: list[tuple[str, list[str]]] = field(default_factory=list)
+    basis: list[str] = field(default_factory=list)  # evidence the passing rules relied on
     unknown_ids: list[str] = field(default_factory=list)
     focus: list[str] = field(default_factory=list)  # services that deserve a closer look
     contradicted: bool = False
@@ -385,8 +432,9 @@ class _Check:
             return CONTRADICTED
         return INSUFFICIENT if self.missing or not self.passed else SUPPORTED
 
-    def ok(self, rule: str, message: str) -> None:
-        """A rule found what the claim needs."""
+    def ok(self, rule: str, message: str, evidence_ids: Iterable[str] = ()) -> None:
+        """A rule found what the claim needs, in `evidence_ids` (the claim's basis)."""
+        self.basis = _union(self.basis, evidence_ids)
         self.note(rule, message, good=True)
 
     def contradict(
@@ -394,7 +442,9 @@ class _Check:
     ) -> None:
         """Evidence actively disagrees with the claim."""
         self.contradicted = True
-        self.contradicting_ids = _union(self.contradicting_ids, evidence_ids)
+        ids = _union(evidence_ids)  # one log query has many lines, but one evidence ID
+        self.contradicting_ids = _union(self.contradicting_ids, ids)
+        self.contradictions.append((rule, ids))
         self.note(rule, message, good=False, focus=focus)
 
     def lack(self, rule: str, message: str, focus: Iterable[str] = ()) -> None:
@@ -416,7 +466,12 @@ class _Check:
             update={"status": self.status, "contradicting_evidence_ids": contradicting}
         )
         return HypothesisCheck(
-            hypothesis=final, passed=self.passed, failed=self.failed, rule_ids=self.rule_ids
+            hypothesis=final,
+            passed=self.passed,
+            failed=self.failed,
+            rule_ids=self.rule_ids,
+            proposers=self.proposers,
+            basis_evidence_ids=self.basis if self.status == SUPPORTED else [],
         )
 
 
@@ -424,10 +479,12 @@ class _Check:
 
 
 def _evaluate(
-    h: Hypothesis, registry: EvidenceRegistry, observed: _Observations, alert_time: datetime
+    claim: Claim, registry: EvidenceRegistry, observed: _Observations, alert_time: datetime
 ) -> _Check:
-    """V1 first; the mechanism's rule only for a well-formed claim; V5 for remembered claims."""
-    check = _Check(h)
+    """V1 first; the mechanism's rule only for a well-formed claim; then V1-grounding, and V5
+    for remembered claims."""
+    h = claim.hypothesis
+    check = _Check(h, proposers=claim.proposers, detail=claim.detail)
     _structural(check, registry)
     if not check.missing:
         if h.mechanism == FailureMechanism.BAD_DEPLOYMENT:
@@ -436,6 +493,9 @@ def _evaluate(
             _resource_pressure(check, observed)
         elif h.mechanism == FailureMechanism.DEPENDENCY_FAILURE:
             _dependency_failure(check, observed)
+        if h.mechanism in ACTIONABLE:
+            _healthy_target(check, observed)
+        _grounding(check)
     if h.origin == "memory":
         episode = h.details.get("episode_id", "a past episode")
         confirmed = check.status == SUPPORTED
@@ -461,6 +521,44 @@ def _structural(check: _Check, registry: EvidenceRegistry) -> None:
         check.lack(V1, f"the claim cites evidence that is not in this run: {unknown}", focus)
     if not check.missing:
         check.ok(V1, f"every cited evidence ID exists in this run ({len(cited)} checked)")
+
+
+def _healthy_target(check: _Check, observed: _Observations) -> None:
+    """V6 for the target: a service the platform shows healthy is not the root cause to fix.
+
+    For example an OOM kill 55 minutes before the alert on a service that is Running, fully
+    ready and without errors through the whole incident: the kill happened, but there is
+    nothing on that service to fix now. (V2 and V3 alone would still support such a claim.)
+    """
+    if check.contradicted:
+        return
+    healthy = observed.healthy_evidence(check.target)
+    if healthy:
+        message = (
+            f"{check.target} is observed healthy ({', '.join(healthy)}): there is nothing on it "
+            "to fix, so it is not this incident's root cause"
+        )
+        check.contradict(V6, message, healthy)
+
+
+def _grounding(check: _Check) -> None:
+    """V1-grounding: a supported claim must cite at least one item its rules relied on.
+
+    The verifier reads all of the run's evidence, so a claim can be supported by evidence
+    another agent recorded: that is how two specialists' views combine. But a claim citing
+    none of it (only unrelated evidence) was not based on the evidence: it stays open.
+    """
+    if check.status != SUPPORTED:
+        return
+    cited = set(check.hypothesis.supporting_evidence_ids)
+    used = [eid for eid in check.basis if eid in cited]
+    if used:
+        count = f"{len(used)} of the {len(check.basis)}"
+        check.ok(V1_GROUNDING, f"the claim cites {count} evidence items its rules relied on")
+        return
+    relied = ", ".join(check.basis) or "none recorded"
+    message = f"the claim cites none of the evidence its rules relied on ({relied})"
+    check.lack(V1_GROUNDING, message, [check.target])
 
 
 def _bad_deployment(check: _Check, observed: _Observations, alert_time: datetime) -> None:
@@ -502,7 +600,11 @@ def _deploy_timing(
     service = check.target
     deploy_id, record = release
     when = _when(record.deployed_at, alert_time)
-    check.ok(V2_TIMING, f"deployment evidence shows {service} {record.version} deployed {when}")
+    check.ok(
+        V2_TIMING,
+        f"deployment evidence shows {service} {record.version} deployed {when}",
+        [deploy_id],
+    )
     onset = _error_onset(check, observed, record.version, alert_time)
     if onset is None:
         return
@@ -511,7 +613,7 @@ def _deploy_timing(
     relative = f"{_offset(delta)} {record.version} was deployed (allowed window {low}..+{high} min)"
     evidence = [deploy_id, *onset.evidence_ids]
     if onset.start_seen and low <= delta <= high:
-        check.ok(V2_TIMING, f"errors on {service} began {relative}")
+        check.ok(V2_TIMING, f"errors on {service} began {relative}", evidence)
     elif onset.start_seen:
         check.contradict(V2_TIMING, f"errors on {service} began {relative}", evidence)
     elif delta < low:  # the evidence starts mid-incident, yet even that is before the deploy
@@ -535,7 +637,11 @@ def _error_onset(
             check.lack(V2_TIMING, f"{service}'s error_rate never rises above {threshold}")
             return None
         when = _when(began, alert_time)
-        check.ok(V2_TIMING, f"{service}'s error_rate is first seen above {threshold} {when}")
+        check.ok(
+            V2_TIMING,
+            f"{service}'s error_rate is first seen above {threshold} {when}",
+            [eid for eid, _ in series],
+        )
         # An onset counts as seen only if the evidence also shows a calm moment before it.
         start_seen = min(timestamp for timestamp, _ in points) < began
         return _Onset(began, start_seen, [eid for eid, _ in series])
@@ -552,7 +658,9 @@ def _error_onset(
         return None
     eid, first = tagged[0]
     check.ok(
-        V2_TIMING, f"{service} logs its first '{tag}' error {_when(first.timestamp, alert_time)}"
+        V2_TIMING,
+        f"{service} logs its first '{tag}' error {_when(first.timestamp, alert_time)}",
+        [eid],
     )
     return _Onset(first.timestamp, lines[0][1].timestamp < first.timestamp, [eid])
 
@@ -577,7 +685,11 @@ def _upstream_dominance(check: _Check, observed: _Observations) -> None:
     upstream = _discount_healthy_blame(check, observed, observed.upstream_errors(service))
     counted = f"{len(upstream)} of {errors} ERROR lines of {service}"
     if len(upstream) < UPSTREAM_SHARE * errors or not upstream:
-        check.ok(V2_UPSTREAM, f"{counted} blame a dependency (under {UPSTREAM_SHARE:.0%})")
+        check.ok(
+            V2_UPSTREAM,
+            f"{counted} blame a dependency (under {UPSTREAM_SHARE:.0%})",
+            [eid for eid, _ in fresh],
+        )
         return
     blamed = _union([dependency for _, dependency in upstream])
     message = f"{counted} say 'upstream ... call failed': its errors come from {', '.join(blamed)}"
@@ -620,13 +732,15 @@ def _resource_pressure(check: _Check, observed: _Observations) -> None:
         eid for eid, ln in observed.fresh_lines(service) if signals.is_oom_message(ln.message)
     ]
     if oom_events:
-        check.ok(V3, f"{len(oom_events)} OOMKilled/BackOff events for {service}")
+        events = [eid for eid, _ in oom_events]
+        check.ok(V3, f"{len(oom_events)} OOMKilled/BackOff events for {service}", events)
     if memory is not None and near_limit:
         limit = f"{memory.limit_mb:g} MB limit (pressure from {signals.MEMORY_PRESSURE_RATIO:.0%})"
-        check.ok(V3, f"{service}'s memory reached {memory.peak:.0%} of its {limit}")
+        message = f"{service}'s memory reached {memory.peak:.0%} of its {limit}"
+        check.ok(V3, message, memory.evidence_ids)
     if oom_events or near_limit:
         if oom_lines:  # text that agrees with a platform signal adds corroboration
-            check.ok(V3, f"{len(oom_lines)} out-of-memory errors in {service}'s logs")
+            check.ok(V3, f"{len(oom_lines)} out-of-memory errors in {service}'s logs", oom_lines)
         return  # a platform signal is enough
     # An event list cannot be dated, so for a service that was fixed in this run, a list read
     # before the fix must not prove "no OOM kills": coverage then counts as missing.
@@ -703,7 +817,7 @@ def _dependency_failure(check: _Check, observed: _Observations) -> None:
         check.contradict(V4, message, healthy)
         _text_loses(check, failures, healthy)
         return
-    check.ok(V4, f"{len(failures)} ERROR lines of {service} say {quote}")
+    check.ok(V4, f"{len(failures)} ERROR lines of {service} say {quote}", failures)
 
 
 def _resolve_dependencies(
@@ -730,46 +844,86 @@ def _resolve_dependencies(
 # --- choosing the best hypothesis and writing the report ----------------------------------------
 
 
-def _merge(hypotheses: Iterable[Hypothesis]) -> list[Hypothesis]:
-    """One entry per distinct claim; agents proposing the same claim pool their evidence.
+def _claim_detail(h: Hypothesis, observed: _Observations) -> str:
+    """The detail that tells two claims of one mechanism on one service apart.
 
-    Same claim = same origin, mechanism, target and (for dependency failures) dependency. A
-    remembered claim stays apart from a live one, so the dashboard shows it judged on its own.
+    A bad deployment: the bad release's version (the newest observed release of the target
+    when the claim names none, as V2 reads it). A dependency failure: the blamed dependency
+    (the first one the target's own logs blame when the claim names none, as V4 reads it).
     """
-    merged: dict[tuple[str, FailureMechanism, str | None, str], Hypothesis] = {}
-    for h in hypotheses:
-        key = (h.origin, h.mechanism, h.target_service, str(h.details.get("dependency", "")))
-        merged[key] = _pool(merged[key], h) if key in merged else h
-    return list(merged.values())
+    target = h.target_service or ""
+    if h.mechanism == FailureMechanism.BAD_DEPLOYMENT:
+        release = observed.release(target, None)
+        return _detail(h, "version") or (release[1].version if release else "")
+    if h.mechanism == FailureMechanism.DEPENDENCY_FAILURE:
+        return _named_dependency(h, observed) or ""
+    return ""
 
 
-def _pool(first: Hypothesis, other: Hypothesis) -> Hypothesis:
-    """`first`, plus the evidence IDs (and any missing details) of a duplicate claim."""
-    return first.model_copy(
-        update={
-            "supporting_evidence_ids": _union(
-                first.supporting_evidence_ids, other.supporting_evidence_ids
-            ),
-            "contradicting_evidence_ids": _union(
-                first.contradicting_evidence_ids, other.contradicting_evidence_ids
-            ),
-            "details": {**other.details, **first.details},
-        }
+def _depth(
+    target: str, observed: _Observations, graph: Mapping[str, set[str]]
+) -> tuple[int, list[str]]:
+    """V7: how many services' upstream errors lead to `target`, and the IDs of those lines.
+
+    A caller counts when its blame leads to `target` directly or through other services.
+    Blame toward a dependency observed healthy is not in the graph (V6), so text alone
+    cannot make a healthy service look like the deepest root cause.
+    """
+    callers = [caller for caller in graph if target in _reachable(caller, graph)]
+    lines = [
+        eid
+        for caller in callers
+        for eid, dependency in observed.upstream_errors(caller)
+        if dependency in graph.get(caller, set())
+        and (dependency == target or target in _reachable(dependency, graph))
+    ]
+    return len(callers), _union(lines)
+
+
+def _restore_point_problems(
+    version: str, target: str, report: VerificationReport, registry: EvidenceRegistry
+) -> list[str]:
+    """VP4: a fix that restores a version must restore one the evidence names.
+
+    Named versions: the version before the diagnosed release in the deployment evidence,
+    and the target of a propose_rollback dry run for the service. Restoring the release
+    the diagnosis blames is never right.
+    """
+    observed = _Observations(registry.all())
+    best = report.best
+    bad = None
+    if best is not None and best.mechanism == FailureMechanism.BAD_DEPLOYMENT:
+        bad = _claim_detail(best, observed) or None
+    release = observed.release(target, bad)
+    earlier = []  # the release deployed just before the bad one, if the history shows it
+    if release is not None:
+        older = [
+            record
+            for _, record in observed.deployments
+            if record.service == target
+            and record.deployed_at < release[1].deployed_at
+            and record.version != release[1].version
+        ]
+        earlier = [max(older, key=lambda record: record.deployed_at).version] if older else []
+    named = _union(
+        [release[1].previous_version] if release and release[1].previous_version else [],
+        earlier,
+        [
+            plan.target_version
+            for _, plan in observed.rollback_plans
+            if plan.service == target and plan.possible and plan.target_version
+        ],
     )
-
-
-def _rank(check: _Check, graph: Mapping[str, set[str]]) -> tuple[int, int, bool, int, str]:
-    """Sort key, best first: deepest root cause, more evidence, live before memory."""
-    h = check.hypothesis
-    # Depth = how many services' upstream errors lead here, directly or through others.
-    blamed_by = sum(1 for caller in graph if check.target in _reachable(caller, graph))
-    return (
-        -blamed_by,
-        -len(h.supporting_evidence_ids),
-        h.origin == "memory",
-        _MECHANISM_ORDER[h.mechanism],  # the last two only make ties deterministic
-        check.target,
-    )
+    if bad is not None and version == bad:
+        return [f"the proposal restores {version}, the release the diagnosis blames"]
+    if not named:
+        return [
+            f"no deployment history or rollback dry run in this run names a version of "
+            f"{target} to restore"
+        ]
+    if version not in named:
+        return [f"the proposal restores {version}, but the evidence names {', '.join(named)}"]
+    return []
 
 
 def _report_status(
@@ -782,15 +936,26 @@ def _report_status(
     return "insufficient"
 
 
-def _focus(checks: Sequence[_Check], incident: Incident) -> list[str]:
-    """Where the next round should look: services with missing evidence or open leads."""
+def _focus(
+    checks: Sequence[_Check],
+    incident: Incident,
+    conflict: Disagreement | None = None,
+    ranked: Sequence[_Check] = (),
+) -> list[str]:
+    """Where the next round should look: the services of an open conflict first, then
+    services with missing evidence or open leads."""
     if not checks:  # nobody proposed anything: start again from the alerted services
         return _union([incident.service, *incident.affected_services])
-    return _union(*(check.focus for check in checks))
+    competing = [c.target for c in ranked] if conflict is not None else []
+    return _union(competing, *(check.focus for check in checks))
 
 
 def _summary(
-    status: str, best: Hypothesis | None, checks: Sequence[_Check], focus: Sequence[str]
+    status: str,
+    best: Hypothesis | None,
+    checks: Sequence[_Check],
+    focus: Sequence[str],
+    conflict: Disagreement | None = None,
 ) -> str:
     """One plain sentence for the dashboard and the trace."""
     counts = Counter(check.status for check in checks)
@@ -802,6 +967,11 @@ def _summary(
     if status == "contradicted":
         return f"The evidence contradicts every hypothesis ({tally}); nothing can be acted on."
     where = ", ".join(focus) or "the alerted services"
+    if conflict is not None:
+        return (
+            f"Supported root causes compete ({'; '.join(conflict.claims)}) and no evidence "
+            f"rule decides between them ({tally}); look next at {where}."
+        )
     if not checks:
         return f"No hypotheses were proposed; look next at {where}."
     return f"No actionable root cause is supported yet ({tally}); look next at {where}."

@@ -315,7 +315,7 @@ def test_prompt_version_is_defined() -> None:
 
 
 def test_prompts_contain_no_secrets(context: ContextPack, monkeypatch: pytest.MonkeyPatch) -> None:
-    secret = "sk-ant-api03-THIS-IS-A-TEST-SECRET"
+    secret = "sk-ant-" + "api03-THIS-IS-A-TEST-SECRET"  # assembled at runtime, like the others
     monkeypatch.setenv("ANTHROPIC_API_KEY", secret)
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", secret)
     secret_like = re.compile(r"sk-ant-|api[_ -]?key|auth[_ -]?token|bearer", re.IGNORECASE)

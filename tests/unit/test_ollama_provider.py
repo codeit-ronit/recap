@@ -343,3 +343,16 @@ def test_the_provider_says_what_it_is(settings: Settings) -> None:
     assert (info.name, info.kind, info.origin) == ("ollama:qwen3:8b", "llm", "local_llm")
     assert (info.mode, info.prompt_version) == ("tools", protocol.PROMPT_VERSION)
     assert json.loads(info.model_dump_json())["replay_of"] is None
+
+
+async def test_parallel_first_steps_share_one_readiness_check(settings: Settings) -> None:
+    """Two specialists start together: one /api/version and one /api/show, not two each."""
+    import asyncio
+
+    fake = FakeOllama([tool_answer(("list_services", {}))] * 2)
+    provider = ollama(settings, fake)
+    request = investigation_request(settings)
+    await asyncio.gather(provider.next_action(request), provider.next_action(request))
+    paths = [r.url.path for r in fake.requests]
+    assert paths.count("/api/version") == 1 and paths.count("/api/show") == 1
+    assert paths.count("/api/chat") == 2

@@ -85,6 +85,7 @@ class DeterministicProvider:
                 action="call_tools",
                 tool_calls=[call],
                 summary=f"{call.reason} ({len(planned) - 1} more checks planned)",
+                kind="tool_request",
             )
         return _with_usage(decision, request.context.tokens_after)
 
@@ -128,6 +129,7 @@ def _finish(
         hypotheses=hypotheses,
         summary=summary,
         next_steps=_next_steps(planned, hypotheses, parse_evidence(evidence)),
+        kind="hypothesis" if hypotheses else "need_more_evidence",
     )
 
 

@@ -502,3 +502,63 @@ Test results after the run reviews:
 - Real models have not been red-teamed (prompt injection against `qwen3:8b`/`gpt-oss-120b`).
 - Model-level runs are not reproducible (random IDs in the prompt); only replays are.
 - **M5:** Docker, Kind and kubectl are still not installed.
+
+---
+
+## M3: real multi-agent intelligence, RAG and episodic memory (in progress, 2026-10-21)
+
+Decisions approved for M3: Ollama-hosted embeddings (`nomic-embed-text`, 274 MB, 768
+dimensions, pulled and answering on `127.0.0.1:11434/api/embed`) behind the pluggable
+embedding interface; separate memory partitions for scripted demos, real-model verified
+episodes and isolated evaluation runs; verified Groq Free (the existing key, at the owner's
+choice) and local Ollama only, no paid API. Before any push, a secret scan of all tracked
+files and every commit: run on 2026-10-21 over 34 commits and 346 files, nothing found.
+
+### Step 1: independent specialists ([ADR 0020](decisions/0020-independent-specialists-with-role-contracts.md))
+
+- Round-scoped views, per-agent evidence IDs (`ev-…-r2t01`), canonical order at the end of a
+  round; disjoint tools and role contracts (responsibilities, allowed mechanisms) enforced
+  by the harness for every provider; `contradicting_evidence_ids`, an untrusted
+  `confidence_note` and `AgentFinding.outcome`; a per-agent time share in parallel rounds
+  and partial findings kept when the budget stops the run; prompts-v4.3.
+- A parallel round recorded with either specialist delayed replays offline, and the
+  evidence IDs do not depend on which one was slower (`tests/e2e/test_parallel_replay.py`).
+  This closes the M2 follow-up "a replay of a run with a parallel round can stop with
+  ReplayMismatch".
+
+### Step 2: the evidence merger ([ADR 0021](decisions/0021-evidence-rules-settle-disagreements-never-votes.md))
+
+- Claims merged by mechanism, target and detail (release version or dependency), with all
+  proposers; each passing rule records its basis; new rules V1-grounding, V6 on the target
+  (a healthy service is no root cause), V7-deepest-cause without tie-breaks, VP4-restore-point;
+  typed disagreement records; an open conflict's question reaches the next round
+  (`RT3-disagreement`) and then a person (FAILED, no fix proposed); `verification.merge`
+  trace events. This closes the M2 follow-up on the rollback target.
+- Scripted baseline before and after (15 scenarios × adaptive/single/parallel, memory off,
+  auto-approved, in a scratch data directory): **0 differences in 45 runs** in end state,
+  diagnosis, report status, routing rules, actions and every claim's status.
+- Revert checks: each of 7 changes (merge key, citation tie-break, grounding, VP4, healthy
+  target, duplicate IDs in a contradiction, questions reaching the next round) was undone
+  on its own; its guarding tests failed every time, and the files were restored.
+- A two-fault scenario (test only) with the scripted policy: both specialists found the
+  inventory leak in round 1 (merged, two proposers), RECAP restarted inventory, the oracle
+  said "not recovered", and the next epoch found and rolled back checkout's bad release:
+  RESOLVED. With fixed fake-model answers making both claims in one round, the conflict
+  stayed open through the follow-up round and the run ended FAILED for a person
+  (`tests/e2e/test_disagreement_follow_up.py`).
+
+### Real model runs in M3 (simulated environment)
+
+| Run | Model | Requests | Tokens in / out (reported) | Outcome |
+|---|---|---|---|---|
+| local 7 (the CI fixture since prompts-v4.3, recording `20261021-134004-ollama-5f0326`) | `qwen3:8b` (Ollama 0.34.4, `tools` mode) | 5 | 13,234 / 703 | `bad-deployment`, memory off, simulation auto-approver: RESOLVED in about 3.3 min, one round, one investigator (RT7). The same five reads as local 5 (health and the error rate; deployments and events; logs), a diagnosis citing 3 evidence IDs, all three in its rules' basis (V1-grounding passed), a rollback to `v2.4.0` (VP4: the release before the bad one); the oracle verified recovery |
+
+This run re-recorded the CI replay fixture for prompts-v4.3; it is single-agent, so it does
+not yet exercise the specialists. The real multi-agent runs (several scenarios, at least one
+unfamiliar and one adversarial) come after the retrieval, memory and context steps.
+
+### Tests so far
+
+`pytest`: **1256 passed, 1 skipped** (the skip needs the optional `otel` extra).
+`ruff check` and `ruff format --check`: clean. Requests in M3 so far: the 5 chat requests of
+local 7 and local checks that `nomic-embed-text` answers, all on loopback ($0).

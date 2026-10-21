@@ -4,6 +4,12 @@ Every tool result becomes an immutable `Evidence` with a run-unique ID like
 "ev-3f9a2c-007" (runbook chunks and memories enter context packs under their own IDs).
 Agents and the verifier only pass these IDs around, so no one can quietly edit what was
 observed, and a claim that cites an ID from another run is detectably invalid.
+
+In a parallel round (several specialists at once) each agent's evidence is numbered in its
+own namespace, e.g. "ev-3f9a2c-r2t01" for the telemetry investigator's first result in
+round 2. IDs then never depend on which agent's result happened to arrive first, and when
+the round closes its items are put in a canonical order (agent, then the agent's own
+order). Both make a recorded parallel run replay the same way whatever the timing.
 """
 
 from __future__ import annotations
@@ -14,6 +20,13 @@ from typing import Any
 from recap.context.tokens import estimate_tokens
 from recap.core.ids import utcnow
 from recap.core.models import AgentRole, Evidence, SourceType, TrustLevel
+
+# One letter per agent in parallel-round evidence IDs ("r2t01": round 2, telemetry, first).
+_ROLE_CODES = {
+    AgentRole.TELEMETRY: "t",
+    AgentRole.INFRASTRUCTURE: "i",
+    AgentRole.INVESTIGATOR: "v",
+}
 
 
 def tool_source_ref(tool_name: str, args: dict[str, Any]) -> str:
@@ -40,6 +53,33 @@ class EvidenceRegistry:
         self._prefix = f"ev-{run_id.split('-')[-1][:6]}"
         self._items: dict[str, Evidence] = {}
         self._on_add = on_add  # e.g. persist to SQLite
+        # The open parallel round, if any: its number, where it starts, per-agent counters.
+        self._round: int | None = None
+        self._round_start = 0
+        self._counters: dict[AgentRole, int] = {}
+
+    def open_round(self, round_number: int, roles: Iterable[AgentRole]) -> int:
+        """Start a parallel round: from now on each listed agent's evidence gets IDs in its
+        own namespace. Returns the index where the round's evidence starts."""
+        self._round = round_number
+        self._round_start = len(self._items)
+        self._counters = {role: 0 for role in roles}
+        return self._round_start
+
+    def close_round(self, order: Iterable[AgentRole]) -> None:
+        """End the parallel round and put its evidence in a canonical order: by the agents'
+        order in `order`, then each agent's own order (never by arrival time)."""
+        if self._round is None:
+            return
+        rank = {role: index for index, role in enumerate(order)}
+        items = list(self._items.values())
+        head, tail = items[: self._round_start], items[self._round_start :]
+        ordered = sorted(
+            enumerate(tail),
+            key=lambda pair: (rank.get(pair[1].agent_role, len(rank)), pair[0]),  # type: ignore[arg-type]
+        )
+        self._items = {e.id: e for e in [*head, *(e for _, e in ordered)]}
+        self._round, self._round_start, self._counters = None, 0, {}
 
     def add(
         self,
@@ -55,7 +95,7 @@ class EvidenceRegistry:
     ) -> Evidence:
         """Record a new observation and return it with its assigned ID."""
         evidence = Evidence(
-            id=f"{self._prefix}-{len(self._items) + 1:03d}",
+            id=self._next_id(agent_role),
             incident_id=self.incident_id,
             source_type=source_type,
             source_ref=source_ref,
@@ -72,6 +112,15 @@ class EvidenceRegistry:
         if self._on_add:
             self._on_add(evidence)
         return evidence
+
+    def _next_id(self, agent_role: AgentRole | None) -> str:
+        """Sequential outside parallel rounds ("ev-3f9a2c-007"); per agent inside one
+        ("ev-3f9a2c-r2t01")."""
+        if self._round is not None and agent_role in self._counters:
+            self._counters[agent_role] += 1
+            code = _ROLE_CODES.get(agent_role, "x")
+            return f"{self._prefix}-r{self._round}{code}{self._counters[agent_role]:02d}"
+        return f"{self._prefix}-{len(self._items) + 1:03d}"
 
     def get(self, evidence_id: str) -> Evidence | None:
         return self._items.get(evidence_id)

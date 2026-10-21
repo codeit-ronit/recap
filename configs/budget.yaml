@@ -16,6 +16,7 @@ routing:
   parallel_min_tool_calls: 10   # do not start parallel specialists with fewer calls left
   familiar_similarity: 0.6      # memory similarity that counts as "we have seen this before"
   conflict_similarity: 0.45     # similar episodes above this that disagree -> conflict
+  parallel_agent_time_share: 0.7  # a parallel agent may use at most this share of the time left
 
 retries:
   max_investigation_rounds: 2   # re-investigate (escalating) when evidence is insufficient

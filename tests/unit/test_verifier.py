@@ -251,7 +251,13 @@ def test_recent_bad_deployment_is_supported() -> None:
 
     check = only_check(report)
     assert check.hypothesis.status == SUPPORTED
-    assert check.rule_ids == ["V1-structural", "V2-deploy-timing", "V2-upstream-dominance"]
+    assert check.rule_ids == [
+        "V1-structural",
+        "V2-deploy-timing",
+        "V2-upstream-dominance",
+        "V1-grounding",
+    ]
+    assert check.basis_evidence_ids == ids  # deployment, error rate, and checkout's own logs
     window = "(allowed window -5..+30 min)"
     assert f"errors on checkout began 2 min after v2.4.1 was deployed {window}" in check.passed
     assert report.status == "supported"
@@ -531,6 +537,7 @@ def test_check_proposal_catches_unknown_evidence_and_a_wrong_target() -> None:
         "VP1-evidence-exists",
         "VP2-target-matches-diagnosis",
         "VP3-action-named",
+        "VP4-restore-point",
     ]
 
 
@@ -663,8 +670,14 @@ def test_a_healthy_dependency_does_not_get_the_deepest_root_cause_bonus() -> Non
     )
 
     statuses = {c.hypothesis.target_service: c.hypothesis.status for c in report.checks}
-    assert statuses == {"checkout": SUPPORTED, "payment": SUPPORTED}
+    # Before M3 payment's claim counted as supported (the kill did happen) and checkout won
+    # only because it cited more evidence. Now V6 also covers the target: payment is
+    # observed healthy, so there is nothing on it to fix.
+    assert statuses == {"checkout": SUPPORTED, "payment": CONTRADICTED}
+    payment = next(c for c in report.checks if c.hypothesis.target_service == "payment")
+    assert any("payment is observed healthy" in line for line in payment.failed)
     assert report.best is not None and report.best.target_service == "checkout"
+    assert not [d for d in report.disagreements if d.kind == "competing_root_causes"]
 
 
 # --- epochs: after a fix, the fixed service's older state no longer counts (audit 2.6) -------

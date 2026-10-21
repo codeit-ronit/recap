@@ -46,6 +46,7 @@ class TraceCategory:
     APPROVAL_DECIDED = "approval.decided"
     MITIGATION_STARTED = "mitigation.started"  # written BEFORE a write is sent (write-ahead)
     MITIGATION = "mitigation.executed"
+    VERIFY_MERGE = "verification.merge"  # claims pooled per agent, and their disagreements
     VERIFY_EVIDENCE = "verification.evidence"
     VERIFY_RECOVERY = "verification.recovery"
     BUDGET = "budget.exhausted"
