@@ -28,6 +28,7 @@ from recap.providers.quota import OPT_IN_ENV, UsageLedger
 from recap.telemetry.redact import Redactor
 from recap.telemetry.usage import cost_label
 from tests.llm_fakes import (
+    FAKE_COMPLETION_ID,
     FAKE_GROQ_KEY,
     FAKE_REQUEST_ID,
     FakeGroq,
@@ -177,7 +178,9 @@ async def test_a_recording_keeps_the_rate_limits_but_no_request_id(
     assert provider.info.recording is not None
     text = (settings.paths.root / provider.info.recording).read_text(encoding="utf-8")
     assert "x-ratelimit-limit-requests" in text  # the tripwire's evidence is kept
-    assert FAKE_REQUEST_ID not in text and "x-request-id" not in text
+    for linkable in (FAKE_REQUEST_ID, FAKE_COMPLETION_ID, "x-request-id", "system_fingerprint"):
+        assert linkable not in text, linkable
+    assert '"prompt_tokens": 900' in text  # what the provider reads is still there
 
 
 async def test_tools_mode_requires_a_tool_call(settings: Settings, groq_env: None) -> None:

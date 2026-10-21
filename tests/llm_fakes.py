@@ -42,6 +42,7 @@ OLLAMA_MODEL = "qwen3:8b"
 GROQ_MODEL = "openai/gpt-oss-120b"
 FAKE_GROQ_KEY = "gsk_" + "TESTKEYnotREAL" * 3  # shaped like a Groq key, never valid
 FAKE_REQUEST_ID = "req_01FAKEACCOUNTLINK0000000000"  # shaped like a Groq request ID
+FAKE_COMPLETION_ID = "chatcmpl-0f4e5a6b-fake-4c1d-9e8f-account0link"  # an answer's own ID
 FAKE_OLLAMA_VERSION = "0.0.0-fake"  # never a real Ollama version: fake runs stay recognizable
 FAKE_WEIGHTS = "sha256-" + "fa4e" * 16  # a weights file name as /api/show's modelfile gives it
 
@@ -282,7 +283,10 @@ class FakeGroq:
                 200,
                 headers=headers,
                 json={
-                    "id": "chatcmpl-test",
+                    # Like a real Groq answer: its own ID, Groq's request ID and a fingerprint.
+                    "id": FAKE_COMPLETION_ID,
+                    "x_groq": {"id": FAKE_REQUEST_ID},
+                    "system_fingerprint": "fp_fakefakefake",
                     "model": self.answered_by,
                     "choices": [
                         {

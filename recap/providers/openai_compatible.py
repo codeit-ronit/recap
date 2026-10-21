@@ -266,17 +266,30 @@ class FreeHostedProvider(HttpLLMProvider):
         )
 
 
+# What a recording keeps of a chat answer: the fields `_reply` reads. Never the answer's
+# own IDs (`id`, Groq's `x_groq.id`, `system_fingerprint`): like a request-ID header, they
+# could link a published recording to the account that made it.
+KEPT_ANSWER_FIELDS = ("model", "object", "created", "choices", "usage", "error")
+
+
 def trim_for_recording(model: str) -> Any:
-    """A recording keeps only this provider's model from the /models list."""
+    """A recording keeps only this provider's model from the /models list, and only the
+    fields of a chat answer that the provider reads."""
 
     def trim(path: str, body: Any) -> Any:
-        if not path.endswith("/models") or not isinstance(body, dict):
+        if not isinstance(body, dict):
             return body
-        return {
-            "data": [
-                m for m in body.get("data") or [] if isinstance(m, dict) and m.get("id") == model
-            ]
-        }
+        if path.endswith("/models"):
+            return {
+                "data": [
+                    m
+                    for m in body.get("data") or []
+                    if isinstance(m, dict) and m.get("id") == model
+                ]
+            }
+        if path.endswith("/chat/completions"):
+            return {key: value for key, value in body.items() if key in KEPT_ANSWER_FIELDS}
+        return body
 
     return trim
 

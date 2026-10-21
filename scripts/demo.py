@@ -258,7 +258,8 @@ async def main() -> int:
     )
     args = parser.parse_args()
     if args.approve == "ask" and not sys.stdin.isatty():
-        print("--approve ask needs an interactive terminal (a person reads and answers).")
+        print("--approve ask needs an interactive terminal: the answer is typed there,")
+        print("after the proposal is shown.")
         print("For unattended simulation runs use --approve auto.")
         return 2
 

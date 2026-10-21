@@ -41,6 +41,36 @@ def test_api_keys_are_redacted_inside_nested_payloads() -> None:
     assert result["text"] == f"tokens {REDACTED} and {REDACTED}"
 
 
+@pytest.mark.parametrize(
+    "secret",
+    [
+        "sk-" + "proj-" + "Ab1_cD2-" * 6,  # OpenAI project key (has dashes inside)
+        "sk-" + "svcacct-" + "Ab1cD2eF" * 4,  # OpenAI service-account key
+        "gho_" + "x1" * 18,  # GitHub OAuth token
+        "ghs_" + "x1" * 18,  # GitHub app token
+        "github_" + "pat_" + "11AB" * 10,  # GitHub fine-grained token
+        "xoxb-" + "1234567890-" + "abcdEFGH" * 2,  # Slack bot token
+        "ASIA" + "ABCDEFGHIJKLMNOP",  # AWS temporary access key ID
+        "-----BEGIN "
+        + "OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk\n-----END OPENSSH PRIVATE KEY-----",
+    ],
+    ids=[
+        "openai-project",
+        "openai-service",
+        "github-oauth",
+        "github-app",
+        "github-fine-grained",
+        "slack",
+        "aws-temporary",
+        "private-key",
+    ],
+)
+def test_more_key_formats_are_redacted_even_right_after_a_newline(secret: str) -> None:
+    """Formats the M2 run review found missing; a newline before them must not matter."""
+    text = Redactor(environ={}).redact_text(f"the log said:\n{secret}\nthen nothing")
+    assert secret not in text and REDACTED in text
+
+
 def test_values_under_sensitive_key_names_are_hidden() -> None:
     payload = {
         "api_key": "plain",

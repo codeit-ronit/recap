@@ -43,7 +43,7 @@ from recap.core.models import (
 )
 from recap.safety.injection import injection_flags
 
-PROMPT_VERSION = "prompts-v3.1"  # v3.1: placeholders instead of example values
+PROMPT_VERSION = "prompts-v3.2"  # v3.2: placeholders instead of example values
 
 # Static on purpose: no per-run values here, so the same system prompt is sent every time.
 # Which environment RECAP works on is stated in each request's incident section instead.
@@ -89,7 +89,10 @@ class ToolCallOutput(Contract):
 
     tool_name: str = Field(description="Exact name of one of the tools listed in the request.")
     args_json: str = Field(
-        description='Arguments as a JSON object string, e.g. {"service": "checkout"}; "{}" if none.'
+        description=(
+            'Arguments as a JSON object string, e.g. {"service": "<a listed service>"}; "{}" '
+            "if none."
+        )
     )
     reason: str = Field(description="One short sentence on why this call helps.")
 

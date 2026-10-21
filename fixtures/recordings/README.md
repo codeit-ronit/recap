@@ -15,8 +15,8 @@ with `ReplayMismatch`; nothing is ever guessed.
 
 What a recording keeps: the request bodies (prompts are built from simulated incident
 data only), the responses (Ollama's `/api/show` trimmed to capabilities, size, context
-length and the weights file's name, never its local path), and the rate-limit headers (no
-request IDs). It never holds an API key: keys are added only on the
+length and the weights file's name, never its local path; a hosted chat answer only the
+fields the provider reads), and the rate-limit headers. No request or answer IDs are kept. It never holds an API key: keys are added only on the
 wire, and every line is scrubbed for secrets and the user's home folder before it is
 written.
 

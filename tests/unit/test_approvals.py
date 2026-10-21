@@ -15,6 +15,7 @@ import pytest
 from recap.core.errors import ApprovalError, ConfigError
 from recap.core.ids import utcnow
 from recap.core.models import ApprovalStatus, EnvironmentInfo, MitigationProposal
+from recap.safety import approvals
 from recap.safety.approvals import (
     ApprovalStore,
     AutoApprovalChannel,
@@ -329,17 +330,64 @@ async def test_the_real_prompt_rejects_unread_without_a_terminal(
 async def test_a_terminal_answer_is_logged_with_how_it_came(
     store: ApprovalStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    order: list[str] = []
+
     class Terminal(io.StringIO):
         def isatty(self) -> bool:
             return True
 
+        def readline(self, *args: object) -> str:
+            order.append("read")
+            return super().readline()
+
     monkeypatch.setattr(sys, "stdin", Terminal("y\n"))
+    monkeypatch.setattr(approvals, "_discard_typed_ahead", lambda: order.append("flush"))
     request = store.create_request(make_proposal(), run_id="run-1", ttl_seconds=900)
     await ConsoleApprovalChannel(store, output_fn=lambda *a: None).notify(request)  # real input()
     (approval,) = store.approvals_for("inc-1")
     assert approval.decision == "approved" and approval.actor == "console-user"
+    assert order == ["flush", "read"]  # anything typed before the prompt was discarded first
     detail = store.events(request.proposal_id)[-1].detail
-    assert re.fullmatch(r"interactive terminal; answered after \d+\.\d s", detail)
+    # An instant answer is logged as one nobody could have read the proposal for.
+    assert re.fullmatch(
+        r"interactive terminal; answered after \d+\.\d s "
+        r"\(faster than a person can read the proposal\)",
+        detail,
+    )
+
+
+async def test_an_answer_after_reading_time_is_not_flagged(
+    store: ApprovalStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(approvals, "FAST_ANSWER_SECONDS", 0.0)
+    request = store.create_request(make_proposal(), run_id="run-1", ttl_seconds=900)
+    channel = ConsoleApprovalChannel(store, input_fn=lambda p: "y", output_fn=lambda *a: None)
+    await channel.notify(request)
+    assert re.fullmatch(r"answered after \d+\.\d s", store.events(request.proposal_id)[-1].detail)
+
+
+def test_a_console_no_that_revokes_an_approval_keeps_its_note(store: ApprovalStore) -> None:
+    proposal = make_proposal()
+    store.create_request(proposal, run_id="run-1", ttl_seconds=900)
+    store.decide(
+        proposal.proposal_id,
+        decision="approved",
+        proposal_digest=proposal.digest(),
+        actor="operator:alice",
+    )
+    store.decide(
+        proposal.proposal_id,
+        decision="rejected",
+        proposal_digest=proposal.digest(),
+        actor="console-user",
+        note="interactive terminal; answered after 4.2 s",
+    )
+    revoked = store.events(proposal.proposal_id)[-1]
+    assert revoked.kind == "revoked"
+    assert revoked.detail == (
+        "interactive terminal; answered after 4.2 s; "
+        "overrides the approval by operator:alice before it was used"
+    )
 
 
 async def test_external_channel_leaves_the_decision_to_the_api(store: ApprovalStore) -> None:

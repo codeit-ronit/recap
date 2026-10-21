@@ -164,6 +164,14 @@ async def test_an_operator_no_stops_the_run_even_if_someone_else_approved_first(
     assert record.incident is not None
     stored = runtime.approvals.approvals_for(record.incident.incident_id)
     assert all(approval.consumed_at is None for approval in stored)
+    # The "no" is logged with how it came, in the decision log and in the trace.
+    log = runtime.approvals.events(stored[0].proposal_id)
+    [revoked] = [e for e in log if e.kind == "revoked"]
+    assert "answered after" in revoked.detail and "overrides the approval" in revoked.detail
+    decided = [
+        e for e in runtime.events.list_events(record.run_id) if e.category == "approval.decided"
+    ]
+    assert decided and "answered after" in decided[-1].payload.get("note", "")
 
 
 # --- 2. cross-process: a later rejection must win --------------------------------------------

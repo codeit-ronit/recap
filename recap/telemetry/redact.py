@@ -17,8 +17,9 @@ The Redactor returns a redacted deep copy and applies three rules:
   2. Known secrets    values of environment variables whose NAME contains KEY, SECRET,
                       TOKEN or PASSWORD (plus any extra secrets passed in) are replaced
                       wherever they appear inside a string.
-  3. Key formats      strings shaped like Anthropic, OpenAI, OpenRouter, Groq, Google, AWS
-                      or GitHub keys, or bearer tokens, are replaced.
+  3. Key formats      strings shaped like Anthropic, OpenAI (including project and service
+                      account keys), OpenRouter, Groq, Google, AWS (long-term and temporary),
+                      GitHub or Slack keys, private-key blocks, or bearer tokens, are replaced.
 
 The pattern list is best-effort, not a guarantee: a secret in a format these rules do not
 recognize is stored as it is. This is a local prototype, not a data-loss-prevention system.
@@ -46,13 +47,18 @@ KEY_VALUE_SECRET = re.compile(
 )
 
 SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # A private key block, whole (it spans lines).
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"),
     re.compile(r"sk-ant-[A-Za-z0-9_-]{8,}"),  # Anthropic API key
     re.compile(r"sk-or-v1-[A-Za-z0-9]{16,}"),  # OpenRouter API key
+    re.compile(r"sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{16,}"),  # OpenAI project/service key
     re.compile(r"sk-[A-Za-z0-9]{16,}"),  # OpenAI-style API key
     re.compile(r"gsk_[A-Za-z0-9]{16,}"),  # Groq API key
     re.compile(r"AIza[0-9A-Za-z_-]{30,}"),  # Google (Gemini) API key
-    re.compile(r"AKIA[0-9A-Z]{16}"),  # AWS access key ID
-    re.compile(r"ghp_[A-Za-z0-9]{20,}"),  # GitHub personal access token
+    re.compile(r"(?:AKIA|ASIA)[0-9A-Z]{16}"),  # AWS access key ID (long-term or temporary)
+    re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),  # GitHub fine-grained token
+    re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),  # GitHub tokens (personal, OAuth, app, refresh)
+    re.compile(r"xox[abprs]-[A-Za-z0-9-]{10,}"),  # Slack token
     re.compile(r"(?i)bearer\s+[A-Za-z0-9._-]{8,}"),  # HTTP "Authorization: Bearer ..." value
 )
 

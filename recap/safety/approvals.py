@@ -241,7 +241,7 @@ class ApprovalStore:
         if status == PENDING:
             return self._record(conn, row, decision, actor, now, note)
         if status == APPROVED and decision == "rejected":
-            return self._revoke(conn, row, actor, now)
+            return self._revoke(conn, row, actor, now, note)
         return _refuse(
             conn, proposal_id, actor, now, attempt, f"approval request is {status}, not pending"
         )
@@ -275,7 +275,12 @@ class ApprovalStore:
         return approval
 
     def _revoke(
-        self, conn: sqlite3.Connection, request: sqlite3.Row, actor: str, now: datetime
+        self,
+        conn: sqlite3.Connection,
+        request: sqlite3.Row,
+        actor: str,
+        now: datetime,
+        note: str = "",
     ) -> Approval | str:
         """approved -> rejected while the approval is unused: an explicit "no" wins."""
         proposal_id = request["proposal_id"]
@@ -295,6 +300,8 @@ class ApprovalStore:
             (REJECTED, actor, now.isoformat(), proposal_id),
         )
         detail = f"overrides the approval by {current['actor']} before it was used"
+        if note:  # how the "no" came (the console: "interactive terminal; answered after ...")
+            detail = f"{note}; {detail}"
         _event(conn, proposal_id, "revoked", actor, now, request, detail)
         approval = Approval.model_validate(dict(current))
         return approval.model_copy(
@@ -526,6 +533,10 @@ class AutoApprovalChannel:
         )
 
 
+# A console answer quicker than this cannot have followed reading the proposal (logged as such).
+FAST_ANSWER_SECONDS = 1.0
+
+
 class ConsoleApprovalChannel:
     """Asks the person at the terminal to approve or reject one exact action."""
 
@@ -546,8 +557,11 @@ class ConsoleApprovalChannel:
 
         The real prompt needs an interactive terminal: when input is piped in (or missing),
         nobody can be reading the proposal, so the request is rejected without reading it.
-        "console-user" therefore always means someone answered at a terminal. The decision
-        log also records how the answer came: "interactive terminal; answered after 53.4 s".
+        Anything typed before the prompt appeared is discarded, so the answer is typed after
+        the proposal was shown. The decision log records how the answer came: "interactive
+        terminal; answered after 53.4 s", flagged when it came faster than a person reads.
+        This proves a terminal and a timing, not a person: a program driving a terminal can
+        still answer.
         """
         for line in _describe(request):
             self._output(line)
@@ -556,6 +570,8 @@ class ConsoleApprovalChannel:
             self._output("No interactive terminal: the request is rejected unread.")
             approved, note = False, "rejected unread: no interactive terminal"
         else:
+            if real_prompt:
+                _discard_typed_ahead()
             started = time.monotonic()
             try:
                 # input() blocks, so it runs in a thread and the event loop keeps running.
@@ -563,8 +579,11 @@ class ConsoleApprovalChannel:
             except EOFError:  # input ended: treat as "no"
                 answer = ""
             approved = str(answer).strip().lower() in {"y", "yes"}
+            waited = time.monotonic() - started
             where = "interactive terminal; " if real_prompt else ""
-            note = f"{where}answered after {time.monotonic() - started:.1f} s"
+            note = f"{where}answered after {waited:.1f} s"
+            if waited < FAST_ANSWER_SECONDS:
+                note += " (faster than a person can read the proposal)"
         self._store.decide(
             request.proposal_id,
             decision="approved" if approved else "rejected",
@@ -572,6 +591,18 @@ class ConsoleApprovalChannel:
             actor="console-user",
             note=note,
         )
+
+
+def _discard_typed_ahead() -> None:
+    """Drop whatever was typed before the prompt appeared: an early "y" must not count."""
+    try:
+        import termios
+    except ImportError:  # not a POSIX system: nothing to flush
+        return
+    try:
+        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+    except (termios.error, OSError, ValueError, AttributeError):  # not a real terminal
+        pass
 
 
 def _interactive_terminal() -> bool:

@@ -48,7 +48,8 @@ step protocol (`protocol.py`, **prompts-v4.1**). For each decision:
    reuse its cache; the parser checks the evidence IDs). On the last step only finishing is
    offered.
 3. **Send** one HTTP request through the transport (`transport.py`): no SDK, no hidden
-   retries. Every exchange is recorded under `data/recordings/` without the API key.
+   retries. Every exchange is recorded under `data/recordings/` without the API key, and
+   without any request or answer ID that could link it to the provider account.
 4. **Parse** the answer (`tool_request`, `hypothesis`, `need_more_evidence`, `stop`; for a
    proposal `final_proposal` or `stop`) and check it again: unlisted tools, foreign
    arguments, repeated calls, unknown IDs and services outside the allowlist are dropped with
@@ -59,7 +60,11 @@ step protocol (`protocol.py`, **prompts-v4.1**). For each decision:
 Each request becomes a `ModelCall` in the decision (an `llm.call` trace event): model asked
 for and model that answered, mode, attempt, HTTP status, exact token counts as the server
 reported them, duration, finish reason, a prompt fingerprint, and excerpts of the answer
-and of any reasoning.
+and of any reasoning. The run record also names the server and weights that answered
+(`provider_info.server`: Ollama's version, size, quantization, weights digest) and the code
+that ran (`versions.code_version`). Fixed prompt text carries no example values: a test
+checks that no scenario's facts appear in anything fixed a model can be shown
+(`tests/unit/test_prompt_neutrality.py`).
 
 ### `ollama`: local, offline
 

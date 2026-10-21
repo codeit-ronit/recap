@@ -279,8 +279,14 @@ def trim_for_recording(path: str, body: Any) -> Any:
 
 
 def _weights_digest(show: dict[str, Any]) -> str | None:
-    """The model's weights file digest, from the FROM line of /api/show's modelfile."""
-    match = re.search(r"sha256[-:]([0-9a-f]{64})", str(show.get("modelfile") or ""))
+    """The model's weights file digest, from the FROM line of /api/show's modelfile.
+
+    Only a line that starts with FROM counts: the modelfile also holds comments, and a
+    model's tag may itself contain a digest-like name.
+    """
+    match = re.search(
+        r"(?m)^FROM\s+\S*?sha256[-:]([0-9a-f]{64})\s*$", str(show.get("modelfile") or "")
+    )
     return f"sha256:{match.group(1)}" if match else None
 
 

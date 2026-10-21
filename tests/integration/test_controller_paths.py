@@ -311,7 +311,10 @@ async def test_the_trace_says_how_a_console_approval_was_given(settings: Setting
         e for e in runtime.events.list_events(record.run_id) if e.category == "approval.decided"
     ]
     assert decided.payload["actor"] == "console-user"
-    assert re.fullmatch(r"answered after \d+\.\d s", decided.payload["note"])
+    assert re.fullmatch(
+        r"answered after \d+\.\d s \(faster than a person can read the proposal\)",
+        decided.payload["note"],
+    )
 
 
 @pytest.fixture(autouse=True)

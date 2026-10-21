@@ -199,8 +199,12 @@ def code_version(root: Path) -> str:
         return done.stdout.strip()
 
     try:
+        # Only RECAP's own checkout counts: a copy inside some other repository is "unknown".
+        if Path(git("rev-parse", "--show-toplevel")).resolve() != root.resolve():
+            return "unknown"
         commit = git("rev-parse", "--short=12", "HEAD")
-        changed = git("status", "--porcelain", "--untracked-files=no")
+        # --no-optional-locks: never take the index lock (a concurrent git commit must not fail).
+        changed = git("--no-optional-locks", "status", "--porcelain", "--untracked-files=no")
     except (OSError, subprocess.SubprocessError):
         return "unknown"
     return f"{commit}+dirty" if changed else commit
