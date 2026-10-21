@@ -26,12 +26,16 @@ How a pack is built:
   5. Selection    pinned items first (e.g. the runbook for the diagnosed mechanism), then
                   greedy by score while the budget allows. Everything left out is listed in
                   `dropped_ids`, never silently lost.
+  6. Must-keep    a pinned or priority item (what a diagnosis rests on, or evidence that
+                  contradicts a claim) that no longer fits is SHORTENED into the room left
+                  (beginning and end, with the pointer) instead of being dropped, as long as
+                  at least MIN_ITEM_TOKENS remain (M3). Lower-ranked items never get this.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from datetime import datetime
 from typing import Literal, NamedTuple
 
@@ -133,8 +137,9 @@ class ContextPacker:
         full = [_to_item(draft, query, focus_words, draft.item_id in priority) for draft in drafts]
         items = [self._compact(item) for item in full]
         budget = max(0, max_tokens)
-        chosen = _select(items, budget, set(pinned_ids))
-        packed = [item for item in items if item.item_id in chosen]
+        must_keep = set(pinned_ids) | priority
+        chosen = _select(items, budget, set(pinned_ids), must_keep, self._compact_to)
+        packed = [chosen[item.item_id] for item in items if item.item_id in chosen]
         return ContextPack(
             items=packed,  # stays in readable order: evidence, docs by rank, memories
             budget_tokens=budget,
@@ -144,18 +149,22 @@ class ContextPacker:
         )
 
     def _compact(self, item: ContextItem) -> ContextItem:
-        """Shorten an oversized item: keep its beginning and its end, point to the full record.
+        """Shorten an oversized item to `max_item_tokens` (see `_compact_to`)."""
+        return self._compact_to(item, self.max_item_tokens)
+
+    def _compact_to(self, item: ContextItem, max_tokens: int) -> ContextItem:
+        """Shorten an item: keep its beginning and its end, point to the full record.
 
         Two thirds of the room go to the beginning (headers, first facts) and one third to
         the end, because tool output is chronological and its newest lines come last.
         Keeping only the beginning was audit finding 2.1: every ERROR line was lost.
         """
-        if item.token_estimate <= self.max_item_tokens:
+        if item.token_estimate <= max_tokens:
             return item
         pointer = f" ...[compacted; full record: {item.item_id}]... "
         # The pointer counts against the cap, so a compacted item never costs more than
-        # max_item_tokens and is always smaller than the original.
-        keep = max(0, self.max_item_tokens * CHARS_PER_TOKEN - len(pointer))
+        # max_tokens and is always smaller than the original.
+        keep = max(0, max_tokens * CHARS_PER_TOKEN - len(pointer))
         head = keep * 2 // 3
         tail = keep - head
         text = item.text[:head].rstrip() + pointer + item.text[len(item.text) - tail :].lstrip()
@@ -314,9 +323,20 @@ def _words(text: str) -> set[str]:
 # --- selection ----------------------------------------------------------------------------
 
 
-def _select(items: Sequence[ContextItem], budget: int, pinned: set[str]) -> set[str]:
-    """Pinned items first, then greedy by score (ties by ID): take every item that still fits."""
-    chosen: set[str] = set()
+def _select(
+    items: Sequence[ContextItem],
+    budget: int,
+    pinned: set[str],
+    must_keep: set[str],
+    shorten: Callable[[ContextItem, int], ContextItem],
+) -> dict[str, ContextItem]:
+    """Pinned items first, then greedy by score (ties by ID): every item that still fits.
+
+    A must-keep item (pinned or priority) that does not fit is shortened to the room left,
+    if at least MIN_ITEM_TOKENS remain; any other item that does not fit is left out.
+    Returns the chosen items by ID (a shortened one replaces its full version).
+    """
+    chosen: dict[str, ContextItem] = {}
     if budget <= 0:
         return chosen
     used = 0
@@ -324,6 +344,11 @@ def _select(items: Sequence[ContextItem], budget: int, pinned: set[str]) -> set[
     for item in order:
         # An item that does not fit is skipped, but smaller ones after it may still fit.
         if used + item.token_estimate <= budget:
-            chosen.add(item.item_id)
+            chosen[item.item_id] = item
             used += item.token_estimate
+        elif item.item_id in must_keep and budget - used >= MIN_ITEM_TOKENS:
+            short = shorten(item, budget - used)
+            if used + short.token_estimate <= budget:
+                chosen[item.item_id] = short
+                used += short.token_estimate
     return chosen

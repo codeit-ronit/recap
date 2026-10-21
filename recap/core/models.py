@@ -178,6 +178,9 @@ class RunBudget(Contract):
     max_elapsed_seconds: float = Field(120.0, gt=0)  # wall clock (approval waits excluded)
     max_estimated_tokens: int = Field(120_000, ge=0)  # sum of context packs sent to providers
     max_parallel_agents: int = Field(2, ge=1)
+    # Tokens a model server actually reports (input + output) across the run's requests,
+    # reserved before each request and settled with the real count after it (M3).
+    max_model_tokens: int = Field(200_000, ge=0)
 
 
 class Incident(Contract):

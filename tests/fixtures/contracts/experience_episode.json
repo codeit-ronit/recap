@@ -1,6 +1,6 @@
 {
-  "episode_id": "ep-b8bb2d348b",
-  "origin_run_id": "run-6481ca9c0c",
+  "episode_id": "ep-1f39fc6783",
+  "origin_run_id": "run-e34a70c005",
   "scenario_id": "bad-deployment",
   "failure_family": "bad_deployment",
   "partition": "demo",
@@ -13,19 +13,19 @@
   "mechanism_target": "checkout",
   "verified_evidence": [
     {
-      "evidence_id": "ev-6481ca-004",
+      "evidence_id": "ev-e34a70-004",
       "summary": "{\"deployments\":[{\"service\":\"checkout\",\"version\":\"v2.4.1\",\"previous_version\":\"v2.4.0\",\"deployed_at\":\"2026-03-14T09:48:00Z\",\"status\":\"complete\",\"change_summary\":\""
     },
     {
-      "evidence_id": "ev-6481ca-002",
+      "evidence_id": "ev-e34a70-002",
       "summary": "{\"service\":\"checkout\",\"lines\":[{\"timestamp\":\"2026-03-14T09:00:00Z\",\"level\":\"INFO\",\"service\":\"checkout\",\"message\":\"GET /api/checkout/orders 200 in 95ms\"},{\"times"
     },
     {
-      "evidence_id": "ev-6481ca-003",
+      "evidence_id": "ev-e34a70-003",
       "summary": "{\"service\":\"checkout\",\"metric\":\"error_rate\",\"unit\":\"ratio\",\"points\":[{\"timestamp\":\"2026-03-14T09:00:00Z\",\"value\":0.0},{\"timestamp\":\"2026-03-14T09:05:00Z\",\"value"
     },
     {
-      "evidence_id": "ev-6481ca-001",
+      "evidence_id": "ev-e34a70-001",
       "summary": "{\"service\":\"checkout\",\"status\":\"Running\",\"ready_replicas\":3,\"replicas\":3,\"error_rate\":0.3177,\"latency_p95_ms\":1599.8,\"observed_at\":\"2026-03-14T10:00:00Z\"}"
     }
   ],
@@ -37,7 +37,7 @@
       "to_version": "v2.4.0"
     },
     "result": "recovered",
-    "at": "2026-10-21T14:40:45.287850Z",
+    "at": "2026-10-21T15:02:05.601706Z",
     "note": ""
   },
   "outcome": "success",
@@ -52,63 +52,63 @@
     "prompt_version": null,
     "weights": null,
     "retrieval": "bm25",
-    "code_version": "7b556811dfc9+dirty",
+    "code_version": "23319a2e3a86+dirty",
     "seed": 11,
-    "config_hash": "2590a3ea0ee17de0",
-    "fixture_hash": "1204748c26992366",
-    "origin_run_id": "run-6481ca9c0c",
+    "config_hash": "f876fe0250c93ac1",
+    "fixture_hash": "79e5c4c4f4098098",
+    "origin_run_id": "run-e34a70c005",
     "created_by": "consolidator-v2",
-    "trace": "runs/run-6481ca9c0c/events"
+    "trace": "runs/run-e34a70c005/events"
   },
-  "created_at": "2026-10-21T14:40:45.353187Z",
+  "created_at": "2026-10-21T15:02:05.671206Z",
   "summary_method": "deterministic-extraction",
   "trajectory": [
     {
       "agent": "investigator",
       "call": "mcp:get_service_health(service=checkout)",
-      "evidence_id": "ev-6481ca-001",
+      "evidence_id": "ev-e34a70-001",
       "kind": "tool"
     },
     {
       "agent": "investigator",
       "call": "mcp:get_service_logs(service=checkout)",
-      "evidence_id": "ev-6481ca-002",
+      "evidence_id": "ev-e34a70-002",
       "kind": "tool"
     },
     {
       "agent": "investigator",
       "call": "mcp:get_service_metrics(metric=error_rate,service=checkout)",
-      "evidence_id": "ev-6481ca-003",
+      "evidence_id": "ev-e34a70-003",
       "kind": "tool"
     },
     {
       "agent": "investigator",
       "call": "mcp:get_recent_deployments(service=checkout)",
-      "evidence_id": "ev-6481ca-004",
+      "evidence_id": "ev-e34a70-004",
       "kind": "tool"
     },
     {
       "agent": "investigator",
       "call": "mcp:get_k8s_like_events(service=checkout)",
-      "evidence_id": "ev-6481ca-005",
+      "evidence_id": "ev-e34a70-005",
       "kind": "tool"
     },
     {
       "agent": "investigator",
       "call": "mcp:get_service_metrics(metric=memory_mb,service=checkout)",
-      "evidence_id": "ev-6481ca-006",
+      "evidence_id": "ev-e34a70-006",
       "kind": "tool"
     },
     {
       "agent": "investigator",
       "call": "mcp:propose_rollback(service=checkout)",
-      "evidence_id": "ev-6481ca-007",
+      "evidence_id": "ev-e34a70-007",
       "kind": "tool"
     },
     {
       "agent": "controller",
       "call": "mcp:execute_rollback(service=checkout,to_version=v2.4.0)",
-      "evidence_id": "ev-6481ca-008",
+      "evidence_id": "ev-e34a70-008",
       "kind": "tool"
     }
   ],

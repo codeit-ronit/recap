@@ -29,15 +29,22 @@ have cost something is never the one missing from the record.
 
 HTTP-level trouble is the subclass's job: it raises ProviderError (the run fails with that
 message), FreeStatusLost (the provider is stopped) or QuotaExhausted (the run is deferred).
+
+The run's model-token budget (RunBudget.max_model_tokens) is enforced here when the
+controller binds it (`bind_token_budget`): each attempt reserves its estimated prompt plus
+`max_output_tokens` BEFORE it is sent, and settles with the tokens the server reported
+afterwards (the estimate for an answer that reported none). Running out raises
+BudgetExhausted before anything is sent. A replay settles with the recorded counts, so it
+stops where the original run would have.
 """
 
 from __future__ import annotations
 
 import unicodedata
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, Literal, Protocol
 
 from recap.context.tokens import estimate_tokens
 from recap.core.config import ProviderSettings
@@ -65,6 +72,14 @@ SCHEMA_REJECTED = (
 )
 
 Purpose = Literal["investigate", "propose"]
+
+
+class TokenBudget(Protocol):
+    """What the provider needs from the run's BudgetTracker (recap/harness/budget.py)."""
+
+    def reserve_model_tokens(self, tokens: int) -> int: ...
+
+    def settle_model_tokens(self, reserved: int, actual: int) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -139,6 +154,12 @@ class HttpLLMProvider(ABC):
             replay_of=replay_of,
             recording=recording,
         )
+        # The run's model-token budget, bound by the controller (None: not enforced here).
+        self.token_budget: TokenBudget | None = None
+
+    def bind_token_budget(self, budget: TokenBudget) -> None:
+        """Enforce the run's max_model_tokens on every request this provider sends."""
+        self.token_budget = budget
 
     # --- the LLMProvider interface -------------------------------------------------------
 
@@ -202,9 +223,14 @@ class HttpLLMProvider(ABC):
         for attempt in range(1, self.settings.max_attempts + 1):
             sent = messages if not problem else [*messages, protocol.correction(problem)]
             log: list[ModelReply] = []  # every HTTP exchange of this attempt, in order
+            prompt = estimate_tokens(canonical_json(sent)) + estimate_tokens(
+                canonical_json(schema or tools or {})
+            )
+            reserved = self._reserve_run_tokens(prompt + self.settings.max_output_tokens)
             try:
                 reply = await self._send(sent, schema=schema, tools=tools, purpose=purpose, log=log)
             except Exception as exc:
+                self._settle_run_tokens(reserved, log, prompt)
                 # Requests already sent are recorded before the error goes on (they may have
                 # cost tokens, and they show what happened).
                 for exchange in log:
@@ -212,6 +238,7 @@ class HttpLLMProvider(ABC):
                     usage = usage.plus(_reply_usage(exchange))
                 attach_model_calls(exc, calls, usage)
                 raise
+            self._settle_run_tokens(reserved, log, prompt)
             for retried in log[:-1]:  # exchanges the subclass retried (a short 429, a 5xx)
                 calls.append(self._model_call(purpose, attempt, sent, schema, retried, None))
                 usage = usage.plus(_reply_usage(retried))
@@ -226,6 +253,15 @@ class HttpLLMProvider(ABC):
                 return Outcome(decision, usage, calls, "")
             problem = parsed.problem
         return Outcome(None, usage, calls, problem)
+
+    # Named for the RUN's budget: FreeHostedProvider has its own `_reserve` (the free plan).
+    def _reserve_run_tokens(self, tokens: int) -> int:
+        """Reserve one request's worst case against the run's budget (0 when unbound)."""
+        return self.token_budget.reserve_model_tokens(tokens) if self.token_budget else 0
+
+    def _settle_run_tokens(self, reserved: int, log: Sequence[ModelReply], prompt: int) -> None:
+        if self.token_budget is not None:
+            self.token_budget.settle_model_tokens(reserved, _spent(log, prompt))
 
     @abstractmethod
     async def _send(
@@ -290,6 +326,22 @@ class HttpLLMProvider(ABC):
             replayed=reply.replayed,
             notes=notes,
         )
+
+
+def _spent(log: Sequence[ModelReply], prompt: int) -> int:
+    """What an attempt's exchanges cost in model tokens, for the run's budget.
+
+    The server's own counts when it reported them (a replay reports the recorded ones);
+    the prompt estimate for an answer that reported none; nothing for an exchange that
+    generated nothing (a 429, a 5xx).
+    """
+    total = 0
+    for reply in log:
+        if reply.input_tokens is not None or reply.output_tokens is not None:
+            total += (reply.input_tokens or 0) + (reply.output_tokens or 0)
+        elif reply.status in (200, 400):
+            total += prompt
+    return total
 
 
 def _reply_usage(reply: ModelReply) -> Usage:

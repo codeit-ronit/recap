@@ -3,6 +3,11 @@
 Every tool call is *reserved* before it is sent. If the reservation fails the call
 never happens, so a run can never make an untracked tool call. Exceeding any limit
 raises BudgetExhausted, which the controller turns into the BUDGET_EXHAUSTED state.
+
+Model tokens work the same way: before each request to a model, the provider reserves
+what the request could cost (its estimated prompt plus the most it may answer); after the
+answer it settles with the tokens the server actually reported. Requests of parallel
+agents reserve against the same total, so together they can never overshoot it.
 """
 
 from __future__ import annotations
@@ -24,6 +29,8 @@ class BudgetTracker:
         self.steps = 0
         self.tool_calls = 0
         self.tokens = 0
+        self.model_tokens = 0  # reported by model servers (an estimate when one reports none)
+        self.model_reserved = 0  # reserved by requests still waiting for their answer
 
     # --- charging (each raises BudgetExhausted when a limit would be exceeded) ----------
 
@@ -51,6 +58,23 @@ class BudgetTracker:
                 f"{self.tokens}+{estimated_tokens} > {self.budget.max_estimated_tokens}",
             )
         self.tokens += estimated_tokens
+
+    def reserve_model_tokens(self, tokens: int) -> int:
+        """Reserve what one model request could cost BEFORE it is sent; returns the amount."""
+        limit = self.budget.max_model_tokens
+        if self.model_tokens + self.model_reserved + tokens > limit:
+            raise BudgetExhausted(
+                "max_model_tokens",
+                f"{self.model_tokens} used + {self.model_reserved} reserved + {tokens} for "
+                f"the next request > {limit}",
+            )
+        self.model_reserved += tokens
+        return tokens
+
+    def settle_model_tokens(self, reserved: int, actual: int) -> None:
+        """Replace a reservation by what the request really cost (as the server reported)."""
+        self.model_reserved = max(0, self.model_reserved - reserved)
+        self.model_tokens += max(0, actual)
 
     def check_deadline(self) -> None:
         if self.elapsed_seconds() > self.budget.max_elapsed_seconds:
@@ -97,6 +121,8 @@ class BudgetTracker:
             "max_tool_calls": self.budget.max_tool_calls,
             "estimated_tokens": self.tokens,
             "max_estimated_tokens": self.budget.max_estimated_tokens,
+            "model_tokens": self.model_tokens,
+            "max_model_tokens": self.budget.max_model_tokens,
             "elapsed_seconds": round(self.elapsed_seconds(), 3),
             "max_elapsed_seconds": self.budget.max_elapsed_seconds,
         }

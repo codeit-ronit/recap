@@ -589,6 +589,20 @@ files and every commit: run on 2026-10-21 over 34 commits and 346 files, nothing
   plain values in the reuse verdict and in memory lines, no writes from a replay, LIVE for
   model runs) was undone on its own; its guarding tests failed every time, files restored.
 
+### Step 5: context under pressure ([ADR 0024](decisions/0024-a-real-model-token-budget-and-context-that-keeps-what-matters.md))
+
+- `RunBudget.max_model_tokens` (200,000), reserved before each model request (estimated
+  prompt plus the answer allowance) and settled with the server's reported counts; parallel
+  agents share it; running out stops the run before the request (tested with a fake server
+  reporting 3,000 prompt tokens per answer and a 5,000-token run: one request, then
+  BUDGET_EXHAUSTED, `model_tokens` 3,080 in the run summary).
+- A cut long log list keeps its first error, its newest errors and warnings, then its
+  newest lines (tested: 3 early errors in 200 lines all survive a 60-line cut; before, the
+  newest 60 lines held none); must-keep evidence beyond the pack budget is shortened, not
+  dropped.
+- No prompt template changed: the CI replay still matches. Both scripted baselines: **0
+  differences** (45 runs without memory, 30 with). Revert checks: 5 of 5 guarded.
+
 ### Real model runs in M3 (simulated environment)
 
 | Run | Model | Requests | Tokens in / out (reported) | Outcome |
@@ -605,7 +619,7 @@ unfamiliar and one adversarial) come after the retrieval, memory and context ste
 
 ### Tests so far
 
-`pytest`: **1299 passed, 1 skipped** (the skip needs the optional `otel` extra).
+`pytest`: **1305 passed, 1 skipped** (the skip needs the optional `otel` extra).
 `ruff check` and `ruff format --check`: clean. Dashboard: `npm run build` and its 19 tests
 pass. Requests in M3 so far: the 17 chat requests of local 7 to 9, and embedding requests
 that built the stored vectors, captured the seven test query vectors, compared the

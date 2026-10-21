@@ -6,11 +6,11 @@
   },
   "rationale": "The evidence supports: checkout v2.4.1, deployed 12 min before the alert, may have introduced the errors. Runbook runbook-bad-deployment#remediation-1 recommends execute_rollback for bad deployment. Roll checkout back to v2.4.0 (the version the propose_rollback dry run names).",
   "evidence_ids": [
-    "ev-6481ca-004",
-    "ev-6481ca-002",
-    "ev-6481ca-003",
-    "ev-6481ca-001",
-    "ev-6481ca-007"
+    "ev-e34a70-004",
+    "ev-e34a70-002",
+    "ev-e34a70-003",
+    "ev-e34a70-001",
+    "ev-e34a70-007"
   ],
   "expected_health_change": "error rate on checkout back under 5% and all replicas ready",
   "rollback_hint": "redeploy v2.4.1 after a fix",
@@ -20,7 +20,7 @@
   "citations": [
     "runbook-bad-deployment#remediation-1"
   ],
-  "proposal_id": "prop-8e05d18720",
-  "incident_id": "inc-bfa747a919",
-  "created_at": "2026-10-21T14:40:45.273187Z"
+  "proposal_id": "prop-28ba81aa56",
+  "incident_id": "inc-9c48b103c5",
+  "created_at": "2026-10-21T15:02:05.589598Z"
 }

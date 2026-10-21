@@ -179,3 +179,21 @@ async def test_hybrid_retrieval_without_complete_vectors_fails_loudly(settings: 
     assert record.state == IncidentState.FAILED
     assert record.error is not None and "scripts/build_vector_index.py" in record.error
     assert fake.chats == [] and fake.embeds == []  # it stopped before asking anything
+
+
+async def test_the_model_token_budget_stops_the_run_before_an_over_budget_request(
+    settings: Settings,
+) -> None:
+    """Each answer reports 3,000 prompt tokens; the run may spend 5,000 in all."""
+    from recap.core.models import RunBudget
+
+    fake = FakeOllama(responder=ScriptedModel(), prompt_tokens=3_000)
+    tight = RunConfig(provider="ollama", use_memory=False, budget=RunBudget(max_model_tokens=5_000))
+    runtime, record = await live_run(settings, tight, fake)
+    assert record.state == IncidentState.BUDGET_EXHAUSTED
+    assert "max_model_tokens" in record.outcome_note
+    assert len(fake.chats) == 1  # the request that would overshoot was never sent
+    [summary] = [
+        e for e in runtime.events.list_events(record.run_id) if e.category == C.RUN_SUMMARY
+    ]
+    assert summary.payload["budget"]["model_tokens"] == 3_080  # the server's own counts

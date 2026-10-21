@@ -43,6 +43,10 @@ Everything below runs against a **simulated** environment; nothing repairs a rea
   preconditions (deterministic extraction); reuse only with the same mechanism, the same
   service and a fix that still fits today's evidence; hits re-ranked by what live evidence
   confirmed; semantic recall in hybrid runs; poisoned-memory tests.
+- **A real model-token budget** ([ADR 0024](docs/decisions/0024-a-real-model-token-budget-and-context-that-keeps-what-matters.md)):
+  `max_model_tokens`, reserved before each model request and settled with the tokens the
+  server reported; a long log list keeps its errors when the gateway cuts it; evidence a
+  diagnosis needs is shortened, not dropped, when the pack is full.
 
 ### Changed
 

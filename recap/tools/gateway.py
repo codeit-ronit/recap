@@ -543,13 +543,44 @@ def _bound(value: Any, limits: PolicyLimits, key: str | None = None) -> tuple[An
     if isinstance(value, list):
         keep = limits.max_list_items
         cut = len(value) > keep
-        if cut:
+        if cut and key == "lines":
+            value = _errors_first(value, keep)
+        elif cut:
             value = value[len(value) - keep :] if key in _CHRONOLOGICAL_LISTS else value[:keep]
         items = [_bound(item, limits) for item in value]
         return [v for v, _ in items], cut or any(c for _, c in items)
     if isinstance(value, str) and len(value) > limits.max_output_chars:
         return _head_and_tail(value, limits.max_output_chars), True
     return value, False
+
+
+def _errors_first(lines: list[Any], keep: int) -> list[Any]:
+    """Which `keep` log lines survive a cut, still in time order (oldest first).
+
+    Keeping only the newest lines let INFO noise after an incident push its errors out of
+    the evidence (master prompt 4.4: no truncation that discards all errors). So the cut
+    keeps the FIRST error line (the onset), then the newest ERROR and WARN lines up to half
+    of the room, then the newest lines of any level until the room is full.
+    """
+
+    def level(index: int) -> str:
+        line = lines[index]
+        return str(line.get("level", "")) if isinstance(line, dict) else ""
+
+    chosen: set[int] = set()
+    errors = [i for i in range(len(lines)) if level(i) == "ERROR"]
+    if errors:
+        chosen.add(errors[0])
+    notable = [i for i in range(len(lines)) if level(i) in ("ERROR", "WARN")]
+    for index in reversed(notable):
+        if len(chosen) >= max(1, keep // 2):
+            break
+        chosen.add(index)
+    for index in reversed(range(len(lines))):
+        if len(chosen) >= keep:
+            break
+        chosen.add(index)
+    return [lines[i] for i in sorted(chosen)]
 
 
 def _render(data: dict[str, Any], max_chars: int) -> tuple[str, bool]:

@@ -1,5 +1,5 @@
 {
-  "incident_id": "inc-bfa747a919",
+  "incident_id": "inc-9c48b103c5",
   "scenario_id": "bad-deployment",
   "service": "checkout",
   "affected_services": [
@@ -20,6 +20,7 @@
     "max_tool_calls": 30,
     "max_elapsed_seconds": 120.0,
     "max_estimated_tokens": 120000,
-    "max_parallel_agents": 2
+    "max_parallel_agents": 2,
+    "max_model_tokens": 200000
   }
 }

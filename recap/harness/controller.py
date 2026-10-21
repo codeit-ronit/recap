@@ -234,6 +234,11 @@ class IncidentController:
         self.capabilities = CapabilityIssuer(self.run_id, self.incident.incident_id)
         self.environment.bind_executor(self.capabilities.public_key)
         self.budget = BudgetTracker(self.incident.budget)
+        # A model provider reserves each request's tokens against this run's budget and
+        # settles with the server's real counts (max_model_tokens). Scripted: nothing to bind.
+        bind = getattr(self.provider, "bind_token_budget", None)
+        if callable(bind):
+            bind(self.budget)
         self.lifecycle = Lifecycle()
         self.record = RunRecord(
             run_id=self.run_id,

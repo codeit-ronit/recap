@@ -7,6 +7,7 @@ default_budget:
   max_elapsed_seconds: 120   # wall clock; time spent waiting for a human approval is excluded
   max_estimated_tokens: 120000  # sum of context packs handed to providers (estimated tokens)
   max_parallel_agents: 2
+  max_model_tokens: 200000   # tokens model servers REPORT (input + output), reserved per request
 
 context:
   pack_tokens: 3000       # max estimated tokens in one context pack

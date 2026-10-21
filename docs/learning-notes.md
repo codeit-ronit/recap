@@ -4817,3 +4817,41 @@ fits. A remembered rollback to a version that's now the bad release gets rejecte
 reason. Real-model runs keep their own memory partition, replays never write, and test
 runs never read their own split. And because the memory file is data, nothing from it can
 become trusted prompt text."
+
+### M3, step 5 — A real token budget, and context that keeps what matters
+
+**What changed, in one paragraph.** Before, RECAP limited a run by steps, tool calls, time
+and the *estimated* size of what it showed the model; the tokens a real model actually
+used were counted but never limited. Now every model request first reserves what it could
+cost (its estimated prompt plus the largest answer allowed), and after the answer the
+reservation is replaced by the tokens the server reported. When the next request would go
+over the run's limit, RECAP stops before sending it. Two smaller fixes keep the context
+useful when space is short: a long log keeps its error lines when it is cut, and evidence
+that a diagnosis depends on (or that contradicts a claim) is shortened instead of dropped.
+
+**Why reserve first and settle after?** If you only count after the answer, one request can
+overshoot by its whole size, and two agents running in parallel can each think there is
+room and overshoot together. Reserving before sending means the in-flight requests are
+already counted; settling after means the final number is the server's real count, not
+RECAP's rough estimate.
+
+**The log cut, in one example.** A service logs 3 errors, then 192 lines of normal INFO
+traffic. The gateway keeps at most 60 lines. Keeping "the newest 60" (the old rule) keeps
+none of the errors, so the evidence would look healthy. The new rule keeps the first error
+(when it started), the newest errors and warnings (up to half the room), then the newest
+lines of any level, all still in time order.
+
+**Reproduce.**
+
+```bash
+.venv/bin/python -m pytest tests/unit/test_context_budget.py \
+  "tests/e2e/test_runbook_search.py::test_the_model_token_budget_stops_the_run_before_an_over_budget_request"
+```
+
+**Interview version.** "Every request to a model reserves its worst case against the run's
+token budget before it's sent, and settles with the server's reported count afterwards,
+so parallel agents can't overshoot together and the total is real, not estimated. I also
+fixed a quiet way to lose evidence: cutting a long log to its newest lines can throw away
+every error when the service keeps logging normal traffic, so the cut keeps the first
+error, the newest errors, then the newest lines. And when the context is full, the evidence
+a diagnosis depends on gets shortened rather than dropped."

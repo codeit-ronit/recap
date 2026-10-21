@@ -194,8 +194,9 @@ and streamed live to the dashboard.
      - **act:** each requested read goes through `ToolGateway.call_read`
        ([recap/tools/gateway.py](../recap/tools/gateway.py)): policy (`policy.decision`),
        budget reservation, `tool.call`, the MCP call with a hard timeout, then the result is
-       redacted, bounded (keeping the head and the tail), flagged and stored as `Evidence`
-       → `tool.result`. One read tool is answered by RECAP itself: `search_runbooks` takes
+       redacted, bounded (keeping the head and the tail; a long log list keeps its first
+       error, its newest errors and warnings, then its newest lines, ADR 0024), flagged
+       and stored as `Evidence` → `tool.result`. One read tool is answered by RECAP itself: `search_runbooks` takes
        the same path, then the controller searches the runbooks (`retrieval.docs`, stage
        `agent`). Its receipt is DOC evidence (never proof), it has its own budget, and the
        sections it found join only this agent's context.
@@ -218,7 +219,7 @@ deployments, events, the memory metric, and a rollback dry run (`propose_rollbac
   context pack, the agent's tools, its history, the step number).
 - **Code:** `HttpLLMProvider.next_action` ([recap/providers/http_llm.py](../recap/providers/http_llm.py)):
   1. **render** ([recap/providers/protocol.py](../recap/providers/protocol.py),
-     prompts-v4.3): a static system prompt (rules, and RECAP's failure mechanisms in generic
+     prompts-v4.5): a static system prompt (rules, and RECAP's failure mechanisms in generic
      terms), then one user message: role (goal, responsibilities, the mechanisms it may
      conclude), incident, focus, the verifier's open questions, tools, previous calls, what
      this agent may count as already observed, the context pack (every item inside
@@ -228,7 +229,10 @@ deployments, events, the memory metric, and a rollback dry run (`propose_rollbac
      agent can see; at most 2 calls); in `tools` mode the read tools as native functions
      plus `submit_findings`, the same definitions every step (the parser checks the
      evidence IDs); on the last step only finishing is offered;
-  3. **check before sending**: Ollama: loopback only (proxy settings ignored), the model
+  3. **check before sending**: the run's model-token budget (the estimated prompt plus
+     `max_output_tokens` is reserved against `max_model_tokens` and settled with the
+     server's own counts after the answer, ADR 0024; running out stops the run before the
+     request goes out). Ollama: loopback only (proxy settings ignored), the model
      installed, not served from a remote host and able to call tools, the prompt fits
      `num_ctx`. Groq: the free-tier guard
      ([recap/providers/quota.py](../recap/providers/quota.py)): opt-in, allowlist, key,
@@ -470,7 +474,7 @@ Reproduce it:
 | Routing and concurrency | [recap/routing/router.py](../recap/routing/router.py), [recap/routing/orchestrator.py](../recap/routing/orchestrator.py) |
 | What a provider sees | [recap/core/models.py](../recap/core/models.py) (views), [recap/context/packer.py](../recap/context/packer.py), [recap/context/summaries.py](../recap/context/summaries.py), [recap/providers/prompts.py](../recap/providers/prompts.py) |
 | The scripted provider | [recap/providers/deterministic.py](../recap/providers/deterministic.py), [playbooks.py](../recap/providers/playbooks.py), [heuristics.py](../recap/providers/heuristics.py) |
-| Real model providers | [recap/providers/protocol.py](../recap/providers/protocol.py) (prompts-v4.3, schemas, parsing), [http_llm.py](../recap/providers/http_llm.py) (the shared loop), [ollama_provider.py](../recap/providers/ollama_provider.py), [openai_compatible.py](../recap/providers/openai_compatible.py), [factory.py](../recap/providers/factory.py) |
+| Real model providers | [recap/providers/protocol.py](../recap/providers/protocol.py) (prompts-v4.5, schemas, parsing), [http_llm.py](../recap/providers/http_llm.py) (the shared loop), [ollama_provider.py](../recap/providers/ollama_provider.py), [openai_compatible.py](../recap/providers/openai_compatible.py), [factory.py](../recap/providers/factory.py) |
 | Free-tier guard, recordings, replay | [recap/providers/quota.py](../recap/providers/quota.py), [transport.py](../recap/providers/transport.py), [catalog.py](../recap/providers/catalog.py) (`GET /providers`) |
 | Tool boundary | [recap/tools/gateway.py](../recap/tools/gateway.py), [registry.py](../recap/tools/registry.py), [actions.py](../recap/tools/actions.py), [mcp_client.py](../recap/tools/mcp_client.py), [mcp_server.py](../recap/tools/mcp_server.py) |
 | Safety | [recap/safety/policy.py](../recap/safety/policy.py), [approvals.py](../recap/safety/approvals.py), [capabilities.py](../recap/safety/capabilities.py) |
