@@ -26,7 +26,8 @@ export type IncidentState =
   | "RESOLVED"
   | "FAILED"
   | "BLOCKED"
-  | "BUDGET_EXHAUSTED";
+  | "BUDGET_EXHAUSTED"
+  | "QUOTA_EXHAUSTED"; // a free model's quota ran out: the run was deferred, not failed
 
 export type AgentRole =
   | "investigator"
@@ -151,6 +152,8 @@ export interface Usage {
   actual_output_tokens: number | null;
   external_cost_usd: number;
   is_estimate: boolean;
+  unreported_calls?: number;
+  model_requests?: number; // HTTP requests actually sent to a language model (0 for scripted / replay)
 }
 
 export interface AgentFinding {
@@ -361,11 +364,50 @@ export interface StrategyDecision {
 // 9-10. Providers, telemetry & run records
 // ===================================================================================
 
+/** Where a run's decisions came from (recap/core/models.py ProviderOrigin): the run-origin badge. */
+export type ProviderOrigin = "scripted" | "local_llm" | "free_hosted_llm" | "paid_llm" | "replay";
+
 export interface ProviderInfo {
   name: string;
-  kind: "scripted" | "llm";
+  kind: "scripted" | "llm" | "replay";
+  origin?: ProviderOrigin; // absent on runs recorded before M2
   model: string | null;
   description: string;
+  mode?: "json" | "tools" | null;
+  prompt_version?: string | null;
+  replay_of?: Record<string, unknown> | null;
+  recording?: string | null;
+}
+
+/** GET /providers (recap/providers/catalog.py): one configured provider and whether it can run. */
+export interface ProviderStatus {
+  name: string;
+  kind: ProviderInfo["kind"];
+  origin: ProviderOrigin;
+  model: string | null;
+  mode: "json" | "tools" | null;
+  description: string;
+  default: boolean;
+  status: "ready" | "needs_setup" | "stopped" | "disabled" | "unavailable";
+  detail: string;
+  usage?: { requests_last_minute: number; requests_last_24h: number; tokens_last_24h: number };
+  // local (Ollama)
+  base_url?: string;
+  installed?: string[];
+  // free hosted: a key is reported only as present or not, never its value
+  key_env?: string;
+  key_present?: boolean;
+  opted_in?: boolean;
+  confirmed_on?: string | null;
+  confirmation_age_days?: number | null;
+  allowed_models?: string[];
+  limits_checked_on?: string;
+  caps?: Record<string, number>;
+  last_rate_limit?: Record<string, unknown> | null;
+  stopped?: { stopped_at: string; reason: string } | null;
+  // replay
+  recording?: string;
+  replay_of?: Record<string, unknown>;
 }
 
 export interface TraceEvent {
@@ -414,6 +456,7 @@ export interface RunRecord {
   history: StateChange[];
   environment: EnvironmentInfo | null;
   provider: string;
+  provider_info?: ProviderInfo | null; // absent on runs recorded before M2
   strategies: StrategyDecision[];
   findings: AgentFinding[];
   verification: VerificationReport | null;
@@ -665,6 +708,32 @@ export interface StatePayload {
   incident?: Partial<Incident>;
   environment?: Partial<EnvironmentInfo>;
   provider?: Partial<ProviderInfo>;
+}
+
+/** llm.call: one request to a language model (recap/core/models.py ModelCall). */
+export interface LlmCallPayload {
+  step?: number;
+  provider?: string;
+  model?: string;
+  model_reported?: string | null;
+  origin?: string;
+  purpose?: "investigate" | "propose";
+  mode?: "json" | "tools";
+  attempt?: number;
+  status?: number | null;
+  ok?: boolean;
+  response_kind?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  duration_ms?: number;
+  finish_reason?: string | null;
+  prompt_sha256?: string;
+  prompt_chars?: number;
+  output_excerpt?: string;
+  thinking_excerpt?: string;
+  rate_limit?: Record<string, unknown>;
+  replayed?: boolean;
+  notes?: string[];
 }
 
 export interface RoutingPayload {

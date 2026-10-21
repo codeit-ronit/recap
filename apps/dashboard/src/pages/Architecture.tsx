@@ -1,12 +1,16 @@
 import { Fragment } from "react";
 import type { ReactNode } from "react";
-import { Chip, Mono, SimulatedBadge } from "../components/Badge";
+import { api } from "../api";
+import { Chip, Mono, OriginChip, SimulatedBadge } from "../components/Badge";
 import { Card, KeyValues, Notice, PageHeader } from "../components/Card";
 import { ErrorState, Loading } from "../components/EmptyState";
 import { Icon } from "../components/Icon";
+import { DataTable } from "../components/Table";
 import { fmtInt } from "../format";
+import type { Tone } from "../format";
+import { usePolling } from "../hooks";
 import type { PageProps } from "../hooks";
-import type { SystemSummary } from "../types";
+import type { ProviderStatus, SystemSummary } from "../types";
 
 type Trust = "trusted" | "untrusted" | "readonly";
 
@@ -210,9 +214,8 @@ function Wiring({ system }: { system: SystemSummary }) {
             <span className="cell-stack">
               <span className="chip-row">
                 <Mono>{system.provider.name}</Mono>
-                <Chip tone={system.provider.kind === "scripted" ? "neutral" : "warn"}>
-                  {system.provider.kind === "scripted" ? "scripted — not an LLM" : `LLM${system.provider.model ? ` · ${system.provider.model}` : ""}`}
-                </Chip>
+                <OriginChip provider={system.provider} />
+                {system.provider.mode ? <span className="muted small">{system.provider.mode} mode</span> : null}
               </span>
               {system.provider.description ? <span className="muted small">{system.provider.description}</span> : null}
             </span>,
@@ -276,6 +279,101 @@ export function ArchitecturePage({ system }: PageProps) {
           {system.data ? <Wiring system={system.data} /> : system.error ? <ErrorState error={system.error} /> : <Loading />}
         </Card>
       </div>
+      <ProvidersCard />
     </>
+  );
+}
+
+const STATUS_TONE: Record<ProviderStatus["status"], Tone> = {
+  ready: "ok",
+  needs_setup: "warn",
+  stopped: "bad",
+  disabled: "neutral",
+  unavailable: "warn",
+};
+
+/**
+ * Every configured decision provider and whether it could run now (GET /providers). The
+ * server never calls a hosted API or a model to answer this, and a key is shown only as
+ * present or missing. The server's default provider is the one new runs use.
+ */
+function ProvidersCard() {
+  const providers = usePolling(() => api.providers(), 15000, []);
+  return (
+    <Card
+      title="Decision providers"
+      subtitle="GET /providers — readiness, free-tier guard and usage; this project's budget is $0"
+    >
+      {providers.data ? (
+        <DataTable
+          rows={providers.data}
+          rowKey={(row) => row.name}
+          columns={[
+            {
+              key: "name",
+              header: "Provider",
+              render: (row) => (
+                <span className="cell-stack">
+                  <span className="chip-row">
+                    <Mono>{row.name}</Mono>
+                    {row.default ? <Chip tone="accent">server default</Chip> : null}
+                  </span>
+                  <span className="muted small">{row.description}</span>
+                </span>
+              ),
+            },
+            { key: "origin", header: "Origin", render: (row) => <OriginChip provider={row} /> },
+            {
+              key: "model",
+              header: "Model",
+              render: (row) =>
+                row.model ? (
+                  <span className="cell-stack">
+                    <Mono>{row.model}</Mono>
+                    {row.mode ? <span className="muted small">{row.mode} mode</span> : null}
+                  </span>
+                ) : (
+                  <span className="muted">—</span>
+                ),
+            },
+            {
+              key: "status",
+              header: "Status",
+              render: (row) => (
+                <span className="cell-stack">
+                  <Chip tone={STATUS_TONE[row.status]} dot>
+                    {row.status.replace("_", " ")}
+                  </Chip>
+                  <span className="muted small">{row.detail}</span>
+                  {row.key_env ? (
+                    <span className="muted small">
+                      key <Mono>{row.key_env}</Mono>: {row.key_present ? "present (value never shown)" : "missing"}
+                    </span>
+                  ) : null}
+                </span>
+              ),
+            },
+            {
+              key: "usage",
+              header: "Requests (24 h)",
+              numeric: true,
+              render: (row) =>
+                row.usage ? (
+                  <span className="cell-stack">
+                    <span>{fmtInt(row.usage.requests_last_24h)}</span>
+                    <span className="muted small">{fmtInt(row.usage.tokens_last_24h)} tokens</span>
+                  </span>
+                ) : (
+                  <span className="muted">—</span>
+                ),
+            },
+          ]}
+        />
+      ) : providers.error ? (
+        <ErrorState error={providers.error} />
+      ) : (
+        <Loading />
+      )}
+    </Card>
   );
 }

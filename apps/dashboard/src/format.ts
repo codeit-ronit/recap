@@ -22,6 +22,7 @@ import type {
   EvidenceCheckPayload,
   InjectionPayload,
   InvestigationRoundPayload,
+  LlmCallPayload,
   MemoryAssessHit,
   MemoryAssessPayload,
   MemorySearchHit,
@@ -64,6 +65,7 @@ export const TERMINAL_STATES: ReadonlySet<string> = new Set([
   "FAILED",
   "BLOCKED",
   "BUDGET_EXHAUSTED",
+  "QUOTA_EXHAUSTED",
 ]);
 
 const STATE_LABELS: Record<string, string> = {
@@ -78,6 +80,7 @@ const STATE_LABELS: Record<string, string> = {
   FAILED: "Failed",
   BLOCKED: "Blocked",
   BUDGET_EXHAUSTED: "Budget exhausted",
+  QUOTA_EXHAUSTED: "Quota exhausted (deferred)",
 };
 
 export function stateLabel(state: string | null | undefined): string {
@@ -97,6 +100,7 @@ export function stateTone(state: string | null | undefined): Tone {
     case "BLOCKED":
       return "bad";
     case "BUDGET_EXHAUSTED":
+    case "QUOTA_EXHAUSTED":
     case "AWAITING_APPROVAL":
       return "warn";
     case "CREATED":
@@ -336,21 +340,60 @@ export function environmentBadge(
   };
 }
 
+export interface OriginBadge {
+  label: string;
+  tone: Tone;
+  title: string;
+}
+
+/**
+ * The run-origin badge: where a run's decisions came from. A scripted or replayed run must
+ * never look like live model reasoning, so the label comes only from ProviderInfo.origin
+ * (or, for runs recorded before origins existed, from its kind).
+ */
+export function originBadge(provider: Partial<ProviderInfo> | null | undefined): OriginBadge {
+  const origin = provider?.origin ?? (provider?.kind === "scripted" ? "scripted" : provider?.kind);
+  switch (origin) {
+    case "scripted":
+      return { label: "SCRIPTED", tone: "neutral", title: "Scripted baseline policy: fixed playbooks, NOT an LLM." };
+    case "local_llm":
+      return { label: "LOCAL LLM", tone: "accent", title: "Real inference by a model on this machine (Ollama). No API, $0." };
+    case "free_hosted_llm":
+      return { label: "FREE HOSTED LLM", tone: "accent", title: "Real inference on a free plan, checked before every request." };
+    case "replay":
+      return { label: "REPLAY", tone: "warn", title: "Recorded answers of an earlier real-model run. No model was called." };
+    case "paid_llm":
+      return { label: "PAID LLM", tone: "bad", title: "A billed API (disabled for this $0 project)." };
+    default:
+      return { label: "ORIGIN UNKNOWN", tone: "neutral", title: "This run did not record where its decisions came from." };
+  }
+}
+
 export function providerLabel(provider: Partial<ProviderInfo> | null | undefined): string {
   if (!provider?.name) return "provider unknown";
-  if (provider.kind === "scripted") return `${provider.name} — scripted, not an LLM`;
-  return `${provider.name} — LLM${provider.model ? ` (${provider.model})` : ""}`;
+  const badge = originBadge(provider);
+  if (badge.label === "SCRIPTED") return `${provider.name} — scripted, not an LLM`;
+  const model = provider.model ? ` (${provider.model})` : "";
+  return `${provider.name} — ${badge.label.toLowerCase()}${model}`;
 }
 
 /**
  * One line about what a run cost. The backend's own line (run.summary `cost`) always wins.
- * Without it (e.g. a run that stopped before its summary), only the scripted provider is
- * known to cost nothing; for any other provider this page cannot tell.
+ * Without it (e.g. a run that stopped before its summary), only providers that cannot be
+ * billed are known to cost nothing; for any other provider this page cannot tell.
  */
-export function costLabel(summaryCost: string | null | undefined, providerKind: ProviderInfo["kind"] | undefined): string {
+export function costLabel(summaryCost: string | null | undefined, provider: Partial<ProviderInfo> | null | undefined): string {
   if (summaryCost) return summaryCost;
-  if (providerKind === "scripted") return "$0.00 external API charged (deterministic mode)";
-  return "cost unknown (estimated tokens only)";
+  switch (originBadge(provider).label) {
+    case "SCRIPTED":
+      return "$0.00 external API charged (deterministic mode)";
+    case "LOCAL LLM":
+      return "$0.00 - local model on this machine";
+    case "REPLAY":
+      return "$0.00 - replayed recording: no model was called";
+    default:
+      return "cost unknown (estimated tokens only)";
+  }
 }
 
 // --- trace events -> one readable line --------------------------------------------------
@@ -565,6 +608,28 @@ export function describeEvent(e: TraceEvent): EventLine {
           code(str(q.role, who || "agent")),
           ` started · round ${str(q.round, "?")} · up to ${str(q.max_steps, "?")} steps`,
           focus.length ? ` · focus: ${focus.join(", ")}` : "",
+        ],
+      };
+    }
+
+    case "llm.call": {
+      const q = p as LlmCallPayload;
+      const seconds = num(q.duration_ms);
+      const chips: { label: string; tone: Tone }[] = [];
+      if (q.replayed) chips.push({ label: "replayed", tone: "warn" });
+      if (q.ok === false) chips.push({ label: "unusable answer", tone: "bad" });
+      if ((num(q.attempt) ?? 1) > 1) chips.push({ label: `attempt ${str(q.attempt)}`, tone: "neutral" });
+      return {
+        icon: "zap",
+        tone: q.ok === false ? "warn" : "info",
+        tag: "LLM",
+        chips,
+        parts: [
+          code(who || "controller"),
+          " → ",
+          code(str(q.model, "model")),
+          ` · ${str(q.mode, "?")} · ${str(q.response_kind, "?")} · in ${fmtInt(num(q.input_tokens))} / out ${fmtInt(num(q.output_tokens))} tokens`,
+          seconds !== null ? ` · ${fmtMs(seconds)}` : "",
         ],
       };
     }

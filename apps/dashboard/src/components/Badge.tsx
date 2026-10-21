@@ -3,6 +3,7 @@ import {
   flagTone,
   humanize,
   hypothesisTone,
+  originBadge,
   outcomeTone,
   stateLabel,
   stateTone,
@@ -10,6 +11,7 @@ import {
   verdictTone,
 } from "../format";
 import type { Tone } from "../format";
+import type { ProviderInfo } from "../types";
 import { Icon } from "./Icon";
 
 /** A small rounded label. Color is never the only signal: chips always carry text. */
@@ -116,3 +118,18 @@ export function Mono({ children, title, nowrap = false }: { children: ReactNode;
     </code>
   );
 }
+
+/**
+ * The run-origin badge: SCRIPTED, LOCAL LLM, FREE HOSTED LLM or REPLAY. It is shown on every
+ * run so a scripted or replayed run can never be mistaken for live model reasoning.
+ */
+export function OriginChip({ provider }: { provider: Partial<ProviderInfo> | null | undefined }) {
+  const badge = originBadge(provider);
+  const title = provider?.name ? `${badge.title} (${provider.name})` : badge.title;
+  return (
+    <Chip tone={badge.tone} outline title={title}>
+      {badge.label}
+    </Chip>
+  );
+}
+

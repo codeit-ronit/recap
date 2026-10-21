@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, toApiError } from "../api";
 import type { ApiError } from "../api";
 import { ApprovalCard } from "../components/ApprovalCard";
-import { Chip, Mono, StateChip, YesNoChip } from "../components/Badge";
+import { Chip, Mono, OriginChip, StateChip, YesNoChip } from "../components/Badge";
 import { Card, KeyValues, Notice, PageHeader, Segmented, StatTile, Toggle } from "../components/Card";
 import { ErrorState, Loading } from "../components/EmptyState";
 import { EventFeed } from "../components/EventFeed";
@@ -16,6 +16,7 @@ import type {
   ApprovalRequest,
   ExperienceEpisode,
   ProposalPayload,
+  ProviderInfo,
   RunConfigInput,
   RunDetail,
   RunSummaryPayload,
@@ -231,8 +232,10 @@ function ResultPanel({
   }
   const best = record.verification?.best;
   const recovery = record.recovery;
-  const providerKind = system && record.provider === system.provider.name ? system.provider.kind : undefined;
+  // Where the decisions came from: the run's own record (runs before M2: the live system's).
+  const provider = record.provider_info ?? (system && record.provider === system.provider.name ? system.provider : null);
   const u = record.usage;
+  const reported = u.actual_input_tokens !== null || u.actual_output_tokens !== null;
   // Where the run happened comes from its own record; the simulator is never assumed.
   const env = record.environment;
   const where = !env
@@ -292,6 +295,18 @@ function ResultPanel({
               <span className="muted">none recorded</span>
             ),
           ],
+          [
+            "Decisions by",
+            <span className="chip-row">
+              <OriginChip provider={provider} />
+              <Mono>{provider?.name ?? record.provider}</Mono>
+              {provider?.mode ? <span className="muted">{provider.mode} mode</span> : null}
+              {provider?.prompt_version ? <span className="muted">· {provider.prompt_version}</span> : null}
+              {provider?.replay_of ? (
+                <span className="muted">· replay of {str(provider.replay_of.original_provider)} {str(provider.replay_of.model)}</span>
+              ) : null}
+            </span>,
+          ],
           ["Episode written", record.episode_id ? <Mono>{record.episode_id}</Mono> : <span className="muted">not written</span>],
           [
             "Usage",
@@ -299,9 +314,19 @@ function ResultPanel({
               {fmtInt(u.steps)} step{u.steps === 1 ? "" : "s"} · {fmtInt(u.tool_calls)} tool call{u.tool_calls === 1 ? "" : "s"} ·{" "}
               {fmtInt(u.estimated_tokens)} tokens{" "}
               <Chip>estimated</Chip>
+              {u.model_requests ? (
+                <>
+                  {" "}· {fmtInt(u.model_requests)} model request{u.model_requests === 1 ? "" : "s"}
+                  {reported ? (
+                    <>
+                      {" "}· in {fmtInt(u.actual_input_tokens)} / out {fmtInt(u.actual_output_tokens)} tokens <Chip tone="ok">reported by the model server</Chip>
+                    </>
+                  ) : null}
+                </>
+              ) : null}
             </span>,
           ],
-          ["Cost", costLabel(summary?.cost, providerKind)],
+          ["Cost", costLabel(summary?.cost, provider)],
           [
             "Run config",
             <Mono>
@@ -437,6 +462,8 @@ function RunPanel({ runId, system, onNewRun }: { runId: string; system: SystemSu
   const detail = usePolling(finished ? () => api.run(runId) : null, (d) => (d?.status === "running" ? 800 : null), [runId, finished]);
   const summary = lastOf(events, "run.summary")?.payload as RunSummaryPayload | undefined;
   const incident = events.length ? obj(events[0].payload.incident) : {};
+  // The first event (CREATED) names the provider: the run-origin badge needs nothing else.
+  const runProvider = events.length ? (obj(events[0].payload.provider) as Partial<ProviderInfo>) : undefined;
 
   return (
     <div className="run-panel" id="run-panel">
@@ -450,6 +477,7 @@ function RunPanel({ runId, system, onNewRun }: { runId: string; system: SystemSu
         subtitle={
           <span className="chip-row">
             {current ? <StateChip state={current} /> : <Chip>starting</Chip>}
+            {runProvider?.name ? <OriginChip provider={runProvider} /> : null}
             <Chip tone={stream.transport === "sse" ? "accent" : "neutral"} mono>
               {TRANSPORT_LABEL[stream.transport]}
             </Chip>

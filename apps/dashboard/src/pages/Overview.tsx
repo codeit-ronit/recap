@@ -11,7 +11,7 @@ import { hrefFor, navigate, useNow, usePolling } from "../hooks";
 import type { PageProps } from "../hooks";
 import type { EvalReport, RunSummary, SystemSummary } from "../types";
 
-const FINAL_STATES = ["RESOLVED", "BLOCKED", "FAILED", "BUDGET_EXHAUSTED"] as const;
+const FINAL_STATES = ["RESOLVED", "BLOCKED", "FAILED", "BUDGET_EXHAUSTED", "QUOTA_EXHAUSTED"] as const;
 
 function SystemCard({ icon, label, value, detail }: { icon: IconName; label: string; value: ReactNode; detail?: ReactNode }) {
   return (
@@ -44,7 +44,7 @@ function SystemCards({ system }: { system: SystemSummary }) {
         icon="cpu"
         label="Decision provider"
         value={<Mono>{system.provider.name}</Mono>}
-        detail={system.provider.kind === "scripted" ? "scripted policy — not an LLM, $0 cost" : providerLabel(system.provider)}
+        detail={system.provider.origin === "scripted" || system.provider.kind === "scripted" ? "scripted policy — not an LLM, $0 cost" : providerLabel(system.provider)}
       />
       <SystemCard
         icon="book"

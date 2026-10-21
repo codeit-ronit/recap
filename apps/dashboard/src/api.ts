@@ -26,6 +26,7 @@ import type {
   KnowledgeDocRef,
   KnowledgeResult,
   MemoryPartition,
+  ProviderStatus,
   RunDetail,
   RunRequest,
   RunStartResponse,
@@ -133,6 +134,7 @@ const enc = encodeURIComponent;
 export const api = {
   health: () => request<HealthResponse>("/health"),
   system: () => request<SystemSummary>("/system"),
+  providers: () => request<ProviderStatus[]>("/providers"),
   scenarios: () => request<ScenarioInfo[]>("/scenarios"),
 
   runs: (limit = 100) => request<RunSummary[]>(`/runs?limit=${limit}`),

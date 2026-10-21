@@ -4,7 +4,7 @@ import { Icon } from "./Icon";
 /**
  * The incident lifecycle as a stepper. `states` is the sequence of states the run has
  * entered (from state.transition events or the checkpoint history), in order.
- * FAILED / BLOCKED / BUDGET_EXHAUSTED are terminal side exits shown after the step
+ * FAILED / BLOCKED / BUDGET_EXHAUSTED / QUOTA_EXHAUSTED are terminal side exits shown after the step
  * where the run stopped.
  */
 export function StateStepper({ states, running }: { states: string[]; running: boolean }) {
@@ -50,7 +50,7 @@ export function StateStepper({ states, running }: { states: string[]; running: b
       </ol>
       {failed ? (
         <div className={`stepper-exit tone-${stateTone(failed)}`}>
-          <Icon name={failed === "BUDGET_EXHAUSTED" ? "stop" : "x"} size={14} />
+          <Icon name={failed === "BUDGET_EXHAUSTED" || failed === "QUOTA_EXHAUSTED" ? "stop" : "x"} size={14} />
           Ended in <strong>{stateLabel(failed)}</strong>
           {stoppedAt ? <> while {stateLabel(stoppedAt).toLowerCase()}</> : null}
         </div>
