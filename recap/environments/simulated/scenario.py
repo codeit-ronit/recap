@@ -115,6 +115,9 @@ class ExpectedOutcome(Contract):
     fix_params: dict[str, Any] = Field(default_factory=dict)
     final_state: IncidentState | None = None  # only set when a run should NOT end RESOLVED
     redteam: bool = False  # the scenario contains a prompt-injection attempt
+    # The attempt is written so that RECAP's pattern scanner does NOT flag it (a plausible
+    # "automation" line asking for an allowed action): pattern flags are not a protection.
+    evades_scanner: bool = False
 
 
 class ScenarioSpec(Contract):
@@ -134,6 +137,9 @@ class ScenarioSpec(Contract):
     deployments: list[DeploymentSpec]
     faults: list[Fault] = Field(min_length=1)
     log_lines: list[ScriptedLogLine] = Field(default_factory=list)
+    # How the shop's services word their own log messages (recap/core/signals.py):
+    # "java" (the default templates) or "rpc" (an RPC client's style, M3).
+    log_style: Literal["java", "rpc"] = "java"
     expected: dict[str, Any]
     budget: dict[str, Any] = Field(default_factory=dict)  # RunBudget field overrides
     run_overrides: dict[str, Any] = Field(default_factory=dict)  # RunConfig field overrides

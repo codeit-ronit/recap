@@ -48,11 +48,32 @@ from recap.core.signals import (
     HEAP_WARNING_TEMPLATE,
     OOM_ERROR_MESSAGE,
     RELEASE_ERROR_TEMPLATE,
+    RPC_HEAP_WARNING_TEMPLATE,
+    RPC_OOM_ERROR_MESSAGE,
+    RPC_RELEASE_ERROR_TEMPLATE,
+    RPC_UPSTREAM_ERROR_TEMPLATE,
     UPSTREAM_ERROR_TEMPLATE,
 )
 
 State = dict[str, Any]
 Fault = dict[str, Any]
+
+# How a service words its messages, by the scenario's log_style: (heap warning, OOM error,
+# release error, upstream error). The verifier and the scripted policy parse both styles.
+_STYLES = {
+    "java": (
+        HEAP_WARNING_TEMPLATE,
+        OOM_ERROR_MESSAGE,
+        RELEASE_ERROR_TEMPLATE,
+        UPSTREAM_ERROR_TEMPLATE,
+    ),
+    "rpc": (
+        RPC_HEAP_WARNING_TEMPLATE,
+        RPC_OOM_ERROR_MESSAGE,
+        RPC_RELEASE_ERROR_TEMPLATE,
+        RPC_UPSTREAM_ERROR_TEMPLATE,
+    ),
+}
 
 # --- Rules of the simulated world -------------------------------------------------------
 
@@ -316,6 +337,7 @@ def _messages_at(state: State, name: str, minute: int) -> list[tuple[str, str]]:
     if cond.status == "Deleted":
         return []  # a deleted service writes nothing
     messages: list[tuple[str, str]] = []
+    heap, oom, release, upstream = _STYLES[state.get("log_style", "java")]
     if minute % 3 == 0:  # normal background traffic
         latency = round(_reading(state, name, "latency_p95_ms", minute, cond))
         endpoint = ENDPOINTS.get(name, "status")
@@ -324,17 +346,14 @@ def _messages_at(state: State, name: str, minute: int) -> list[tuple[str, str]]:
         limit = state["services"][name]["memory_limit_mb"]
         ratio = _reading(state, name, "memory_mb", minute, cond) / limit
         if ratio > HEAP_WARNING_RATIO and minute % 2 == 0:
-            messages.append(("WARN", HEAP_WARNING_TEMPLATE.format(percent=round(ratio * 100))))
+            messages.append(("WARN", heap.format(percent=round(ratio * 100))))
         if cond.oom and minute in crash_minutes(cond.leak, minute):
-            messages.append(("ERROR", OOM_ERROR_MESSAGE))
+            messages.append(("ERROR", oom))
     if cond.release is not None:
         exception, version = cond.release["exception"], cond.release["version"]
-        messages.append(
-            ("ERROR", RELEASE_ERROR_TEMPLATE.format(exception=exception, version=version))
-        )
+        messages.append(("ERROR", release.format(exception=exception, version=version)))
     for dep in cond.failing_dependencies:
-        text = UPSTREAM_ERROR_TEMPLATE.format(dependency=dep, reason=UPSTREAM_REASON)
-        messages.append(("ERROR", text))
+        messages.append(("ERROR", upstream.format(dependency=dep, reason=UPSTREAM_REASON)))
     # Scenario-authored lines (noise, misleading hints, injection attempts) appear verbatim.
     for line in state["log_lines"]:
         if line["service"] == name and line["minute"] == minute:

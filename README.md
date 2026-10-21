@@ -342,7 +342,7 @@ Full details: [docs/threat-model.md](docs/threat-model.md) and [recap/safety/REA
 │                          live/: exported real-model runs (trace, record, recording, README)
 ├── fixtures/
 │   ├── knowledge/         7 synthetic runbooks and guides (the RAG corpus)
-│   └── scenarios/         15 incident scenarios: 6 demo, 3 train, 6 test
+│   └── scenarios/         17 incident scenarios: 6 demo, 3 train, 8 test (2 held-out M3 cases)
 ├── infra/                 how V1 runs locally; rules for a future benchmark host
 ├── integrations/sregym/   SREGym adapter stub, planned tool mapping, sample config
 ├── recap/                 the Python package

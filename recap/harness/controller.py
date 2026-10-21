@@ -28,6 +28,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any, TypeVar
 
 from recap import __version__
@@ -1302,10 +1303,20 @@ class IncidentController:
             "recording": self.provider.info.recording,
             "environment": self.info.kind,
             "seed": seed,
+            # Extra knowledge folders (RECAP_KNOWLEDGE_OVERLAYS): a red-team run says so.
+            "knowledge_overlays": [
+                _shown_path(folder, self.settings.paths.root)
+                for folder in self.settings.paths.knowledge_overlays
+            ],
         }
 
 
 # --- small pure helpers -----------------------------------------------------------------------
+
+
+def _shown_path(path: Path, root: Path) -> str:
+    """A repo-relative path when the file is in the repository (no local folders on record)."""
+    return str(path.relative_to(root)) if path.is_relative_to(root) else path.name
 
 
 def _memory_defaults(config: RunConfig, origin: str) -> RunConfig:

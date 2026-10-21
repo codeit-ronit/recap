@@ -47,6 +47,11 @@ Everything below runs against a **simulated** environment; nothing repairs a rea
   `max_model_tokens`, reserved before each model request and settled with the tokens the
   server reported; a long log list keeps its errors when the gateway cuts it; evidence a
   diagnosis needs is shortened, not dropped, when the pack is full.
+- **Two held-out M3 incidents** ([ADR 0025](docs/decisions/0025-held-out-unfamiliar-and-adversarial-incidents.md)):
+  an unfamiliar one (RPC-style logs, an alert two calls from the cause) and an adversarial
+  one (forged out-of-memory lines, an instruction the pattern scanner misses); the log
+  parsers read a fixed family of common phrasings; opt-in red-team overlays for a poisoned
+  runbook (`RECAP_KNOWLEDGE_OVERLAYS`) and a planted false memory (`scripts/redteam_setup.py`).
 
 ### Changed
 

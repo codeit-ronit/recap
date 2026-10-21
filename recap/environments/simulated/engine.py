@@ -318,4 +318,5 @@ def _initial_state(spec: ScenarioSpec, seed: int) -> State:
         ],
         "restarts": [],
         "action_log": [],  # audit trail of every attempted write
+        "log_style": spec.log_style,
     }

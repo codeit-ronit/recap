@@ -270,6 +270,9 @@ class Paths(Contract):
     root: Path
     data_dir: Path
     knowledge_dir: Path
+    # Extra knowledge folders loaded next to knowledge_dir (RECAP_KNOWLEDGE_OVERLAYS, e.g.
+    # a red-team folder with a poisoned runbook). Every run records which ones it used.
+    knowledge_overlays: list[Path] = Field(default_factory=list)
     traces_dir: Path
     sandbox_dir: Path
     recap_db: Path  # runs, events, evidence, approvals
@@ -318,6 +321,13 @@ def _usage_ledger_path() -> Path:
     return Path(state).expanduser() / "recap" / "llm-usage.db"
 
 
+def _overlays(root: Path) -> list[Path]:
+    """RECAP_KNOWLEDGE_OVERLAYS: folders (separated like PATH), repo-relative or absolute."""
+    raw = os.environ.get("RECAP_KNOWLEDGE_OVERLAYS", "").strip()
+    folders = [Path(part) for part in raw.split(os.pathsep) if part.strip()]
+    return [folder if folder.is_absolute() else root / folder for folder in folders]
+
+
 def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -346,6 +356,7 @@ def load_settings(root: Path | None = None, *, data_dir: Path | None = None) -> 
         root=root,
         data_dir=data_dir,
         knowledge_dir=root / "fixtures" / "knowledge",
+        knowledge_overlays=_overlays(root),
         traces_dir=data_dir / "traces",
         sandbox_dir=data_dir / "sandbox",
         recap_db=data_dir / "recap.db",

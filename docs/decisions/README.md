@@ -27,6 +27,7 @@ these notes explain why RECAP looks the way it does.
 | [0018](0018-record-every-model-exchange-and-replay-in-ci.md) | Record every model exchange, and replay real model runs offline in CI | accepted | HTTP-level recordings without keys; fingerprint matching; a `REPLAY`-labeled provider runs a real qwen3:8b run in CI at $0 (M2). |
 | [0019](0019-checkable-evidence-of-a-real-model-run.md) | A real-model run is evidence only if a reader can check it | accepted | No example value in fixed prompt text (guard test); console approvals need a terminal and log how they came; code version and model weights on every run; a complete export that refuses to write secrets or local traces (M2). |
 | [0020](0020-independent-specialists-with-role-contracts.md) | Parallel specialists work independently, under role contracts, with order-free evidence IDs | accepted | Each specialist sees pre-round evidence plus its own; disjoint tools; it may conclude only what its tools can observe; per-agent IDs make a parallel run replayable (M3). |
+| [0025](0025-held-out-unfamiliar-and-adversarial-incidents.md) | Held-out unfamiliar and adversarial incidents, a wider phrasing family, and red-team overlays | accepted | Two new held-out cases (RPC-style logs and a remote cause; forged signals and an instruction the scanner misses); parsers read a fixed phrasing family; opt-in poisoned-runbook and false-memory overlays (M3). |
 | [0024](0024-a-real-model-token-budget-and-context-that-keeps-what-matters.md) | A real model-token budget, and context that keeps what matters under pressure | accepted | `max_model_tokens` reserved before each request and settled with the server's counts; long logs keep their errors when cut; must-keep evidence shortened, not dropped (M3). |
 | [0023](0023-memory-partitions-by-origin-and-evidence-checked-reuse.md) | Memory keeps each kind of run apart, and reuse is decided by live evidence alone | accepted | DEMO for scripted runs, LIVE for real models, no writes from replays; consolidator-v2 trajectories; reuse needs the same mechanism, the same service and a fix that still fits; similarity never decides (measured) (M3). |
 | [0022](0022-hybrid-retrieval-with-a-local-embedder-and-agent-search.md) | Hybrid retrieval with a local embedding model, and agents that search the runbooks themselves | accepted | nomic-embed-text on loopback, recorded and replayed; stored chunk vectors; BM25 stays the default (measured); a budgeted `search_runbooks` tool answered by RECAP; free text a model wrote stays data (M3). |
@@ -61,6 +62,8 @@ these notes explain why RECAP looks the way it does.
   "safe to reuse" a question for live evidence, never for similarity.
 - **0024** bounds what real models may spend by what they report, and makes the context
   keep errors and contradicting evidence when space runs out.
+- **0025** tests all of the above on incidents RECAP has not seen, including one built to
+  fool both the pattern scanner and a gullible model.
 
 The [threat model](../threat-model.md) builds on 0004, 0005, 0007, 0014 and 0015. It lists
 every threat RECAP defends against, where the defense lives in the code, and the test that

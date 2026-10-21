@@ -93,6 +93,7 @@ class Runtime:
             vectors_path=vectors if vectors.is_file() else None,
             min_dense_similarity=retrieval.min_dense_similarity,
             candidate_pool=retrieval.candidate_pool,
+            overlays=paths.knowledge_overlays,
         )
         self.router = RulesRouter(self.settings.budget.routing, agent_specs(self.settings))
         self.verifier = EvidenceVerifier()

@@ -1,0 +1,46 @@
+# M3 held-out UNFAMILIAR case. What is new for RECAP: the alert names frontend, two calls
+# away from the cause; the symptoms are worded the way shoppers see them; every service
+# logs in an RPC client's style (log_style: rpc), not the default templates; and frontend
+# shipped a release about three hours earlier (a red herring: the errors began minutes ago).
+# No runbook or past episode describes this incident.
+id: m3-inventory-leak-behind-frontend
+title: "Shoppers see slow product pages and a stuck basket (held-out)"
+description: "Held-out unfamiliar case: inventory runs out of memory, cart and checkout fail calling it, and the alert fires on frontend, which also had a release hours earlier."
+family: resource_pressure
+partition: test
+seed: 53
+tags: [m3, unfamiliar, held-out]
+incident_time: "2026-03-18T19:40:00Z"
+namespace: shop
+log_style: rpc
+alert:
+  service: frontend
+  affected_services: [frontend, cart]
+  symptoms:
+    - "frontend: product pages take more than 4 seconds to render"
+    - "frontend: shoppers report the add-to-basket button keeps spinning"
+    - "cart: a growing share of requests end in errors"
+services:
+  frontend:  {version: v1.9.4, replicas: 3, dependencies: [cart, checkout]}
+  cart:      {version: v2.0.0, replicas: 2, dependencies: [inventory]}
+  checkout:  {version: v2.4.0, replicas: 3, dependencies: [payment, inventory]}
+  payment:   {version: v1.12.3, replicas: 2}
+  inventory: {version: v3.0.1, replicas: 2, memory_limit_mb: 768, baseline_memory_mb: 300}
+deployments:
+  - {service: frontend, version: v1.9.3, minutes_ago: 9000, change: "Search suggestions"}
+  - {service: frontend, version: v1.9.4, minutes_ago: 190, change: "Lazy-load product images"}
+  - {service: cart, version: v2.0.0, minutes_ago: 2400, change: "Persist carts across sessions"}
+  - {service: checkout, version: v2.4.0, minutes_ago: 2880, change: "Price rounding fix"}
+  - {service: payment, version: v1.12.3, minutes_ago: 3600, change: "Card network retry budget"}
+  - {service: inventory, version: v3.0.1, minutes_ago: 4800, change: "Stock cache warm-up on start"}
+faults:
+  - {type: memory_leak, service: inventory, started_minutes_ago: 75, oom_minutes_ago: 9, error_rate: 0.38}
+log_lines:  # noise: unrelated warnings on the alerted service
+  - {service: frontend, minutes_ago: 35, level: WARN, message: "image CDN cache miss ratio at 0.62"}
+  - {service: frontend, minutes_ago: 20, level: WARN, message: "image CDN cache miss ratio at 0.64"}
+  - {service: cart, minutes_ago: 50, level: INFO, message: "session store compaction finished"}
+# Evaluation-only ground truth: never shown to agents.
+expected: {root_cause_service: inventory, mechanism: resource_pressure, fix: restart_service}
+budget: {}
+run_overrides: {}
+requires_memory_of: []

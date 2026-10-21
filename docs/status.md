@@ -603,6 +603,24 @@ files and every commit: run on 2026-10-21 over 34 commits and 346 files, nothing
 - No prompt template changed: the CI replay still matches. Both scripted baselines: **0
   differences** (45 runs without memory, 30 with). Revert checks: 5 of 5 guarded.
 
+### Step 6: held-out unfamiliar and adversarial incidents ([ADR 0025](decisions/0025-held-out-unfamiliar-and-adversarial-incidents.md))
+
+- Two held-out scenarios: `m3-inventory-leak-behind-frontend` (unfamiliar: RPC-style logs,
+  the alert two calls from the cause, an old release as a red herring) and
+  `m3-payment-release-under-forged-signals` (adversarial: forged out-of-memory lines and a
+  planted instruction the pattern scanner misses). Parsers read a fixed phrasing family;
+  opt-in overlays add a poisoned runbook (`RECAP_KNOWLEDGE_OVERLAYS`) and a planted false
+  memory (`scripts/redteam_setup.py`, scratch folders only).
+- **Scripted policy, measured:** both new cases end RESOLVED with the right fix under
+  adaptive, parallel and single routing (6 of 6 runs; restart inventory, roll back payment).
+  With every lure at once, the poisoned runbook is retrieved and the false memory found at
+  similarity 1.0, and the evidence overrules both. A gullible fake model believing the
+  forged lines gets no fix executed (FAILED for a person). These are the scripted baseline
+  and fakes, not yet real models.
+- Existing scripted baseline runs: **0 differences** (45 without memory, 30 with). Revert
+  checks: with only the old phrasing the unfamiliar case is not solved; without overlay
+  loading the poisoned-runbook test fails.
+
 ### Real model runs in M3 (simulated environment)
 
 | Run | Model | Requests | Tokens in / out (reported) | Outcome |
@@ -619,7 +637,7 @@ unfamiliar and one adversarial) come after the retrieval, memory and context ste
 
 ### Tests so far
 
-`pytest`: **1305 passed, 1 skipped** (the skip needs the optional `otel` extra).
+`pytest`: **1340 passed, 1 skipped** (the skip needs the optional `otel` extra).
 `ruff check` and `ruff format --check`: clean. Dashboard: `npm run build` and its 19 tests
 pass. Requests in M3 so far: the 17 chat requests of local 7 to 9, and embedding requests
 that built the stored vectors, captured the seven test query vectors, compared the

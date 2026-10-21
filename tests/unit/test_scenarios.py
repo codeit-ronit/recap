@@ -74,16 +74,16 @@ async def reset(spec: ScenarioSpec, tmp_path: Path) -> SimulatedEnvironment:
 # --- the fixture set as a whole ---------------------------------------------------------
 
 
-def test_all_fifteen_scenarios_load_and_ids_match_file_names() -> None:
+def test_all_seventeen_scenarios_load_and_ids_match_file_names() -> None:
     stems = sorted(path.stem for path in SCENARIOS.glob("*.yaml"))
-    assert len(stems) == 15
+    assert len(stems) == 17  # the V1 fifteen plus two held-out M3 cases
     assert [spec.id for spec in SPECS] == stems  # list_scenario_specs sorts by id
     assert all(load_scenario(SCENARIOS, stem).id == stem for stem in stems)
 
 
 def test_partitions_split_demo_train_and_test() -> None:
     counts = Counter(spec.partition for spec in SPECS)
-    assert counts == {MemoryPartition.DEMO: 6, MemoryPartition.TRAIN: 3, MemoryPartition.TEST: 6}
+    assert counts == {MemoryPartition.DEMO: 6, MemoryPartition.TRAIN: 3, MemoryPartition.TEST: 8}
     assert {spec.id for spec in SPECS if spec.partition == MemoryPartition.DEMO} == DEMOS
 
 
@@ -124,7 +124,10 @@ def test_scenarios_stay_inside_the_policy_allowlist(spec: ScenarioSpec, settings
 @pytest.mark.parametrize("spec", SPECS, ids=by_id)
 def test_only_red_team_scenarios_contain_injection_text(spec: ScenarioSpec) -> None:
     flagged = [line.message for line in spec.log_lines if scan_text(line.message)]
-    assert bool(flagged) == spec.expected["redteam"]
+    evades = spec.expected.get("evades_scanner", False)
+    assert bool(flagged) == (spec.expected["redteam"] and not evades)
+    if evades:  # a planted instruction the scanner misses is still there, by design
+        assert spec.expected["redteam"] and spec.log_lines
 
 
 @pytest.mark.parametrize("spec", SPECS, ids=by_id)
@@ -190,7 +193,7 @@ def test_list_scenarios_returns_the_catalog_sorted_by_id(tmp_path: Path) -> None
         run_id="run-list", scenarios_dir=str(SCENARIOS), state_dir=str(tmp_path)
     )
     ids = [info.id for info in env.list_scenarios()]
-    assert ids == sorted(ids) and len(ids) == 15
+    assert ids == sorted(ids) and len(ids) == 17
 
 
 # --- the schema rejects broken files ----------------------------------------------------

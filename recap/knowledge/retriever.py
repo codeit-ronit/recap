@@ -124,15 +124,22 @@ class KnowledgeRetriever:
         vectors_path: Path | None = None,
         min_dense_similarity: float = 0.0,
         candidate_pool: int = CANDIDATE_POOL,
+        overlays: Sequence[Path] = (),
     ) -> KnowledgeRetriever:
         """Build a retriever over a folder of Markdown runbooks (lexical reranker on).
+
+        `overlays` are extra folders indexed with it (a red-team poisoned runbook, say);
+        their chunks have no stored vector, so hybrid search is then not ready.
 
         With `vectors_path` (an existing vector file), hybrid search becomes possible for
         the chunks it covers; `hybrid_ready` says whether it covers all of them.
         """
         vectors = VectorIndex.load(vectors_path) if vectors_path is not None else None
+        chunks = load_documents(knowledge_dir, root=root)
+        for folder in overlays:  # extra folders; an overlay chunk has no stored vector
+            chunks += load_documents(folder, root=root)
         return cls(
-            load_documents(knowledge_dir, root=root),
+            chunks,
             reranker=LexicalReranker(),
             vectors=vectors,
             min_dense_similarity=min_dense_similarity,
