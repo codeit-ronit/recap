@@ -28,6 +28,7 @@ curl -H "Authorization: Bearer $(cat data/operator-token)" http://127.0.0.1:8000
 |---|---|---|
 | GET | `/health` | liveness + environment `label`: `SIMULATED LOCAL ENVIRONMENT · V1` for a simulated environment, otherwise `LIVE ENVIRONMENT (<kind>) · V1` |
 | GET | `/system` | which implementation is plugged into each interface (environment adapter, transport, provider, retriever, router, policy, verifier, oracle, sinks) |
+| GET | `/providers` | every configured decision provider and whether it could run now: origin, model, status (`ready`, `needs_setup`, `stopped`, `disabled`, `unavailable`), whether a key is present (never its value), caps and usage. It runs no inference and calls no hosted API (it only asks a local Ollama server which models are installed) |
 | GET | `/scenarios` | available scenarios (ground-truth fields are for evaluation only; agents never see them) |
 | GET | `/auth/session` | **operator** · who the token belongs to (`{operator, actor}`); 401 without a valid token |
 | POST | `/incidents/run` | **operator** · `{scenario_id, config}` → starts a run, returns `run_id` (202) |
@@ -80,6 +81,11 @@ reported as the `error`).
 - `safety_enabled: false` is refused by the API (the simulation-only ablation runs only in the
   evaluation runner).
 - A per-run `provider` other than the server's default is refused (400): the provider is
-  server configuration, so a client cannot switch on the paid LLM provider.
+  server configuration, so a client cannot switch on the paid LLM provider or spend a free
+  quota. To run real models from the dashboard, start the server with one, for example
+  `RECAP_PROVIDER=ollama uvicorn apps.api.main:app` (local), or for Groq's free plan also
+  export `GROQ_API_KEY`, `RECAP_GROQ_FREE_PLAN_CONFIRMED_ON` and
+  `RECAP_ALLOW_LIVE_FREE_INFERENCE=1` in that server's shell
+  ([recap/providers/README.md](../../recap/providers/README.md)).
 - Runs use the default "manual" approval mode unless the request sets `"approval_mode": "auto"`
   (the simulation auto-approver, allowed only against a simulated environment).

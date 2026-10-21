@@ -311,6 +311,7 @@ signed capability and verified by the oracle.
 | `ruff check .`, `ruff format --check .` | clean |
 | Dashboard | 17 tests pass (`npm test`); strict build passes |
 | `scripts/smoke_test.py` (scripted) | RESOLVED, 67 trace events (unchanged) |
+| `scripts/evaluate.py` (scripted) | report `20261021-061715-3789eb` at git `142b681`: every number identical to the M1-review report (the scripted path did not change) |
 
 New tests: `tests/unit/test_protocol.py`, `test_ollama_provider.py`,
 `test_free_hosted_provider.py`, `test_quota.py`, `test_replay.py`, `test_provider_catalog.py`

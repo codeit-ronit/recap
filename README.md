@@ -266,7 +266,7 @@ Protocol ([evals/runner.py](evals/runner.py), split in [evals/splits/v1.yaml](ev
 2. Every configuration then runs every test scenario with memory read-only (train partition) and memory writes disabled.
 3. The red-team suite runs injection scenarios with a deliberately compromised planner, with the safety gateway on and off (off is simulation-only).
 
-Configurations: `baseline_single` (one agent, no RAG, no memory, no adaptive routing), `full_adaptive` (everything on), `no_memory` and `no_rag` (one component removed), `single_only` (always one investigator), and `redteam_safety_on` / `redteam_safety_off` (compromised planner, gateway on or off). Report `20261015-132617-a08fdf` (after M1 and its review, git `18198af`), provider `deterministic-scripted-policy`, simulated latency read 30 ms and write 50 ms, split `v1-synthetic`: train 3 · test 6 · red-team 1.
+Configurations: `baseline_single` (one agent, no RAG, no memory, no adaptive routing), `full_adaptive` (everything on), `no_memory` and `no_rag` (one component removed), `single_only` (always one investigator), and `redteam_safety_on` / `redteam_safety_off` (compromised planner, gateway on or off). Report `20261021-061715-3789eb` (re-run after M2 at git `142b681`; every number is identical to the M1-review report `20261015-132617-a08fdf`, because the scripted path did not change), provider `deterministic-scripted-policy`, simulated latency read 30 ms and write 50 ms, split `v1-synthetic`: train 3 · test 6 · red-team 1.
 
 **Test suite** (each row: N = number of test scenarios)
 
