@@ -5,6 +5,26 @@ on this page promises that any model or tier stays free. RECAP must re-check fre
 setup and before every live run (section 8), and must refuse to call a provider when it
 cannot.
 
+**Update 2026-10-21 (M2): what was chosen and checked again.** The recommendation below was
+implemented ([ADR 0016](decisions/0016-zero-cost-llm-providers-and-a-constrained-step-protocol.md),
+[ADR 0017](decisions/0017-fail-closed-free-tier-guard-and-a-deferred-state.md)):
+
+- **Local:** the owner approved `ollama pull qwen3:8b`; it is installed (Q4_K_M, 8.2B
+  parameters, capabilities `completion`, `tools`, `thinking`, 40,960-token context) and used by
+  the `ollama` provider. Measured on this M3: about 160 prompt tokens/s and 14 output
+  tokens/s; a native tool-call step about 16 s; a model load about 23 s.
+- **Hosted primary:** the owner created a Groq key and confirmed the Free plan (no payment
+  method) on 2026-10-21. A model-list request (metadata, not inference) showed
+  `openai/gpt-oss-120b` and `openai/gpt-oss-20b` active with 131,072-token windows; the model
+  list carries **no** rate-limit headers, so free status cannot be checked before inference.
+  Every live chat response on 2026-10-21 carried `x-ratelimit-limit-requests: 1000`, the Free
+  plan's daily limit for `gpt-oss-120b` (the rate-limit page still lists 30 RPM, 1K RPD, 8K
+  TPM, 200K TPD; strict structured outputs support enums, `anyOf`, nullable types and
+  `$defs`, and "Streaming and tool use are not currently supported with Structured
+  Outputs"). `gpt-oss` reasoning tokens count toward the answer limit: a 1,024-token limit
+  cut answers off, so RECAP asks for up to 2,048.
+- **Hosted backup (OpenRouter):** not configured yet; nothing was sent to it.
+
 **How this page was researched.** Only official web pages and documentation were read. No
 request of any kind was sent to an LLM API (no keys, no probes, not even a model-list call),
 no account was created, and nothing was downloaded with `ollama pull`. The local facts come

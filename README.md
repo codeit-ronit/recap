@@ -1,11 +1,11 @@
 # RECAP — Experience-Learning Autonomous Reliability Agent (Prototype)
 
 > **V1 prototype: runs on a simulated local environment; nothing here repairs a real cluster.**
-> Hardened in milestone M1 (October 2026) after an independent audit: see [docs/status.md](docs/status.md) for measured results and [docs/flow.md](docs/flow.md) for one incident end to end.
+> Hardened in milestone M1 (October 2026) after an independent audit. Since M2 a **real model** can make the decisions at $0: `qwen3:8b` on this machine (Ollama) or `gpt-oss-120b` on Groq's free plan. See [docs/status.md](docs/status.md) for measured results and [docs/flow.md](docs/flow.md) for one incident end to end.
 
 An incident-response agent that investigates through real MCP (Model Context Protocol) tools, asks a human to approve one exact fix, checks recovery with an independent oracle, and remembers only what was verified.
 
-To be clear: the default decision-maker is a scripted, deterministic policy, **not an LLM**. The adapter for SREGym (a reliability benchmark that runs on Kubernetes) is an interface stub. No model is trained, the evaluation is tiny and synthetic, token counts are estimates, and the external API cost is $0.
+To be clear: the default decision-maker is still a scripted, deterministic policy, **not an LLM**; real models are opt-in (`--provider ollama`, `--provider groq`) and every run shows which one decided (a SCRIPTED / LOCAL LLM / FREE HOSTED LLM / REPLAY badge). The real-model runs so far are a handful on one simulated scenario: they show the path works, not how often a model is right. The adapter for SREGym (a reliability benchmark that runs on Kubernetes) is an interface stub. No model is trained, the evaluation is tiny, synthetic and scripted, scripted token counts are estimates (real models report exact counts), and the external API cost is $0.
 
 ## What it does
 
@@ -127,7 +127,12 @@ Or build once (`cd apps/dashboard && npm install && npm run build`), restart uvi
 - `--approve ask` (the default in an interactive terminal) asks *you* to approve the exact action. `--approve auto` uses the simulation-only auto-approver.
 - Runtime data (SQLite databases, sandbox state, JSONL traces) goes to `data/`, which is git-ignored and shared by the CLI, API and dashboard.
 - Optional settings are environment variables listed in [.env.example](.env.example), such as `RECAP_DATA_DIR` and `RECAP_PROVIDER`. RECAP does not load a `.env` file by itself.
-- The optional Claude provider is opt-in: install the `llm` extra, set `RECAP_PROVIDER=anthropic` and your own `ANTHROPIC_API_KEY` (your own billing). See [recap/providers/README.md](recap/providers/README.md).
+- **Real models, $0** (see [recap/providers/README.md](recap/providers/README.md)):
+  - local: `ollama pull qwen3:8b` once (5.2 GB, your decision), `OLLAMA_NO_CLOUD=1 ollama serve`, then `python scripts/demo.py --scenario bad-deployment --provider ollama` (about 1 minute per decision on a 16 GB laptop);
+  - Groq Free plan: export `GROQ_API_KEY` and `RECAP_GROQ_FREE_PLAN_CONFIRMED_ON=<date you checked the billing page>`, then `RECAP_ALLOW_LIVE_FREE_INFERENCE=1 python scripts/demo.py --scenario bad-deployment --provider groq`; RECAP refuses to send anything otherwise, and stops if a response shows a non-free plan;
+  - offline replay of a recorded real run: `RECAP_PROVIDER=replay python scripts/demo.py --scenario bad-deployment --no-memory --approve auto`;
+  - `python scripts/providers.py` shows which providers are ready (no inference).
+- The paid Claude adapter is disabled for this $0 project (it needs `RECAP_ALLOW_PAID_LLM=1` on top of an API key).
 
 ## 3-minute demo
 
@@ -227,6 +232,9 @@ Status words: **implemented** (works and is tested, against the simulator), **si
 | Recovery oracle | implemented | [recap/verification/oracle.py](recap/verification/oracle.py) | Reads `health_check` only; replaceable through `ControllerDeps.oracle_factory` |
 | Tracing and redaction | implemented | [recap/telemetry/](recap/telemetry/) | JSONL, SQLite, live SSE stream; local only. Best-effort secret redaction of trace payloads, tool outputs and run errors |
 | Scripted decision provider (default) | implemented | [recap/providers/deterministic.py](recap/providers/deterministic.py) | Playbooks and heuristics, **not an LLM**; $0 |
+| Local LLM provider (Ollama) | implemented | [recap/providers/ollama_provider.py](recap/providers/ollama_provider.py), [protocol.py](recap/providers/protocol.py) | `qwen3:8b`, native tool calls, per-request schemas; real runs on one simulated scenario (M2) |
+| Free hosted LLM provider (Groq Free) | implemented | [recap/providers/openai_compatible.py](recap/providers/openai_compatible.py), [quota.py](recap/providers/quota.py) | `gpt-oss-120b`, strict JSON; fail-closed free-tier guard and tripwire; real runs on one simulated scenario (M2) |
+| Model recordings and offline replay | implemented | [recap/providers/transport.py](recap/providers/transport.py), [fixtures/recordings/](fixtures/recordings/) | CI replays a real `qwen3:8b` run; replays are labeled REPLAY |
 | Evaluation runner | implemented | [evals/runner.py](evals/runner.py) | Baselines, ablations, red team; scripted policy only; synthetic, tiny N |
 | API | implemented | [apps/api/](apps/api/) | FastAPI; no endpoint executes an action directly |
 | Dashboard | implemented | [apps/dashboard/](apps/dashboard/) | React + TypeScript (Vite); its numbers come from the API |
@@ -234,7 +242,7 @@ Status words: **implemented** (works and is tested, against the simulator), **si
 | The "human" in evals and auto runs | simulated | [recap/safety/approvals.py](recap/safety/approvals.py) (`AutoApprovalChannel`) | Refuses to run outside a simulated environment |
 | Compromised red-team planner | simulated | [recap/safety/redteam.py](recap/safety/redteam.py) | Obeys injected instructions on purpose |
 | SREGym adapter | adapter only | [integrations/sregym/adapter.py](integrations/sregym/adapter.py) | Interface stub; never connected or run |
-| Anthropic Claude provider | adapter only | [recap/providers/anthropic_provider.py](recap/providers/anthropic_provider.py) | Opt-in, your key and billing; tested only with a fake client, never called by tests, CI or demos |
+| Anthropic Claude provider | adapter only | [recap/providers/anthropic_provider.py](recap/providers/anthropic_provider.py) | **Paid; disabled** for this $0 project (needs `RECAP_ALLOW_PAID_LLM=1`); tested only with a fake client |
 | Hybrid retrieval (BM25 + embeddings) | adapter only | [recap/knowledge/embeddings.py](recap/knowledge/embeddings.py) | Optional `embeddings` extra; tested with a fake embedder |
 | OpenTelemetry console bridge | adapter only | [recap/telemetry/otel.py](recap/telemetry/otel.py) | Optional `otel` extra; console spans, no collector |
 | `LearnedRouter` | adapter only | [recap/routing/router.py](recap/routing/router.py) | Interface stub; raises `NotImplementedError` |
@@ -242,7 +250,7 @@ Status words: **implemented** (works and is tested, against the simulator), **si
 | Model training or fine-tuning | not yet built | `TrainingPipeline` in [recap/core/interfaces.py](recap/core/interfaces.py) | Explicit not-implemented placeholder |
 | Learned routing policy | not yet built | — | Planned contextual bandit |
 | Neural reranker | not yet built | `Reranker` interface in [recap/core/interfaces.py](recap/core/interfaces.py) | V1 uses a lexical reranker |
-| Authenticated approvals | not yet built | — | Approver identity is a free-text label in V1 |
+| Per-person approvals | not yet built | — | Since M1 approvals come from one authenticated operator token, not individual people |
 | Docker / Compose packaging | not yet built | [infra/README.md](infra/README.md) | Not included: it could not be tested |
 | Crash-resume of in-flight runs | not yet built | [recap/harness/store.py](recap/harness/store.py) | Checkpoints are saved and inspectable, but an interrupted run is not resumed |
 
@@ -346,7 +354,7 @@ Full details: [docs/threat-model.md](docs/threat-model.md) and [recap/safety/REA
 │   ├── routing/           routing signals, rules router, orchestrator
 │   ├── agents/            agent roles and the evidence verifier
 │   ├── verification/      recovery oracle
-│   ├── providers/         scripted policy (default) and the optional Claude adapter
+│   ├── providers/         scripted policy (default), Ollama and Groq Free providers, replay, paid Claude adapter (off)
 │   ├── telemetry/         tracer, sinks, redaction, usage labels, optional OpenTelemetry
 │   └── runtime.py         composition root: builds every part from configs
 ├── scripts/               demo.py, evaluate.py, smoke_test.py, export_contract_examples.py, bootstrap.sh
@@ -359,14 +367,14 @@ Full details: [docs/threat-model.md](docs/threat-model.md) and [recap/safety/REA
 
 ## Tests and CI
 
-`python -m pytest` gives **912 passed, 1 skipped** in about 55 s (Python 3.11, with the optional Anthropic SDK installed, as in CI). The skip is the optional OpenTelemetry SDK test. With only the `dev` extra, three tests that need the Anthropic SDK's error classes are skipped too. No test calls a real LLM API. `ruff check .` and `ruff format --check .` are clean. `python -m pytest -m e2e` selects the **43** test cases (40 test functions) that run a real incident end to end through the controller, the MCP subprocess, the gateway and the simulator.
+`python -m pytest` gives **1082 passed, 1 skipped** in about 70 s (Python 3.11, with the optional Anthropic SDK installed, as in CI). The skip is the optional OpenTelemetry SDK test. With only the `dev` extra, three tests that need the Anthropic SDK's error classes are skipped too. No test calls a real model or any hosted API: fake Ollama and Groq servers (httpx's mock transport) and a recorded real `qwen3:8b` run stand in. `ruff check .` and `ruff format --check .` are clean. `python -m pytest -m e2e` selects the **54** test cases (51 test functions) that run a real incident end to end through the controller, the MCP subprocess, the gateway and the simulator.
 
 | Category | Files | What it covers |
 |---|---|---|
-| unit | 41 | Module-level checks: policy rules, approvals (revocation, the decision log, a cross-process race), capabilities, BM25, memory isolation, packer, evidence summaries, label-free views, router, orchestrator deadlines, verifier (V1 to V6, epochs), oracle, simulator, redaction, providers, the agent loop, the run store, the evaluation split, scenario alerts that match the simulated signals, and golden JSON examples of the contracts ([tests/fixtures/contracts/](tests/fixtures/contracts/), made by [scripts/export_contract_examples.py](scripts/export_contract_examples.py)) |
+| unit | 47 | Module-level checks: policy rules, approvals (revocation, the decision log, a cross-process race), capabilities, BM25, memory isolation, packer, evidence summaries, label-free views, router, orchestrator deadlines, verifier (V1 to V6, epochs), oracle, simulator, redaction, providers, the agent loop, the run store, the evaluation split, scenario alerts that match the simulated signals, and golden JSON examples of the contracts ([tests/fixtures/contracts/](tests/fixtures/contracts/), made by [scripts/export_contract_examples.py](scripts/export_contract_examples.py)). Since M2: the step protocol (schemas, parsing), the Ollama and Groq providers against local protocol fixtures, the free-tier guard and usage ledger, recording and replay, and the provider catalog |
 | integration | 5 | A real MCP stdio subprocess (with a signed write and its refused replay); nothing runs before approval, and rejection or expiry blocks; the safety-off ablation; controller paths (namespace refusal, scenario overrides that cannot switch off safety, token-budget stop, retry, provider failure, cancellation, a late console answer); the evaluation runner's protocol |
 | adversarial | 8 | Poisoned runbook, prompt injection against the gateway, malicious MCP servers, and the audit reproductions: context survival, forged evidence, oracle isolation, the approval race, executor authority |
-| e2e | 7 | All five demos, the API flow over HTTP, the API's evaluation results and run statuses, API security (anonymous and signed in), the retry and stabilization lifecycle, and the environment swap |
+| e2e | 9 | All five demos, the API flow over HTTP, the API's evaluation results and run statuses, API security (anonymous and signed in), the retry and stabilization lifecycle, the environment swap, model-driven runs over a fake model server (an operator-approved resolution, no oracle or label data in any byte sent to the model, replay, a deferred quota run with the key never stored), and the replay of a recorded real `qwen3:8b` run |
 
 The `test_audit_*.py` files reproduce each finding of the independent V1 audit; they failed on the V1 code and pass since M1 ([docs/status.md](docs/status.md)).
 
@@ -379,7 +387,7 @@ CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on every push and
 | Item | Why | Depends on | Priority |
 |---|---|---|---|
 | SREGym adapter (pinned commit, Kind cluster) | First real, non-simulated incidents and results | Pinning and reading an SREGym commit; a Kubernetes-in-Docker (Kind) cluster, provisioned only with the owner's consent and after cost checks | High |
-| Real LLM provider evaluation (Claude adapter + open models) | V1 numbers describe a scripted policy, not an LLM | Real tasks (SREGym or many more scenarios); an API budget; serving for open models | High |
+| Real LLM evaluation (local and free models) | M2 ran real models end to end on one scenario; the evaluation numbers still describe the scripted policy | More (and unfamiliar) scenarios, a live-free evaluation mode that respects the free quotas, recorded replays for CI (M3/M4) | High |
 | Larger scenario set with confidence intervals | N = 6 supports no statistical claim | More scenarios per failure family; interval estimates in `evals/runner.py` | High |
 | Per-user approvals (chat-ops) | M1 added a single operator token; approvals should come from a verified individual person, with roles, for example in a chat tool | Single sign-on and a chat integration | High before any real cluster |
 | Learned router (contextual bandit) | Spend parallel compute only where it pays off | Many logged runs with verified outcomes; the existing `RoutingSignals` and `LearnedRouter` interface | Medium |
@@ -398,7 +406,7 @@ CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on every push and
 - [docs/learning-notes.md](docs/learning-notes.md): the concepts behind RECAP, explained simply
 - [docs/threat-model.md](docs/threat-model.md): what can go wrong and what stops it
 - [docs/benchmark-plan.md](docs/benchmark-plan.md): the plan for a real SREGym benchmark
-- [docs/provider-options.md](docs/provider-options.md): free LLM inference options (researched, not yet used)
+- [docs/provider-options.md](docs/provider-options.md): free LLM inference options (researched; Ollama and Groq Free in use since M2)
 - [docs/decisions/](docs/decisions/): architecture decision records
 - Module READMEs: [harness](recap/harness/README.md) · [environments](recap/environments/README.md) · [tools](recap/tools/README.md) · [safety](recap/safety/README.md) · [knowledge](recap/knowledge/README.md) · [memory](recap/memory/README.md) · [context](recap/context/README.md) · [routing](recap/routing/README.md) · [agents](recap/agents/README.md) · [verification](recap/verification/README.md) · [providers](recap/providers/README.md) · [telemetry](recap/telemetry/README.md) · [API](apps/api/README.md) · [dashboard](apps/dashboard/README.md) · [SREGym adapter](integrations/sregym/README.md) · [infra](infra/README.md)
 

@@ -22,6 +22,9 @@ these notes explain why RECAP looks the way it does.
 | [0013](0013-stabilization-epochs-and-deadlines.md) | Wait for live targets to settle, judge each epoch on its own evidence, bound every provider call | accepted | Bounded stabilization polling, pre-fix state of a fixed service ignored, BUDGET_EXHAUSTED at the deadline (audit 2.6). |
 | [0014](0014-signed-capabilities-at-the-write-boundary.md) | The write boundary verifies signed, single-use capabilities | accepted | Ed25519 per run; the environment refuses any write the gateway did not sign for exactly that action (audit 2.5). |
 | [0015](0015-operator-auth-and-no-wins-approvals.md) | An operator-authenticated API, and approvals where "no" wins until the approval is used | accepted | Bearer token, identity from the credential, Host and Origin checks, compare-and-swap transitions, append-only log (audit 2.4). |
+| [0016](0016-zero-cost-llm-providers-and-a-constrained-step-protocol.md) | Real model inference only from local or verified-free providers, through one constrained step protocol | accepted | Ollama (local) and Groq Free over plain HTTP; per-request schemas from the trusted catalog; one corrective retry, never a scripted stand-in (M2). |
+| [0017](0017-fail-closed-free-tier-guard-and-a-deferred-state.md) | A fail-closed free-tier guard, and a deferred state when a free quota runs out | accepted | Opt-in, allowlist, dated owner confirmation, caps below the free limits, a rate-limit-header tripwire; `QUOTA_EXHAUSTED` instead of another provider (M2). |
+| [0018](0018-record-every-model-exchange-and-replay-in-ci.md) | Record every model exchange, and replay real model runs offline in CI | accepted | HTTP-level recordings without keys; fingerprint matching; a `REPLAY`-labeled provider runs a real qwen3:8b run in CI at $0 (M2). |
 
 ## How the decisions fit together
 
@@ -37,6 +40,9 @@ these notes explain why RECAP looks the way it does.
 - **0010 to 0015** are the M1 audit fixes. 0010 and 0011 decide what a provider may see and
   in what form; 0012 decides what evidence counts; 0013 shapes the recovery lifecycle; 0014
   and 0015 move enforcement to the write boundary and to an authenticated operator.
+- **0016 to 0018** bring real models in at $0 (M2). 0016 decides which models and how they
+  are asked; 0017 keeps a hosted free plan free or stops; 0018 records every exchange so a
+  real model run can be replayed offline in CI. The scripted policy of 0003 stays the default.
 
 The [threat model](../threat-model.md) builds on 0004, 0005, 0007, 0014 and 0015. It lists
 every threat RECAP defends against, where the defense lives in the code, and the test that

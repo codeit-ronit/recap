@@ -4299,3 +4299,136 @@ records it, and only then lets the cancellation through. The controller records 
 sent but unverified, with its used approval. The one gap left is a hard kill of the process
 between sending and recording; then only the write-ahead event shows it, and a startup
 reconciliation step would be the next thing to build."
+
+### M2 — Real models at $0: local Ollama, Groq's free plan, and replay
+
+**What changed, in one paragraph.** M2 put real language models behind RECAP's unchanged
+`LLMProvider` interface without spending anything. A local `qwen3:8b` (5.2 GB, through
+Ollama) and Groq's free-plan `gpt-oss-120b` are spoken to over plain HTTP through one
+versioned step protocol (prompts-v4). For each request RECAP builds a JSON schema from its
+own trusted catalog, so the model can only name listed tools, allowlisted services and
+evidence IDs it can see. A fail-closed guard keeps the hosted plan free (or stops), a new
+`QUOTA_EXHAUSTED` state defers a run when a free quota runs out, and every model exchange is
+recorded so CI can replay a real model run offline. The scripted policy stays the default.
+
+**Why each change matters.**
+
+| Piece | Problem it solves | Read |
+|---|---|---|
+| Step protocol (prompts-v4) | With V1's prompts, `qwen3:8b` called a bad release a "dependency failure" and put the version under a key the verifier ignores: the prompt never defined RECAP's mechanisms. Now they are defined (generically) and answers have typed fields | [ADR 0016](decisions/0016-zero-cost-llm-providers-and-a-constrained-step-protocol.md), `recap/providers/protocol.py` |
+| Per-request schemas | A small model can name tools that do not exist or invent IDs; enums make that impossible while the server generates | `step_schema`, `proposal_schema`, `tool_definitions` |
+| Native tools for Ollama | A JSON step took about 75 s (740 output tokens); a native tool call about 16 s (57 tokens) | `mode: tools` in `configs/providers.yaml` |
+| One corrective retry, no fallback | An unusable answer is common for small models; a scripted fallback would mislabel scripted decisions as model reasoning | `HttpLLMProvider._decide` |
+| Free-tier guard + tripwire | "Free" must be verified, not assumed; Groq has no plan API | [ADR 0017](decisions/0017-fail-closed-free-tier-guard-and-a-deferred-state.md), `recap/providers/quota.py` |
+| `QUOTA_EXHAUSTED` | A run that ran out of free quota did not fail on its merits; FAILED would be misleading and another provider could cost money | `IncidentState`, `IncidentController._stop_on_error` |
+| Recording + replay | CI must never call a model, yet the LLM path must be tested with real model output | [ADR 0018](decisions/0018-record-every-model-exchange-and-replay-in-ci.md), `recap/providers/transport.py` |
+| Run-origin badge | A scripted or replayed run must never look like live reasoning | `ProviderInfo.origin`, `originBadge` in the dashboard |
+
+**The idea most worth understanding: constrain, then check, then let trusted code decide.**
+A model's answer is untrusted data, like a log line. RECAP narrows it three times:
+
+1. **Constrained generation.** The JSON schema for a step is built for that request: the
+   `tool_name` field is an enum of the agent's read-only tools, `service` an enum of the
+   allowlisted services, and `supporting_evidence_ids` an enum of the evidence IDs in the
+   agent's context. Ollama turns the schema into a grammar and Groq enforces it in strict
+   mode, so the model *cannot* write an unlisted tool or a made-up ID. Lists have
+   `maxItems`, after a real `qwen3:8b` answer repeated two citation IDs until its output limit.
+2. **Parsing.** The answer is checked again (a schema is only a hint to some servers):
+   foreign arguments, repeated observations, unknown IDs and services are dropped with a
+   note the trace shows, at most two calls run per step, and a proposal must be in the
+   catalog, on the diagnosed service, cite real evidence and not repeat a failed fix.
+3. **Trusted decisions.** The gateway still judges every call, the verifier still judges
+   every claim against all evidence, a human still approves every fix, and the oracle still
+   decides recovery. A schema constrains an answer's form, never its truth.
+
+**How "$0" is enforced, not hoped for.** Before every hosted request: an explicit
+per-process opt-in, an exact model allowlist, a key from the environment only, and the
+owner's dated confirmation (at most 7 days old) that the console's billing page shows the
+Free plan. RECAP's own caps sit below the free limits in a SQLite ledger shared by every
+process. After every response, Groq's `x-ratelimit-limit-requests` header must equal the
+free plan's daily limit (1,000); anything else stops the provider until the owner checks the
+billing page again. A 429 gets one short retry, then the run is deferred; RECAP never
+switches provider. On 2026-10-21 every live Groq response carried `1000`.
+
+**Record and replay.** Providers send requests through a transport. The live transport
+sends one HTTP request (no SDK, so no hidden retries); the recording transport also appends
+the exchange (without the key, with the home folder scrubbed) to a JSONL file; the replay
+transport answers from a recording, matching each request by a fingerprint that ignores
+run-specific random IDs. When a recorded answer cites evidence, its run prefix is moved to
+the current run's. A request the recording lacks raises `ReplayMismatch`, never a guess.
+
+**Inputs → outputs (the new pieces).**
+
+- `protocol.step_schema(request)` → the JSON schema for one step;
+  `protocol.parse_json_step(text, request)` / `parse_tool_step(calls, text, request)` →
+  `Parsed(decision | None, kind, notes, problem)`.
+- `HttpLLMProvider.next_action(request)` → an `InvestigationDecision` with exact `Usage`
+  (`actual_input_tokens`, `actual_output_tokens`, `model_requests`) and its `ModelCall`s.
+- `FreeTierGuard.preflight(model, tokens)` → a ledger reservation ID, or `ConfigError` /
+  `QuotaExhausted` / `MinuteCapReached` before anything is sent;
+  `after_response(...)` → the rate-limit snapshot, or a stop.
+- `ReplayTransport.request(method, path, body)` → the recorded `HttpExchange`, or
+  `ReplayMismatch`.
+- `provider_status(settings, ledger)` → every provider's readiness for `GET /providers`.
+
+**What really ran (2026-10-21, `bad-deployment`, simulated environment).**
+
+| Run | Model | Requests | Tokens in / out (reported) | Outcome |
+|---|---|---|---|---|
+| Local, first | `qwen3:8b` (Ollama, 16 GB M3) | 10 | 26,911 / 1,580 | RESOLVED in ~4 min: round 1 claimed a bad deploy without reading logs, the verifier said insufficient, two parallel specialists found it |
+| Local, fixture | `qwen3:8b` | 7 | 18,331 / 809 | RESOLVED in ~2.4 min in one round (now `fixtures/recordings/`) |
+| Groq | `gpt-oss-120b` (Free) | 8 (2 cut off) | 15,365 / 1,685 | RESOLVED after an escalation; showed that a 1,024-token answer limit cuts a reasoning model off |
+| Groq, final settings | `gpt-oss-120b` (Free) | 5 | 13,368 / 1,354 | FAILED safely: it diagnosed after 2 tool steps without the service's logs, twice; the verifier refused and handed over to a human |
+
+All four used the simulation auto-approver (development runs). Every fix was proposed by
+the model, judged by the policy and verified by the oracle. Small samples: these show the
+path works, not how often a model is right.
+
+**Tradeoffs.**
+
+- Real runs are slow: about 15-50 s per local decision, and on the free plan about two large
+  requests a minute (RECAP paces itself rather than exceed its cap).
+- Model behaviour is not reproducible run to run (each prompt holds a random incident ID);
+  only a replay is exact, and a changed prompt needs a re-recorded fixture.
+- The free-plan check is the owner's word plus a header comparison; the first response after
+  an upgrade is the one that would reveal it.
+- `gpt-oss-120b` tends to conclude early; telling models what evidence each mechanism needs
+  is an M3 follow-up (not done here, to avoid tuning prompts to the checker).
+
+**Reproduce it.**
+
+```bash
+.venv/bin/python -m pytest tests/unit/test_protocol.py tests/unit/test_ollama_provider.py \
+    tests/unit/test_free_hosted_provider.py tests/unit/test_quota.py tests/unit/test_replay.py
+.venv/bin/python -m pytest tests/e2e/test_llm_provider_runs.py tests/e2e/test_recorded_model_runs.py
+RECAP_PROVIDER=replay .venv/bin/python scripts/demo.py --scenario bad-deployment --no-memory --approve auto
+OLLAMA_NO_CLOUD=1 ollama serve &   # then a real local run (about 2-4 minutes):
+.venv/bin/python scripts/demo.py --scenario bad-deployment --provider ollama --no-memory
+```
+
+**Interview question:** "How do you let an LLM drive an incident response without letting it
+do something stupid or expensive?"
+
+**Model answer:** "I treat its output as untrusted data and narrow it three times. First,
+constrained generation: for each step I build a JSON schema from my own tool catalog, so the
+tool name, the service and every cited evidence ID are enums: the model literally cannot
+name a tool that isn't offered or invent an evidence ID. Second, I parse and check the
+answer again and drop anything unlisted or repeated, with a note in the trace. Third, the
+model only proposes: a policy gateway judges every call, a verifier checks every claim
+against all the evidence, a human approves every fix, and an independent oracle decides
+whether it worked. On cost: hosted calls need an explicit opt-in, an allowlisted model and a
+dated owner confirmation of the free plan, and every response's rate-limit header is
+compared with the free plan's; a mismatch stops the provider. When the free quota runs out
+the run is deferred, never moved to another provider. In the real runs, the verifier caught
+a model concluding too early twice; once a second round fixed it, once it handed over to a
+human."
+
+**Interview question:** "How do you test an LLM agent in CI without calling the model?"
+
+**Model answer:** "Two ways. For the plumbing, a local protocol fixture: a fake Ollama or Groq
+server behind httpx's MockTransport, so the real HTTP, parsing and safety code runs. For the
+model's actual behaviour, record and replay: every live exchange is recorded at the HTTP level
+without the key, and a replay provider answers from the recording through the same code,
+matching requests by a fingerprint that ignores random run IDs. CI replays a real qwen3:8b
+incident end to end. A replay is always labeled as one, adds no model usage, and fails loudly
+if the prompts changed since the recording."

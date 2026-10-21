@@ -4,7 +4,9 @@ This page records what was actually measured, milestone by milestone. Every numb
 comes from a command that was run; nothing is projected. It is updated at the end of each
 milestone of the zero-cost next phase (M0 to M6).
 
-**Cost so far: $0.** No LLM API request of any kind has been sent in this phase.
+**Cost so far: $0.** Since M2, real model requests have been sent, and every one was free:
+local inference with Ollama on this machine, and Groq's Free plan, whose rate-limit header
+showed the free plan's limit on every response. No paid API was called.
 
 ---
 
@@ -232,12 +234,109 @@ Scripted provider only (`deterministic-scripted-policy`, not an LLM), simulated 
 only. **No LLM request of any kind was sent, no model was downloaded, nothing was provisioned.
 Cost: $0.**
 
-### Still open (blockers for later milestones)
+### Still open after M1 (blockers for later milestones)
 
-- **M2 (real LLM inference)** needs one owner decision: a verified-free hosted provider key
-  (proposed: Groq Free plan, see [provider-options.md](provider-options.md)), and/or approval to
-  download a local model (proposed: `qwen3:8b`, 5.2 GB; `llama3.2:3b` is already installed but
-  is too small to diagnose reliably).
+- **M2 (real LLM inference)** needed one owner decision: done on 2026-10-21 (see M2 below).
 - **M5 (local Kubernetes)**: Docker, Kind and kubectl are not installed on this machine.
 - The threat model lists what a real cluster still needs:
   [Before a real Kubernetes target](threat-model.md#before-a-real-kubernetes-target).
+
+---
+
+## M2: zero-cost real model providers (2026-10-21)
+
+**Owner decisions:** approved the 5.2 GB `qwen3:8b` download, and provided a Groq key for a
+Free-plan account (no payment method). The key was stored only in a private file outside
+the repository (`~/.config/recap/groq.env`, mode 600); because it was pasted into a chat,
+rotating it after M2 is recommended. Live hosted calls ran only with
+`RECAP_ALLOW_LIVE_FREE_INFERENCE=1` set for that one process.
+
+### What was built
+
+| Piece | Where | ADR |
+|---|---|---|
+| Step protocol prompts-v4: per-request JSON schemas from the trusted catalog, parsing, one corrective retry | `recap/providers/protocol.py`, `http_llm.py` | [0016](decisions/0016-zero-cost-llm-providers-and-a-constrained-step-protocol.md) |
+| Local provider (Ollama, `qwen3:8b`, native tool calls) | `recap/providers/ollama_provider.py` | 0016 |
+| Free hosted provider (Groq Free, `gpt-oss-120b`, strict JSON) | `recap/providers/openai_compatible.py` | 0016 |
+| Free-tier guard, usage ledger, tripwire, `QUOTA_EXHAUSTED` | `recap/providers/quota.py`, `recap/core/lifecycle.py`, `controller.py` | [0017](decisions/0017-fail-closed-free-tier-guard-and-a-deferred-state.md) |
+| Recording and replay (`replay` provider, committed real-model fixture) | `recap/providers/transport.py`, `fixtures/recordings/` | [0018](decisions/0018-record-every-model-exchange-and-replay-in-ci.md) |
+| `ModelCall` / `llm.call` events, `Usage.model_requests`, `ProviderInfo.origin` | `recap/core/models.py`, `harness/loop.py` | 0016 |
+| `GET /providers`, run-origin badges, LLM lines in the event feed, provider table, deferred state | `recap/providers/catalog.py`, `apps/api/main.py`, `apps/dashboard/src/` | — |
+| `scripts/providers.py` (readiness, usage, clear-stop), `scripts/export_run_trace.py` (sanitized trace), `demo.py --provider` | `scripts/` | — |
+| Paid Claude adapter: now also needs `RECAP_ALLOW_PAID_LLM=1` | `recap/providers/factory.py` | 0016 |
+
+### Measured on this machine (MacBook Air 15", M3, 16 GB; Ollama 0.34.4)
+
+- `qwen3:8b` (Q4_K_M): prompt evaluation about 155-165 tokens/s, generation about 14
+  tokens/s, first model load 23 s; with `num_ctx` 12,288 it ran 100% on the GPU (6.8 GB).
+- One investigation step, same prompt (about 2,700 tokens): JSON-schema answer 75 s and
+  790 output tokens; JSON with `think: true` 65 s (905 output tokens, about 400 of them
+  thinking, prompt cached); native tool call about 16 s and 57 output tokens. Hence `tools`
+  mode for Ollama's investigation steps, JSON for proposals.
+- With V1's prompts (prompts-v3) the model called the bad release a `dependency_failure`
+  (also with thinking on); with prompts-v4 it gave `bad_deployment`, `checkout`, `v2.4.1`,
+  citing four real evidence IDs. A JSON proposal once looped on its citations until the
+  output limit (now capped with `maxItems`).
+
+### Real model runs (simulated `bad-deployment`, no memory, development runs)
+
+All four used the **simulation auto-approver**; the human-approved deliverable run is listed
+under "Still open". Every fix was proposed by the model, judged by the policy, executed with a
+signed capability and verified by the oracle.
+
+| Run | Model | Requests | Tokens in / out (server-reported) | Outcome |
+|---|---|---|---|---|
+| local 1 | `qwen3:8b` | 10 (1 unusable, retried) | 26,911 / 1,580 | RESOLVED, 246 s: round 1 claimed a bad deploy without reading logs (verifier: insufficient), round 2 parallel specialists found it; rollback to `v2.4.0` |
+| local 2 (now the CI fixture) | `qwen3:8b` | 7 | 18,331 / 809 | RESOLVED, 143 s, one round: health, deployments, events, logs, 2 metrics, then the diagnosis and the rollback |
+| Groq 1 | `gpt-oss-120b` | 3 | 7,083 / 699 | QUOTA_EXHAUSTED (deferred) at 122 s: reserving the full answer limit let two parallel agents starve RECAP's own per-minute cap (fixed: reserve a typical answer, pace up to 150 s) |
+| Groq 2 | `gpt-oss-120b` | 8 (2 cut off: HTTP 400 `json_validate_failed`) | 15,365 / 1,685 | RESOLVED, 246 s, after an escalation; the cut-offs showed a 1,024-token limit is too small for a reasoning model (fixed: 2,048) |
+| Groq 3 (final settings) | `gpt-oss-120b` | 5 | 13,368 / 1,354 | FAILED safely, 182 s: it diagnosed after 2 tool steps without the service's logs, in both rounds; the verifier refused and handed over to a human |
+
+- **Free plan, checked on every response:** all 14 successful Groq responses (and the 2
+  schema failures) carried `x-ratelimit-limit-requests: 1000`, the Free plan's daily limit;
+  `x-ratelimit-remaining-requests` counted down (989 → 985 in Groq 3).
+- **Replay:** local 1 replayed offline 3 times (about 1.2 s each, RESOLVED, 0 model
+  requests); local 2 is `fixtures/recordings/ollama-qwen3-8b-bad-deployment.jsonl`, replayed
+  by `tests/e2e/test_recorded_model_runs.py`.
+- Small sample, one scenario: these runs show the real path works and fails safely; they say
+  nothing yet about how often a model is right.
+
+### Test results after M2
+
+| Check | Result |
+|---|---|
+| `python -m pytest` | **1082 passed, 1 skipped** (the optional OpenTelemetry test), 68 s |
+| By folder | unit 935 · integration 27 · adversarial 62 · e2e 59 |
+| `python -m pytest -m e2e` | **54** cases (51 functions), up from 48 |
+| `ruff check .`, `ruff format --check .` | clean |
+| Dashboard | 17 tests pass (`npm test`); strict build passes |
+| `scripts/smoke_test.py` (scripted) | RESOLVED, 67 trace events (unchanged) |
+
+New tests: `tests/unit/test_protocol.py`, `test_ollama_provider.py`,
+`test_free_hosted_provider.py`, `test_quota.py`, `test_replay.py`, `test_provider_catalog.py`
+(local protocol fixtures: fake Ollama and Groq servers behind httpx's mock transport, so the
+real HTTP code runs); `tests/e2e/test_llm_provider_runs.py` (model-driven runs through the
+whole system: operator-approved resolution, no oracle or label data in any byte sent to the
+model after a failed fix, replay, a deferred quota run with the key in no file);
+`tests/e2e/test_recorded_model_runs.py` (the real `qwen3:8b` run, offline).
+
+### What genuinely ran
+
+- **Real LLM inference:** `qwen3:8b` locally (25 requests in all, including 8 direct
+  measurement requests) and `gpt-oss-120b` on Groq's Free plan (16 chat requests, about
+  39,500 reported tokens, plus 4 model-list metadata requests). **Charges: $0.**
+- **Replays** of recorded real runs (no model called).
+- **Simulated environment only.** Nothing was provisioned; no paid API was called.
+
+### Still open (M2 blockers and follow-ups)
+
+- **Human-approved deliverable run:** the M2 deliverable asks for a run that a human
+  approves. The four runs above used the simulation auto-approver. The owner runs:
+  `python scripts/demo.py --scenario bad-deployment --provider ollama --no-memory` and
+  answers `y`; `scripts/export_run_trace.py <run_id> evals/live/<name>` then writes the
+  sanitized trace.
+- `gpt-oss-120b` tends to diagnose before reading the service's logs (twice in Groq 3).
+  Telling models what evidence each mechanism needs, generically, is an M3 follow-up.
+- Real models have not been red-teamed (prompt injection against `qwen3:8b`/`gpt-oss-120b`).
+- Model-level runs are not reproducible (random IDs in the prompt); only replays are.
+- **M5:** Docker, Kind and kubectl are still not installed.
