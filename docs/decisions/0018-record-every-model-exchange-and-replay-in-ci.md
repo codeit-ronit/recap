@@ -77,3 +77,17 @@ Accepted (M2, 2026-10-21). Complements
 - **Matching requests by order.** Breaks as soon as two agents run concurrently.
 - **Mocking the model in CI.** Scripted fakes test the plumbing (they are used too:
   `tests/llm_fakes.py`) but not a real model's choices.
+
+## Amended after the M2 review
+
+- **Recordings are redacted as data, then serialized.** Redacting the serialized line could
+  cut through a JSON escape when a log line said `token="..."`, leaving a recording that no
+  longer parsed; untrusted text could break replay that way. The redactor's free-text rule
+  also no longer swallows a backslash. A recording that does not parse is a `ConfigError`.
+- **Replays never count usage**, including a replayed schema failure, and make the same
+  retry choices as the live run without sleeping.
+- **A replay runs with the recorded run's limits** (`budget_overrides` from the recording's
+  settings), so every prompt says the same "step N of M".
+- **A `ReplayMismatch` in one parallel agent stops the whole run**, like a budget stop; so
+  does the free-plan tripwire (`FreeStatusLost`). A quota stop wins over an ordinary budget
+  stop whatever the agents' order, so the run is deferred.

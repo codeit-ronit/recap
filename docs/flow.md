@@ -42,7 +42,7 @@ flowchart TD
     RTR --> ORC["Orchestrator"]
     ORC --> AG["Agent harness loop (one per agent)"]
     AG -->|"ContextPacker: summaries, label-free views"| PRV["Provider: scripted policy, Ollama, Groq Free, or a replay"]
-    PRV -->|"prompts-v4 + a schema built from the trusted catalog"| LLM["Model server: Ollama on loopback, or Groq Free behind the free-tier guard"]
+    PRV -->|"prompts-v4.1 + a schema built from the trusted catalog"| LLM["Model server: Ollama on loopback, or Groq Free behind the free-tier guard"]
     LLM -->|"answer: tool_request / hypothesis / need_more_evidence / stop"| PRV
     PRV -.->|"every exchange, without the key"| REC["Recording: data/recordings/*.jsonl"]
     PRV -->|"read tool calls"| GW["ToolGateway"]
@@ -195,25 +195,28 @@ deployments, events, the memory metric, and a rollback dry run (`propose_rollbac
   context pack, the agent's tools, its history, the step number).
 - **Code:** `HttpLLMProvider.next_action` ([recap/providers/http_llm.py](../recap/providers/http_llm.py)):
   1. **render** ([recap/providers/protocol.py](../recap/providers/protocol.py),
-     prompts-v4): a static system prompt (rules, and RECAP's failure mechanisms in generic
+     prompts-v4.1): a static system prompt (rules, and RECAP's failure mechanisms in generic
      terms), then one user message: role, incident, focus, tools, previous calls, what any
      agent already observed, the context pack (every item inside `<untrusted_data>`), what
      to return, and "step N of M" last;
   2. **constrain**: in `json` mode a JSON schema built for this request (tool names,
      services, metrics and mechanisms as enums; evidence IDs as an enum of the IDs this
      agent can see; at most 2 calls); in `tools` mode the read tools as native functions
-     plus `submit_findings`; on the last step only finishing is offered;
-  3. **check before sending**: Ollama: loopback only, the model installed and able to call
-     tools, the prompt fits `num_ctx`. Groq: the free-tier guard
+     plus `submit_findings`, the same definitions every step (the parser checks the
+     evidence IDs); on the last step only finishing is offered;
+  3. **check before sending**: Ollama: loopback only (proxy settings ignored), the model
+     installed, not served from a remote host and able to call tools, the prompt fits
+     `num_ctx`. Groq: the free-tier guard
      ([recap/providers/quota.py](../recap/providers/quota.py)): opt-in, allowlist, key,
-     the owner's dated confirmation, no stop, RECAP's caps (a full minute cap waits, a full
-     day cap defers);
+     the owner's dated confirmation, no stop on its host, RECAP's caps in the user's ledger
+     (a full minute cap waits, a full day cap defers);
   4. **send** through the transport ([recap/providers/transport.py](../recap/providers/transport.py)):
      one HTTP request, recorded to `data/recordings/` without the key (a replay answers from
      a recording instead, offline);
-  5. **check after**: the answering model must be the requested one; Groq's
-     `x-ratelimit-limit-requests` must equal the free plan's (else the provider is stopped);
-     a 429 is retried once if short, otherwise the run is deferred (QUOTA_EXHAUSTED);
+  5. **check after**: the answering model must be the requested one; on every Groq
+     response that carries it, whatever its status, `x-ratelimit-limit-requests` must equal
+     the free plan's (else the host is stopped for every RECAP process of this user); a
+     429 is retried once if short, otherwise the run is deferred (QUOTA_EXHAUSTED);
   6. **parse** the answer: `tool_request` → up to 2 read calls (unlisted tools, foreign
      arguments and repeats dropped with a note); `hypothesis` → hypotheses with allowlisted
      targets, typed `version`/`dependency` and only known evidence IDs; `need_more_evidence`
@@ -221,17 +224,19 @@ deployments, events, the memory metric, and a rollback dry run (`propose_rollbac
   7. **unusable?** send the reason back once (a corrective retry); still unusable → the
      agent finishes with no decision. Never a scripted stand-in.
 - **Output:** an `InvestigationDecision` with exact `Usage` (input and output tokens as the
-  server reported them, `model_requests`) and its `ModelCall`s → one `llm.call` event each.
+  server reported them, `model_requests`) and its `ModelCall`s → one `llm.call` event per
+  HTTP request, including a retried 429 or 5xx. If the decision fails after requests went
+  out, those requests travel with the error and are recorded before it goes on.
   Proposals (stage 6) follow the same path with a proposal schema (`final_proposal` or
   `stop`): the action must be in the catalog, on the diagnosed service, cite real evidence
   and not repeat a fix that failed.
 - **Next:** the harness runs the requested reads (stage 4, step 3), or the verifier judges
   the finding (stage 5).
 
-Measured on 2026-10-21 (bad-deployment, simulated): `qwen3:8b` locally resolved it with 7
-model requests (18,331 input / 809 output tokens) in about 2.4 minutes, in one round; a
-`gpt-oss-120b` run on Groq Free resolved it with 8 requests, every response's free-plan
-header checked. Details in [status.md](status.md).
+Measured on 2026-10-21 (bad-deployment, simulated): `qwen3:8b` locally resolved it with 8
+model requests (21,489 input / 771 output tokens, prompts-v4.1) in about 2.5 minutes, in
+one round; a `gpt-oss-120b` run on Groq Free resolved it with 8 requests, every response's
+free-plan header checked. Details in [status.md](status.md).
 
 ### Stage 5. Verify the evidence
 
@@ -376,7 +381,7 @@ flowchart LR
 | The simulated world, its action log and used capability nonces | `data/sandbox/<run_id>.db` | not served (oracle and MCP server only) | indirectly, through tool results |
 | Experience episodes | `data/memory.db` → `episodes` | `GET /memory` | Experience Memory |
 | Model exchanges (prompts and answers, no keys) | `data/recordings/<id>.jsonl`; committed replay fixtures in `fixtures/recordings/` | not served; path in the run's `versions.recording` | the `llm.call` events show each request (excerpts) |
-| LLM usage ledger and provider stops | `data/recap.db` → `llm_usage`, `provider_stops` | `GET /providers` | Architecture → Decision providers |
+| LLM usage ledger and provider stops | per user, outside every data folder: `~/.local/state/recap/llm-usage.db` (or `RECAP_USAGE_LEDGER`) → `llm_requests`, `llm_stops`, keyed by host | `GET /providers`, `scripts/providers.py usage` | Architecture → Decision providers |
 | Operator token | `data/operator-token` (mode 0600) or `RECAP_OPERATOR_TOKEN` | never | typed once into the sign-in box (kept in the tab's sessionStorage) |
 | Evaluation reports | `evals/reports/<id>/` and `evals/reports/latest/` | `GET /evals/results` | Evaluations |
 
@@ -420,7 +425,7 @@ Reproduce it:
 | Routing and concurrency | [recap/routing/router.py](../recap/routing/router.py), [recap/routing/orchestrator.py](../recap/routing/orchestrator.py) |
 | What a provider sees | [recap/core/models.py](../recap/core/models.py) (views), [recap/context/packer.py](../recap/context/packer.py), [recap/context/summaries.py](../recap/context/summaries.py), [recap/providers/prompts.py](../recap/providers/prompts.py) |
 | The scripted provider | [recap/providers/deterministic.py](../recap/providers/deterministic.py), [playbooks.py](../recap/providers/playbooks.py), [heuristics.py](../recap/providers/heuristics.py) |
-| Real model providers | [recap/providers/protocol.py](../recap/providers/protocol.py) (prompts-v4, schemas, parsing), [http_llm.py](../recap/providers/http_llm.py) (the shared loop), [ollama_provider.py](../recap/providers/ollama_provider.py), [openai_compatible.py](../recap/providers/openai_compatible.py), [factory.py](../recap/providers/factory.py) |
+| Real model providers | [recap/providers/protocol.py](../recap/providers/protocol.py) (prompts-v4.1, schemas, parsing), [http_llm.py](../recap/providers/http_llm.py) (the shared loop), [ollama_provider.py](../recap/providers/ollama_provider.py), [openai_compatible.py](../recap/providers/openai_compatible.py), [factory.py](../recap/providers/factory.py) |
 | Free-tier guard, recordings, replay | [recap/providers/quota.py](../recap/providers/quota.py), [transport.py](../recap/providers/transport.py), [catalog.py](../recap/providers/catalog.py) (`GET /providers`) |
 | Tool boundary | [recap/tools/gateway.py](../recap/tools/gateway.py), [registry.py](../recap/tools/registry.py), [actions.py](../recap/tools/actions.py), [mcp_client.py](../recap/tools/mcp_client.py), [mcp_server.py](../recap/tools/mcp_server.py) |
 | Safety | [recap/safety/policy.py](../recap/safety/policy.py), [approvals.py](../recap/safety/approvals.py), [capabilities.py](../recap/safety/capabilities.py) |

@@ -87,3 +87,29 @@ Accepted (M2, 2026-10-21). Implements the no-spend rules of the master prompt (s
 - **Retrying 429 with backoff until it works.** That drains the free quota and hides the
   limit; one bounded retry, then an honest deferral.
 - **Falling back to another provider on 429.** Could reach a paid endpoint; never.
+
+## Amended after the M2 review
+
+- **The tripwire reads every response that carries the header**, whatever its status. A
+  paid plan's 400 (`json_validate_failed`) or 429 carries the paid limit too, and a schema
+  failure may have generated billed tokens; before, only 200s were compared. A successful
+  response without the header still trips it.
+- **The ledger is per user, keyed by host.** It lives at `Paths.usage_ledger`
+  (`RECAP_USAGE_LEDGER`, default `~/.local/state/recap/llm-usage.db`), outside every data
+  folder, and counts and stops by the provider's host (`api.groq.com`), not its name in
+  `configs/providers.yaml`. Before, a stop or a daily cap held only inside one
+  `RECAP_DATA_DIR`, and renaming the provider entry escaped a stop.
+- **The stop is checked inside the reservation's transaction**, so a stop recorded by
+  another process between the checks and the request is not missed.
+- **Model traffic ignores proxy settings** (`trust_env=False`): a proxy would receive every
+  prompt and could answer as "the model", and would turn the loopback-only local model into
+  a remote one.
+- The owner's confirmation date is compared with the **local** date, the key must be
+  printable ASCII (a key pasted with quotes is refused without being echoed), and the
+  model-list request runs after checks 1-5 but is not counted against the caps (it is
+  metadata).
+- A replayed recording makes the same retry choices as the live run did (from the recorded
+  settings), without waiting.
+- **Still true:** requests already in flight when the tripwire fires (another agent, another
+  process) are not stopped by it. The owner's 7-day confirmation is what keeps the account
+  free in the first place.

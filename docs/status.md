@@ -255,7 +255,7 @@ rotating it after M2 is recommended. Live hosted calls ran only with
 
 | Piece | Where | ADR |
 |---|---|---|
-| Step protocol prompts-v4: per-request JSON schemas from the trusted catalog, parsing, one corrective retry | `recap/providers/protocol.py`, `http_llm.py` | [0016](decisions/0016-zero-cost-llm-providers-and-a-constrained-step-protocol.md) |
+| Step protocol prompts-v4 (prompts-v4.1 after the review): per-request JSON schemas from the trusted catalog, parsing, one corrective retry | `recap/providers/protocol.py`, `http_llm.py` | [0016](decisions/0016-zero-cost-llm-providers-and-a-constrained-step-protocol.md) |
 | Local provider (Ollama, `qwen3:8b`, native tool calls) | `recap/providers/ollama_provider.py` | 0016 |
 | Free hosted provider (Groq Free, `gpt-oss-120b`, strict JSON) | `recap/providers/openai_compatible.py` | 0016 |
 | Free-tier guard, usage ledger, tripwire, `QUOTA_EXHAUSTED` | `recap/providers/quota.py`, `recap/core/lifecycle.py`, `controller.py` | [0017](decisions/0017-fail-closed-free-tier-guard-and-a-deferred-state.md) |
@@ -280,14 +280,15 @@ rotating it after M2 is recommended. Live hosted calls ran only with
 
 ### Real model runs (simulated `bad-deployment`, no memory, development runs)
 
-All four used the **simulation auto-approver**; the human-approved deliverable run is listed
-under "Still open". Every fix was proposed by the model, judged by the policy, executed with a
+Every run below used the **simulation auto-approver**; the human-approved deliverable run is
+listed under "Still open". Every fix was proposed by the model, judged by the policy, executed with a
 signed capability and verified by the oracle.
 
 | Run | Model | Requests | Tokens in / out (server-reported) | Outcome |
 |---|---|---|---|---|
 | local 1 | `qwen3:8b` | 10 (1 unusable, retried) | 26,911 / 1,580 | RESOLVED, 246 s: round 1 claimed a bad deploy without reading logs (verifier: insufficient), round 2 parallel specialists found it; rollback to `v2.4.0` |
-| local 2 (now the CI fixture) | `qwen3:8b` | 7 | 18,331 / 809 | RESOLVED, 143 s, one round: health, deployments, events, logs, 2 metrics, then the diagnosis and the rollback |
+| local 2 (the first CI fixture) | `qwen3:8b` | 7 | 18,331 / 809 | RESOLVED, 143 s, one round: health, deployments, events, logs, 2 metrics, then the diagnosis and the rollback |
+| local 3 (the CI fixture since the review, prompts-v4.1) | `qwen3:8b` | 8 | 21,489 / 771 | RESOLVED, about 2.5 min, one round: health, deployments, logs, error-rate and latency metrics, events, then the diagnosis (5 evidence IDs) and the rollback |
 | Groq 1 | `gpt-oss-120b` | 3 | 7,083 / 699 | QUOTA_EXHAUSTED (deferred) at 122 s: reserving the full answer limit let two parallel agents starve RECAP's own per-minute cap (fixed: reserve a typical answer, pace up to 150 s) |
 | Groq 2 | `gpt-oss-120b` | 8 (2 cut off: HTTP 400 `json_validate_failed`) | 15,365 / 1,685 | RESOLVED, 246 s, after an escalation; the cut-offs showed a 1,024-token limit is too small for a reasoning model (fixed: 2,048) |
 | Groq 3 (final settings) | `gpt-oss-120b` | 5 | 13,368 / 1,354 | FAILED safely, 182 s: it diagnosed after 2 tool steps without the service's logs, in both rounds; the verifier refused and handed over to a human |
@@ -296,8 +297,9 @@ signed capability and verified by the oracle.
   schema failures) carried `x-ratelimit-limit-requests: 1000`, the Free plan's daily limit;
   `x-ratelimit-remaining-requests` counted down (989 → 985 in Groq 3).
 - **Replay:** local 1 replayed offline 3 times (about 1.2 s each, RESOLVED, 0 model
-  requests); local 2 is `fixtures/recordings/ollama-qwen3-8b-bad-deployment.jsonl`, replayed
-  by `tests/e2e/test_recorded_model_runs.py`.
+  requests); local 3 is `fixtures/recordings/ollama-qwen3-8b-bad-deployment.jsonl` (local 2
+  was, until prompts-v4.1 changed the requests), replayed by
+  `tests/e2e/test_recorded_model_runs.py`.
 - Small sample, one scenario: these runs show the real path works and fails safely; they say
   nothing yet about how often a model is right.
 
@@ -321,10 +323,50 @@ whole system: operator-approved resolution, no oracle or label data in any byte 
 model after a failed fix, replay, a deferred quota run with the key in no file);
 `tests/e2e/test_recorded_model_runs.py` (the real `qwen3:8b` run, offline).
 
+### Review hardening (after the M2 code)
+
+Three independent reviews (security, correctness, test quality) examined the M2 changes.
+Every confirmed finding was fixed. Each fix has a test that was checked by reverting the fix
+in a scratch copy: the test then fails on its intended assertion (52 such checks, all
+caught: 32 for the security and correctness findings, 19 for the test review's gaps, and 1
+for the stable tool definitions, added while writing these notes). One
+first attempt did not fail when its fix was reverted (httpx ignores proxies whenever a mock
+transport is given); that test now runs a real loopback "proxy" through the production code.
+The numbers in this section replace the M2 test numbers above. Details per threat:
+[threat-model.md](threat-model.md#the-m2-review-hardening-the-model-path).
+
+| Area | What the review found | What changed | Tests |
+|---|---|---|---|
+| Free-plan tripwire | Only successful responses were compared, but a paid plan's 400 or 429 carries the paid limit too (and the corrective retry was then sent) | Every response that carries the header is compared, whatever its status | `test_a_paid_plan_header_on_an_error_response_trips_the_wire`, `test_a_429_from_a_paid_plan_trips_the_wire_before_any_retry` |
+| Usage ledger and stops | A stop or a daily cap held only inside one `RECAP_DATA_DIR`; renaming the provider entry escaped a stop | One ledger per user (`~/.local/state/recap/llm-usage.db`, or `RECAP_USAGE_LEDGER`), keyed by host; the stop is re-checked inside the reservation's transaction | 4 tests in `tests/unit/test_m2_review.py` |
+| Proxies | `HTTP_PROXY` (or a system proxy) could carry local prompts to a proxy, which could answer as "the model" | Model traffic ignores proxy settings | `test_proxy_settings_never_carry_a_local_request` |
+| The record of requests | A retried 429 or 5xx, and the requests of a decision that then failed, were missing from the trace and from `model_requests` | Every HTTP request is its own `llm.call`; a failed decision's requests travel with the error and are recorded | 3 tests in `tests/unit/test_m2_review.py` (invariant I23) |
+| Labels | Configuration could pair a hosted API with the "local" origin; a red-team run hid a fired tripwire and printed $0 | The origin is fixed by the class and hosted URLs need `https://`; the red-team wrapper forwards everything and shows a RED-TEAM chip; a fired tripwire makes any cost line "cost unknown" | `test_the_origin_is_fixed_by_the_code_and_hosted_means_https`, `test_the_red_team_wrapper_hides_neither_the_tripwire_nor_itself` |
+| Model text | Terminal escape codes reached the console; corrective feedback quoted the model's own text back to it | Control characters stripped; feedback never quotes the model | `test_terminal_escape_codes_are_dropped_from_model_text`, `test_feedback_to_the_model_never_quotes_the_model` |
+| Recordings and replay | A log line with `token="..."` broke a recording; a recorded short 429 deferred the replay; a replayed failure counted as usage; a mismatch in one parallel agent let the other finish the run | Redacted as data, then serialized; replays reuse the recorded settings and budget, count no usage and never sleep; `ReplayMismatch` and `FreeStatusLost` stop the whole run; a quota stop wins over a budget stop | 6 tests in `tests/unit/test_m2_review.py` |
+| Protocol (now prompts-v4.1) | Tool definitions changed every step; a `tool_name` key could redirect a native tool call; a shared argument claimed one tool's range; a 5,000-digit number crashed parsing | Stable tool definitions; the called function decides; merged argument ranges; oversized numbers and Groq's `tool_use_failed` are unusable answers; argument names that collide with protocol fields are refused at startup | 5 tests in `tests/unit/test_m2_review.py`, `test_tool_definitions_stay_the_same_from_step_to_step` |
+| Ollama | `...-CLOUD` in other letter cases; a local name that `/api/show` reports as served from a remote host | Both refused | 2 tests in `tests/unit/test_m2_review.py` |
+| Smaller ones | A key pasted with curly quotes; the owner's confirmation compared with the UTC date instead of the local one; `GET /providers` probing any configured Ollama address (and calling it ready), or failing on an odd answer | The key is refused without being echoed; the local date; only a loopback Ollama is probed, and an odd answer is reported, not a crash | 4 tests in `tests/unit/test_m2_review.py` |
+| Test quality | 19 places where a fix could be undone with no test failing (or failing for the wrong reason): look-alike loopback hosts, the strict-schema conversion, the hosted request's allowlists, an opt-in withdrawn or a stop recorded after startup, a retry's reservation, the wait before a 5xx retry, a key the redactor cannot recognize, the recording trims, a duplicate call, a proposal's extra arguments, the prompt-fit boundary, and more | A test for each | `tests/unit/test_m2_test_review.py` (29 tests) |
+
+The replay fixture was re-recorded with prompts-v4.1 (local 3 above).
+
+Test results after the review:
+
+| Check | Command | Result |
+|---|---|---|
+| Python tests | `.venv/bin/python -m pytest` | **1150 passed, 1 skipped** in about 72 s (the skip is the optional OpenTelemetry test) |
+| By folder | `--collect-only tests/<folder>` | unit 1000 · integration 27 · adversarial 62 · e2e folder 62 · total 1,151 |
+| End-to-end | `.venv/bin/python -m pytest -m e2e` | **57** cases (53 functions) |
+| Lint and format | `ruff check .` and `ruff format --check .` | clean |
+| Dashboard tests | `cd apps/dashboard && npm test` | 19 passed, 0 failed |
+| Dashboard build (strict TypeScript) | `npm run build` | passed |
+| Smoke test | `.venv/bin/python scripts/smoke_test.py` | `RESOLVED (67 trace events, simulated environment)` (unchanged) |
+
 ### What genuinely ran
 
-- **Real LLM inference:** `qwen3:8b` locally (25 requests in all, including 8 direct
-  measurement requests) and `gpt-oss-120b` on Groq's Free plan (16 chat requests, about
+- **Real LLM inference:** `qwen3:8b` locally (33 requests in all: 25 in the three runs
+  above and 8 direct measurement requests) and `gpt-oss-120b` on Groq's Free plan (16 chat requests, about
   39,500 reported tokens, plus 4 model-list metadata requests). **Charges: $0.**
 - **Replays** of recorded real runs (no model called).
 - **Simulated environment only.** Nothing was provisioned; no paid API was called.

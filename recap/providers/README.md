@@ -34,7 +34,7 @@ how an LLM would perform.
 ## Real models (M2): how one decision works
 
 `OllamaProvider` and `FreeHostedProvider` share one loop (`http_llm.py`) and one versioned
-step protocol (`protocol.py`, **prompts-v4**). For each decision:
+step protocol (`protocol.py`, **prompts-v4.1**). For each decision:
 
 1. **Render** the request: a static system prompt (the rules, and RECAP's failure
    mechanisms in generic SRE terms), then one user message with the role, the incident, the
@@ -44,7 +44,9 @@ step protocol (`protocol.py`, **prompts-v4**). For each decision:
 2. **Constrain** the answer with a schema built for this request from RECAP's trusted
    catalog: tool names, services, metrics and mechanisms are enums, and evidence IDs are an
    enum of the IDs this agent can see. In `tools` mode the read tools are native functions
-   plus `submit_findings`. On the last step only finishing is offered.
+   plus `submit_findings`, with the same definitions every step (so a local server can
+   reuse its cache; the parser checks the evidence IDs). On the last step only finishing is
+   offered.
 3. **Send** one HTTP request through the transport (`transport.py`): no SDK, no hidden
    retries. Every exchange is recorded under `data/recordings/` without the API key.
 4. **Parse** the answer (`tool_request`, `hypothesis`, `need_more_evidence`, `stop`; for a
@@ -87,13 +89,20 @@ Nothing is sent, not even the model-list check, unless every one of these holds
 3. `GROQ_API_KEY` is set in the environment (keys are never read from files);
 4. `RECAP_GROQ_FREE_PLAN_CONFIRMED_ON=YYYY-MM-DD`: the date the owner checked the Groq
    console's billing page and saw the Free plan, at most 7 days ago;
-5. the provider was not stopped by the tripwire;
-6. RECAP's own caps have room (below the free plan's 30 RPM / 1K RPD / 8K TPM / 200K TPD).
+5. the provider's host was not stopped by the tripwire;
+6. RECAP's own caps have room (below the free plan's 30 RPM / 1K RPD / 8K TPM / 200K TPD),
+   re-checked with the stop inside the reservation's transaction.
 
-After every response, `x-ratelimit-limit-requests` must equal the free plan's daily limit
-(1,000); anything else, a 402 or `blocked_api_access` stops the provider until
+After every response that carries it, whatever its status, `x-ratelimit-limit-requests`
+must equal the free plan's daily limit (1,000); anything else, a successful response
+without it, a 402 or `blocked_api_access` stops the provider's host until
 `python scripts/providers.py clear-stop groq`. A 429 is retried once if `retry-after` is
 short; otherwise the run ends `QUOTA_EXHAUSTED` (deferred). It never switches provider.
+
+The usage ledger (caps and stops) is per USER, outside every data folder
+(`~/.local/state/recap/llm-usage.db`, or `RECAP_USAGE_LEDGER`), and keyed by host
+(`api.groq.com`): a stop holds for the CLI, the API and any `RECAP_DATA_DIR`, and renaming
+the provider entry cannot escape it. Model traffic ignores proxy settings.
 
 ```bash
 export GROQ_API_KEY=...                                    # your key, in your shell only
@@ -107,7 +116,8 @@ RECAP_ALLOW_LIVE_FREE_INFERENCE=1 python scripts/demo.py --scenario bad-deployme
 `RECAP_REPLAY_RECORDING`) rebuilds the recorded provider and answers each request from the
 recording, matched by a fingerprint that ignores run-specific random IDs. A request that is
 not in the recording stops the run with `ReplayMismatch`. CI replays
-`fixtures/recordings/ollama-qwen3-8b-bad-deployment.jsonl` (ADR 0018).
+`fixtures/recordings/ollama-qwen3-8b-bad-deployment.jsonl` (ADR 0018), with the recorded
+run's limits and retry choices; every HTTP request (a retried 429 too) is its own `llm.call`.
 
 ## The optional Claude adapter (`anthropic`): paid, disabled
 
@@ -128,7 +138,7 @@ curl -s localhost:8000/providers         # the same, from the API (keys: present
 | File | Purpose |
 |---|---|
 | `factory.py` | `create_provider(name, settings, ...)`: builds providers from `configs/providers.yaml`; recordings; the paid opt-in |
-| `protocol.py` | prompts-v4: the step protocol's text, per-request schemas and the parser |
+| `protocol.py` | prompts-v4.1: the step protocol's text, per-request schemas and the parser |
 | `http_llm.py` | the shared decision loop: render, send, parse, one corrective retry, `ModelCall`s |
 | `ollama_provider.py` | the local provider |
 | `openai_compatible.py` | the free hosted provider (Groq) |

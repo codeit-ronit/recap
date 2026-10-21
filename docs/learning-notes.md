@@ -4305,7 +4305,7 @@ reconciliation step would be the next thing to build."
 **What changed, in one paragraph.** M2 put real language models behind RECAP's unchanged
 `LLMProvider` interface without spending anything. A local `qwen3:8b` (5.2 GB, through
 Ollama) and Groq's free-plan `gpt-oss-120b` are spoken to over plain HTTP through one
-versioned step protocol (prompts-v4). For each request RECAP builds a JSON schema from its
+versioned step protocol (prompts-v4; prompts-v4.1 after the review below). For each request RECAP builds a JSON schema from its
 own trusted catalog, so the model can only name listed tools, allowlisted services and
 evidence IDs it can see. A fail-closed guard keeps the hosted plan free (or stops), a new
 `QUOTA_EXHAUSTED` state defers a run when a free quota runs out, and every model exchange is
@@ -4344,9 +4344,10 @@ A model's answer is untrusted data, like a log line. RECAP narrows it three time
 **How "$0" is enforced, not hoped for.** Before every hosted request: an explicit
 per-process opt-in, an exact model allowlist, a key from the environment only, and the
 owner's dated confirmation (at most 7 days old) that the console's billing page shows the
-Free plan. RECAP's own caps sit below the free limits in a SQLite ledger shared by every
-process. After every response, Groq's `x-ratelimit-limit-requests` header must equal the
-free plan's daily limit (1,000); anything else stops the provider until the owner checks the
+Free plan. RECAP's own caps sit below the free limits in one SQLite ledger per user, shared
+by every RECAP process and keyed by the provider's host. After every response that carries
+it (an error response too), Groq's `x-ratelimit-limit-requests` header must equal the free
+plan's daily limit (1,000); anything else stops the provider until the owner checks the
 billing page again. A 429 gets one short retry, then the run is deferred; RECAP never
 switches provider. On 2026-10-21 every live Groq response carried `1000`.
 
@@ -4376,11 +4377,12 @@ the current run's. A request the recording lacks raises `ReplayMismatch`, never 
 | Run | Model | Requests | Tokens in / out (reported) | Outcome |
 |---|---|---|---|---|
 | Local, first | `qwen3:8b` (Ollama, 16 GB M3) | 10 | 26,911 / 1,580 | RESOLVED in ~4 min: round 1 claimed a bad deploy without reading logs, the verifier said insufficient, two parallel specialists found it |
-| Local, fixture | `qwen3:8b` | 7 | 18,331 / 809 | RESOLVED in ~2.4 min in one round (now `fixtures/recordings/`) |
+| Local, second | `qwen3:8b` | 7 | 18,331 / 809 | RESOLVED in ~2.4 min in one round (the first CI fixture) |
+| Local, fixture (prompts-v4.1) | `qwen3:8b` | 8 | 21,489 / 771 | RESOLVED in ~2.5 min in one round (now `fixtures/recordings/`) |
 | Groq | `gpt-oss-120b` (Free) | 8 (2 cut off) | 15,365 / 1,685 | RESOLVED after an escalation; showed that a 1,024-token answer limit cuts a reasoning model off |
 | Groq, final settings | `gpt-oss-120b` (Free) | 5 | 13,368 / 1,354 | FAILED safely: it diagnosed after 2 tool steps without the service's logs, twice; the verifier refused and handed over to a human |
 
-All four used the simulation auto-approver (development runs). Every fix was proposed by
+Every run used the simulation auto-approver (development runs). Every fix was proposed by
 the model, judged by the policy and verified by the oracle. Small samples: these show the
 path works, not how often a model is right.
 
@@ -4432,3 +4434,78 @@ without the key, and a replay provider answers from the recording through the sa
 matching requests by a fingerprint that ignores random run IDs. CI replays a real qwen3:8b
 incident end to end. A replay is always labeled as one, adds no model usage, and fails loudly
 if the prompts changed since the recording."
+
+### M2 review — Hardening the model path
+
+**What changed, in one paragraph.** After M2, three independent reviews (security,
+correctness, test quality) examined the new model path. The most serious findings were about
+money and the record. The free-plan tripwire read only successful responses, but a paid
+plan's error responses carry the paid limit too. The usage ledger lived in the data folder,
+so a second folder (or a renamed provider entry) escaped a stop. A proxy setting could carry
+local prompts off the machine. And the requests most likely to cost something (a retried 429,
+a decision that failed after sending) were missing from the trace. Smaller ones: a
+configuration could label a hosted model "local", a red-team run hid a fired tripwire,
+terminal escape codes in model text reached the console, a secret-shaped log line broke a
+recording, and replays could drift from the live run. All are fixed, with prompts-v4.1 and a
+re-recorded fixture. Each fix's test was checked by reverting the fix (52 checks, all caught).
+Details: [status.md](status.md#review-hardening-after-the-m2-code) and the "Amended after
+the M2 review" sections of ADRs
+[0016](decisions/0016-zero-cost-llm-providers-and-a-constrained-step-protocol.md#amended-after-the-m2-review),
+[0017](decisions/0017-fail-closed-free-tier-guard-and-a-deferred-state.md#amended-after-the-m2-review) and
+[0018](decisions/0018-record-every-model-exchange-and-replay-in-ci.md#amended-after-the-m2-review).
+
+**The idea most worth understanding: count at the side effect, not at success.** M2 created
+a `ModelCall` when a decision succeeded. But a request is sent (and may be billed) whether or
+not the decision that sent it succeeds. Now every HTTP exchange is appended to a log the
+moment it returns, before any retry or error. When a decision fails after requests went out,
+`attach_model_calls(exc, calls, usage)` puts them on the exception, and the harness and the
+controller record them (`model_calls_of(exc)`) before the error goes on. The same rule holds
+for the guard: its state (caps, stops) must live where every sender sees it. That means one
+ledger per user, keyed by the host that would bill, not by a folder or a name in a file. The
+stop is checked inside the same transaction that reserves the request.
+
+**A test that cannot see the bug.** The first proxy test passed even with the fix reverted.
+httpx ignores proxy settings whenever a custom transport is given, and the test gave it a
+mock transport. So the test never ran the code path where the bug lived. It now starts a
+real loopback "proxy" and uses the production transport, and it fails when the fix is
+reverted. The general lesson: a fake can hide exactly the behaviour under test, and that is
+why every fix here was checked by reverting it.
+
+**Don't hand the model its own words back.** The corrective retry used to quote the
+problem, and the problem could contain the model's text (for example a planted tool name
+from a log line it read). Now feedback states the rule instead ("each must name a listed
+tool, give its required arguments, and not repeat a call already observed"). Model text
+also loses control characters before it is stored or printed, so `\x1b[8m` cannot hide text
+in an operator's terminal.
+
+**Inputs → outputs (the new pieces).**
+
+- `attach_model_calls(exc, calls, usage)` → the exception carries the requests it sent;
+  `model_calls_of(exc)` → `(calls, usage or None)`.
+- `Paths.usage_ledger` → `RECAP_USAGE_LEDGER`, or `~/.local/state/recap/llm-usage.db`;
+  `ledger_scope(base_url)` → the host that counts (`api.groq.com`, `127.0.0.1:11434`).
+- `FreeTierGuard.after_response(...)` → runs on every response with the header, whatever
+  its status; a mismatch stops the host for every RECAP process of this user.
+- `LiveTransport` → `httpx.AsyncClient(trust_env=False)`: no proxies for model traffic.
+
+**Reproduce it.**
+
+```bash
+.venv/bin/python -m pytest                         # 1150 passed, 1 skipped
+.venv/bin/python -m pytest tests/unit/test_m2_review.py tests/unit/test_m2_test_review.py
+.venv/bin/python scripts/providers.py usage        # the per-user ledger: requests and tokens by host
+```
+
+**Interview question:** "Your guard says a hosted model costs $0. How do you know nothing
+gets around it?"
+
+**Model answer:** "I look for every way a request could leave without the guard seeing it,
+or the guard could forget what it saw. Before sending: an explicit opt-in, an allowlisted
+model, and the owner's dated confirmation of the free plan. The caps and stops live in one
+ledger per user, keyed by the host that would bill, so another process, another data folder
+or a renamed config entry can't escape them. The stop is checked inside the same transaction
+that reserves the request. After sending, the plan's rate-limit header is compared on every
+response, including errors, because a paid plan's 429 says it's paid too. Every request is
+recorded even when its decision fails. Each of those has a test I've seen fail with the fix
+reverted. What's left is stated, not hidden: the first response after a plan upgrade is the
+one that reveals it, and requests already in flight aren't recalled."

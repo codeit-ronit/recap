@@ -113,3 +113,30 @@ recordings and replay are [ADR 0018](0018-record-every-model-exchange-and-replay
   validity while generating, which matters most for small models.
 - **Falling back to the scripted policy when a model fails.** That would label scripted
   decisions as model reasoning; the run fails or escalates instead.
+
+## Amended after the M2 review
+
+Two independent reviews (security, correctness) of the M2 code changed these points; each
+fix has a test that fails when the fix is reverted (`tests/unit/test_m2_review.py`).
+
+- **Every HTTP request is a ModelCall, including failed ones.** A subclass now appends every
+  exchange to a log before it retries or raises: a retried 429 or 5xx is its own
+  `llm.call`, and when a decision fails after requests went out (a refusal, a quota stop, the
+  tripwire), they are attached to the exception (`attach_model_calls`) and the harness and
+  controller record them before the error goes on. Before, the request most likely to have
+  cost something was exactly the one missing from the trace and from `model_requests`.
+- **The origin is fixed by the code, not the configuration:** `OllamaProvider` is
+  `local_llm` and `FreeHostedProvider` is `free_hosted_llm`; the config validator refuses any
+  other pairing, and a hosted `base_url` must use `https://`.
+- **prompts-v4.1:** tools-mode definitions no longer list the step's evidence IDs (servers do
+  not enforce tool-argument schemas, the IDs are in the prompt, and identical definitions let
+  a local server cache the start of the prompt); feedback sent back to the model never quotes
+  the model's own text; model text loses control characters (terminal escape codes); an
+  oversized number is an unusable answer, not a crash; the function the model called decides
+  the tool, never a `tool_name` key inside its arguments; a shared argument (`limit`) no
+  longer claims one tool's range; a catalog whose argument names collide with the protocol's
+  fields is refused at startup.
+- **Ollama:** model names ending in "cloud" are refused in any case, and so is a local name
+  that `/api/show` reports as served from a remote host.
+- The committed replay fixture was re-recorded with prompts-v4.1 (8 requests, 21,489 / 771
+  tokens, RESOLVED in one round).
