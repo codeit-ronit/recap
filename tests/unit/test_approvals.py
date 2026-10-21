@@ -314,7 +314,7 @@ async def test_console_channel_strips_control_characters_and_handles_eof(
 async def test_the_real_prompt_rejects_unread_without_a_terminal(
     store: ApprovalStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Piped input is not a person: "console-user" must always mean someone at a terminal."""
+    """Piped input is not a terminal: "console-user" must always mean an answer typed on one."""
     piped = io.StringIO("y\n")  # e.g. `yes | python scripts/demo.py --approve ask`
     monkeypatch.setattr(sys, "stdin", piped)
     request = store.create_request(make_proposal(), run_id="run-1", ttl_seconds=900)

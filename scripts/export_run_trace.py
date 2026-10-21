@@ -486,7 +486,7 @@ def _usage(
         f"- {u.model_requests} model requests for {u.steps} agent decisions · {tokens} / "
         f"{u.actual_output_tokens or 0:,} output tokens, as the server reported them",
         f"- {tool_calls(u.tool_calls, events, approved)}",
-        f"- Cost: {_md(str(cost))}",
+        f"- Cost, as the run recorded it: {_md(str(cost))}",
         "",
     ]
 
@@ -528,11 +528,17 @@ def _scope(
         )
     if recording:
         settings = recording[0].get("settings") or {}
+        effort = settings.get("reasoning_effort")
+        reasoning = (
+            f"reasoning effort {effort}"
+            if effort
+            else f"thinking {'on' if settings.get('think') else 'off'}"
+        )
+        window = settings.get("context_tokens")
         lines.append(
             f"- Sampling: temperature {settings.get('temperature')}, seed {settings.get('seed')}, "
-            f"thinking {'on' if settings.get('think') else 'off'}, at most "
-            f"{settings.get('max_output_tokens')} output tokens per answer, context window "
-            f"{settings.get('context_tokens')} tokens."
+            f"{reasoning}, at most {settings.get('max_output_tokens')} output tokens per answer, "
+            f"context window {f'{window} tokens' if window else 'not set'}."
         )
         offered = _proposal_actions(recording)
         if offered:
@@ -541,11 +547,18 @@ def _scope(
                 f"{', '.join(_code(a) for a in offered)}, a listed service, and evidence IDs "
                 "the run had seen."
             )
-        lines.append(
+        replay = (
             "- The recording replays offline with the same RECAP code and prompts "
             f"({_code(str(record.versions.get('prompt_version')))}); after a prompt change a "
             "replay stops with ReplayMismatch instead of guessing."
         )
+        if _had_parallel_round(events):
+            replay += (
+                " This run had a parallel round: its specialists' prompts include what every "
+                "agent had already observed, so a replay depends on the order they ran in and "
+                "may stop with ReplayMismatch."
+            )
+        lines.append(replay)
     waits = [
         wait
         for p in record.proposals
@@ -629,6 +642,11 @@ def _error_rates(record: RunRecord) -> str:
     if "error_rate" not in before or "error_rate" not in after:
         return ""
     return f"; {_code(target)} error rate {before['error_rate']} → {after['error_rate']}"
+
+
+def _had_parallel_round(events: list[TraceEvent]) -> bool:
+    """True if the router ran agents side by side in some round."""
+    return any(e.category == C.ROUTING and e.payload.get("mode") == "parallel" for e in events)
 
 
 def _is_chat(exchange: dict[str, Any]) -> bool:

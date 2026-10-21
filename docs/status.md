@@ -280,8 +280,9 @@ rotating it after M2 is recommended. Live hosted calls ran only with
 
 ### Real model runs (simulated `bad-deployment`, no memory)
 
-Local 4 and local 6 were approved **by a person at the terminal** (local 6 is the M2
-deliverable; both are exported in [evals/live/](../evals/live/README.md)). Every other run used
+Local 4 and local 6 were approved **by the owner at the terminal** (the record shows an
+interactive terminal and a human-scale wait, not who typed; local 6 is the M2 deliverable;
+both are exported in [evals/live/](../evals/live/README.md)). Every other run used
 the **simulation auto-approver**. Every fix was proposed by the model, judged by the policy,
 executed with a signed capability and verified by the oracle.
 
@@ -290,11 +291,11 @@ executed with a signed capability and verified by the oracle.
 | local 1 | `qwen3:8b` | 10 (1 unusable, retried) | 26,911 / 1,580 | RESOLVED, 246 s: round 1 claimed a bad deploy without reading logs (verifier: insufficient), round 2 parallel specialists found it; rollback to `v2.4.0` |
 | local 2 (the first CI fixture) | `qwen3:8b` | 7 | 18,331 / 809 | RESOLVED, 143 s, one round: health, deployments, events, logs, 2 metrics, then the diagnosis and the rollback |
 | local 3 (the CI fixture after the M2 code review, prompts-v4.1) | `qwen3:8b` | 8 | 21,489 / 771 | RESOLVED, about 2.5 min, one round: health, deployments, logs, error-rate and latency metrics, events, then the diagnosis (5 evidence IDs) and the rollback |
-| local 4 (**human-approved**, prompts-v4.1) | `qwen3:8b` | 7 | 18,690 / 809 | RESOLVED, 188 s, 53 s of it waiting for the person: the same six reads as local 3, a diagnosis citing 5 evidence IDs, a rollback to `v2.4.0` approved at the terminal. Its prompts' schema examples matched this scenario's answer (see below) |
+| local 4 (**human-approved**, prompts-v4.1) | `qwen3:8b` | 7 | 18,690 / 809 | RESOLVED, 188 s, 53 s of it waiting for the approval: the same six reads as local 3, a diagnosis citing 5 evidence IDs, a rollback to `v2.4.0` approved at the terminal. Its prompts' schema examples matched this scenario's answer (see below) |
 | local 5 (the CI fixture since prompts-v4.2) | `qwen3:8b` | 5 | 12,891 / 744 | RESOLVED, about 2 min, one round: health and the error-rate metric, deployments and events, logs; a diagnosis citing 4 evidence IDs; rollback to `v2.4.0` |
-| local 6 (**human-approved, the M2 deliverable**, prompts-v4.2) | `qwen3:8b` | 5 | 12,834 / 724 | RESOLVED, 282 s, 176 s of it waiting for the person: the same five reads as local 5, a diagnosis citing 4 evidence IDs, a rollback to `v2.4.0` approved at an interactive terminal; the oracle saw checkout's error rate fall from 0.32 to 0.0 |
+| local 6 (**human-approved, the M2 deliverable**, prompts-v4.2) | `qwen3:8b` | 5 | 12,834 / 724 | RESOLVED, 282 s, 176 s of it waiting for the approval: the same five reads as local 5, a diagnosis citing 4 evidence IDs, a rollback to `v2.4.0` approved at an interactive terminal; the oracle saw checkout's error rate fall from 0.32 to 0.0 |
 | Groq 1 | `gpt-oss-120b` | 3 | 7,083 / 699 | QUOTA_EXHAUSTED (deferred) at 122 s: reserving the full answer limit let two parallel agents starve RECAP's own per-minute cap (fixed: reserve a typical answer, pace up to 150 s) |
-| Groq 2 | `gpt-oss-120b` | 8 (2 cut off: HTTP 400 `json_validate_failed`) | 15,365 / 1,685 | RESOLVED, 246 s, after an escalation; the cut-offs showed a 1,024-token limit is too small for a reasoning model (fixed: 2,048) |
+| Groq 2 | `gpt-oss-120b` | 8 (2 rejected: HTTP 400 `json_validate_failed`) | 15,365 / 1,685 | RESOLVED, 246 s, after an escalation. Groq's strict-schema check rejected two answers: one was complete but left out two required (nullable) tool-call fields, and its retry came back empty. RECAP raised the answer limit from 1,024 to 2,048 tokens afterwards as a precaution (reasoning tokens count toward it); this run does not show the limit caused either failure |
 | Groq 3 (final settings) | `gpt-oss-120b` | 5 | 13,368 / 1,354 | FAILED safely, 182 s: it diagnosed after 2 tool steps without the service's logs, in both rounds; the verifier refused and handed over to a human |
 
 - **Free plan, checked on every response:** all 14 successful Groq responses (and the 2
@@ -415,7 +416,8 @@ to it. Six independent reviewers then checked it and its export (read-only, on c
 
 Fixed in commit `689b1af` ([ADR 0019](decisions/0019-checkable-evidence-of-a-real-model-run.md)):
 
-- prompts-v4.2 and prompts-v3.1 carry no example values, guarded by
+- prompts-v4.2 and prompts-v3.1 carry no example values (v3.1 still had one, found by the
+  second review; now prompts-v3.2), guarded by
   `tests/unit/test_prompt_neutrality.py`;
 - console approvals need an interactive terminal and log how the answer came;
 - every run records its code version and its model server's facts, including the weights digest;
@@ -456,7 +458,7 @@ Test results after the run reviews:
 | Dashboard | `npm test`, `npm run build` | 19 passed; strict build passes |
 | Smoke test | `.venv/bin/python scripts/smoke_test.py` | `RESOLVED (67 trace events, simulated environment)` (unchanged) |
 | Published files | `tests/unit/test_published_artifacts.py` | the replay fixture and the three exports in `evals/live/` |
-| Evaluation (scripted) | `.venv/bin/python scripts/evaluate.py` | report `20261021-104555-1da3c9` at git `fb51dca`: every outcome, diagnosis, tool-call, step and token number identical to the M1-review report; only wall-clock latency and the fixture hash (it covers the re-recorded model run) differ |
+| Evaluation (scripted) | `.venv/bin/python scripts/evaluate.py` | report `20261021-104555-1da3c9` at git `fb51dca`: every outcome, diagnosis, tool-call, step and token number identical to the M1-review report; only wall-clock latency, the config hash (M2's provider settings) and the fixture hash (it covers the re-recorded model run) differ |
 
 ### What genuinely ran
 
@@ -487,6 +489,16 @@ Test results after the run reviews:
   `Usage` does not track it yet.
 - The Groq free-plan confirmation of 2026-10-21 lapses after 2026-10-28; rotating the key
   before the next hosted run is recommended (it was pasted into a chat).
+- Every real-model run used the same scenario (`bad-deployment`); the master prompt also
+  asks for unfamiliar scenarios (unfamiliar services, log phrasings, confounding symptoms).
+  Running a real model on a held-out or new scenario is an M3 entry item.
+- A replay of a run with a parallel round can stop with `ReplayMismatch`: the specialists'
+  prompts include what every agent has observed so far, which depends on the order they ran
+  in (the exported Groq run does not replay for this reason). M3's multi-agent work needs
+  order-independent replays, for example per-agent evidence numbering.
+- The provider catalog (`GET /providers`) does not report a hosted model's context limit,
+  explicit tool and structured-output support flags, or measured latency.
+- No Python type checker runs (ruff only; the dashboard's TypeScript build is strict).
 - Real models have not been red-teamed (prompt injection against `qwen3:8b`/`gpt-oss-120b`).
 - Model-level runs are not reproducible (random IDs in the prompt); only replays are.
 - **M5:** Docker, Kind and kubectl are still not installed.

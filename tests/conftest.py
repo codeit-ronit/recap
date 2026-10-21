@@ -6,12 +6,26 @@ never share SQLite files with each other.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from recap.core.config import Settings, load_settings
 from tests.helpers import OPERATOR_TOKEN
+
+
+@pytest.fixture(scope="session", autouse=True)
+def session_usage_ledger(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
+    """A private LLM usage ledger for the whole session, set before any module- or
+    session-scoped fixture builds a Runtime: the user's real one (~/.local/state) is never
+    opened by the tests."""
+    path = tmp_path_factory.mktemp("ledger") / "llm-usage.db"
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("RECAP_USAGE_LEDGER", str(path))
+        # Even code that ignored the variable would fall back to a temporary state folder.
+        patch.setenv("XDG_STATE_HOME", str(tmp_path_factory.mktemp("state")))
+        yield path
 
 
 @pytest.fixture(autouse=True)

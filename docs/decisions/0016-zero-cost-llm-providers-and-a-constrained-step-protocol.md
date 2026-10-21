@@ -148,6 +148,7 @@ fix has a test that fails when the fix is reverted (`tests/unit/test_m2_review.p
   copied example. Fixed text now carries no example value, and
   `tests/unit/test_prompt_neutrality.py` checks every scenario's facts against all of it
   ([ADR 0019](0019-checkable-evidence-of-a-real-model-run.md)). The paid adapter's prompts
-  became prompts-v3.1 for the same reason.
+  became prompts-v3.1 for the same reason, and prompts-v3.2 after the second review found one
+  more example (`{"service": "checkout"}`).
 - `ProviderInfo.server` now records what the Ollama server reported (version, capabilities,
   size, quantization, weights digest), and the run record names the code version.

@@ -89,7 +89,7 @@ An approval is never general consent. It allows **one** action, once:
 | Channel | Who decides | Notes |
 |---|---|---|
 | `AutoApprovalChannel` | nobody (simulation only) | raises `ConfigError` unless the environment is simulated |
-| `ConsoleApprovalChannel` | the person at the terminal | shows the exact action, target, params, evidence IDs and digest prefix; only `y`/`yes` approves; control characters in planner text are stripped |
+| `ConsoleApprovalChannel` | whoever answers at an interactive terminal (recorded as `console-user`: a terminal and a timing, not a person) | shows the exact action, target, params, evidence IDs and digest prefix; only `y`/`yes` approves; control characters in planner text are stripped |
 | `ExternalApprovalChannel` | a human in the dashboard | the API calls `ApprovalStore.decide`; the waiter is woken in-process or by polling |
 
 ## Red team

@@ -21,8 +21,10 @@ implemented ([ADR 0016](decisions/0016-zero-cost-llm-providers-and-a-constrained
   plan's daily limit for `gpt-oss-120b` (the rate-limit page still lists 30 RPM, 1K RPD, 8K
   TPM, 200K TPD; strict structured outputs support enums, `anyOf`, nullable types and
   `$defs`, and "Streaming and tool use are not currently supported with Structured
-  Outputs"). `gpt-oss` reasoning tokens count toward the answer limit: a 1,024-token limit
-  cut answers off, so RECAP asks for up to 2,048.
+  Outputs"). `gpt-oss` reasoning tokens count toward the answer limit, so RECAP asks for up
+  to 2,048 tokens (raised from 1,024 after a run in which Groq's schema check rejected two
+  answers: one complete but missing two required fields, then an empty retry; the run does
+  not show the limit caused them).
 - **Hosted backup (OpenRouter):** not configured yet; nothing was sent to it.
 
 **How this page was researched.** Only official web pages and documentation were read. No

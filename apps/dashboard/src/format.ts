@@ -357,7 +357,7 @@ export function originBadge(provider: Partial<ProviderInfo> | null | undefined):
     case "scripted":
       return { label: "SCRIPTED", tone: "neutral", title: "Scripted baseline policy: fixed playbooks, NOT an LLM." };
     case "local_llm":
-      return { label: "LOCAL LLM", tone: "accent", title: "Real inference by a model on this machine (Ollama). No API, $0." };
+      return { label: "LOCAL LLM", tone: "accent", title: "Real inference by a model on this machine (Ollama). No paid or remote API, $0." };
     case "free_hosted_llm":
       return { label: "FREE HOSTED LLM", tone: "accent", title: "Real inference on a free plan, checked before every request." };
     case "replay":

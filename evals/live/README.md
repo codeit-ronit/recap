@@ -23,8 +23,10 @@ works, not how often a model is right.
 - **The v4.2 run is the M2 deliverable.** A real local model investigated through the MCP
   tool server, the owner approved its exact fix at the terminal, and the oracle verified the
   recovery. What the record itself proves is narrower: the answer was typed on an
-  interactive terminal 175.9 s after the prompt appeared (input typed earlier is discarded),
-  which is a human pace; it cannot prove who typed it. The model read health, the error-rate metric, deployments, events and logs
+  interactive terminal 175.9 s after the prompt appeared, a human pace. At that code version
+  an answer typed in advance would have been read the moment the prompt appeared, so
+  175.9 s rules it out (discarding typed-ahead input was added afterwards). It cannot prove
+  who typed it. The model read health, the error-rate metric, deployments, events and logs
   (5 requests, 12,834 input / 724 output tokens), named release `v2.4.1` as the cause and
   proposed rolling back to `v2.4.0`. Since prompts-v4.2 no fixed prompt text holds either
   value (a test checks it for every scenario). The recording shows where they came from:
@@ -39,9 +41,13 @@ works, not how often a model is right.
   RECAP version did not yet record whether the answer came from an interactive terminal.
 - **The Groq run** shows the free hosted plan in use. Every one of its 8 responses carried
   `x-ratelimit-limit-requests: 1000`, the free plan's daily limit, which RECAP checks on every
-  response. Two answers were cut off by a 1,024-token output limit (since raised to 2,048).
-  Its prompts are prompts-v4, before the M2 review. Its exported recording keeps only the
-  answer fields RECAP reads: Groq's request and answer IDs were removed.
+  response. Two answers were rejected by Groq's strict-schema check (HTTP 400
+  `json_validate_failed`): one was complete but left out two required (nullable)
+  tool-call fields, and its corrective retry came back empty. Its prompts are prompts-v4, before the M2 review. Its
+  exported recording keeps only the answer fields RECAP reads: Groq's request and answer IDs
+  were removed. It does not replay: it has no committed code version, and its second round
+  ran two specialists in parallel, whose prompts depend on the order they read evidence in
+  (a replay stops with `ReplayMismatch` instead of guessing).
 
 ## The code version of each run
 
@@ -64,7 +70,10 @@ python scripts/demo.py --scenario bad-deployment --no-memory --approve auto
 
 The replay answers every model request from the recording: no model is called, and the
 run is labeled REPLAY. With different prompts it stops with `ReplayMismatch` instead of
-guessing. A recorded Groq run replays without a key, because nothing is sent.
+guessing. The two `qwen3:8b` exports replay this way (checked with their own commits); a
+run with a parallel round, like the Groq one, may not, because its specialists' prompts
+depend on the order they ran in. A hosted recording would replay without a key, because
+nothing is sent.
 
 ## Adding a run
 

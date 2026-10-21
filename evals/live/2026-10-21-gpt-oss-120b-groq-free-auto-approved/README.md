@@ -63,7 +63,7 @@ Policy decisions (every call is judged before it is sent):
 
 - 8 model requests for 7 agent decisions · 15,365 input / 1,685 output tokens, as the server reported them
 - 7 tool calls (6 reads, 1 approved write)
-- Cost: $0.00 - free plan (owner-confirmed; every response's limit header matched the free plan); 15,365 in / 1,685 out tokens reported by the server, 2 request(s) unreported
+- Cost, as the run recorded it: $0.00 - free plan (owner-confirmed; every response's limit header matched the free plan); 15,365 in / 1,685 out tokens reported by the server, 2 request(s) unreported
 
 ## Scope and caveats
 
@@ -71,7 +71,7 @@ Policy decisions (every call is judged before it is sent):
 - Memory: not read (memory off for this run)
 - Runbook retrieval (RAG) was on; chunks retrieved: `guide-reading-signals#error-rate-1`, `guide-reading-signals#latency-1`, `runbook-bad-deployment#remediation-1`, `runbook-bad-deployment#verification-1`, `runbook-memory-pressure#remediation-1`, `shop-architecture#service-level-objectives-1`
 - The verified run was saved to experience memory as `ep-c7ed0063c0` (partition `demo`).
-- Sampling: temperature 0.0, seed 7, thinking off, at most 1024 output tokens per answer, context window None tokens.
-- The recording replays offline with the same RECAP code and prompts (`prompts-v4`); after a prompt change a replay stops with ReplayMismatch instead of guessing.
+- Sampling: temperature 0.0, seed 7, reasoning effort low, at most 1024 output tokens per answer, context window not set.
+- The recording replays offline with the same RECAP code and prompts (`prompts-v4`); after a prompt change a replay stops with ReplayMismatch instead of guessing. This run had a parallel round: its specialists' prompts include what every agent had already observed, so a replay depends on the order they ran in and may stop with ReplayMismatch.
 - Wall time 246 s, of which 0 s waiting for the approval.
 

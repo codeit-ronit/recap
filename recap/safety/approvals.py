@@ -200,7 +200,7 @@ class ApprovalStore:
         approval was not used yet (a revocation: "no" wins until the approval is used). Anything
         else raises ApprovalError, and the refused attempt is still written to the log.
         `note` says how the decision was made (the console: "interactive terminal; answered
-        after 53.4 s"); it goes into the decision log with the decision.
+        after N s"); it goes into the decision log with the decision.
         """
         now = now or utcnow()
         with self._transaction() as conn:
@@ -538,7 +538,7 @@ FAST_ANSWER_SECONDS = 1.0
 
 
 class ConsoleApprovalChannel:
-    """Asks the person at the terminal to approve or reject one exact action."""
+    """Asks at the terminal for an answer on one exact action (a terminal, not a person)."""
 
     name = "console"
 
@@ -559,7 +559,7 @@ class ConsoleApprovalChannel:
         nobody can be reading the proposal, so the request is rejected without reading it.
         Anything typed before the prompt appeared is discarded, so the answer is typed after
         the proposal was shown. The decision log records how the answer came: "interactive
-        terminal; answered after 53.4 s", flagged when it came faster than a person reads.
+        terminal; answered after N s", flagged when it came faster than a person reads.
         This proves a terminal and a timing, not a person: a program driving a terminal can
         still answer.
         """

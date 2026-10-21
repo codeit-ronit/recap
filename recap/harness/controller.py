@@ -639,7 +639,7 @@ class IncidentController:
         self.record.approvals.append(approval)
         # How the decision was made, from the append-only decision log: the entry that set
         # the current decision (an approve, a reject, or a "no" that revoked an approval).
-        # The console records "interactive terminal; answered after 53.4 s"; others leave it empty.
+        # The console records "interactive terminal; answered after N s"; others leave it empty.
         logged = [
             event.detail
             for event in self.deps.approvals.events(proposal.proposal_id)

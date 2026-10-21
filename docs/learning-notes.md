@@ -1597,7 +1597,7 @@ void after a date. A blank signed cheque (general consent) is exactly what RECAP
 | Channel | Who decides | Notes |
 |---|---|---|
 | `AutoApprovalChannel` | nobody: simulation only | refuses to be built for an environment that is not simulated; the controller's `_check_safety_scope` refuses `approval_mode="auto"` there too |
-| `ConsoleApprovalChannel` | the person at the terminal (`--approve ask`) | prints action, target, params, rationale (marked "planner text, untrusted"), evidence ids, digest prefix and expiry; only `y` or `yes` approves; no terminal means "no"; control characters are stripped |
+| `ConsoleApprovalChannel` | whoever answers at an interactive terminal (`--approve ask`; recorded as `console-user`: a terminal and a timing, not a person) | prints action, target, params, rationale (marked "planner text, untrusted"), evidence ids, digest prefix and expiry; only `y` or `yes` approves; no terminal means "no"; control characters are stripped |
 | `ExternalApprovalChannel` | a human in the dashboard | the API's `POST /approvals/{proposal_id}` calls `decide()` with the digest the human reviewed; a wrong digest, an expired request or a second decision returns HTTP 409 |
 
 ```mermaid
@@ -4382,7 +4382,7 @@ the current run's. A request the recording lacks raises `ReplayMismatch`, never 
 | Local, **human-approved** (prompts-v4.1) | `qwen3:8b` | 7 | 18,690 / 809 | RESOLVED; the owner approved at the terminal 53 s after the request; its prompts' examples matched the answer (see below) |
 | Local, fixture (prompts-v4.2) | `qwen3:8b` | 5 | 12,891 / 744 | RESOLVED in ~2 min (now `fixtures/recordings/`) |
 | Local, **human-approved, the M2 deliverable** (prompts-v4.2) | `qwen3:8b` | 5 | 12,834 / 724 | RESOLVED; approved at an interactive terminal 175.9 s after the prompt; exported in `evals/live/` |
-| Groq | `gpt-oss-120b` (Free) | 8 (2 cut off) | 15,365 / 1,685 | RESOLVED after an escalation; showed that a 1,024-token answer limit cuts a reasoning model off |
+| Groq | `gpt-oss-120b` (Free) | 8 (2 rejected) | 15,365 / 1,685 | RESOLVED after an escalation; Groq's strict-schema check rejected two answers (one complete but missing two required fields, then an empty retry) |
 | Groq, final settings | `gpt-oss-120b` (Free) | 5 | 13,368 / 1,354 | FAILED safely: it diagnosed after 2 tool steps without the service's logs, twice; the verifier refused and handed over to a human |
 
 All runs except the two human-approved ones used the simulation auto-approver. Every fix was proposed by
@@ -4522,12 +4522,12 @@ and found three weaknesses in the evidence. RECAP's own prompt examples (`"v2.4.
 `"v2.4.0"`) were exactly the scenario's answer. The approval record could not tell a
 terminal from a pipe. And the record named neither the code nor the exact model weights.
 After the fixes (prompts-v4.2, a terminal check with a decision-log note, provenance, a
-guarded export), three more reviewers attacked the fixes and proved more gaps: the export's
-secret check read JSON text, an answer typed in advance counted, notes were attributed to
-the wrong approval, Groq IDs hid in answer bodies, and the prompt guard saw only one prompt.
-Then the owner ran the incident again with the fixed prompts: the model still found both
-versions. The recording shows they first reached it in the third request, inside the
-deployment tool result it chose to read. Details:
+guarded export), the owner ran the incident again with the fixed prompts: the model still
+found both versions. The recording shows they first reached it in the third request, inside
+the deployment tool result it chose to read. Meanwhile three more reviewers attacked the
+fixes and proved more gaps, closed afterwards: the export's secret check read JSON text, an
+answer typed in advance counted, notes were attributed to the wrong approval, Groq IDs hid
+in answer bodies, and the prompt guard saw only one prompt. Details:
 [status.md](status.md#the-human-approved-runs-the-m2-deliverable) and
 [ADR 0019](decisions/0019-checkable-evidence-of-a-real-model-run.md).
 
@@ -4545,9 +4545,11 @@ the paid adapter's prompts.
 
 **Evidence must say how it was made, and what it does not prove.** "Approved by
 `console-user`" proved only that `input()` returned "y". Now the console reads only from an
-interactive terminal, discards anything typed before the prompt appeared, and logs how long
-the answer took ("answered after 175.9 s"; answers faster than a person can read are
-flagged). That proves a terminal and a human pace, not who typed it. The README of an export
+interactive terminal and logs how long the answer took: the deliverable run says "answered
+after 175.9 s". Since the second review it also discards anything typed before the prompt
+appeared and flags answers faster than a person can read (at the deliverable run's code, a
+line typed in advance would have been read at once, so 175.9 s rules it out). That proves a
+terminal and a human pace, not who typed it. The README of an export
 says so. In the same spirit, every run records its code version (the git commit, `+dirty`
 with uncommitted changes) and the digest of the model's weights file, so a claim about a
 run can be checked against exactly what ran.

@@ -269,9 +269,11 @@ class Recording(Contract):
 class ReplayTransport:
     """Answers each request from a recording. No network, and never a guessed answer.
 
-    Requests are matched by fingerprint, not by order, so agents that ran side by side can
-    ask in any order. Each recorded answer is used once; asking the same thing again uses
-    the next recording of it, and asking something never recorded raises ReplayMismatch.
+    Requests are matched by fingerprint, not by order. Agents that ran side by side may
+    still ask something never recorded: their prompts include what every agent has already
+    observed, so a different finishing order makes different prompts (ADR 0018). Each
+    recorded answer is used once; asking the same thing again uses the next recording of it,
+    and asking something never recorded raises ReplayMismatch.
     """
 
     name = "replay"

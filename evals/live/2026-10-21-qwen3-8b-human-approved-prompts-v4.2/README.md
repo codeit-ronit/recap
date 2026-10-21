@@ -55,7 +55,7 @@ Policy decisions (every call is judged before it is sent):
 
 - 5 model requests for 5 agent decisions · 12,834 input (of which 4,934 came from the server's prompt cache) / 724 output tokens, as the server reported them
 - 6 tool calls (5 reads, 1 approved write)
-- Cost: $0.00 - local model on this machine, no paid or remote API; 12,834 in / 724 out tokens reported by the server
+- Cost, as the run recorded it: $0.00 - local model on this machine, no paid or remote API; 12,834 in / 724 out tokens reported by the server
 
 ## Scope and caveats
 

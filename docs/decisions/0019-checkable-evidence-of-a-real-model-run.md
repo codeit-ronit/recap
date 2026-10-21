@@ -35,15 +35,15 @@ oracle-verified recovery. They also found that the evidence claimed more than it
 ## Decision
 
 1. **Neutral fixed text.** Prompts, instructions, schemas and tool definitions carry no
-   example value (prompts-v4.2 and prompts-v3.1 say "exactly as the deployment evidence
+   example value (prompts-v4.2 and prompts-v3.2 say "exactly as the deployment evidence
    names it" or use a `<placeholder>`). `tests/unit/test_prompt_neutrality.py` collects every
    scenario's versions and the longer texts of its faults, deployments, planted log lines
    and expected answer, and fails if any appears in any fixed text.
 2. **Attested console approvals.** `ConsoleApprovalChannel` reads an answer only from an
    interactive terminal; piped or missing input is rejected unread. Anything typed before
    the prompt appeared is discarded, so the answer is typed after the proposal was shown.
-   The append-only decision log records how the answer came ("interactive terminal; answered
-   after 53.4 s", flagged when it came faster than a person can read the proposal), via
+   The append-only decision log records how the answer came (the deliverable run: "interactive
+   terminal; answered after 175.9 s"; flagged when faster than a person can read), via
    `ApprovalStore.decide(note=...)`, also when the answer is a "no" that revokes an earlier
    approval; the `approval.decided` trace event carries it. `demo.py --approve ask` refuses
    to start without a terminal. This proves a terminal and a timing, not a person.
@@ -75,8 +75,9 @@ oracle-verified recovery. They also found that the evidence claimed more than it
   exactly what the model was sent and answered (the recording replays offline), and that no
   answer was planted in RECAP's own text.
 - The replay fixture re-recorded with prompts-v4.2 resolved the same way: the model still
-  named `v2.4.1` and proposed rolling back to `v2.4.0`, values that now appear only in the
-  deployment evidence.
+  named `v2.4.1` and proposed rolling back to `v2.4.0`, values that now appear only in tool
+  evidence (`v2.4.1` in the deployment history and the error logs, `v2.4.0` only in the
+  deployment history).
 - Each new guard has a test that fails when the guard is undone (17 revert checks after the
   first review, 22 after the second, all caught).
 
