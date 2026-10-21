@@ -279,13 +279,17 @@ free-plan header checked. Details in [status.md](status.md).
   ([recap/safety/approvals.py](../recap/safety/approvals.py)).
   1. A request is opened for that exact proposal and digest, with an expiry →
      `approval.requested`, and a `requested` entry in the append-only decision log.
-  2. A channel asks for a decision: the console (`y`/`N`), the dashboard through
+  2. A channel asks for a decision: the console (`y`/`N`, only from an interactive
+     terminal: piped input is rejected unread, and anything typed before the prompt
+     appeared is discarded; the decision log records "interactive terminal; answered after
+     N s", flagged when faster than a person reads), the dashboard through
      `POST /approvals/{id}` (operator token; the approver recorded is `operator:<name>`), or
      the simulation-only auto-approver. The run's clock is paused while a human decides.
   3. The store's rules: approve only a pending request; reject a pending request **or**
      revoke an approval that was not used yet; nothing after a rejection; every change is a
      compare-and-swap in one SQLite transaction; every attempt is logged.
-- **Output:** an `Approval` (approved or rejected) → `approval.decided`.
+- **Output:** an `Approval` (approved or rejected) → `approval.decided`, which also carries
+  the decision log's note on how the answer came.
 - **Next:** approved → stage 8; rejected or expired → BLOCKED.
 
 ### Stage 8. Execute through the gateway (MITIGATING)
@@ -374,7 +378,7 @@ flowchart LR
 
 | Output | Stored in | Served at | Shown on the dashboard |
 |---|---|---|---|
-| Run checkpoint (`RunRecord`) | `data/recap.db` → `runs` | `GET /runs`, `GET /runs/{id}` | Overview, Live Incident Run, every run page |
+| Run checkpoint (`RunRecord`, with `versions.code_version` and, for a model run, `provider_info.server`: the server's version and the weights digest) | `data/recap.db` → `runs` | `GET /runs`, `GET /runs/{id}` | Overview, Live Incident Run, every run page |
 | Trace events | `data/recap.db` → `events`; `data/traces/<run_id>.jsonl` | `GET /runs/{id}/events`, `GET /runs/{id}/stream` (SSE) | Live event feed, Agent Timeline |
 | Evidence (raw record + structured data) | `data/recap.db` → `evidence` | inside `GET /runs/{id}` | Evidence & RAG |
 | Approval requests, decisions, decision log | `data/recap.db` → `approval_requests`, `approvals`, `approval_events` (append-only) | `GET /approvals/pending`, `GET /approvals/{id}/events`, `GET /approvals/events` | Safety & Approvals, Live Incident Run |
@@ -384,6 +388,7 @@ flowchart LR
 | LLM usage ledger and provider stops | per user, outside every data folder: `~/.local/state/recap/llm-usage.db` (or `RECAP_USAGE_LEDGER`) → `llm_requests`, `llm_stops`, keyed by host | `GET /providers`, `scripts/providers.py usage` | Architecture → Decision providers |
 | Operator token | `data/operator-token` (mode 0600) or `RECAP_OPERATOR_TOKEN` | never | typed once into the sign-in box (kept in the tab's sessionStorage) |
 | Evaluation reports | `evals/reports/<id>/` and `evals/reports/latest/` | `GET /evals/results` | Evaluations |
+| A shareable copy of one run (trace, run record, model recording, README) | `evals/live/<name>/`, written by `scripts/export_run_trace.py RUN_ID evals/live/<name>`; it refuses to write secrets, key shapes, the login name or local paths | not served (committed to git) | not shown; the README is the readable account |
 
 ---
 

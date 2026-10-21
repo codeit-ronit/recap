@@ -25,6 +25,7 @@ these notes explain why RECAP looks the way it does.
 | [0016](0016-zero-cost-llm-providers-and-a-constrained-step-protocol.md) | Real model inference only from local or verified-free providers, through one constrained step protocol | accepted | Ollama (local) and Groq Free over plain HTTP; per-request schemas from the trusted catalog; one corrective retry, never a scripted stand-in (M2). |
 | [0017](0017-fail-closed-free-tier-guard-and-a-deferred-state.md) | A fail-closed free-tier guard, and a deferred state when a free quota runs out | accepted | Opt-in, allowlist, dated owner confirmation, caps below the free limits, a rate-limit-header tripwire; `QUOTA_EXHAUSTED` instead of another provider (M2). |
 | [0018](0018-record-every-model-exchange-and-replay-in-ci.md) | Record every model exchange, and replay real model runs offline in CI | accepted | HTTP-level recordings without keys; fingerprint matching; a `REPLAY`-labeled provider runs a real qwen3:8b run in CI at $0 (M2). |
+| [0019](0019-checkable-evidence-of-a-real-model-run.md) | A real-model run is evidence only if a reader can check it | accepted | No example value in fixed prompt text (guard test); console approvals need a terminal and log how they came; code version and model weights on every run; a complete export that refuses to write secrets or local traces (M2). |
 
 ## How the decisions fit together
 
@@ -43,6 +44,8 @@ these notes explain why RECAP looks the way it does.
 - **0016 to 0018** bring real models in at $0 (M2). 0016 decides which models and how they
   are asked; 0017 keeps a hosted free plan free or stops; 0018 records every exchange so a
   real model run can be replayed offline in CI. The scripted policy of 0003 stays the default.
+  0019 came from reviewing the first human-approved run: it makes such a run checkable
+  (neutral prompts, an attested approval, code and weights provenance, a guarded export).
 
 The [threat model](../threat-model.md) builds on 0004, 0005, 0007, 0014 and 0015. It lists
 every threat RECAP defends against, where the defense lives in the code, and the test that

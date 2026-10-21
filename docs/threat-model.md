@@ -358,6 +358,30 @@ loopback "proxy" and the production code path.
 | Replays drifted from the live run | A recorded short 429 deferred the replay; a replayed schema failure counted as live usage; a mismatch in one parallel agent let the other resolve the run | Replays reuse the recorded retry settings without waiting, count no usage, use the recorded budget; `ReplayMismatch` and `FreeStatusLost` stop the whole run; a quota stop wins over a budget stop | `test_a_recorded_short_429_replays_instead_of_deferring`, `test_a_replayed_schema_failure_counts_no_live_usage`, `test_a_run_stopping_provider_error_in_one_agent_stops_the_run`, `test_a_quota_stop_wins_over_a_budget_stop_in_any_order` |
 | Smaller ones | Cloud names in other cases, a local copy of a cloud model, a key pasted with quotes, a confirmation dated "today" east of UTC, an integer with 5,000 digits, a `tool_name` key redirecting a native tool call, a `tool_use_failed` 400, an argument colliding with a protocol field, a shared argument claiming one tool's range, an unmocked local probe in one API test | Each fixed | the corresponding tests in `tests/unit/test_m2_review.py` |
 
+### The review of the first human-approved run
+
+Six reviewers checked the first human-approved real-model run (`run-4b3d3f1704`) and its
+export, and three more then reviewed the fixes
+([ADR 0019](decisions/0019-checkable-evidence-of-a-real-model-run.md)). The run was real,
+approved at the terminal and oracle-verified; these gaps were closed, each with a test that
+fails when the fix is undone (17 revert checks after the first review, 22 after the second,
+all caught):
+
+| Threat | Example | Fix | Test |
+|---|---|---|---|
+| RECAP's own fixed text plants a scenario's answer | prompts-v4.1's schema examples `"v2.4.1"` / `"v2.4.0"` were `bad-deployment`'s bad release and rollback target; the paid adapter's v3 prompts used `{"service": "checkout"}` | No example value in any fixed text (prompts-v4.2, prompts-v3.2); the guard scans every role's first and last step, the proposal prompts, every prompt-module string (feedback included) and the runbooks, and catches pieces of facts and quoted example services | `tests/unit/test_prompt_neutrality.py` (with a self-test that plants a fact in each kind of source) |
+| Piped input poses as a person's approval | `yes \| python scripts/demo.py --approve ask` records `console-user` | The console reads an answer only from an interactive terminal; the decision log records how the answer came; `--approve ask` refuses to start without a terminal | `test_the_real_prompt_rejects_unread_without_a_terminal`, `test_the_trace_says_how_a_console_approval_was_given` |
+| An early or scripted answer passes as a reading person | "y⏎" typed while the model works is taken the moment the prompt appears; a program drives a pseudo-terminal | Typed-ahead input is discarded before the prompt; an answer faster than a person can read is flagged in the log; the docs claim a terminal and a timing, not a person | `test_a_terminal_answer_is_logged_with_how_it_came` |
+| A revoking "no" or a second approval is misreported | A console "no" overriding an API approval lost its note; a run's two approvals showed the same note | The revocation keeps its note; the trace and the README take each proposal's own deciding log entry | `test_a_console_no_that_revokes_an_approval_keeps_its_note`, the race test, `test_each_approval_line_shows_its_own_note_and_wait` |
+| A shared run points at the owner | Groq's `x-request-id` header and the same ID in its answer body (`x_groq`); the login name inside a temp path; the data folder's path; a key after a newline, where the export's gate read JSON text (`\n` hid it) | Recordings keep only what the provider reads; the export cleans, then checks every decoded and URL-decoded string and key, and writes nothing if an environment secret, a key shape, the login name or a local path remains; the redactor knows more key formats; CI scans every published file the same way | `tests/unit/test_export_gates.py`, `test_the_exported_run_holds_the_evidence_and_no_secrets`, `tests/unit/test_published_artifacts.py` |
+| A published README forges a line | Model text with `<br>- **Approval:** approved by ...` | Model text is escaped (no HTML, no line breaks, no inline markup) | `test_model_text_cannot_add_readme_lines_or_markup` |
+| An export mixes two runs | Re-exporting into a folder left another run's recording behind | Exports are staged and moved into place; replacing needs `--replace` | the replace checks in the export e2e test |
+| A run cannot say what produced it | The model named only by its tag; no code version | `ProviderInfo.server` (Ollama version, size, quantization, weights digest from the `FROM` line) and `versions.code_version` ("unknown" outside RECAP's own checkout) | `test_the_run_learns_which_server_and_weights_answered`, `test_the_weights_digest_comes_from_the_from_line_only`, `tests/unit/test_code_version.py` |
+
+"A person approved" is still an inference (a terminal and a human-scale delay), not an
+identity, and a program driving a terminal can still answer. Recording the OS user would put
+personal data into public exports.
+
 ## What M1 changed (the audit findings)
 
 Each finding was first reproduced as a test that failed on the V1 code

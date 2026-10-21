@@ -140,3 +140,14 @@ fix has a test that fails when the fix is reverted (`tests/unit/test_m2_review.p
   that `/api/show` reports as served from a remote host.
 - The committed replay fixture was re-recorded with prompts-v4.1 (8 requests, 21,489 / 771
   tokens, RESOLVED in one round).
+
+## Amended after the human-approved run review
+
+- **prompts-v4.2:** the schemas' example values (`"v2.4.1"`, `"v2.4.0"`) were exactly the
+  `bad-deployment` scenario's answer, so a correct diagnosis could not be told apart from a
+  copied example. Fixed text now carries no example value, and
+  `tests/unit/test_prompt_neutrality.py` checks every scenario's facts against all of it
+  ([ADR 0019](0019-checkable-evidence-of-a-real-model-run.md)). The paid adapter's prompts
+  became prompts-v3.1 for the same reason.
+- `ProviderInfo.server` now records what the Ollama server reported (version, capabilities,
+  size, quantization, weights digest), and the run record names the code version.

@@ -4378,11 +4378,14 @@ the current run's. A request the recording lacks raises `ReplayMismatch`, never 
 |---|---|---|---|---|
 | Local, first | `qwen3:8b` (Ollama, 16 GB M3) | 10 | 26,911 / 1,580 | RESOLVED in ~4 min: round 1 claimed a bad deploy without reading logs, the verifier said insufficient, two parallel specialists found it |
 | Local, second | `qwen3:8b` | 7 | 18,331 / 809 | RESOLVED in ~2.4 min in one round (the first CI fixture) |
-| Local, fixture (prompts-v4.1) | `qwen3:8b` | 8 | 21,489 / 771 | RESOLVED in ~2.5 min in one round (now `fixtures/recordings/`) |
+| Local, fixture (prompts-v4.1) | `qwen3:8b` | 8 | 21,489 / 771 | RESOLVED in ~2.5 min in one round (the CI fixture until prompts-v4.2) |
+| Local, **human-approved** (prompts-v4.1) | `qwen3:8b` | 7 | 18,690 / 809 | RESOLVED; the owner approved at the terminal 53 s after the request; its prompts' examples matched the answer (see below) |
+| Local, fixture (prompts-v4.2) | `qwen3:8b` | 5 | 12,891 / 744 | RESOLVED in ~2 min (now `fixtures/recordings/`) |
+| Local, **human-approved, the M2 deliverable** (prompts-v4.2) | `qwen3:8b` | 5 | 12,834 / 724 | RESOLVED; approved at an interactive terminal 175.9 s after the prompt; exported in `evals/live/` |
 | Groq | `gpt-oss-120b` (Free) | 8 (2 cut off) | 15,365 / 1,685 | RESOLVED after an escalation; showed that a 1,024-token answer limit cuts a reasoning model off |
 | Groq, final settings | `gpt-oss-120b` (Free) | 5 | 13,368 / 1,354 | FAILED safely: it diagnosed after 2 tool steps without the service's logs, twice; the verifier refused and handed over to a human |
 
-Every run used the simulation auto-approver (development runs). Every fix was proposed by
+All runs except the two human-approved ones used the simulation auto-approver. Every fix was proposed by
 the model, judged by the policy and verified by the oracle. Small samples: these show the
 path works, not how often a model is right.
 
@@ -4509,3 +4512,100 @@ response, including errors, because a paid plan's 429 says it's paid too. Every 
 recorded even when its decision fails. Each of those has a test I've seen fail with the fix
 reverted. What's left is stated, not hidden: the first response after a plan upgrade is the
 one that reveals it, and requests already in flight aren't recalled."
+
+### M2 run review — What makes a real run checkable
+
+**What changed, in one paragraph.** The owner ran a real incident with `qwen3:8b` and
+approved the fix at the terminal. Six independent reviewers confirmed the run was real
+(Ollama's own log, the recording, the trace and the usage ledger agree request by request)
+and found three weaknesses in the evidence. RECAP's own prompt examples (`"v2.4.1"`,
+`"v2.4.0"`) were exactly the scenario's answer. The approval record could not tell a
+terminal from a pipe. And the record named neither the code nor the exact model weights.
+After the fixes (prompts-v4.2, a terminal check with a decision-log note, provenance, a
+guarded export), three more reviewers attacked the fixes and proved more gaps: the export's
+secret check read JSON text, an answer typed in advance counted, notes were attributed to
+the wrong approval, Groq IDs hid in answer bodies, and the prompt guard saw only one prompt.
+Then the owner ran the incident again with the fixed prompts: the model still found both
+versions. The recording shows they first reached it in the third request, inside the
+deployment tool result it chose to read. Details:
+[status.md](status.md#the-human-approved-runs-the-m2-deliverable) and
+[ADR 0019](decisions/0019-checkable-evidence-of-a-real-model-run.md).
+
+**The idea most worth understanding: an example in a prompt is evidence the model sees.** A
+language model continues patterns; a concrete value in a schema description ("e.g.
+`v2.4.1`") is a strong hint. Here the examples happened to be this scenario's answer, so a
+correct diagnosis could not be told apart from a copied example. The fix is not "pick
+better examples": any concrete value could be some scenario's answer. Fixed text now carries
+none, and a test collects what only scenarios know (versions, exception texts, class names,
+dotted identifiers, quoted names) and scans everything fixed that a model can be shown:
+every role's first and last step, the proposal prompts, every string in the prompt modules
+(feedback included) and the runbooks. A self-test plants a fact in each kind of source and
+checks that the guard reports it there. Its first run found one more planted example in
+the paid adapter's prompts.
+
+**Evidence must say how it was made, and what it does not prove.** "Approved by
+`console-user`" proved only that `input()` returned "y". Now the console reads only from an
+interactive terminal, discards anything typed before the prompt appeared, and logs how long
+the answer took ("answered after 175.9 s"; answers faster than a person can read are
+flagged). That proves a terminal and a human pace, not who typed it. The README of an export
+says so. In the same spirit, every run records its code version (the git commit, `+dirty`
+with uncommitted changes) and the digest of the model's weights file, so a claim about a
+run can be checked against exactly what ran.
+
+**Check the decoded value, never its serialization.** The export's last-line secret check
+searched the JSON text with patterns that start with a word boundary. In JSON a newline
+before a key is written as a backslash and an `n`, and `n` is a word character, so the
+boundary never matched and the key passed. The gate now walks the decoded strings and dict
+keys, also checks URL-decoded forms, and compares paths without case.
+
+**Reviewing the fixes finds new bugs.** Every fix adds code, and a revert check proves only
+that a test fails without the fix, not that the fix covers every case. The second review's
+findings (28, several overlapping) were all in the first round's fixes. Of the 22 revert
+checks that followed, one at first passed: the self-test could not tell which source caught
+a planted fact, so it now names the source it expects.
+
+**Inputs → outputs (the new pieces).**
+
+- `ApprovalStore.decide(..., note=...)` → the note goes into the append-only decision log
+  (also for a revoking "no"); the `approval.decided` trace event carries it.
+- `code_version(root)` → `"689b1af0e6aa"`, `"689b1af0e6aa+dirty"` or `"unknown"`.
+- `ProviderInfo.server` → Ollama's version, the model's capabilities, context window, size,
+  quantization and weights digest.
+- `export_run(settings, run_id, out_dir, replace=False)` → the written file names, or
+  `SystemExit` naming the file and the kind of problem (never the value).
+
+**Reproduce it.**
+
+```bash
+.venv/bin/python -m pytest tests/unit/test_prompt_neutrality.py tests/unit/test_export_gates.py \
+    tests/unit/test_published_artifacts.py tests/unit/test_code_version.py
+RECAP_DATA_DIR=/tmp/recap-replay RECAP_USAGE_LEDGER=/tmp/recap-replay/ledger.db RECAP_PROVIDER=replay \
+  RECAP_REPLAY_RECORDING=evals/live/2026-10-21-qwen3-8b-human-approved-prompts-v4.2/recording.jsonl \
+  .venv/bin/python scripts/demo.py --scenario bad-deployment --no-memory --approve auto
+```
+
+**Interview question:** "Your demo shows the model found the right fix. How do you know it
+didn't just copy the answer from somewhere?"
+
+**Model answer:** "Three ways, and one limit. First, a test makes sure no fixed text the
+model sees, prompts, schemas, tool descriptions, feedback or runbooks, contains anything only
+a scenario knows, and a self-test plants a fact in each kind of source to prove the scan sees
+it. That test exists because a review found my own schema examples were the answer. Second,
+the recording shows where the values entered: the bad release and the rollback target first
+appear in the third prompt, inside the deployment history the model chose to fetch. Third,
+the model only proposes: a verifier checks every claim against the evidence, a policy
+gateway and a human approve the exact action, and an oracle checks recovery. The limit: it's
+one run of one simulated scenario with an 8-billion-parameter model, so it shows the path
+works end to end, not how often the model is right."
+
+**Interview question:** "How do you prove a human approved an action?"
+
+**Model answer:** "You can't fully, so you record what you can prove and say what you can't.
+RECAP's console reads the answer only from an interactive terminal, throws away anything
+typed before the prompt appeared, and logs how long the answer took in an append-only
+decision log. The approval is bound to a fingerprint of the exact action and used once. That
+proves the answer was typed on a terminal at a human pace after the proposal was shown. It
+doesn't prove who typed it, and a program driving a terminal could still answer. The next
+step for a real system would be a signed approval tied to an identity, not the OS user name,
+which would leak into public exports."
+

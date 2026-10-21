@@ -82,3 +82,14 @@ API ([apps/api/auth.py](../../apps/api/auth.py), [apps/api/main.py](../../apps/a
   operator's "no".
 - **Let a rejection always win, even after the approval was used.** It cannot call back a
   write that was already sent, and would make the record claim something that did not happen.
+
+## Amended after the M2 human-approved run review
+
+- The console approver reads an answer only from an interactive terminal: piped or missing
+  input is rejected unread, and anything typed before the prompt appeared is discarded, so
+  `console-user` means an answer typed on a terminal after the proposal was shown. The
+  append-only decision log records how each console answer came ("interactive terminal;
+  answered after 53.4 s", flagged when faster than a person reads; a revoking "no" keeps its
+  note too) through `ApprovalStore.decide(note=...)`
+  ([ADR 0019](0019-checkable-evidence-of-a-real-model-run.md)). It proves a terminal and a
+  timing, not a person.

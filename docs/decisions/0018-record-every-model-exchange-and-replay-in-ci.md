@@ -91,3 +91,17 @@ Accepted (M2, 2026-10-21). Complements
 - **A `ReplayMismatch` in one parallel agent stops the whole run**, like a budget stop; so
   does the free-plan tripwire (`FreeStatusLost`). A quota stop wins over an ordinary budget
   stop whatever the agents' order, so the run is deferred.
+
+## Amended after the human-approved run review
+
+- Recordings no longer keep `x-request-id`, nor a hosted answer's own IDs (`id`, Groq's
+  `x_groq`, `system_fingerprint`): they could link a published recording to the provider
+  account. A chat answer keeps only the fields the provider reads, and the rate-limit headers
+  the tripwire and replays need.
+- `/api/show` keeps the weights file's name (`FROM sha256-…`, never its path), so a replay
+  knows which weights answered the original run.
+- `scripts/export_run_trace.py` now publishes a run's recording with its trace, so a shared
+  run can be replayed offline by anyone with the same RECAP code
+  ([ADR 0019](0019-checkable-evidence-of-a-real-model-run.md)).
+- The committed fixture was re-recorded with prompts-v4.2 (5 requests, 12,891 / 744 tokens,
+  RESOLVED in one round).

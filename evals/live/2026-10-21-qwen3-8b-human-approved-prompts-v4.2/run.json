@@ -1,0 +1,615 @@
+{
+  "run_id": "run-c21f88c519",
+  "scenario_id": "bad-deployment",
+  "config": {
+    "strategy": "adaptive",
+    "use_rag": true,
+    "use_memory": false,
+    "memory_write": true,
+    "memory_read_partitions": [
+      "train",
+      "demo"
+    ],
+    "memory_write_partition": "demo",
+    "safety_enabled": true,
+    "approval_mode": "manual",
+    "planner": "default",
+    "provider": "ollama",
+    "seed": null,
+    "budget": null,
+    "tool_latency_ms": null,
+    "label": ""
+  },
+  "incident": {
+    "incident_id": "inc-af088144eb",
+    "scenario_id": "bad-deployment",
+    "service": "checkout",
+    "affected_services": [
+      "checkout"
+    ],
+    "symptoms": [
+      "checkout: HTTP 5xx ratio above 30% (SLO 1%)",
+      "checkout: p95 latency above 1.5s"
+    ],
+    "created_at": "2026-03-14T10:00:00Z",
+    "environment": "simulated",
+    "metadata": {
+      "source": "simulated-alertmanager",
+      "namespace": "shop"
+    },
+    "budget": {
+      "max_steps": 30,
+      "max_tool_calls": 30,
+      "max_elapsed_seconds": 1800.0,
+      "max_estimated_tokens": 120000,
+      "max_parallel_agents": 2
+    }
+  },
+  "state": "RESOLVED",
+  "history": [
+    {
+      "state": "CREATED",
+      "at": "2026-10-21T09:38:51.939982Z",
+      "reason": "incident created"
+    },
+    {
+      "state": "RETRIEVING",
+      "at": "2026-10-21T09:38:52.366286Z",
+      "reason": "gather runbooks and past experience"
+    },
+    {
+      "state": "INVESTIGATING",
+      "at": "2026-10-21T09:38:52.367864Z",
+      "reason": "investigate with read-only tools"
+    },
+    {
+      "state": "PROPOSING",
+      "at": "2026-10-21T09:40:00.213670Z",
+      "reason": "diagnosis: The error rate and latency issues in the checkout service are caused by a bug in the PricingClient.applyDiscount method introduced in the v2.4.1 deployment."
+    },
+    {
+      "state": "AWAITING_APPROVAL",
+      "at": "2026-10-21T09:40:37.445145Z",
+      "reason": "approval required for execute_rollback"
+    },
+    {
+      "state": "MITIGATING",
+      "at": "2026-10-21T09:43:33.349405Z",
+      "reason": "execute_rollback on checkout"
+    },
+    {
+      "state": "VERIFYING",
+      "at": "2026-10-21T09:43:33.823868Z",
+      "reason": "independent oracle checks recovery"
+    },
+    {
+      "state": "RESOLVED",
+      "at": "2026-10-21T09:43:33.826088Z",
+      "reason": "oracle verified recovery (simulated environment)"
+    }
+  ],
+  "environment": {
+    "kind": "simulated",
+    "name": "RECAP simulated shop",
+    "namespace": "shop",
+    "is_simulated": true,
+    "supported_actions": [
+      "rollback",
+      "restart",
+      "delete_namespace"
+    ],
+    "description": "Deterministic local simulation of a five-service shop (state in a per-run SQLite file). No real cluster is involved.",
+    "stabilization_timeout_seconds": 0.0,
+    "stabilization_poll_seconds": 2.0
+  },
+  "provider": "ollama:qwen3:8b",
+  "provider_info": {
+    "name": "ollama:qwen3:8b",
+    "kind": "llm",
+    "origin": "local_llm",
+    "model": "qwen3:8b",
+    "description": "Open-weight model served by Ollama on this machine. No network, no charge.",
+    "mode": "tools",
+    "prompt_version": "prompts-v4.2",
+    "replay_of": null,
+    "recording": "data/recordings/20261021-093851-ollama-17f273.jsonl",
+    "red_team": false,
+    "server": {
+      "ollama_version": "0.34.4",
+      "capabilities": [
+        "completion",
+        "tools",
+        "thinking"
+      ],
+      "context_length": 40960,
+      "parameter_size": "8.2B",
+      "quantization": "Q4_K_M",
+      "weights": "sha256:a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f"
+    }
+  },
+  "strategies": [
+    {
+      "mode": "single",
+      "reason": "clear single-service incident",
+      "rule_id": "RT7-default",
+      "selected_agents": [
+        "investigator"
+      ],
+      "provider": "ollama:qwen3:8b",
+      "budget": {
+        "investigator": 10
+      },
+      "signals": {
+        "services_affected": 1,
+        "symptom_categories": [
+          "errors",
+          "latency"
+        ],
+        "memory_hits": 0,
+        "top_memory_similarity": 0.0,
+        "familiar_success": false,
+        "memory_conflict": false,
+        "prior_failed_attempts": 0,
+        "escalation": false,
+        "remaining_tool_calls": 30,
+        "remaining_steps": 30,
+        "max_parallel_agents": 2
+      },
+      "round": 1
+    }
+  ],
+  "findings": [
+    {
+      "agent_role": "investigator",
+      "evidence_ids": [
+        "ev-c21f88-001",
+        "ev-c21f88-002",
+        "ev-c21f88-003",
+        "ev-c21f88-004",
+        "ev-c21f88-005"
+      ],
+      "doc_refs": [
+        "shop-architecture#service-level-objectives-1",
+        "guide-reading-signals#error-rate-1",
+        "runbook-bad-deployment#verification-1",
+        "guide-reading-signals#latency-1"
+      ],
+      "hypotheses": [
+        {
+          "claim": "The error rate and latency issues in the checkout service are caused by a bug in the PricingClient.applyDiscount method introduced in the v2.4.1 deployment.",
+          "mechanism": "bad_deployment",
+          "target_service": "checkout",
+          "supporting_evidence_ids": [
+            "ev-c21f88-001",
+            "ev-c21f88-002",
+            "ev-c21f88-003",
+            "ev-c21f88-005"
+          ],
+          "contradicting_evidence_ids": [],
+          "status": "proposed",
+          "details": {
+            "version": "v2.4.1"
+          },
+          "origin": "investigation",
+          "proposed_by": "investigator"
+        }
+      ],
+      "proposed_next_steps": [
+        "Verify if the error rate drops after rolling back to version v2.4.0.",
+        "Check the logs of the PricingClient service for any related issues."
+      ],
+      "usage": {
+        "steps": 4,
+        "tool_calls": 5,
+        "estimated_tokens": 10520,
+        "actual_input_tokens": 10380,
+        "actual_output_tokens": 394,
+        "external_cost_usd": 0.0,
+        "is_estimate": false,
+        "unreported_calls": 0,
+        "model_requests": 4
+      },
+      "summary": "The checkout service is experiencing a high error rate and p95 latency, which started after the deployment of version v2.4.1. The error logs indicate a NullPointerException in the PricingClient.applyDiscount method, suggesting a bug in the code introduced by this deployment.",
+      "error": null,
+      "started_at": "2026-10-21T09:38:52.368874Z",
+      "finished_at": "2026-10-21T09:40:00.203263Z",
+      "round": 1
+    }
+  ],
+  "verification": {
+    "status": "supported",
+    "best": {
+      "claim": "The error rate and latency issues in the checkout service are caused by a bug in the PricingClient.applyDiscount method introduced in the v2.4.1 deployment.",
+      "mechanism": "bad_deployment",
+      "target_service": "checkout",
+      "supporting_evidence_ids": [
+        "ev-c21f88-001",
+        "ev-c21f88-002",
+        "ev-c21f88-003",
+        "ev-c21f88-005"
+      ],
+      "contradicting_evidence_ids": [],
+      "status": "supported",
+      "details": {
+        "version": "v2.4.1"
+      },
+      "origin": "investigation",
+      "proposed_by": "investigator"
+    },
+    "checks": [
+      {
+        "hypothesis": {
+          "claim": "The error rate and latency issues in the checkout service are caused by a bug in the PricingClient.applyDiscount method introduced in the v2.4.1 deployment.",
+          "mechanism": "bad_deployment",
+          "target_service": "checkout",
+          "supporting_evidence_ids": [
+            "ev-c21f88-001",
+            "ev-c21f88-002",
+            "ev-c21f88-003",
+            "ev-c21f88-005"
+          ],
+          "contradicting_evidence_ids": [],
+          "status": "supported",
+          "details": {
+            "version": "v2.4.1"
+          },
+          "origin": "investigation",
+          "proposed_by": "investigator"
+        },
+        "passed": [
+          "every cited evidence ID exists in this run (4 checked)",
+          "deployment evidence shows checkout v2.4.1 deployed 12 min before the alert",
+          "checkout's error_rate is first seen above 5% 10 min before the alert",
+          "errors on checkout began 2 min after v2.4.1 was deployed (allowed window -5..+30 min)",
+          "0 of 12 ERROR lines of checkout blame a dependency (under 50%)"
+        ],
+        "failed": [],
+        "rule_ids": [
+          "V1-structural",
+          "V2-deploy-timing",
+          "V2-upstream-dominance"
+        ]
+      }
+    ],
+    "unknown_evidence_ids": [],
+    "merged_evidence_ids": [
+      "ev-c21f88-001",
+      "ev-c21f88-002",
+      "ev-c21f88-003",
+      "ev-c21f88-004",
+      "ev-c21f88-005"
+    ],
+    "focus_services": [],
+    "summary": "Best supported root cause: bad deployment on checkout (1 supported)."
+  },
+  "retrieved_docs": [
+    {
+      "chunk": {
+        "chunk_id": "shop-architecture#service-level-objectives-1",
+        "doc_path": "fixtures/knowledge/shop-architecture.md",
+        "title": "ShopSim architecture",
+        "heading": "Service level objectives",
+        "text": "- Errors: the HTTP 5xx ratio of every service stays under 1% of requests.\n- Latency: p95 latency stays under 500 ms for every service.\n- Availability: all replicas of every service report ready.\n\nAn alert fires when a service breaks one of these objectives. The alert names the\nservice whose numbers crossed the line, which is not always the service that is broken.",
+        "checksum": "d5b3419b8b41",
+        "provenance": {
+          "source": "fixtures/knowledge",
+          "kind": "synthetic runbook authored for RECAP V1",
+          "license": "MIT (this repository)"
+        },
+        "token_estimate": 92
+      },
+      "score": 12.022455387416487,
+      "rank": 1,
+      "retriever": "bm25",
+      "reranker": "lexical-heading-boost"
+    },
+    {
+      "chunk": {
+        "chunk_id": "guide-reading-signals#error-rate-1",
+        "doc_path": "fixtures/knowledge/guide-reading-signals.md",
+        "title": "Guide: reading health signals",
+        "heading": "Error rate",
+        "text": "The share of requests that fail, usually counted as HTTP 5xx responses. It is the\nclearest sign that users are affected. Find the onset: the first point where the rate\nrises above its normal level. The onset is the moment you compare with recent changes.",
+        "checksum": "486855642ce8",
+        "provenance": {
+          "source": "fixtures/knowledge",
+          "kind": "synthetic runbook authored for RECAP V1",
+          "license": "MIT (this repository)"
+        },
+        "token_estimate": 64
+      },
+      "score": 8.074069375816332,
+      "rank": 2,
+      "retriever": "bm25",
+      "reranker": "lexical-heading-boost"
+    },
+    {
+      "chunk": {
+        "chunk_id": "runbook-bad-deployment#verification-1",
+        "doc_path": "fixtures/knowledge/runbook-bad-deployment.md",
+        "title": "Runbook: bad deployment",
+        "heading": "Verification",
+        "text": "- The error rate falls back under the SLO within a few minutes.\n- All replicas report ready and p95 latency returns to its normal range.\n- No new exceptions tagged with the rolled-back version appear.",
+        "checksum": "092b2a6f0fd0",
+        "provenance": {
+          "source": "fixtures/knowledge",
+          "kind": "synthetic runbook authored for RECAP V1",
+          "license": "MIT (this repository)"
+        },
+        "token_estimate": 50
+      },
+      "score": 7.575642167510665,
+      "rank": 3,
+      "retriever": "bm25",
+      "reranker": "lexical-heading-boost"
+    },
+    {
+      "chunk": {
+        "chunk_id": "guide-reading-signals#latency-1",
+        "doc_path": "fixtures/knowledge/guide-reading-signals.md",
+        "title": "Guide: reading health signals",
+        "heading": "Latency",
+        "text": "p95 latency is the time within which 95% of requests finish. A sharp rise together with\nerrors often means timeouts against a slow dependency; a rise without errors may simply\nbe load.",
+        "checksum": "486855642ce8",
+        "provenance": {
+          "source": "fixtures/knowledge",
+          "kind": "synthetic runbook authored for RECAP V1",
+          "license": "MIT (this repository)"
+        },
+        "token_estimate": 46
+      },
+      "score": 6.0449279582933295,
+      "rank": 4,
+      "retriever": "bm25",
+      "reranker": "lexical-heading-boost"
+    },
+    {
+      "chunk": {
+        "chunk_id": "runbook-bad-deployment#remediation-1",
+        "doc_path": "fixtures/knowledge/runbook-bad-deployment.md",
+        "title": "Runbook: bad deployment",
+        "heading": "Remediation",
+        "text": "Mechanism: bad_deployment\nRecommended action: execute_rollback\n\nUse the propose_rollback dry run first. It reports the current version and the last\nhealthy revision a rollback would restore, without changing anything. Roll back to that\nrevision only after a human approves the exact action: this incident, this service and\nthis target version.",
+        "checksum": "092b2a6f0fd0",
+        "provenance": {
+          "source": "fixtures/knowledge",
+          "kind": "synthetic runbook authored for RECAP V1",
+          "license": "MIT (this repository)"
+        },
+        "token_estimate": 86
+      },
+      "score": 12.224812468723727,
+      "rank": 1,
+      "retriever": "bm25",
+      "reranker": "lexical-heading-boost"
+    },
+    {
+      "chunk": {
+        "chunk_id": "runbook-memory-pressure#remediation-1",
+        "doc_path": "fixtures/knowledge/runbook-memory-pressure.md",
+        "title": "Runbook: memory pressure and crash loops",
+        "heading": "Remediation",
+        "text": "Mechanism: resource_pressure\nRecommended action: restart_service\n\nA rolling restart replaces pods one at a time, so the service keeps serving traffic. It\nis reversible and safe when the service has at least two replicas, and it still needs an\napproval bound to the exact service and incident. A restart does NOT fix a bad release:\nthe new pods run the same broken code and fail again.",
+        "checksum": "e8dd49ce9fda",
+        "provenance": {
+          "source": "fixtures/knowledge",
+          "kind": "synthetic runbook authored for RECAP V1",
+          "license": "MIT (this repository)"
+        },
+        "token_estimate": 96
+      },
+      "score": 8.530640500239272,
+      "rank": 2,
+      "retriever": "bm25",
+      "reranker": "lexical-heading-boost"
+    }
+  ],
+  "memory_hits": [],
+  "proposals": [
+    {
+      "action": "execute_rollback",
+      "target": "checkout",
+      "params": {
+        "to_version": "v2.4.0"
+      },
+      "rationale": "The error rate and latency issues in the checkout service are caused by a bug in the PricingClient.applyDiscount method introduced in the v2.4.1 deployment. The evidence shows that the error rate spiked after the deployment of v2.4.1, and the logs confirm a NullPointerException in this method. The recommended action for a bad deployment is to roll back to the last healthy version, which is v2.4.0.",
+      "evidence_ids": [
+        "ev-c21f88-001",
+        "ev-c21f88-002",
+        "ev-c21f88-003",
+        "ev-c21f88-005"
+      ],
+      "expected_health_change": "The error rate should fall back under the SLO within a few minutes, and the p95 latency should return to its normal range after rolling back to v2.4.0.",
+      "rollback_hint": "The rollback should be approved by a human to ensure the correct version is rolled back to.",
+      "risk_level": "reversible_write",
+      "hypothesis_claim": "The error rate and latency issues in the checkout service are caused by a bug in the PricingClient.applyDiscount method introduced in the v2.4.1 deployment.",
+      "source": "llm",
+      "citations": [
+        "runbook-bad-deployment#remediation-1",
+        "runbook-bad-deployment#verification-1",
+        "guide-reading-signals#error-rate-1",
+        "shop-architecture#service-level-objectives-1"
+      ],
+      "proposal_id": "prop-6a98b4a05c",
+      "incident_id": "inc-af088144eb",
+      "created_at": "2026-10-21T09:40:37.434193Z"
+    }
+  ],
+  "safety_decisions": [
+    {
+      "verdict": "APPROVAL_REQUIRED",
+      "reasons": [
+        "reversible write: needs a human approval bound to this exact proposal"
+      ],
+      "rule_ids": [
+        "R1-tool-name-format",
+        "R2-known-tool",
+        "R3-safety-scope",
+        "R4-args-valid",
+        "R5-namespace-allowlist",
+        "R6-service-allowlist",
+        "R7-worker-read-only",
+        "R8-read-allow",
+        "R9-destructive-deny",
+        "R10-high-risk-deny",
+        "R14-remediation-catalog",
+        "R11-reversible-approval"
+      ],
+      "tool_name": "execute_rollback",
+      "risk": "reversible_write",
+      "caller": "controller",
+      "policy_version": "policy-v1",
+      "decided_at": "2026-10-21T09:40:37.438194Z"
+    }
+  ],
+  "pending_approval": null,
+  "approvals": [
+    {
+      "approval_id": "apr-62983d67ae",
+      "incident_id": "inc-af088144eb",
+      "proposal_id": "prop-6a98b4a05c",
+      "proposal_digest": "54a856ebf58a26ed75706e1c73d6c14086280c4f6aa477999c94d3a2f51f4eeb",
+      "scope": "single_action",
+      "decision": "approved",
+      "actor": "console-user",
+      "decided_at": "2026-10-21T09:43:33.323064Z",
+      "expires_at": "2026-10-21T09:55:37.448782Z",
+      "consumed_at": "2026-10-21T09:43:33.371656Z"
+    }
+  ],
+  "actions": [
+    {
+      "action": "execute_rollback",
+      "target": "checkout",
+      "params": {
+        "to_version": "v2.4.0"
+      },
+      "result": "recovered",
+      "at": "2026-10-21T09:43:33.826077Z",
+      "note": ""
+    }
+  ],
+  "recovery": {
+    "healthy_before": false,
+    "healthy_after": true,
+    "observed_signals": {
+      "before": {
+        "cart": {
+          "service": "cart",
+          "status": "Running",
+          "ready_replicas": 2,
+          "replicas": 2,
+          "error_rate": 0.0
+        },
+        "checkout": {
+          "service": "checkout",
+          "status": "Running",
+          "ready_replicas": 3,
+          "replicas": 3,
+          "error_rate": 0.32
+        },
+        "frontend": {
+          "service": "frontend",
+          "status": "Running",
+          "ready_replicas": 3,
+          "replicas": 3,
+          "error_rate": 0.256
+        },
+        "inventory": {
+          "service": "inventory",
+          "status": "Running",
+          "ready_replicas": 2,
+          "replicas": 2,
+          "error_rate": 0.0
+        },
+        "payment": {
+          "service": "payment",
+          "status": "Running",
+          "ready_replicas": 2,
+          "replicas": 2,
+          "error_rate": 0.0
+        }
+      },
+      "after": {
+        "cart": {
+          "service": "cart",
+          "status": "Running",
+          "ready_replicas": 2,
+          "replicas": 2,
+          "error_rate": 0.0
+        },
+        "checkout": {
+          "service": "checkout",
+          "status": "Running",
+          "ready_replicas": 3,
+          "replicas": 3,
+          "error_rate": 0.0
+        },
+        "frontend": {
+          "service": "frontend",
+          "status": "Running",
+          "ready_replicas": 3,
+          "replicas": 3,
+          "error_rate": 0.0
+        },
+        "inventory": {
+          "service": "inventory",
+          "status": "Running",
+          "ready_replicas": 2,
+          "replicas": 2,
+          "error_rate": 0.0
+        },
+        "payment": {
+          "service": "payment",
+          "status": "Running",
+          "ready_replicas": 2,
+          "replicas": 2,
+          "error_rate": 0.0
+        }
+      }
+    },
+    "oracle_name": "simulated-health-oracle",
+    "verified": true,
+    "checked_at": "2026-03-14T10:05:00Z",
+    "services_checked": [
+      "cart",
+      "checkout",
+      "frontend",
+      "inventory",
+      "payment"
+    ]
+  },
+  "episode_id": "ep-98da966f41",
+  "usage": {
+    "steps": 5,
+    "tool_calls": 6,
+    "estimated_tokens": 2732,
+    "actual_input_tokens": 12834,
+    "actual_output_tokens": 724,
+    "external_cost_usd": 0.0,
+    "is_estimate": false,
+    "unreported_calls": 0,
+    "model_requests": 5
+  },
+  "outcome_note": "oracle verified recovery (simulated environment)",
+  "error": null,
+  "versions": {
+    "recap": "0.1.0",
+    "schema": "recap.v1",
+    "prompt_version": "prompts-v4.2",
+    "config_hash": "bf53d1f01a973306",
+    "fixture_hash": "6a0b4664c5b9b2fd",
+    "code_version": "689b1af0e6aa+dirty",
+    "policy_version": "policy-v1",
+    "router": "rules-router-v1",
+    "verifier": "evidence-rule-verifier-v1",
+    "provider": "ollama:qwen3:8b",
+    "provider_origin": "local_llm",
+    "recording": "data/recordings/20261021-093851-ollama-17f273.jsonl",
+    "environment": "simulated",
+    "seed": 11,
+    "transport": "mcp-stdio"
+  },
+  "created_at": "2026-10-21T09:38:51.940006Z",
+  "updated_at": "2026-10-21T09:43:34.001468Z"
+}

@@ -278,17 +278,21 @@ rotating it after M2 is recommended. Live hosted calls ran only with
   citing four real evidence IDs. A JSON proposal once looped on its citations until the
   output limit (now capped with `maxItems`).
 
-### Real model runs (simulated `bad-deployment`, no memory, development runs)
+### Real model runs (simulated `bad-deployment`, no memory)
 
-Every run below used the **simulation auto-approver**; the human-approved deliverable run is
-listed under "Still open". Every fix was proposed by the model, judged by the policy, executed with a
-signed capability and verified by the oracle.
+Local 4 and local 6 were approved **by a person at the terminal** (local 6 is the M2
+deliverable; both are exported in [evals/live/](../evals/live/README.md)). Every other run used
+the **simulation auto-approver**. Every fix was proposed by the model, judged by the policy,
+executed with a signed capability and verified by the oracle.
 
 | Run | Model | Requests | Tokens in / out (server-reported) | Outcome |
 |---|---|---|---|---|
 | local 1 | `qwen3:8b` | 10 (1 unusable, retried) | 26,911 / 1,580 | RESOLVED, 246 s: round 1 claimed a bad deploy without reading logs (verifier: insufficient), round 2 parallel specialists found it; rollback to `v2.4.0` |
 | local 2 (the first CI fixture) | `qwen3:8b` | 7 | 18,331 / 809 | RESOLVED, 143 s, one round: health, deployments, events, logs, 2 metrics, then the diagnosis and the rollback |
-| local 3 (the CI fixture since the review, prompts-v4.1) | `qwen3:8b` | 8 | 21,489 / 771 | RESOLVED, about 2.5 min, one round: health, deployments, logs, error-rate and latency metrics, events, then the diagnosis (5 evidence IDs) and the rollback |
+| local 3 (the CI fixture after the M2 code review, prompts-v4.1) | `qwen3:8b` | 8 | 21,489 / 771 | RESOLVED, about 2.5 min, one round: health, deployments, logs, error-rate and latency metrics, events, then the diagnosis (5 evidence IDs) and the rollback |
+| local 4 (**human-approved**, prompts-v4.1) | `qwen3:8b` | 7 | 18,690 / 809 | RESOLVED, 188 s, 53 s of it waiting for the person: the same six reads as local 3, a diagnosis citing 5 evidence IDs, a rollback to `v2.4.0` approved at the terminal. Its prompts' schema examples matched this scenario's answer (see below) |
+| local 5 (the CI fixture since prompts-v4.2) | `qwen3:8b` | 5 | 12,891 / 744 | RESOLVED, about 2 min, one round: health and the error-rate metric, deployments and events, logs; a diagnosis citing 4 evidence IDs; rollback to `v2.4.0` |
+| local 6 (**human-approved, the M2 deliverable**, prompts-v4.2) | `qwen3:8b` | 5 | 12,834 / 724 | RESOLVED, 282 s, 176 s of it waiting for the person: the same five reads as local 5, a diagnosis citing 4 evidence IDs, a rollback to `v2.4.0` approved at an interactive terminal; the oracle saw checkout's error rate fall from 0.32 to 0.0 |
 | Groq 1 | `gpt-oss-120b` | 3 | 7,083 / 699 | QUOTA_EXHAUSTED (deferred) at 122 s: reserving the full answer limit let two parallel agents starve RECAP's own per-minute cap (fixed: reserve a typical answer, pace up to 150 s) |
 | Groq 2 | `gpt-oss-120b` | 8 (2 cut off: HTTP 400 `json_validate_failed`) | 15,365 / 1,685 | RESOLVED, 246 s, after an escalation; the cut-offs showed a 1,024-token limit is too small for a reasoning model (fixed: 2,048) |
 | Groq 3 (final settings) | `gpt-oss-120b` | 5 | 13,368 / 1,354 | FAILED safely, 182 s: it diagnosed after 2 tool steps without the service's logs, in both rounds; the verifier refused and handed over to a human |
@@ -297,9 +301,11 @@ signed capability and verified by the oracle.
   schema failures) carried `x-ratelimit-limit-requests: 1000`, the Free plan's daily limit;
   `x-ratelimit-remaining-requests` counted down (989 → 985 in Groq 3).
 - **Replay:** local 1 replayed offline 3 times (about 1.2 s each, RESOLVED, 0 model
-  requests); local 3 is `fixtures/recordings/ollama-qwen3-8b-bad-deployment.jsonl` (local 2
-  was, until prompts-v4.1 changed the requests), replayed by
-  `tests/e2e/test_recorded_model_runs.py`.
+  requests). Local 5 is `fixtures/recordings/ollama-qwen3-8b-bad-deployment.jsonl`, replayed
+  by `tests/e2e/test_recorded_model_runs.py` (local 2 and local 3 were the fixture before
+  the prompts changed). The exported recordings of local 4 and local 6 each replayed offline
+  with the code they were recorded with: RESOLVED, 0 model requests, the same tool calls,
+  arguments and write.
 - Small sample, one scenario: these runs show the real path works and fails safely; they say
   nothing yet about how often a model is right.
 
@@ -364,9 +370,96 @@ Test results after the review:
 | Smoke test | `.venv/bin/python scripts/smoke_test.py` | `RESOLVED (67 trace events, simulated environment)` (unchanged) |
 | Evaluation (scripted) | `.venv/bin/python scripts/evaluate.py` | report `20261021-082547-5791a1` at git `85dd0f9`: every outcome, diagnosis, tool-call, step and token number identical to the M1-review report; only wall-clock latency and the fixture hash (it covers the re-recorded model run) differ |
 
+### The human-approved runs (the M2 deliverable)
+
+**Local 6, `run-c21f88c519`**, exported in
+[evals/live/2026-10-21-qwen3-8b-human-approved-prompts-v4.2/](../evals/live/2026-10-21-qwen3-8b-human-approved-prompts-v4.2/README.md):
+
+- **Real inference:** `qwen3:8b` on the owner's laptop (Ollama 0.34.4, weights
+  `sha256:a3de86cd…`, recorded in `provider_info.server`). Five requests: four investigation
+  steps in tools mode, one proposal in JSON-schema mode; 12,834 input / 724 output tokens
+  as the server reported them. The trace, the raw answers in the recording and the per-user
+  usage ledger agree request by request.
+- **Tool choices:** the model asked for health and the error-rate metric, then deployments
+  and events, then logs, all through the MCP tool server; the policy allowed each read
+  (`R8-read-allow`).
+- **Where the answer came from:** neither `v2.4.1` nor `v2.4.0` appears in the first two
+  prompts; both first appear in the third, inside the `get_recent_deployments` result the
+  model asked for ("checkout v2.4.1 (previous v2.4.0)"). Since prompts-v4.2, no fixed prompt
+  text holds any scenario's versions (a test checks every scenario).
+- **Approval:** the policy required approval (`R11-reversible-approval`); the owner approved
+  the exact proposal at the terminal. The decision log says "interactive terminal; answered
+  after 175.9 s": typed on a terminal about three minutes after the prompt appeared, so not
+  an answer typed in advance (that would have been read at once). The approval was used
+  once, 49 ms later, and the write was allowed under `R12-approval-binding` with a signed
+  capability. The record proves a terminal and a human pace, not who typed it.
+- **Outcome:** rollback of `checkout` to `v2.4.0`; the oracle saw checkout's error rate fall
+  from 0.32 to 0.0 (healthy before: false, after: true).
+- **Code:** `689b1af0e6aa+dirty`. The uncommitted changes when the run started were six
+  documentation files and `scripts/export_run_trace.py` (all changed at least 9 minutes
+  earlier), none of which a run executes.
+- **Replay:** its exported recording replays offline: RESOLVED, 0 model requests, the same
+  tool calls, arguments and write.
+
+**Local 4, `run-4b3d3f1704`** (prompts-v4.1), the first human-approved run, is exported next
+to it. Six independent reviewers then checked it and its export (read-only, on copies):
+
+| Area | Verdict | What they found |
+|---|---|---|
+| Real inference | supported | Ollama's own log, the recording, the trace and the ledger agree to within about 10 µs; the model chose every tool call |
+| Human approval | supported | Console channel, manual mode, 53.4 s from request to decision (the auto-approver takes about 1 ms); the digest binds the exact rollback; used once, before the write. But `console-user` only proved that `input()` returned "y" |
+| Outcome and safety chain | supported, one major finding | Legal lifecycle, every call judged, one signed single-use write, the oracle's verdict recomputed. **Major:** prompts-v4.1's schema examples `"v2.4.1"` / `"v2.4.0"` were exactly this scenario's answer |
+| Publishing safety | supported | No key, path, login name or machine identifier in the export |
+| The export's claims | supported, wording issues | Every number right; "tools mode" for a JSON-mode proposal, "a person answered" from the actor name alone, "no API" for a local API |
+| M2 acceptance | met except | The deliverable was uncommitted, the docs were stale, and the planted-answer finding |
+
+Fixed in commit `689b1af` ([ADR 0019](decisions/0019-checkable-evidence-of-a-real-model-run.md)):
+
+- prompts-v4.2 and prompts-v3.1 carry no example values, guarded by
+  `tests/unit/test_prompt_neutrality.py`;
+- console approvals need an interactive terminal and log how the answer came;
+- every run records its code version and its model server's facts, including the weights digest;
+- recordings drop `x-request-id`;
+- the export is complete and refuses unsafe content, and `tests/unit/test_published_artifacts.py`
+  scans every published file in CI;
+- the replay fixture was re-recorded (local 5).
+
+Each fix's test was checked by undoing the fix: 17 of 17 fail on their intended assertion.
+
+**A second review** (security, correctness, test quality; three reviewers on commit
+`689b1af`, read-only, on copies) then proved these gaps in the fixes themselves, all closed
+before the commit that followed:
+
+| Area | What the review proved | What changed |
+|---|---|---|
+| Export gate | It searched the JSON text, where a key after a newline sits behind `\n`; URL-encoded and upper-case paths passed; the redactor missed several key formats | Every decoded and URL-decoded string and key is checked, paths case-insensitively; the redactor knows OpenAI project keys, all GitHub token kinds, Slack tokens, temporary AWS keys and private-key blocks |
+| Console approval | A "y" typed while the model worked was taken the moment the prompt appeared, logged as an interactive answer | Typed-ahead input is discarded; answers faster than a person can read are flagged; the docs claim a terminal and a timing, not a person |
+| Approval notes | A "no" that revoked an approval lost its note; with two approvals the README showed one note twice; "approved" was printed for a revoked approval | Notes and waits come from each proposal's own deciding log entry; the overview uses the store's current decision |
+| Provider IDs | Groq's request ID is also in the answer body (`x_groq`), with the answer's own `id` | Recordings keep only the answer fields the provider reads; the export drops the IDs from older recordings; the CI scan looks for them |
+| README | Model text could forge a bold "Approval" line with `<br>`; replays claimed prompt-cache tokens; "answered" described an unread rejection | Model text is escaped; replay and unread cases are worded for what they are |
+| Export folder | Re-exporting left the previous run's files behind | Staged and moved into place; replacing needs `--replace` |
+| Provenance | The weights digest came from the first `sha256` anywhere in the modelfile; `code_version` reported an enclosing repository's commit | Only the `FROM` line counts; a copy inside another repository is "unknown"; status reads take no git lock |
+| Neutrality guard | It scanned one role's first prompt: a version planted in a tool description, a specialist's goal, a last-step line, feedback text or the proposal prompt passed | Every role at its first and last step, both proposal prompts, every prompt-module string and the runbooks, pieces of facts and quoted example services; a self-test plants a fact in each source. It found one more planted example (`{"service": "checkout"}` in prompts-v3.1, now v3.2) |
+
+22 of 22 revert checks fail on their intended assertion (one at first did not, because a
+planted fact was also caught through a second source; the self-test now names the source it
+expects).
+
+Test results after the run reviews:
+
+| Check | Command | Result |
+|---|---|---|
+| Python tests | `.venv/bin/python -m pytest` | **1217 passed, 1 skipped** in about 74 s (the skip is the optional OpenTelemetry test) |
+| By folder | `--collect-only tests/<folder>` | unit 1065 · integration 28 · adversarial 62 · e2e folder 63 · total 1,218 |
+| End-to-end | `.venv/bin/python -m pytest -m e2e` | **59** cases (55 functions) |
+| Lint and format | `ruff check .` and `ruff format --check .` | clean |
+| Dashboard | `npm test`, `npm run build` | 19 passed; strict build passes |
+| Smoke test | `.venv/bin/python scripts/smoke_test.py` | `RESOLVED (67 trace events, simulated environment)` (unchanged) |
+| Published files | `tests/unit/test_published_artifacts.py` | the replay fixture and the three exports in `evals/live/` |
+
 ### What genuinely ran
 
-- **Real LLM inference:** `qwen3:8b` locally (33 requests in all: 25 in the three runs
+- **Real LLM inference:** `qwen3:8b` locally (50 requests in all: 42 in the six runs
   above and 8 direct measurement requests) and `gpt-oss-120b` on Groq's Free plan (16 chat requests, about
   39,500 reported tokens, plus 4 model-list metadata requests). **Charges: $0.**
 - **Replays** of recorded real runs (no model called).
@@ -374,13 +467,25 @@ Test results after the review:
 
 ### Still open (M2 blockers and follow-ups)
 
-- **Human-approved deliverable run:** the M2 deliverable asks for a run that a human
-  approves. The four runs above used the simulation auto-approver. The owner runs:
-  `python scripts/demo.py --scenario bad-deployment --provider ollama --no-memory` and
-  answers `y`; `scripts/export_run_trace.py <run_id> evals/live/<name>` then writes the
-  sanitized trace.
+- The human-approved deliverable run is **done** (local 6, `run-c21f88c519`); see "The
+  human-approved runs" above.
 - `gpt-oss-120b` tends to diagnose before reading the service's logs (twice in Groq 3).
   Telling models what evidence each mechanism needs, generically, is an M3 follow-up.
+- The verifier checks that a proposal fits the catalog and the diagnosed service, but not
+  that a rollback's target is the release before the bad one in the deployment evidence;
+  today the model and the approving person decide that (an M3 verifier rule).
+- "A person approved" is an inference: an interactive terminal and a human-scale delay,
+  not an identity; a program driving a terminal could still answer.
+- The redactor and the export's gates are best effort: a secret in a format no rule knows
+  would still be published. Exports are small and reviewed before they are committed.
+- Exports do not include the environment's own record of the write (the sandbox's action
+  log and used capability nonce); the trace and the decision log show the approval binding.
+- `--no-memory` only stops memory reads: a verified run, live-model runs included, is still
+  saved to the `demo` memory partition. A separate partition for live runs is an M3 option.
+- Ollama reports how many input tokens came from its prompt cache; the export shows it, but
+  `Usage` does not track it yet.
+- The Groq free-plan confirmation of 2026-10-21 lapses after 2026-10-28; rotating the key
+  before the next hosted run is recommended (it was pasted into a chat).
 - Real models have not been red-teamed (prompt injection against `qwen3:8b`/`gpt-oss-120b`).
 - Model-level runs are not reproducible (random IDs in the prompt); only replays are.
 - **M5:** Docker, Kind and kubectl are still not installed.
