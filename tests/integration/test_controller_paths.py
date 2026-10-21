@@ -158,7 +158,7 @@ async def test_a_fix_that_does_not_recover_is_retried_then_fails_without_repeati
 class BrokenProvider:
     """A provider whose every call fails, like an LLM API that is down."""
 
-    info = ProviderInfo(name="broken", kind="llm", model="none")
+    info = ProviderInfo(name="broken", kind="llm", origin="paid_llm", model="none")
 
     async def next_action(self, request: InvestigationRequest) -> InvestigationDecision:
         raise RecapError(f"provider unavailable: HTTP 503 (key {FAKE_KEY})")
@@ -306,7 +306,7 @@ def _keep_fixtures_untouched(settings: Settings) -> Iterator[None]:
 class PartlyUnreportedProvider(DeterministicProvider):
     """An 'LLM' whose first decision came back without usage data (but was billed)."""
 
-    info = ProviderInfo(name="partly-unreported", kind="llm", model="fake")
+    info = ProviderInfo(name="partly-unreported", kind="llm", origin="paid_llm", model="fake")
 
     def __init__(self) -> None:
         super().__init__()

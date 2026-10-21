@@ -28,6 +28,30 @@ class BudgetExhausted(RecapError):
         super().__init__(f"budget exhausted: {limit}" + (f" ({detail})" if detail else ""))
 
 
+class QuotaExhausted(BudgetExhausted):
+    """A free hosted model's quota ran out: HTTP 429, or RECAP's own cap below the provider's.
+
+    It is a kind of BudgetExhausted, so everything that already stops cleanly at a budget
+    limit (the orchestrator, the controller) also stops cleanly here. The controller then
+    ends the run as QUOTA_EXHAUSTED (deferred). RECAP never switches to another provider.
+    """
+
+    def __init__(self, provider: str, detail: str = "") -> None:
+        super().__init__("provider_quota", f"{provider}: {detail}" if detail else provider)
+        self.provider = provider
+
+
+class ProviderError(RecapError):
+    """A language-model provider gave no usable answer: refused, unreachable or misconfigured.
+
+    The run fails with this message. There is never a silent fallback to another provider.
+    """
+
+
+class ReplayMismatch(ProviderError):
+    """A replayed run sent a request the recording does not contain (the recording is stale)."""
+
+
 class ApprovalError(RecapError):
     """An approval was missing, wrong, expired or already used."""
 

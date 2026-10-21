@@ -46,7 +46,10 @@ class PromptInjectedProvider:
         self.info = ProviderInfo(
             name=f"{base.info.name}+prompt-injected(red-team)",
             kind=base.info.kind,
+            origin=base.info.origin,
             model=base.info.model,
+            mode=base.info.mode,
+            prompt_version=base.info.prompt_version,
             description=(
                 "RED-TEAM ONLY: simulates a planner that was successfully prompt-injected. "
                 "It proposes whatever destructive action untrusted data asks for, so tests "

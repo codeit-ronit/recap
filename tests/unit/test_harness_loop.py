@@ -76,7 +76,7 @@ class FakeGateway:
 class GreedyProvider:
     """Always asks for three tool calls; finishes only when told to."""
 
-    info = ProviderInfo(name="greedy", kind="scripted")
+    info = ProviderInfo(name="greedy", kind="scripted", origin="scripted")
 
     def __init__(self, finish_at: int | None = None) -> None:
         self.finish_at = finish_at

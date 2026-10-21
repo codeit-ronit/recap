@@ -1,15 +1,78 @@
-# Decision providers. The default is a scripted deterministic policy: it is NOT an LLM,
-# makes no network calls and costs $0. Real LLM providers are opt-in only.
+# Decision providers: the "brain" behind each agent (recap/providers/).
+#
+# The default is a scripted deterministic policy: it is NOT an LLM, makes no network calls
+# and costs $0. Every other provider is opt-in: export RECAP_PROVIDER=<name>.
+# This project's budget is $0: only local and verified-free providers may run.
+#
+#   origin           what the dashboard's run-origin badge says
+#   scripted         fixed playbooks, not an LLM
+#   local_llm        a model on this machine (Ollama): no network, no charge
+#   free_hosted_llm  a hosted free plan, checked before every call (recap/providers/quota.py)
+#   replay           recorded answers of an earlier real LLM run (offline; used by CI)
+#   paid_llm         billed per call: the owner keeps it disabled
 default: deterministic
 
 providers:
   deterministic:
     kind: scripted
+    origin: scripted
     description: "Scripted baseline policy (not an LLM): deterministic playbooks and heuristics."
+
+  ollama:
+    kind: llm
+    origin: local_llm
+    api: ollama
+    description: "Open-weight model served by Ollama on this machine. No network, no charge."
+    base_url: "http://127.0.0.1:11434"   # loopback only: RECAP refuses any other host
+    model: "qwen3:8b"                    # must already be installed; RECAP never downloads models
+    mode: tools                          # investigation steps: native tool calls (proposals use JSON)
+    think: false                         # qwen3's thinking mode: slower, measured in docs/status.md
+    context_tokens: 16384                # Ollama's num_ctx; prompts are about 2-4K tokens
+    max_output_tokens: 1024
+    request_timeout_seconds: 300
+    budget: {max_elapsed_seconds: 1800}  # about a minute per decision on a 16 GB laptop
+
+  groq:
+    kind: llm
+    origin: free_hosted_llm
+    api: openai_compatible
+    description: "Groq Free plan (no payment method) via its OpenAI-compatible API. Fails closed."
+    base_url: "https://api.groq.com/openai/v1"
+    model: "openai/gpt-oss-120b"
+    mode: json                           # strict JSON schema (Groq cannot combine it with tools)
+    reasoning_effort: low                # reasoning tokens count against the free token limits
+    max_output_tokens: 2048              # gpt-oss reasons before it answers: 1024 cut answers off
+    request_timeout_seconds: 60
+    budget: {max_elapsed_seconds: 900}   # the free plan allows about one large request a minute
+    free_tier:
+      api_key_env: GROQ_API_KEY
+      attestation_env: RECAP_GROQ_FREE_PLAN_CONFIRMED_ON
+      attestation_max_age_days: 7
+      allowed_models: ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]
+      # Free plan, requests per day (console.groq.com/docs/rate-limits). Every response's
+      # x-ratelimit-limit-requests header must equal this, or RECAP stops using Groq.
+      free_daily_request_limit: {"openai/gpt-oss-120b": 1000, "openai/gpt-oss-20b": 1000}
+      limits_checked_on: "2026-10-21"
+      # RECAP's own caps, below the free plan's 30 RPM / 1K RPD / 8K TPM / 200K TPD.
+      caps:
+        requests_per_minute: 25
+        requests_per_day: 800
+        tokens_per_minute: 7000
+        tokens_per_day: 150000
+        requests_per_run: 40
+      reserved_output_tokens: 1024       # what RECAP's caps count per answer until its real size is known
+      max_retry_after_seconds: 30
+
+  replay:
+    kind: replay
+    origin: replay
+    description: "Replays a recorded real-LLM run offline (no network). Marked REPLAY, never live."
+    recording: "fixtures/recordings/ollama-qwen3-8b-bad-deployment.jsonl"
 
   anthropic:
     kind: llm
-    description: "Optional Claude adapter via the official Anthropic SDK. Uses YOUR API key and billing."
+    origin: paid_llm
+    description: "Optional Claude adapter (official Anthropic SDK). PAID per call: disabled for this $0 project."
     model: claude-opus-5-5
     effort: high
     max_tokens: 16000

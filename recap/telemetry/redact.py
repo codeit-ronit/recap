@@ -17,8 +17,8 @@ The Redactor returns a redacted deep copy and applies three rules:
   2. Known secrets    values of environment variables whose NAME contains KEY, SECRET,
                       TOKEN or PASSWORD (plus any extra secrets passed in) are replaced
                       wherever they appear inside a string.
-  3. Key formats      strings shaped like Anthropic, OpenAI, AWS or GitHub keys, or bearer
-                      tokens, are replaced.
+  3. Key formats      strings shaped like Anthropic, OpenAI, OpenRouter, Groq, Google, AWS
+                      or GitHub keys, or bearer tokens, are replaced.
 
 The pattern list is best-effort, not a guarantee: a secret in a format these rules do not
 recognize is stored as it is. This is a local prototype, not a data-loss-prevention system.
@@ -45,7 +45,10 @@ KEY_VALUE_SECRET = re.compile(
 
 SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"sk-ant-[A-Za-z0-9_-]{8,}"),  # Anthropic API key
+    re.compile(r"sk-or-v1-[A-Za-z0-9]{16,}"),  # OpenRouter API key
     re.compile(r"sk-[A-Za-z0-9]{16,}"),  # OpenAI-style API key
+    re.compile(r"gsk_[A-Za-z0-9]{16,}"),  # Groq API key
+    re.compile(r"AIza[0-9A-Za-z_-]{30,}"),  # Google (Gemini) API key
     re.compile(r"AKIA[0-9A-Z]{16}"),  # AWS access key ID
     re.compile(r"ghp_[A-Za-z0-9]{20,}"),  # GitHub personal access token
     re.compile(r"(?i)bearer\s+[A-Za-z0-9._-]{8,}"),  # HTTP "Authorization: Bearer ..." value
@@ -83,6 +86,14 @@ class Redactor:
             # A model inside a payload is redacted as the JSON data it will be stored as.
             return self(value.model_dump(mode="json"))
         return value  # numbers, booleans, None, datetimes: nothing to hide
+
+    def redact_text(self, text: str) -> str:
+        """Rules 2 and 3 only (known secrets and key formats), for free text such as recordings.
+
+        Rule 1 (sensitive key names) is left out on purpose: a recorded rate-limit header like
+        "x-ratelimit-limit-tokens: 8000" is a count, and replay needs it exactly as received.
+        """
+        return self._redact_text(text)
 
     def _redact_entry(self, key: Any, value: Any) -> Any:
         """Hide the value of a sensitive key unless it is a number, a flag or None."""

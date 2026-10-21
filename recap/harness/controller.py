@@ -35,7 +35,7 @@ from recap.agents.roles import agent_specs
 from recap.context.evidence import EvidenceRegistry
 from recap.context.packer import ContextPacker
 from recap.core.config import EnvironmentConfig, Settings
-from recap.core.errors import ApprovalError, BudgetExhausted, ConfigError
+from recap.core.errors import ApprovalError, BudgetExhausted, ConfigError, QuotaExhausted
 from recap.core.ids import new_id, utcnow
 from recap.core.interfaces import (
     ApprovalChannel,
@@ -217,6 +217,7 @@ class IncidentController:
             history=list(self.lifecycle.history),
             environment=self.info,
             provider=self.provider.info.name,
+            provider_info=self.provider.info,
             versions=self._versions(seed),
         )
         self.tracer = Tracer(
@@ -526,6 +527,10 @@ class IncidentController:
             self.provider.propose_mitigation(request), "the remediation proposal"
         )
         self._add_usage(decision.usage)
+        for call in decision.model_calls:  # a real model's requests behind the proposal
+            self.tracer.emit(
+                TraceCategory.LLM_CALL, call.model_dump(mode="json"), duration_ms=call.duration_ms
+            )
         if decision.draft is None:
             self.tracer.emit(TraceCategory.PROPOSAL, {"proposal": None, "notes": decision.notes})
             self._finish(S.FAILED, "no remediation could be drafted; a human should take over")
@@ -879,8 +884,15 @@ class IncidentController:
         self._checkpoint()
 
     def _stop_on_error(self, exc: BaseException) -> None:
-        """BudgetExhausted -> BUDGET_EXHAUSTED (a clean, expected stop); anything else -> FAILED."""
+        """QuotaExhausted -> QUOTA_EXHAUSTED (deferred); BudgetExhausted -> BUDGET_EXHAUSTED
+        (a clean, expected stop); anything else -> FAILED."""
         self._record_interrupted_fix("stopped")
+        if isinstance(exc, QuotaExhausted):
+            # A free model's quota ran out: nothing about the incident was decided, and RECAP
+            # does not switch to another provider to finish the run.
+            self.tracer.emit(TraceCategory.BUDGET, {"limit": exc.limit, "detail": exc.detail})
+            self._finish(S.QUOTA_EXHAUSTED, f"deferred: {exc}")
+            return
         if isinstance(exc, BudgetExhausted):
             self.tracer.emit(TraceCategory.BUDGET, {"limit": exc.limit, "detail": exc.detail})
             self._finish(S.BUDGET_EXHAUSTED, f"stopped safely: {exc}")
@@ -917,10 +929,16 @@ class IncidentController:
             external_cost_usd=p.external_cost_usd,
             is_estimate=p.is_estimate,
             unreported_calls=p.unreported_calls,
+            model_requests=p.model_requests,
         )
 
     def _consolidate(self) -> None:
         """Write the finished run to experience memory (success only if the oracle verified it)."""
+        if self.record.state == S.QUOTA_EXHAUSTED:
+            # Deferred: the model never finished, so nothing about the incident was learned.
+            reason = "run deferred (a free model's quota ran out); it is not experience"
+            self.tracer.emit(TraceCategory.MEMORY_SKIP, {"reason": reason})
+            return
         if self.cancelled or self.record.error:
             # A run that crashed or was cancelled says nothing about the incident itself.
             self.tracer.emit(
@@ -985,7 +1003,12 @@ class IncidentController:
                 "unsafe_executed": len(executed),
                 "unsafe_refused_by_environment": len(refused),
                 "budget": self.budget.snapshot(),
-                "cost": cost_label(usage, self.provider.info.kind),
+                "cost": cost_label(
+                    usage,
+                    self.provider.info.origin,
+                    # Set only by a free hosted provider whose tripwire fired (quota.py).
+                    free_status_lost=getattr(self.provider, "free_status_lost", None),
+                ),
                 "simulated": self.info.is_simulated,
                 "episode_id": self.record.episode_id,
             },
@@ -1031,22 +1054,36 @@ class IncidentController:
         return self.scenario.default_seed or 0
 
     def _budget(self) -> RunBudget:
+        """The run's limits: defaults, then the provider's overrides, then the scenario's.
+
+        A real model needs more time than the scripted policy (about a minute per decision
+        locally, or the free plan's rate limits), so its entry in configs/providers.yaml may
+        raise the limits. A scenario's own budget (e.g. budget-exhausted's 3 tool calls)
+        still wins, and an explicit RunConfig.budget replaces everything.
+        """
         if self.config.budget is not None:
             return self.config.budget
         defaults = self.settings.budget.default_budget.model_dump()
-        return RunBudget(**{**defaults, **self.scenario.budget})
+        name = self.config.provider or self.settings.providers.default
+        spec = self.settings.providers.providers.get(name)
+        provider_budget = spec.budget if spec is not None else {}
+        return RunBudget(**{**defaults, **provider_budget, **self.scenario.budget})
 
     def _versions(self, seed: int) -> dict[str, Any]:
         return {
             "recap": __version__,
             "schema": SCHEMA_VERSION,
-            "prompt_version": PROMPT_VERSION,
+            # prompts-v4 for the free/local LLMs; otherwise prompts-v3, as recorded before
+            # (the scripted policy itself uses no prompts at all).
+            "prompt_version": self.provider.info.prompt_version or PROMPT_VERSION,
             "config_hash": self.settings.config_hash,
             "fixture_hash": self.deps.fixture_hash,
             "policy_version": self.settings.policies.version,
             "router": self.deps.router.name,
             "verifier": self.deps.verifier.name,
             "provider": self.provider.info.name,
+            "provider_origin": self.provider.info.origin,
+            "recording": self.provider.info.recording,
             "environment": self.info.kind,
             "seed": seed,
         }

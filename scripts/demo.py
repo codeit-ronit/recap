@@ -5,9 +5,13 @@
     python scripts/demo.py --scenario ambiguous-incident --approve auto
     python scripts/demo.py --scenario malicious-log
     python scripts/demo.py --scenario budget-exhausted
+    python scripts/demo.py --scenario bad-deployment --provider ollama   # a real local LLM
 
 Everything runs locally against the SIMULATED environment through a real MCP server
-subprocess. Nothing here touches a real cluster, cloud account or paid API.
+subprocess. Nothing here touches a real cluster, cloud account or paid API. With
+--provider ollama the decisions come from a real model on this machine (about a minute
+each); with --provider groq from Groq's free plan (needs RECAP_ALLOW_LIVE_FREE_INFERENCE=1
+and the owner's free-plan confirmation, see docs/provider-options.md).
 """
 
 from __future__ import annotations
@@ -32,9 +36,16 @@ from recap.core.models import (
 from recap.runtime import Runtime
 from recap.safety.approvals import ConsoleApprovalChannel
 from recap.telemetry.tracer import TraceCategory as C
-from recap.telemetry.usage import cost_label
 
 LINE = "═" * 78
+# What each run origin means, in the words the dashboard's badge uses.
+ORIGIN_TEXT = {
+    "scripted": "SCRIPTED baseline policy, NOT an LLM",
+    "local_llm": "LOCAL LLM: real inference on this machine (Ollama), no API, $0",
+    "free_hosted_llm": "FREE HOSTED LLM: real inference on a free plan, checked every call",
+    "replay": "REPLAY of a recorded LLM run: no model is called",
+    "paid_llm": "PAID LLM API (disabled for this $0 project)",
+}
 
 
 class ConsoleSink:
@@ -43,6 +54,7 @@ class ConsoleSink:
     def __init__(self) -> None:
         self.started = time.perf_counter()
         self.quiet = False
+        self.cost = ""  # the run summary's cost label, printed at the end
 
     def write(self, e: TraceEvent) -> None:
         if self.quiet and e.category not in (C.STATE,):
@@ -84,6 +96,19 @@ class ConsoleSink:
                 f"ROUTE     round {p['round']}: {p['mode']} [{agents}] · "
                 f"{p['rule_id']} · {p['reason']}"
             )
+        if e.category == C.LLM_CALL:
+            # One real model request: which model, what it chose, exact tokens, time.
+            agent = e.agent or "controller"
+            line = (
+                f"LLM       {agent} · {p['model']} · {p['mode']} · {p['response_kind']} · "
+                f"in {p.get('input_tokens')} / out {p.get('output_tokens')} tokens · "
+                f"{p['duration_ms'] / 1000:.1f}s" + (" · REPLAYED" if p.get("replayed") else "")
+            )
+            problems = [note for note in p.get("notes", []) if note.startswith("unusable")]
+            return line + "".join(f"\n          ✗ {note}" for note in problems)
+        if e.category == C.RUN_SUMMARY:
+            self.cost = p.get("cost", "")
+            return None
         if e.category == C.TOOL_CALL:
             args = ",".join(f"{k}={v}" for k, v in p["args"].items())
             return f"  {e.agent:<28} → {p['tool']}({args})"
@@ -171,7 +196,7 @@ def banner(info: EnvironmentInfo) -> str:
     return f"LIVE ENVIRONMENT ({info.kind}) · V1"
 
 
-def print_summary(record: RunRecord, expected: str, runtime: Runtime, provider_kind: str) -> None:
+def print_summary(record: RunRecord, expected: str, runtime: Runtime, cost: str) -> None:
     print(LINE)
     print(f" RESULT  {record.state.value} — {record.outcome_note}")
     if record.verification and record.verification.best:
@@ -192,7 +217,7 @@ def print_summary(record: RunRecord, expected: str, runtime: Runtime, provider_k
     u = record.usage
     print(
         f" USAGE      steps={u.steps} tool_calls={u.tool_calls} est_tokens={u.estimated_tokens}"
-        f" · {cost_label(u, provider_kind)}"
+        f" · model requests={u.model_requests} · {cost}"
     )
     print(f" EPISODE    {record.episode_id or 'not written'}")
     print(f" TRACE      {runtime.jsonl.path_for(record.run_id)}")
@@ -221,6 +246,12 @@ async def main() -> int:
     parser.add_argument("--no-rag", action="store_true", help="disable runbook retrieval")
     parser.add_argument("--no-memory", action="store_true", help="disable experience memory")
     parser.add_argument("--latency-ms", type=int, default=None, help="simulated tool latency")
+    parser.add_argument(
+        "--provider",
+        default=None,
+        help="decision provider from configs/providers.yaml (default: RECAP_PROVIDER or "
+        "deterministic), e.g. ollama, groq, replay",
+    )
     args = parser.parse_args()
 
     sink = ConsoleSink()
@@ -241,15 +272,13 @@ async def main() -> int:
         use_memory=not args.no_memory,
         approval_mode="auto" if args.approve == "auto" else "manual",
         tool_latency_ms=args.latency_ms,
+        provider=args.provider,
     )
     provider = runtime.make_provider(config)
     print(LINE)
     print(f" RECAP · {banner(runtime.environment_info())} · scenario: {scenario.id}")
     print(f" {scenario.title}")
-    print(
-        f" provider: {provider.info.name} — "
-        + ("scripted baseline policy, NOT an LLM" if provider.info.kind == "scripted" else "LLM")
-    )
+    print(f" provider: {provider.info.name} — {ORIGIN_TEXT[provider.info.origin]}")
     print(
         " approvals: "
         + ("you decide in this terminal" if args.approve == "ask" else "simulation auto-approver")
@@ -261,7 +290,7 @@ async def main() -> int:
     channel = ConsoleApprovalChannel(runtime.approvals) if args.approve == "ask" else None
     record = await runtime.run_incident(scenario.id, config, approval_channel=channel)
     expected = expected_state(scenario, record.config)
-    print_summary(record, expected, runtime, provider.info.kind)
+    print_summary(record, expected, runtime, sink.cost)
     return 0 if record.state.value == expected else 1
 
 

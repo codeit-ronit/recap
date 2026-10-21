@@ -53,7 +53,12 @@ HYPOTHESIS = Hypothesis(
 class StubProvider:
     """Minimal stand-in for the scripted provider (NOT an LLM): always proposes a restart."""
 
-    info = ProviderInfo(name="stub-scripted", kind="scripted", description="test stub, not an LLM")
+    info = ProviderInfo(
+        name="stub-scripted",
+        kind="scripted",
+        origin="scripted",
+        description="test stub, not an LLM",
+    )
 
     def __init__(self) -> None:
         self.calls: list[str] = []

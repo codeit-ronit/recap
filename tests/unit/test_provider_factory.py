@@ -1,8 +1,10 @@
 """Tests for the provider factory: honest default, opt-in LLM, no silent fallback.
 
-No network: the Claude adapter is either refused (missing SDK or key) or given a fake
-client. The SDK itself is replaced in sys.modules where a test needs it to be present
-or missing, so these tests behave the same with or without the llm extra installed.
+No network: the Claude adapter is either refused (no paid opt-in, missing SDK or key) or
+given a fake client. The SDK itself is replaced in sys.modules where a test needs it to be
+present or missing, so these tests behave the same with or without the llm extra installed.
+The free and local providers have their own tests (test_ollama_provider.py,
+test_free_hosted_provider.py, test_replay.py).
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from recap.providers.factory import create_provider, describe_providers
 from recap.providers.prompts import InvestigationOutput
 
 KEY_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+PAID_OPT_IN = "RECAP_ALLOW_PAID_LLM"
 
 
 class FakeClient:
@@ -55,6 +58,12 @@ class FakeClient:
 def no_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     for var in KEY_VARS:
         monkeypatch.delenv(var, raising=False)
+
+
+@pytest.fixture
+def paid_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The owner's explicit opt-in for a paid API (never set for this $0 project)."""
+    monkeypatch.setenv(PAID_OPT_IN, "1")
 
 
 def _request() -> InvestigationRequest:
@@ -114,8 +123,20 @@ def test_unknown_planner_is_refused(settings: Settings) -> None:
 # --- the opt-in Claude adapter ----------------------------------------------------------
 
 
+def test_anthropic_is_refused_without_the_paid_opt_in_even_with_a_key(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """This project's budget is $0: an API key alone must never switch on a paid API."""
+    monkeypatch.delenv(PAID_OPT_IN, raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-real")
+    monkeypatch.setitem(sys.modules, "anthropic", ModuleType("anthropic"))
+    with pytest.raises(ConfigError, match="PAID API") as refused:
+        create_provider("anthropic", settings)
+    assert PAID_OPT_IN in str(refused.value)
+
+
 def test_anthropic_without_an_api_key_is_refused(
-    settings: Settings, no_api_key: None, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, no_api_key: None, paid_opt_in: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Pretend the SDK is installed, so the API-key check is what refuses.
     monkeypatch.setitem(sys.modules, "anthropic", ModuleType("anthropic"))
@@ -125,7 +146,7 @@ def test_anthropic_without_an_api_key_is_refused(
 
 
 def test_anthropic_without_the_sdk_is_refused(
-    settings: Settings, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, paid_opt_in: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-real")
     monkeypatch.setitem(sys.modules, "anthropic", None)  # makes `import anthropic` fail
@@ -134,14 +155,14 @@ def test_anthropic_without_the_sdk_is_refused(
 
 
 def test_anthropic_with_sdk_and_key_builds_without_calling_the_api(
-    settings: Settings, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, paid_opt_in: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-real")
     monkeypatch.setitem(sys.modules, "anthropic", ModuleType("anthropic"))  # no AsyncAnthropic
     provider = create_provider("anthropic", settings)
     # The SDK client is created lazily on the first decision, so nothing ran yet.
     assert isinstance(provider, AnthropicProvider)
-    assert provider.info.kind == "llm"
+    assert (provider.info.kind, provider.info.origin) == ("llm", "paid_llm")
 
 
 async def test_anthropic_with_an_injected_client_works_without_key_or_sdk(
@@ -157,9 +178,10 @@ async def test_anthropic_with_an_injected_client_works_without_key_or_sdk(
 
 
 def test_anthropic_needs_its_config_entry(settings: Settings) -> None:
-    only_scripted = ProvidersConfig(providers={"deterministic": ProviderSettings(kind="scripted")})
+    scripted = ProviderSettings(kind="scripted", origin="scripted")
+    only_scripted = ProvidersConfig(providers={"deterministic": scripted})
     trimmed = settings.model_copy(update={"providers": only_scripted})
-    with pytest.raises(ConfigError, match="not configured"):
+    with pytest.raises(ConfigError, match="unknown provider 'anthropic'"):
         create_provider("anthropic", trimmed, client=FakeClient())
 
 
@@ -184,11 +206,18 @@ def test_describe_providers_needs_no_key_and_builds_nothing(
 ) -> None:
     monkeypatch.setitem(sys.modules, "anthropic", None)
     described = {entry["name"]: entry for entry in describe_providers(settings)}
-    assert set(described) == {"deterministic", "anthropic"}
+    assert set(described) == {"deterministic", "ollama", "groq", "replay", "anthropic"}
+    keys = {"name", "kind", "origin", "model", "mode", "description", "requires_api_key"}
     for entry in described.values():
-        assert set(entry) == {"name", "kind", "model", "description", "requires_api_key"}
-    assert described["deterministic"]["kind"] == "scripted"
-    assert described["deterministic"]["requires_api_key"] is False
-    assert described["anthropic"]["kind"] == "llm"
+        assert set(entry) == keys
+    origins = {name: entry["origin"] for name, entry in described.items()}
+    assert origins == {
+        "deterministic": "scripted",
+        "ollama": "local_llm",
+        "groq": "free_hosted_llm",
+        "replay": "replay",
+        "anthropic": "paid_llm",
+    }
+    needs_key = {name for name, entry in described.items() if entry["requires_api_key"]}
+    assert needs_key == {"groq", "anthropic"}
     assert described["anthropic"]["model"] == "claude-opus-5-5"
-    assert described["anthropic"]["requires_api_key"] is True

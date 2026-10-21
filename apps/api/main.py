@@ -43,6 +43,7 @@ from recap import __version__
 from recap.core.errors import ApprovalError, ConfigError
 from recap.core.models import Approval, EnvironmentInfo, MemoryPartition, RunConfig, RunRecord
 from recap.knowledge.hints import parse_action_hints
+from recap.providers.catalog import provider_status
 from recap.runtime import Runtime
 from recap.safety.injection import injection_flags
 
@@ -150,6 +151,13 @@ def create_app(
     def system(request: Request) -> dict[str, Any]:
         """Which implementation is plugged into each interface (for the Architecture page)."""
         return manager(request).runtime.system_summary()
+
+    @app.get("/providers")
+    async def providers(request: Request) -> list[dict[str, Any]]:
+        """Every configured provider and whether it could run now (no hosted calls, no
+        inference; a key is reported only as present or not)."""
+        rt = manager(request).runtime
+        return await provider_status(rt.settings, rt.ledger)
 
     @app.get("/scenarios")
     def scenarios(request: Request) -> list[dict[str, Any]]:

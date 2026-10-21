@@ -62,6 +62,7 @@ class DeterministicProvider:
     info = ProviderInfo(
         name="deterministic-scripted-policy",
         kind="scripted",
+        origin="scripted",
         model=None,
         description=(
             "Scripted baseline policy (NOT an LLM): role playbooks + heuristics over the "

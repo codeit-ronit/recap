@@ -155,6 +155,15 @@ class AgentHarness:
             decision = await self.provider.next_action(request)
             usage = usage.plus(decision.usage)
             self.on_usage(decision.usage)
+            # A real model's requests come first, so the timeline shows inference before
+            # the decision it produced (the scripted policy sends none).
+            for call in decision.model_calls:
+                self.tracer.emit(
+                    TraceCategory.LLM_CALL,
+                    {"step": step, **call.model_dump(mode="json")},
+                    agent=role.value,
+                    duration_ms=call.duration_ms,
+                )
             self.tracer.emit(
                 TraceCategory.AGENT_DECISION,
                 {

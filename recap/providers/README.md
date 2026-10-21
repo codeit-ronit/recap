@@ -10,113 +10,140 @@ interface in `recap/core/interfaces.py`:
 
 All providers return the same validated Pydantic types, so the harness never knows which one
 is running. Swapping the brain does not change RAG, memory, routing, the safety gateway or
-the harness.
+the harness. Which one runs is server configuration: `configs/providers.yaml`, or
+`RECAP_PROVIDER=<name>` (the CLI also takes `--provider <name>`).
 
-| Name | Class | Kind | What it is |
-|---|---|---|---|
-| `deterministic` (default) | `DeterministicProvider` | scripted | Scripted baseline policy built from playbooks and heuristics. **Not an LLM.** No network, $0. |
-| `anthropic` (opt-in) | `AnthropicProvider` | llm | Claude through the official Anthropic Python SDK. Uses **your own** API key and billing. |
+| Name | Class | Origin (run badge) | What it is | Cost |
+|---|---|---|---|---|
+| `deterministic` (default) | `DeterministicProvider` | `scripted` | Scripted baseline policy built from playbooks and heuristics. **Not an LLM.** | $0, offline |
+| `ollama` | `OllamaProvider` | `local_llm` | A real open-weight model on this machine (`qwen3:8b`) through Ollama's `/api/chat`. | $0, offline |
+| `groq` | `FreeHostedProvider` | `free_hosted_llm` | A real hosted model (`openai/gpt-oss-120b`) on Groq's **Free plan**, behind a fail-closed guard. | $0 (free plan, checked every call) |
+| `replay` | the recorded provider + `ReplayTransport` | `replay` | Answers from a recording of an earlier real-model run. No model is called. | $0, offline |
+| `anthropic` | `AnthropicProvider` | `paid_llm` | Claude through the official SDK. **Paid; disabled** for this $0 project. | billed per call |
+
+The dashboard shows the origin as a badge on every run (SCRIPTED, LOCAL LLM, FREE HOSTED
+LLM, REPLAY), so a scripted or replayed run can never pass for live model reasoning.
 
 ## The honest default
 
-`deterministic` is what the tests, CI and the demo use. It is a scripted policy, not a
-language model: it follows fixed playbooks and parses simulator signals with fixed rules.
-Its token numbers are *estimates* (about 4 characters per token) and its cost is always $0.
-Results produced with it say nothing about how an LLM would perform.
+`deterministic` is what the tests, CI and the default demo use. It follows fixed playbooks
+and parses simulator signals with fixed rules. Its token numbers are *estimates* (about 4
+characters per token) and its cost is always $0. Results produced with it say nothing about
+how an LLM would perform.
 
-Its one setting comes from `configs/budget.yaml`: `routing.familiar_similarity`, the memory
-similarity at which a verified past fix may steer the investigator's first checks. It is the
-same threshold the router uses, so changing it changes both.
+## Real models (M2): how one decision works
 
-## The optional Claude adapter (`anthropic`)
+`OllamaProvider` and `FreeHostedProvider` share one loop (`http_llm.py`) and one versioned
+step protocol (`protocol.py`, **prompts-v4**). For each decision:
 
-- **Opt-in only.** It is never used by the tests, CI or the default demo. Tests inject a
-  fake client and never touch the network.
-- **Your own key and billing.** Every decision is one paid Claude API call.
-- **No silent fallback.** If you ask for `anthropic` but the SDK or the key is missing,
-  RECAP stops with a `ConfigError`. It never quietly switches to another provider.
+1. **Render** the request: a static system prompt (the rules, and RECAP's failure
+   mechanisms in generic SRE terms), then one user message with the role, the incident, the
+   tools, the agent's previous calls, what any agent already observed, and the context pack.
+   Everything RECAP did not write is inside `<untrusted_data>` tags. "Step N of M" comes
+   last, so a local server can reuse its cache for the shared start.
+2. **Constrain** the answer with a schema built for this request from RECAP's trusted
+   catalog: tool names, services, metrics and mechanisms are enums, and evidence IDs are an
+   enum of the IDs this agent can see. In `tools` mode the read tools are native functions
+   plus `submit_findings`. On the last step only finishing is offered.
+3. **Send** one HTTP request through the transport (`transport.py`): no SDK, no hidden
+   retries. Every exchange is recorded under `data/recordings/` without the API key.
+4. **Parse** the answer (`tool_request`, `hypothesis`, `need_more_evidence`, `stop`; for a
+   proposal `final_proposal` or `stop`) and check it again: unlisted tools, foreign
+   arguments, repeated calls, unknown IDs and services outside the allowlist are dropped with
+   a note in the trace.
+5. **Unusable?** Send the reason back once (a corrective retry). Still unusable: the agent
+   finishes without a decision. There is **never** a fallback to scripted decisions.
 
-Enable it:
+Each request becomes a `ModelCall` in the decision (an `llm.call` trace event): model asked
+for and model that answered, mode, attempt, HTTP status, exact token counts as the server
+reported them, duration, finish reason, a prompt fingerprint, and excerpts of the answer
+and of any reasoning.
+
+### `ollama`: local, offline
+
+- Loopback only (`http://127.0.0.1:11434`); `...-cloud` models are refused; RECAP never
+  downloads a model (`ollama pull` is the owner's decision).
+- Before the first request, with no inference: `/api/version` and `/api/show` (capabilities
+  must include `tools` for tools mode, and `thinking` if `think: true`; `context_tokens` must
+  fit the model's window).
+- A prompt that may not fit `num_ctx` is refused before sending: Ollama would silently drop
+  the start of the prompt, where the safety rules are.
+- Investigation steps use native tool calls (`mode: tools`): measured on 2026-10-21, a tool
+  step took about 16 s and 57 output tokens, against about 75 s and 740 tokens in JSON mode.
+  Proposals always use a JSON schema.
 
 ```bash
-pip install -e '.[llm]'                 # installs the official anthropic SDK
-export ANTHROPIC_API_KEY=...            # your own key (ANTHROPIC_AUTH_TOKEN also works)
-export RECAP_PROVIDER=anthropic
-python scripts/demo.py --scenario bad-deployment
+OLLAMA_NO_CLOUD=1 ollama serve            # in another terminal
+python scripts/demo.py --scenario bad-deployment --provider ollama
 ```
 
-The factory checks only these two environment variables before it builds the adapter. That
-is deliberate: using a paid API should be an explicit choice, so a login profile on disk
-alone is not enough.
+### `groq`: the free hosted plan, fail-closed
 
-### What one decision looks like
+Nothing is sent, not even the model-list check, unless every one of these holds
+(`quota.py`, ADR 0017):
 
-1. `prompts.py` renders the request as text. Trusted facts (incident ID, environment kind,
-   tool list, earlier calls) are plain text. Everything else (alert text, tool output, runbook chunks, past
-   incidents, model-written claims) is wrapped in `<untrusted_data id=... kind=... flags=...>`
-   tags, HTML-escaped so it cannot close the tag early.
-2. The adapter calls `client.beta.messages.parse(...)` with:
-   - `model="claude-opus-5-5"`, `max_tokens=16000`, `output_config={"effort": "high"}`
-     (all from `configs/providers.yaml`);
-   - `output_format=` a closed Pydantic schema from `prompts.py`, so Claude must answer in
-     JSON that the SDK validates;
-   - server-side refusal fallback: `betas=["server-side-fallback-2026-07-01"]` and
-     `fallbacks="default"`. If a safety classifier declines, the API retries on
-     Anthropic's recommended fallback model; the adapter notes which model answered;
-   - no `thinking` and no `temperature`: thinking is always on for this model and turning it
-     off is rejected, so `effort` is the only depth control.
-3. `stop_reason` is checked before the output is read. A refusal, a `max_tokens` cut-off or
-   a reply that breaks the schema becomes a "finish" decision (investigation) or no draft
-   (proposal), with a note saying why.
-4. The reply is checked like any untrusted input: tool calls must use a listed tool and
-   valid JSON arguments (`args_json`), cited evidence IDs must exist, and a remediation must
-   be one of the allowed remediation tools and must not repeat an action that already
-   failed. Every correction is recorded as a note in the trace.
-5. Usage records the real token counts from the API. The cost is computed from
-   `price_per_mtok` in `configs/providers.yaml`, so check current pricing before trusting it.
-   A reply that breaks the schema is rejected inside the SDK before its token counts come
-   back. That call was still billed, so its usage stays an estimate and the decision carries
-   the note "provider usage not reported for this call".
+1. `RECAP_ALLOW_LIVE_FREE_INFERENCE=1` for this process (never in CI);
+2. the model is in `free_tier.allowed_models`;
+3. `GROQ_API_KEY` is set in the environment (keys are never read from files);
+4. `RECAP_GROQ_FREE_PLAN_CONFIRMED_ON=YYYY-MM-DD`: the date the owner checked the Groq
+   console's billing page and saw the Free plan, at most 7 days ago;
+5. the provider was not stopped by the tripwire;
+6. RECAP's own caps have room (below the free plan's 30 RPM / 1K RPD / 8K TPM / 200K TPD).
 
-API errors (rate limits, HTTP errors, network failures) become a `RecapError` and the
-controller ends the run as `FAILED`. RECAP adds no retries on top of the SDK's own.
+After every response, `x-ratelimit-limit-requests` must equal the free plan's daily limit
+(1,000); anything else, a 402 or `blocked_api_access` stops the provider until
+`python scripts/providers.py clear-stop groq`. A 429 is retried once if `retry-after` is
+short; otherwise the run ends `QUOTA_EXHAUSTED` (deferred). It never switches provider.
 
-Even a perfect-looking answer only *proposes*. The safety gateway decides every tool call,
-and a remediation still needs an exact approval.
+```bash
+export GROQ_API_KEY=...                                    # your key, in your shell only
+export RECAP_GROQ_FREE_PLAN_CONFIRMED_ON=2026-10-21        # after checking the billing page
+RECAP_ALLOW_LIVE_FREE_INFERENCE=1 python scripts/demo.py --scenario bad-deployment --provider groq
+```
 
-## Prompts and versioning
+### `replay`: a real run, offline
 
-`prompts.py` holds everything the model sees and must return: the system prompt, the two
-renderers and the output schemas. `PROMPT_VERSION` (`prompts-v3`) is stored on every run,
-so a trace always says which prompts produced it. Change anything in that file and bump the
-version.
+`RECAP_PROVIDER=replay` (recording from `configs/providers.yaml` or
+`RECAP_REPLAY_RECORDING`) rebuilds the recorded provider and answers each request from the
+recording, matched by a fingerprint that ignores run-specific random IDs. A request that is
+not in the recording stops the run with `ReplayMismatch`. CI replays
+`fixtures/recordings/ollama-qwen3-8b-bad-deployment.jsonl` (ADR 0018).
 
-The system prompt is the same for every request. The environment kind comes from the
-incident (`The target environment kind is '...'`), and only a `simulated` target is described
-as a simulation rather than a real cluster.
+## The optional Claude adapter (`anthropic`): paid, disabled
 
-## Red-team wrapper
+It calls the paid Claude API, so it needs `RECAP_ALLOW_PAID_LLM=1` on top of the SDK
+(`pip install -e '.[llm]'`) and `ANTHROPIC_API_KEY`. This project's budget is $0: leave it
+off. It still uses prompts-v3 (`prompts.py`) with static schemas. Tests use a fake client.
 
-`create_provider(..., planner="prompt_injected")` wraps any provider in
-`recap.safety.redteam.PromptInjectedProvider`, a deliberately compromised planner that obeys
-instructions hidden in untrusted data. It exists only to show that the safety gateway still
-blocks a destructive action when the planner has been fooled.
+## Inspecting providers
+
+```bash
+python scripts/providers.py              # readiness of every provider (no inference)
+python scripts/providers.py usage        # live requests and tokens per provider
+curl -s localhost:8000/providers         # the same, from the API (keys: present or missing)
+```
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `factory.py` | `create_provider(name, settings, planner=..., client=...)` and `describe_providers(settings)` |
+| `factory.py` | `create_provider(name, settings, ...)`: builds providers from `configs/providers.yaml`; recordings; the paid opt-in |
+| `protocol.py` | prompts-v4: the step protocol's text, per-request schemas and the parser |
+| `http_llm.py` | the shared decision loop: render, send, parse, one corrective retry, `ModelCall`s |
+| `ollama_provider.py` | the local provider |
+| `openai_compatible.py` | the free hosted provider (Groq) |
+| `quota.py` | the usage ledger and the free-tier guard |
+| `transport.py` | live HTTP, recording, replay and fingerprints |
+| `catalog.py` | provider readiness for `GET /providers` (no inference, no hosted calls) |
 | `deterministic.py`, `playbooks.py`, `heuristics.py` | the scripted default policy |
-| `anthropic_provider.py` | the optional Claude adapter |
-| `prompts.py` | versioned prompts and output schemas for LLM providers |
+| `anthropic_provider.py`, `prompts.py` | the paid adapter and prompts-v3 (section builders shared with v4) |
 
-## Limitations (V1)
+## Limitations
 
-- No evaluation results with Claude have been measured in V1. All numbers RECAP reports
-  come from the deterministic provider in the simulated environment.
-- Wrapping untrusted data in tags reduces prompt-injection risk but does not remove it. The
-  real protection is architectural: the gateway denies dangerous actions whatever the model
-  says.
-- The adapter targets the first-party Claude API. Server-side fallback is not available on
-  Amazon Bedrock, Google Vertex AI or Microsoft Foundry.
+- Real runs are slow locally (about 15-50 s per decision on a 16 GB M3) and rate-limited on
+  the free plan (about two large requests a minute).
+- Runs are not reproducible at the model level (each prompt contains a random incident ID);
+  only a replay is exact.
+- A schema constrains an answer's form, not its truth: the verifier, the policy, the
+  approval and the oracle stay in charge.
+- Real models have not been red-teamed yet (planned for M3/M4).

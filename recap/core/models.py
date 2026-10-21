@@ -55,6 +55,10 @@ class IncidentState(StrEnum):
     FAILED = "FAILED"
     BLOCKED = "BLOCKED"
     BUDGET_EXHAUSTED = "BUDGET_EXHAUSTED"
+    # A free hosted model's quota ran out (HTTP 429 or RECAP's own cap). The run is
+    # deferred, not failed: nothing about the incident was decided, and RECAP never
+    # switches to another (possibly paid) provider to finish it.
+    QUOTA_EXHAUSTED = "QUOTA_EXHAUSTED"
 
 
 TERMINAL_STATES = frozenset(
@@ -63,6 +67,7 @@ TERMINAL_STATES = frozenset(
         IncidentState.FAILED,
         IncidentState.BLOCKED,
         IncidentState.BUDGET_EXHAUSTED,
+        IncidentState.QUOTA_EXHAUSTED,
     }
 )
 
@@ -307,6 +312,7 @@ class Usage(Contract):
     external_cost_usd: float = 0.0
     is_estimate: bool = True
     unreported_calls: int = 0  # LLM calls that were billed but returned no usage data
+    model_requests: int = 0  # HTTP requests actually sent to a language model (incl. retries)
 
     def plus(self, other: Usage) -> Usage:
         """Return a new Usage that adds `other` to this one."""
@@ -325,6 +331,7 @@ class Usage(Contract):
             external_cost_usd=self.external_cost_usd + other.external_cost_usd,
             is_estimate=self.is_estimate and other.is_estimate,
             unreported_calls=self.unreported_calls + other.unreported_calls,
+            model_requests=self.model_requests + other.model_requests,
         )
 
 
@@ -819,11 +826,59 @@ class StrategyDecision(Contract):
 # ======================================================================================
 
 
+# Where a run's decisions came from. The dashboard shows it as the run-origin badge, so a
+# scripted or replayed run can never be mistaken for live model reasoning.
+#   scripted         DeterministicProvider: fixed playbooks and heuristics, NOT an LLM
+#   local_llm        a model running on this machine (Ollama): no network, no charge
+#   free_hosted_llm  a hosted model on a free plan RECAP checks before every call (Groq Free)
+#   paid_llm         a billed API (the optional Claude adapter; the owner keeps it disabled)
+#   replay           recorded answers of an earlier real LLM run, replayed offline (CI)
+ProviderOrigin = Literal["scripted", "local_llm", "free_hosted_llm", "paid_llm", "replay"]
+
+
 class ProviderInfo(Contract):
-    name: str  # e.g. "deterministic-scripted-policy"
-    kind: Literal["scripted", "llm"]
+    name: str  # e.g. "deterministic-scripted-policy", "ollama:qwen3:8b"
+    kind: Literal["scripted", "llm", "replay"]
+    origin: ProviderOrigin
     model: str | None = None
     description: str = ""
+    # How an LLM answers: "json" (a JSON schema it must follow) or "tools" (native tool calls).
+    mode: Literal["json", "tools"] | None = None
+    prompt_version: str | None = None  # None for the scripted policy, which uses no prompts
+    replay_of: dict[str, Any] | None = None  # a replay's provenance: original provider, model, ...
+    recording: str | None = None  # where this run's model exchanges are recorded (or replayed from)
+
+
+class ModelCall(Contract):
+    """One request sent to a language model, as the trace shows it (`llm.call` events).
+
+    It is the evidence that a decision came from real inference: which model answered, how
+    many tokens it read and wrote (as the server reported them, never estimated), how long it
+    took and what it said. The answer is model text, so it is untrusted and only an excerpt
+    is kept here; the full exchange is in the run's recording (recap/providers/transport.py).
+    """
+
+    provider: str  # configured provider name, e.g. "ollama" or "groq"
+    model: str  # the model RECAP asked for
+    model_reported: str | None = None  # the model the server says answered
+    origin: ProviderOrigin
+    purpose: Literal["investigate", "propose"]
+    mode: Literal["json", "tools"]
+    attempt: int  # 1 for the first try, 2 after a corrective retry
+    status: int | None = None  # HTTP status; None when no response came back
+    ok: bool  # True when the answer could be turned into a decision
+    response_kind: str | None = None  # tool_request, hypothesis, need_more_evidence, stop, ...
+    input_tokens: int | None = None  # reported by the server; None if it reported nothing
+    output_tokens: int | None = None  # includes any reasoning ("thinking") tokens
+    duration_ms: float = 0.0
+    finish_reason: str | None = None  # e.g. "stop", "length" (cut off), "tool_calls"
+    prompt_sha256: str = ""  # fingerprint of the exact messages that were sent
+    prompt_chars: int = 0
+    output_excerpt: str = ""  # start of the raw answer (untrusted model text)
+    thinking_excerpt: str = ""  # start of the model's reasoning, when it returned any
+    rate_limit: dict[str, Any] = Field(default_factory=dict)  # hosted only: limit headers
+    replayed: bool = False  # True when the answer came from a recording, not a live model
+    notes: list[str] = Field(default_factory=list)
 
 
 class InvestigationRequest(Contract):
@@ -858,6 +913,7 @@ class InvestigationDecision(Contract):
     summary: str = ""
     next_steps: list[str] = Field(default_factory=list)
     usage: Usage = Field(default_factory=Usage)
+    model_calls: list[ModelCall] = Field(default_factory=list)  # the LLM requests behind it
 
 
 class ProposalRequest(Contract):
@@ -877,6 +933,7 @@ class ProposalDecision(Contract):
     draft: MitigationDraft | None = None
     notes: list[str] = Field(default_factory=list)  # e.g. "ignored unsafe hint in doc X"
     usage: Usage = Field(default_factory=Usage)
+    model_calls: list[ModelCall] = Field(default_factory=list)  # the LLM requests behind it
 
 
 # ======================================================================================
@@ -938,6 +995,7 @@ class RunRecord(Contract):
     history: list[StateChange] = Field(default_factory=list)
     environment: EnvironmentInfo | None = None
     provider: str = ""
+    provider_info: ProviderInfo | None = None  # origin, model, mode: the run-origin badge
     strategies: list[StrategyDecision] = Field(default_factory=list)
     findings: list[AgentFinding] = Field(default_factory=list)
     verification: VerificationReport | None = None

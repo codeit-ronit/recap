@@ -1,5 +1,5 @@
 {
-  "run_id": "run-3f7740bb4e",
+  "run_id": "run-83bdeed425",
   "scenario_id": "bad-deployment",
   "config": {
     "strategy": "adaptive",
@@ -21,7 +21,7 @@
     "label": ""
   },
   "incident": {
-    "incident_id": "inc-1f2fd4576c",
+    "incident_id": "inc-d578d92120",
     "scenario_id": "bad-deployment",
     "service": "checkout",
     "affected_services": [
@@ -49,42 +49,42 @@
   "history": [
     {
       "state": "CREATED",
-      "at": "2026-10-15T02:54:04.081134Z",
+      "at": "2026-10-21T05:44:40.757975Z",
       "reason": "incident created"
     },
     {
       "state": "RETRIEVING",
-      "at": "2026-10-15T02:54:04.523792Z",
+      "at": "2026-10-21T05:44:41.168361Z",
       "reason": "gather runbooks and past experience"
     },
     {
       "state": "INVESTIGATING",
-      "at": "2026-10-15T02:54:04.526160Z",
+      "at": "2026-10-21T05:44:41.170739Z",
       "reason": "investigate with read-only tools"
     },
     {
       "state": "PROPOSING",
-      "at": "2026-10-15T02:54:04.602575Z",
+      "at": "2026-10-21T05:44:41.264049Z",
       "reason": "diagnosis: checkout v2.4.1, deployed 12 min before the alert, may have introduced the errors"
     },
     {
       "state": "AWAITING_APPROVAL",
-      "at": "2026-10-15T02:54:04.604987Z",
+      "at": "2026-10-21T05:44:41.266777Z",
       "reason": "approval required for execute_rollback"
     },
     {
       "state": "MITIGATING",
-      "at": "2026-10-15T02:54:04.605941Z",
+      "at": "2026-10-21T05:44:41.267850Z",
       "reason": "execute_rollback on checkout"
     },
     {
       "state": "VERIFYING",
-      "at": "2026-10-15T02:54:04.615120Z",
+      "at": "2026-10-21T05:44:41.274184Z",
       "reason": "independent oracle checks recovery"
     },
     {
       "state": "RESOLVED",
-      "at": "2026-10-15T02:54:04.617872Z",
+      "at": "2026-10-21T05:44:41.275657Z",
       "reason": "oracle verified recovery (simulated environment)"
     }
   ],
@@ -103,6 +103,17 @@
     "stabilization_poll_seconds": 2.0
   },
   "provider": "deterministic-scripted-policy",
+  "provider_info": {
+    "name": "deterministic-scripted-policy",
+    "kind": "scripted",
+    "origin": "scripted",
+    "model": null,
+    "description": "Scripted baseline policy (NOT an LLM): role playbooks + heuristics over the simulator's signal conventions. Offline, deterministic, $0.",
+    "mode": null,
+    "prompt_version": null,
+    "replay_of": null,
+    "recording": null
+  },
   "strategies": [
     {
       "mode": "single",
@@ -138,13 +149,13 @@
     {
       "agent_role": "investigator",
       "evidence_ids": [
-        "ev-3f7740-001",
-        "ev-3f7740-002",
-        "ev-3f7740-003",
-        "ev-3f7740-004",
-        "ev-3f7740-005",
-        "ev-3f7740-006",
-        "ev-3f7740-007"
+        "ev-83bdee-001",
+        "ev-83bdee-002",
+        "ev-83bdee-003",
+        "ev-83bdee-004",
+        "ev-83bdee-005",
+        "ev-83bdee-006",
+        "ev-83bdee-007"
       ],
       "doc_refs": [
         "shop-architecture#service-level-objectives-1",
@@ -158,10 +169,10 @@
           "mechanism": "bad_deployment",
           "target_service": "checkout",
           "supporting_evidence_ids": [
-            "ev-3f7740-004",
-            "ev-3f7740-002",
-            "ev-3f7740-003",
-            "ev-3f7740-001"
+            "ev-83bdee-004",
+            "ev-83bdee-002",
+            "ev-83bdee-003",
+            "ev-83bdee-001"
           ],
           "contradicting_evidence_ids": [],
           "status": "proposed",
@@ -177,17 +188,18 @@
       "usage": {
         "steps": 8,
         "tool_calls": 7,
-        "estimated_tokens": 7558,
+        "estimated_tokens": 5083,
         "actual_input_tokens": null,
         "actual_output_tokens": null,
         "external_cost_usd": 0.0,
         "is_estimate": true,
-        "unreported_calls": 0
+        "unreported_calls": 0,
+        "model_requests": 0
       },
       "summary": "Finished: every check in the playbook is done. Read-only calls by this agent: 7 (checkout). Hypotheses for the verifier: 1.",
       "error": null,
-      "started_at": "2026-10-15T02:54:04.527238Z",
-      "finished_at": "2026-10-15T02:54:04.601536Z",
+      "started_at": "2026-10-21T05:44:41.171837Z",
+      "finished_at": "2026-10-21T05:44:41.262204Z",
       "round": 1
     }
   ],
@@ -198,10 +210,10 @@
       "mechanism": "bad_deployment",
       "target_service": "checkout",
       "supporting_evidence_ids": [
-        "ev-3f7740-004",
-        "ev-3f7740-002",
-        "ev-3f7740-003",
-        "ev-3f7740-001"
+        "ev-83bdee-004",
+        "ev-83bdee-002",
+        "ev-83bdee-003",
+        "ev-83bdee-001"
       ],
       "contradicting_evidence_ids": [],
       "status": "supported",
@@ -219,10 +231,10 @@
           "mechanism": "bad_deployment",
           "target_service": "checkout",
           "supporting_evidence_ids": [
-            "ev-3f7740-004",
-            "ev-3f7740-002",
-            "ev-3f7740-003",
-            "ev-3f7740-001"
+            "ev-83bdee-004",
+            "ev-83bdee-002",
+            "ev-83bdee-003",
+            "ev-83bdee-001"
           ],
           "contradicting_evidence_ids": [],
           "status": "supported",
@@ -250,13 +262,13 @@
     ],
     "unknown_evidence_ids": [],
     "merged_evidence_ids": [
-      "ev-3f7740-001",
-      "ev-3f7740-002",
-      "ev-3f7740-003",
-      "ev-3f7740-004",
-      "ev-3f7740-005",
-      "ev-3f7740-006",
-      "ev-3f7740-007"
+      "ev-83bdee-001",
+      "ev-83bdee-002",
+      "ev-83bdee-003",
+      "ev-83bdee-004",
+      "ev-83bdee-005",
+      "ev-83bdee-006",
+      "ev-83bdee-007"
     ],
     "focus_services": [],
     "summary": "Best supported root cause: bad deployment on checkout (1 supported)."
@@ -393,11 +405,11 @@
       },
       "rationale": "The evidence supports: checkout v2.4.1, deployed 12 min before the alert, may have introduced the errors. Runbook runbook-bad-deployment#remediation-1 recommends execute_rollback for bad deployment. Roll checkout back to v2.4.0 (the version the propose_rollback dry run names).",
       "evidence_ids": [
-        "ev-3f7740-004",
-        "ev-3f7740-002",
-        "ev-3f7740-003",
-        "ev-3f7740-001",
-        "ev-3f7740-007"
+        "ev-83bdee-004",
+        "ev-83bdee-002",
+        "ev-83bdee-003",
+        "ev-83bdee-001",
+        "ev-83bdee-007"
       ],
       "expected_health_change": "error rate on checkout back under 5% and all replicas ready",
       "rollback_hint": "redeploy v2.4.1 after a fix",
@@ -407,9 +419,9 @@
       "citations": [
         "runbook-bad-deployment#remediation-1"
       ],
-      "proposal_id": "prop-c6750d0285",
-      "incident_id": "inc-1f2fd4576c",
-      "created_at": "2026-10-15T02:54:04.604254Z"
+      "proposal_id": "prop-a5febbc1f4",
+      "incident_id": "inc-d578d92120",
+      "created_at": "2026-10-21T05:44:41.265890Z"
     }
   ],
   "safety_decisions": [
@@ -436,22 +448,22 @@
       "risk": "reversible_write",
       "caller": "controller",
       "policy_version": "policy-v1",
-      "decided_at": "2026-10-15T02:54:04.604490Z"
+      "decided_at": "2026-10-21T05:44:41.266179Z"
     }
   ],
   "pending_approval": null,
   "approvals": [
     {
-      "approval_id": "apr-71d827796a",
-      "incident_id": "inc-1f2fd4576c",
-      "proposal_id": "prop-c6750d0285",
-      "proposal_digest": "d3ba93eff6f686e7ba7f4d62d6ce532cfc4301f1a6ce478be7a79d722507db82",
+      "approval_id": "apr-33e04811e1",
+      "incident_id": "inc-d578d92120",
+      "proposal_id": "prop-a5febbc1f4",
+      "proposal_digest": "e71539ff0df49ff7df6a6256a4f3eb2144da08ca3082e556511b0eb44234fd19",
       "scope": "single_action",
       "decision": "approved",
       "actor": "auto-approver[simulation]",
-      "decided_at": "2026-10-15T02:54:04.605644Z",
-      "expires_at": "2026-10-15T03:09:04.605268Z",
-      "consumed_at": "2026-10-15T02:54:04.607176Z"
+      "decided_at": "2026-10-21T05:44:41.267536Z",
+      "expires_at": "2026-10-21T05:59:41.267063Z",
+      "consumed_at": "2026-10-21T05:44:41.269240Z"
     }
   ],
   "actions": [
@@ -462,7 +474,7 @@
         "to_version": "v2.4.0"
       },
       "result": "recovered",
-      "at": "2026-10-15T02:54:04.617841Z",
+      "at": "2026-10-21T05:44:41.275648Z",
       "note": ""
     }
   ],
@@ -556,33 +568,36 @@
       "payment"
     ]
   },
-  "episode_id": "ep-f160b1eba3",
+  "episode_id": "ep-81e117b3c0",
   "usage": {
     "steps": 9,
     "tool_calls": 8,
-    "estimated_tokens": 8430,
+    "estimated_tokens": 5389,
     "actual_input_tokens": null,
     "actual_output_tokens": null,
     "external_cost_usd": 0.0,
     "is_estimate": true,
-    "unreported_calls": 0
+    "unreported_calls": 0,
+    "model_requests": 0
   },
   "outcome_note": "oracle verified recovery (simulated environment)",
   "error": null,
   "versions": {
     "recap": "0.1.0",
     "schema": "recap.v1",
-    "prompt_version": "prompts-v2",
-    "config_hash": "02086400a3e4f88a",
+    "prompt_version": "prompts-v3",
+    "config_hash": "c3acf47f6ed78853",
     "fixture_hash": "b73cc0a448614155",
     "policy_version": "policy-v1",
     "router": "rules-router-v1",
     "verifier": "evidence-rule-verifier-v1",
     "provider": "deterministic-scripted-policy",
+    "provider_origin": "scripted",
+    "recording": null,
     "environment": "simulated",
     "seed": 11,
     "transport": "mcp-stdio"
   },
-  "created_at": "2026-10-15T02:54:04.081619Z",
-  "updated_at": "2026-10-15T02:54:04.676129Z"
+  "created_at": "2026-10-21T05:44:40.758445Z",
+  "updated_at": "2026-10-21T05:44:41.333834Z"
 }

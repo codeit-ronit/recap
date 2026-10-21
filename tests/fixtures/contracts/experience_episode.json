@@ -1,6 +1,6 @@
 {
-  "episode_id": "ep-f160b1eba3",
-  "origin_run_id": "run-3f7740bb4e",
+  "episode_id": "ep-81e117b3c0",
+  "origin_run_id": "run-83bdeed425",
   "scenario_id": "bad-deployment",
   "failure_family": "bad_deployment",
   "partition": "demo",
@@ -13,19 +13,19 @@
   "mechanism_target": "checkout",
   "verified_evidence": [
     {
-      "evidence_id": "ev-3f7740-004",
+      "evidence_id": "ev-83bdee-004",
       "summary": "{\"deployments\":[{\"service\":\"checkout\",\"version\":\"v2.4.1\",\"previous_version\":\"v2.4.0\",\"deployed_at\":\"2026-03-14T09:48:00Z\",\"status\":\"complete\",\"change_summary\":\""
     },
     {
-      "evidence_id": "ev-3f7740-002",
+      "evidence_id": "ev-83bdee-002",
       "summary": "{\"service\":\"checkout\",\"lines\":[{\"timestamp\":\"2026-03-14T09:00:00Z\",\"level\":\"INFO\",\"service\":\"checkout\",\"message\":\"GET /api/checkout/orders 200 in 95ms\"},{\"times"
     },
     {
-      "evidence_id": "ev-3f7740-003",
+      "evidence_id": "ev-83bdee-003",
       "summary": "{\"service\":\"checkout\",\"metric\":\"error_rate\",\"unit\":\"ratio\",\"points\":[{\"timestamp\":\"2026-03-14T09:00:00Z\",\"value\":0.0},{\"timestamp\":\"2026-03-14T09:05:00Z\",\"value"
     },
     {
-      "evidence_id": "ev-3f7740-001",
+      "evidence_id": "ev-83bdee-001",
       "summary": "{\"service\":\"checkout\",\"status\":\"Running\",\"ready_replicas\":3,\"replicas\":3,\"error_rate\":0.3177,\"latency_p95_ms\":1599.8,\"observed_at\":\"2026-03-14T10:00:00Z\"}"
     }
   ],
@@ -37,7 +37,7 @@
       "to_version": "v2.4.0"
     },
     "result": "recovered",
-    "at": "2026-10-15T02:54:04.617841Z",
+    "at": "2026-10-21T05:44:41.275648Z",
     "note": ""
   },
   "outcome": "success",
@@ -48,11 +48,11 @@
     "environment": "simulated",
     "provider": "deterministic-scripted-policy",
     "seed": 11,
-    "config_hash": "02086400a3e4f88a",
+    "config_hash": "c3acf47f6ed78853",
     "fixture_hash": "b73cc0a448614155",
-    "origin_run_id": "run-3f7740bb4e",
+    "origin_run_id": "run-83bdeed425",
     "created_by": "consolidator-v1",
-    "trace": "runs/run-3f7740bb4e/events"
+    "trace": "runs/run-83bdeed425/events"
   },
-  "created_at": "2026-10-15T02:54:04.674183Z"
+  "created_at": "2026-10-21T05:44:41.331645Z"
 }

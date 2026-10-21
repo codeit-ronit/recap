@@ -33,6 +33,7 @@ from recap.knowledge.retriever import KnowledgeRetriever
 from recap.memory.consolidation import Consolidator
 from recap.memory.store import ExperienceStore
 from recap.providers.factory import create_provider, describe_providers
+from recap.providers.quota import UsageLedger
 from recap.routing.router import RulesRouter
 from recap.safety.approvals import ApprovalStore
 from recap.safety.policy import PolicyEngine
@@ -76,6 +77,8 @@ class Runtime:
         self.events = SqliteTraceSink(paths.recap_db)
         self.jsonl = JsonlTraceSink(paths.traces_dir)
         self.memory = ExperienceStore(paths.memory_db)
+        # Counts every live LLM request (and enforces free-tier caps) across all runs.
+        self.ledger = UsageLedger(paths.recap_db)
         self.knowledge = KnowledgeRetriever.from_directory(
             paths.knowledge_dir,
             root=paths.root,
@@ -132,7 +135,7 @@ class Runtime:
 
     def make_provider(self, config: RunConfig) -> LLMProvider:
         name = config.provider or self.settings.providers.default
-        return create_provider(name, self.settings, planner=config.planner)
+        return create_provider(name, self.settings, planner=config.planner, ledger=self.ledger)
 
     def trace_sinks(self, run_id: str) -> list[TraceSink]:
         """Every run writes to SQLite and JSONL; plus the live stream and OTel when enabled."""

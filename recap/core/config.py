@@ -12,11 +12,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from recap.core.errors import ConfigError
 from recap.core.ids import sha256_hex
-from recap.core.models import AgentRole, Contract, RunBudget, ToolRisk
+from recap.core.models import AgentRole, Contract, ProviderOrigin, RunBudget, ToolRisk
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -110,13 +110,84 @@ class PolicySettings(Contract):
     remediation_tools: list[str]
 
 
+class QuotaCaps(Contract):
+    """RECAP's own limits for a free hosted model, set BELOW the provider's published free
+    limits, so RECAP stops itself before the provider has to refuse (recap/providers/quota.py)."""
+
+    requests_per_minute: int = Field(ge=1)
+    requests_per_day: int = Field(ge=1)
+    tokens_per_minute: int = Field(ge=1)
+    tokens_per_day: int = Field(ge=1)
+    requests_per_run: int = Field(ge=1)
+
+
+class FreeTierSettings(Contract):
+    """How a hosted provider is kept at $0 (configs/providers.yaml). Checked before every call."""
+
+    api_key_env: str  # name of the env var holding the key; keys are never read from files
+    # Name of the env var in which the OWNER records the date (YYYY-MM-DD) they checked the
+    # account's billing page and saw the free plan with no payment method.
+    attestation_env: str
+    attestation_max_age_days: int = Field(7, ge=1)
+    allowed_models: list[str]  # exact model IDs; a request for anything else is refused
+    # model -> requests per day on the FREE plan, from the provider's docs. Every response's
+    # x-ratelimit-limit-requests header must match it (a paid plan has a different limit).
+    free_daily_request_limit: dict[str, int]
+    limits_checked_on: str  # when the free limits above were read in the provider's docs
+    caps: QuotaCaps
+    # Tokens reserved for the ANSWER when checking RECAP's own caps (the prompt is estimated
+    # separately). An answer may use up to max_output_tokens, but reserving that much would
+    # let only one request through a minute; the answer's real size replaces the
+    # reservation as soon as it arrives, and the provider's own limit sits above the cap.
+    reserved_output_tokens: int = Field(1024, ge=1)
+    max_retry_after_seconds: float = 30.0  # after a 429, wait at most this long, once
+
+
 class ProviderSettings(Contract):
-    kind: Literal["scripted", "llm"]
+    """One entry of configs/providers.yaml: a provider RECAP can be told to use."""
+
+    kind: Literal["scripted", "llm", "replay"]
+    origin: ProviderOrigin  # where decisions come from (shown as the run-origin badge)
     description: str = ""
     model: str | None = None
+    # --- the optional Claude adapter (paid; the owner keeps it disabled) ---
     effort: str | None = None
     max_tokens: int | None = None
     price_per_mtok: dict[str, float] | None = None
+    # --- LLMs RECAP talks to over plain HTTP: Ollama and OpenAI-compatible hosts ---
+    api: Literal["ollama", "openai_compatible"] | None = None
+    base_url: str | None = None
+    mode: Literal["json", "tools"] = "json"  # investigation steps: JSON schema or native tools
+    think: bool = False  # Ollama: let a "thinking" model reason before it answers
+    reasoning_effort: str | None = None  # hosted reasoning models (gpt-oss): low/medium/high
+    context_tokens: int | None = None  # Ollama num_ctx: the context window to allocate
+    max_output_tokens: int = Field(1024, ge=16)
+    temperature: float = 0.0
+    seed: int | None = 7
+    request_timeout_seconds: float = Field(300.0, gt=0)
+    max_attempts: int = Field(2, ge=1, le=3)  # per decision: first try + corrective retries
+    record: bool = True  # record every model exchange under data/recordings/ (for replay)
+    budget: dict[str, Any] = Field(default_factory=dict)  # RunBudget overrides for this provider
+    free_tier: FreeTierSettings | None = None  # required for origin free_hosted_llm
+    recording: str | None = None  # replay: the recording to answer from (repo-relative)
+
+    @model_validator(mode="after")
+    def _consistent(self) -> ProviderSettings:
+        """Refuse half-configured providers at startup instead of failing mid-run."""
+        unknown = set(self.budget) - set(RunBudget.model_fields)
+        if unknown:
+            raise ValueError(f"unknown budget fields: {', '.join(sorted(unknown))}")
+        if self.kind == "llm" and self.origin in ("local_llm", "free_hosted_llm"):
+            if self.api is None or not self.base_url or not self.model:
+                raise ValueError("an HTTP LLM provider needs api, base_url and model")
+        if self.origin == "free_hosted_llm" and self.free_tier is None:
+            raise ValueError("a free hosted provider needs a free_tier section")
+        if self.origin == "free_hosted_llm" and self.free_tier is not None:
+            if self.model not in self.free_tier.allowed_models:
+                raise ValueError(f"model {self.model!r} is not in free_tier.allowed_models")
+        if self.kind == "replay" and self.origin != "replay":
+            raise ValueError("a replay provider must have origin 'replay'")
+        return self
 
 
 class ProvidersConfig(Contract):

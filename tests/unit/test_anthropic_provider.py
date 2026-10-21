@@ -267,7 +267,9 @@ def test_info_says_it_is_an_llm(provider_settings: ProviderSettings) -> None:
 
 
 def test_defaults_apply_when_the_config_is_minimal() -> None:
-    provider = AnthropicProvider(ProviderSettings(kind="llm"), client=FakeClient())
+    provider = AnthropicProvider(
+        ProviderSettings(kind="llm", origin="paid_llm"), client=FakeClient()
+    )
     assert (provider.model, provider.max_tokens, provider.effort) == (
         "claude-opus-5-5",
         16000,
@@ -435,7 +437,7 @@ async def test_usage_has_real_tokens_and_cost_from_the_price_table(
 
 
 async def test_cost_is_zero_without_a_price_table(investigation: InvestigationRequest) -> None:
-    settings = ProviderSettings(kind="llm", model="claude-opus-5-5")
+    settings = ProviderSettings(kind="llm", origin="paid_llm", model="claude-opus-5-5")
     decision, _ = await _decide(settings, investigation, fake_response(_finish()))
     assert decision.usage.external_cost_usd == 0.0
     assert decision.usage.actual_output_tokens == 200

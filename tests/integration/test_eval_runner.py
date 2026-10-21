@@ -159,7 +159,7 @@ async def test_only_the_scripted_policy_can_be_evaluated(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class FakeLLMProvider:
-        info = ProviderInfo(name="fake-llm", kind="llm")
+        info = ProviderInfo(name="fake-llm", kind="llm", origin="paid_llm")
 
     monkeypatch.setattr(Runtime, "make_provider", lambda self, config: FakeLLMProvider())
     progress: list[str] = []

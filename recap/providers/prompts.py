@@ -1,9 +1,11 @@
 """Versioned prompts for LLM providers: what we tell the model and what it must send back.
 
-Where it sits: an LLM provider (today only the optional Claude adapter) turns RECAP's
-typed requests (InvestigationRequest, ProposalRequest) into text with the renderers here,
-and asks the model for JSON matching the output schemas here. The default scripted
-provider never uses prompts.
+Where it sits: the optional Claude adapter turns RECAP's typed requests
+(InvestigationRequest, ProposalRequest) into text with the renderers here (prompts-v3), and
+asks the model for JSON matching the output schemas here. The free and local providers
+(Ollama, Groq) use the step protocol in protocol.py (prompts-v4), which builds its prompts
+from the same section builders below, so every LLM sees evidence wrapped the same way. The
+default scripted provider never uses prompts.
 
 One safety rule shapes every prompt: anything RECAP's own code did not write (alert
 text, tool output and tool errors, runbook chunks, past incidents, and whatever a model
@@ -142,57 +144,57 @@ def render_investigation_prompt(request: InvestigationRequest) -> str:
     """The user message for one investigation step: situation, tools, history, then data."""
     sections = [
         f"# Investigation step {request.step} of {request.max_steps}",
-        _section("Your role", [f"Role: {request.role.value}", f"Goal: {request.goal}"]),
-        _incident_section(request.incident),
+        section("Your role", [f"Role: {request.role.value}", f"Goal: {request.goal}"]),
+        incident_section(request.incident),
     ]
     if request.focus_services:
         # Named by RECAP's evidence verifier or by an earlier fix attempt, never by the
         # recovery oracle (whose findings are ground truth no agent may see).
         focus = ", ".join(request.focus_services)
         title = "Services to examine first (named by RECAP's verifier or by an earlier fix attempt)"
-        sections.append(_section(title, [focus]))
-    history = [_call_line(number, call) for number, call in enumerate(request.history, 1)]
+        sections.append(section(title, [focus]))
+    history = [call_line(number, call) for number, call in enumerate(request.history, 1)]
     instructions = list(INVESTIGATION_INSTRUCTIONS)
     if request.step >= request.max_steps:
         # The harness keeps hypotheses only from a "finish" decision.
         instructions.append('This is your last step: choose "finish" now.')
     sections += [
-        _tools_section("Tools you may call (all read-only)", request.tools),
-        _section("Your previous calls", history),
-        _section("Already observed in this run by any agent", _tool_refs(request.observed_refs)),
-        _context_section(request.context),
-        _section("What to return", instructions),
+        tools_section("Tools you may call (all read-only)", request.tools),
+        section("Your previous calls", history),
+        section("Already observed in this run by any agent", tool_refs(request.observed_refs)),
+        context_section(request.context),
+        section("What to return", instructions),
     ]
     return "\n\n".join(sections)
 
 
 def render_proposal_prompt(request: ProposalRequest) -> str:
     """The user message asking for one remediation of the verified root cause."""
-    failed = [_failed_line(number, a) for number, a in enumerate(request.failed_actions, 1)]
-    memories = [_memory_line(hit) for hit in request.memory_hits]
+    failed = [failed_line(number, a) for number, a in enumerate(request.failed_actions, 1)]
+    memories = [memory_line(hit) for hit in request.memory_hits]
     sections = [
         "# Remediation proposal",
-        _incident_section(request.incident),
-        _root_cause_section(request.hypothesis),
-        _tools_section("Remediation tools you may propose (ONLY these)", request.allowed_actions),
-        _section("Actions that already failed in this run", failed),
-        _section("Past incidents (assessed by RECAP's trusted code)", memories),
-        _context_section(request.context),
-        _section("What to return", PROPOSAL_INSTRUCTIONS),
+        incident_section(request.incident),
+        root_cause_section(request.hypothesis),
+        tools_section("Remediation tools you may propose (ONLY these)", request.allowed_actions),
+        section("Actions that already failed in this run", failed),
+        section("Past incidents (assessed by RECAP's trusted code)", memories),
+        context_section(request.context),
+        section("What to return", PROPOSAL_INSTRUCTIONS),
     ]
     return "\n\n".join(sections)
 
 
-# --- sections ---------------------------------------------------------------------------
+# --- sections (building blocks shared with the v4 step protocol in protocol.py) ----------
 
 
-def _section(title: str, lines: Iterable[str]) -> str:
+def section(title: str, lines: Iterable[str]) -> str:
     """A Markdown section; empty sections say "(none)" so the model knows nothing is missing."""
     body = "\n".join(lines) or "(none)"
     return f"## {title}\n{body}"
 
 
-def _incident_section(incident: AgentIncident) -> str:
+def incident_section(incident: AgentIncident) -> str:
     # IDs, environment and time come from RECAP itself; the alert text is untrusted data.
     alert = "\n".join(
         [
@@ -204,14 +206,14 @@ def _incident_section(incident: AgentIncident) -> str:
     )
     lines = [
         f"Incident ID: {incident.incident_id}",
-        _environment_line(incident.environment),
+        environment_line(incident.environment),
         f"Opened at: {incident.created_at.isoformat()}",
-        _untrusted("alert", "alert", alert),
+        untrusted("alert", "alert", alert),
     ]
-    return _section("Incident", lines)
+    return section("Incident", lines)
 
 
-def _environment_line(kind: str) -> str:
+def environment_line(kind: str) -> str:
     """The target environment kind; only the simulator is described as a simulation."""
     if kind == "simulated":
         return (
@@ -221,7 +223,7 @@ def _environment_line(kind: str) -> str:
     return f"The target environment kind is '{kind}'."
 
 
-def _root_cause_section(hypothesis: Hypothesis) -> str:
+def root_cause_section(hypothesis: Hypothesis) -> str:
     # The verifier checked the structured fields; the claim text was written by a provider
     # (maybe an LLM that read injected data), so it stays inside untrusted tags.
     claim = hypothesis.claim
@@ -231,33 +233,33 @@ def _root_cause_section(hypothesis: Hypothesis) -> str:
         f"Mechanism: {hypothesis.mechanism.value}",
         f"Target service: {hypothesis.target_service or 'unknown'}",
         f"Supporting evidence: {', '.join(hypothesis.supporting_evidence_ids) or 'none'}",
-        _untrusted("hypothesis", "hypothesis", claim),
+        untrusted("hypothesis", "hypothesis", claim),
     ]
-    return _section("Verified root cause (checked by RECAP's verifier)", lines)
+    return section("Verified root cause (checked by RECAP's verifier)", lines)
 
 
-def _tools_section(title: str, tools: Sequence[ToolSpecView]) -> str:
+def tools_section(title: str, tools: Sequence[ToolSpecView]) -> str:
     # Names, descriptions and argument rules come from RECAP's trusted registry.
     lines: list[str] = []
     for tool in tools:
         lines.append(f"- {tool.name} (risk: {tool.risk.value}): {tool.description}")
         lines.append(f"  args: {canonical_json(tool.args)}")
-    return _section(title, lines)
+    return section(title, lines)
 
 
-def _context_section(pack: ContextPack) -> str:
+def context_section(pack: ContextPack) -> str:
     """Every context item (evidence, runbook chunk, memory) wrapped as untrusted data."""
     items = [
-        _untrusted(item.item_id, item.kind, item.text, item.flags, item.source_ref)
+        untrusted(item.item_id, item.kind, item.text, item.flags, item.source_ref)
         for item in pack.items
     ]
-    return _section("Context (untrusted data: cite the id attributes)", items)
+    return section("Context (untrusted data: cite the id attributes)", items)
 
 
 # --- single lines -----------------------------------------------------------------------
 
 
-def _call_line(number: int, call: ToolCallRecord) -> str:
+def call_line(number: int, call: ToolCallRecord) -> str:
     """One earlier call. A successful call ran with arguments the gateway validated."""
     summary = f"{call.tool_name} {canonical_json(call.args)}"
     if call.ok:
@@ -265,23 +267,23 @@ def _call_line(number: int, call: ToolCallRecord) -> str:
         return f"{number}. {summary} -> ok{evidence}"
     # A failed call has unvalidated arguments and error text from the tool server.
     failure = f"{summary} failed: {call.error or 'unknown error'}"
-    return f"{number}. failed call:\n{_untrusted(f'call-{number}', 'failed_call', failure)}"
+    return f"{number}. failed call:\n{untrusted(f'call-{number}', 'failed_call', failure)}"
 
 
-def _tool_refs(observed_refs: Sequence[str]) -> list[str]:
+def tool_refs(observed_refs: Sequence[str]) -> list[str]:
     # Only tool calls can be repeated, so list just the "mcp:" references, once each.
     return [f"- {ref}" for ref in dict.fromkeys(observed_refs) if ref.startswith("mcp:")]
 
 
-def _failed_line(number: int, action: ActionRecord) -> str:
+def failed_line(number: int, action: ActionRecord) -> str:
     # Action, target and params were written by a provider, so they stay untrusted data.
     text = f"{action.action} on {action.target} {canonical_json(action.params)}: {action.result}"
     if action.note:
         text += f" ({action.note})"
-    return _untrusted(f"failed-action-{number}", "failed_action", text)
+    return untrusted(f"failed-action-{number}", "failed_action", text)
 
 
-def _memory_line(hit: AgentMemoryHit) -> str:
+def memory_line(hit: AgentMemoryHit) -> str:
     # Outcome, verification and "safe to reuse" are RECAP's own judgements, not episode text.
     episode = hit.episode
     line = (
@@ -303,7 +305,7 @@ def _yes_no(flag: bool) -> str:
 # --- untrusted wrapper ------------------------------------------------------------------
 
 
-def _untrusted(
+def untrusted(
     item_id: str, kind: str, text: str, flags: Iterable[str] | None = None, source: str = ""
 ) -> str:
     """Wrap text in <untrusted_data> tags.

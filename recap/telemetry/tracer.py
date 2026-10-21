@@ -34,6 +34,7 @@ class TraceCategory:
     ORCHESTRATION = "orchestration.summary"
     AGENT_START = "agent.start"
     AGENT_DECISION = "agent.decision"
+    LLM_CALL = "llm.call"  # one request to a language model: model, exact tokens, latency
     AGENT_FINISH = "agent.finish"
     TOOL_DISCOVERY = "tool.discovery"
     TOOL_CALL = "tool.call"

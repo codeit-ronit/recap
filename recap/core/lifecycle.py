@@ -7,7 +7,7 @@ never jump from INVESTIGATING straight to RESOLVED without a verified mitigation
     CREATED -> RETRIEVING -> INVESTIGATING -> PROPOSING -> AWAITING_APPROVAL
             -> MITIGATING -> VERIFYING -> RESOLVED
     VERIFYING -> INVESTIGATING          (mitigation did not recover; bounded retry)
-    any non-terminal -> FAILED | BUDGET_EXHAUSTED
+    any non-terminal -> FAILED | BUDGET_EXHAUSTED | QUOTA_EXHAUSTED
     PROPOSING / AWAITING_APPROVAL / MITIGATING -> BLOCKED   (policy deny, rejection, expiry)
     CREATED -> BLOCKED                                       (refused before starting, e.g. the
                                                               namespace is not allowlisted)
@@ -21,8 +21,9 @@ from recap.core.models import TERMINAL_STATES, IncidentState, StateChange
 
 S = IncidentState
 
-# Every non-terminal state may also fail or run out of budget.
-_ALWAYS_ALLOWED = {S.FAILED, S.BUDGET_EXHAUSTED}
+# Every non-terminal state may also fail, run out of budget, or run out of a free
+# provider's quota (the run is then deferred; see IncidentState.QUOTA_EXHAUSTED).
+_ALWAYS_ALLOWED = {S.FAILED, S.BUDGET_EXHAUSTED, S.QUOTA_EXHAUSTED}
 
 TRANSITIONS: dict[IncidentState, set[IncidentState]] = {
     S.CREATED: {S.RETRIEVING, S.BLOCKED},
@@ -36,6 +37,7 @@ TRANSITIONS: dict[IncidentState, set[IncidentState]] = {
     S.FAILED: set(),
     S.BLOCKED: set(),
     S.BUDGET_EXHAUSTED: set(),
+    S.QUOTA_EXHAUSTED: set(),
 }
 
 

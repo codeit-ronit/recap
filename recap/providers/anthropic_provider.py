@@ -47,6 +47,7 @@ from recap.core.models import (
     Usage,
 )
 from recap.providers.prompts import (
+    PROMPT_VERSION,
     SYSTEM_PROMPT,
     HypothesisOutput,
     InvestigationOutput,
@@ -100,7 +101,13 @@ class AnthropicProvider:
         # anthropic.AsyncAnthropic, or a test fake with the same beta.messages.parse method.
         self._client: Any = client
         self.info = ProviderInfo(
-            name=f"anthropic:{self.model}", kind="llm", model=self.model, description=DESCRIPTION
+            name=f"anthropic:{self.model}",
+            kind="llm",
+            origin="paid_llm",  # billed per call: the owner keeps this adapter disabled
+            model=self.model,
+            description=DESCRIPTION,
+            mode="json",
+            prompt_version=PROMPT_VERSION,
         )
 
     async def next_action(self, request: InvestigationRequest) -> InvestigationDecision:
