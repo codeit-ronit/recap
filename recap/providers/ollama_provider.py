@@ -35,8 +35,8 @@ from recap.core.errors import ConfigError, ProviderError
 from recap.core.ids import canonical_json
 from recap.providers.http_llm import HttpLLMProvider, ModelReply, Purpose
 from recap.providers.protocol import Message
-from recap.providers.quota import UsageLedger
-from recap.providers.transport import ModelTransport
+from recap.providers.quota import UsageLedger, ledger_scope
+from recap.providers.transport import HttpExchange, ModelTransport
 
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 DEFAULT_CONTEXT_TOKENS = 8192
@@ -48,17 +48,22 @@ PROBE_TIMEOUT_SECONDS = 10.0
 
 
 def check_local_settings(settings: ProviderSettings) -> None:
-    """Refuse a non-loopback server or a cloud model before anything is sent."""
+    """Refuse a non-loopback server or a cloud-named model before anything is sent.
+
+    The transport also ignores proxy settings (HTTP_PROXY, a system proxy), which could
+    otherwise carry a "local" request, and its prompt, off the machine.
+    """
     host = urlsplit(settings.base_url or "").hostname or ""
     if host not in LOOPBACK_HOSTS:
         raise ConfigError(
             f"the Ollama provider is local-only: base_url must be on {', '.join(LOOPBACK_HOSTS)}, "
             f"not {host or settings.base_url!r}"
         )
-    model = settings.model or ""
-    if model.split(":")[-1].endswith("cloud"):
+    model = (settings.model or "").lower()
+    if model.split(":")[-1].endswith("cloud") or model.endswith("-cloud"):
         raise ConfigError(
-            f"{model!r} is an Ollama cloud model (it runs on Ollama's servers): RECAP refuses it"
+            f"{settings.model!r} is an Ollama cloud model (it runs on Ollama's servers): "
+            "RECAP refuses it"
         )
 
 
@@ -66,6 +71,7 @@ class OllamaProvider(HttpLLMProvider):
     """A local Ollama model behind the LLMProvider interface."""
 
     api = "ollama"
+    origin = "local_llm"
 
     def __init__(
         self,
@@ -104,6 +110,12 @@ class OllamaProvider(HttpLLMProvider):
         body = show.body if isinstance(show.body, dict) else {}
         if show.status != 200:
             raise ProviderError(f"Ollama /api/show answered HTTP {show.status}")
+        if body.get("remote_host") or body.get("remote_model"):
+            # A local name can point at a cloud model (e.g. a copy of a "-cloud" model).
+            raise ProviderError(
+                f"{self.model} is served from {body.get('remote_host') or 'a remote host'}, "
+                "not this machine: RECAP refuses cloud models"
+            )
         capabilities = [str(c) for c in body.get("capabilities") or []]
         if self.mode == "tools" and "tools" not in capabilities:
             raise ProviderError(
@@ -134,6 +146,7 @@ class OllamaProvider(HttpLLMProvider):
         schema: dict[str, Any] | None,
         tools: list[dict[str, Any]] | None,
         purpose: Purpose,
+        log: list[ModelReply],
     ) -> ModelReply:
         await self.ensure_ready()
         self._check_fits(messages, schema, tools)
@@ -160,48 +173,56 @@ class OllamaProvider(HttpLLMProvider):
         )
         data = exchange.body if isinstance(exchange.body, dict) else {}
         self._count(exchange.status, data, exchange.replayed)
+        reply = self._reply(exchange, data)
+        log.append(reply)  # recorded whatever happens next
+        if exchange.status != 200:
+            raise ProviderError(f"Ollama returned HTTP {exchange.status}: {reply.notes[0]}")
+        if reply.model_reported != self.model:
+            raise ProviderError(
+                f"Ollama answered with {reply.model_reported!r}, not the requested {self.model}"
+            )
+        if reply.input_tokens is not None and reply.input_tokens >= self.context_tokens:
+            raise ProviderError(
+                f"the prompt filled the whole context window ({reply.input_tokens} tokens), so "
+                "its start may have been cut; raise context_tokens"
+            )
+        return reply
+
+    def _reply(self, exchange: HttpExchange, data: dict[str, Any]) -> ModelReply:
+        """Any exchange as a ModelReply (an error too: it is recorded like an answer)."""
+        common: dict[str, Any] = {
+            "status": exchange.status,
+            "input_tokens": _int(data.get("prompt_eval_count")),
+            "output_tokens": _int(data.get("eval_count")),
+            "model_reported": data.get("model"),
+            "duration_ms": exchange.duration_ms,
+            "replayed": exchange.replayed,
+        }
         if exchange.status != 200:
             error = data.get("error") or exchange.text or "no details"
-            raise ProviderError(f"Ollama returned HTTP {exchange.status}: {str(error)[:200]}")
-        reported = data.get("model")
-        if reported != self.model:
-            raise ProviderError(
-                f"Ollama answered with {reported!r}, not the requested {self.model}"
-            )
-        prompt_tokens = _int(data.get("prompt_eval_count"))
-        if prompt_tokens is not None and prompt_tokens >= self.context_tokens:
-            raise ProviderError(
-                f"the prompt filled the whole context window ({prompt_tokens} tokens), so its "
-                "start may have been cut; raise context_tokens"
-            )
+            return ModelReply(notes=[str(error)[:200]], **common)
         notes: list[str] = []
         if data.get("done_reason") == "length":
-            notes.append(
-                f"the answer was cut off at max_output_tokens={settings.max_output_tokens}"
-            )
+            limit = self.settings.max_output_tokens
+            notes.append(f"the answer was cut off at max_output_tokens={limit}")
         load_seconds = (_int(data.get("load_duration")) or 0) / 1e9
         if load_seconds >= 1:
             notes.append(f"Ollama first loaded the model into memory ({load_seconds:.1f}s)")
         message = data.get("message") or {}
         return ModelReply(
-            status=200,
             content=str(message.get("content") or ""),
             tool_calls=[_tool_call(call) for call in message.get("tool_calls") or []],
             thinking=str(message.get("thinking") or ""),
             finish_reason=data.get("done_reason"),
-            input_tokens=prompt_tokens,
-            output_tokens=_int(data.get("eval_count")),
-            model_reported=reported,
-            duration_ms=exchange.duration_ms,
-            replayed=exchange.replayed,
             notes=notes,
+            **common,
         )
 
     def _count(self, status: int, data: dict[str, Any], replayed: bool) -> None:
         """Add a live request to the usage ledger (a replayed answer cost nothing now)."""
         if self.ledger is None or replayed:
             return
-        request_id = self.ledger.reserve(self.name, self.model, 0)
+        request_id = self.ledger.reserve(ledger_scope(self.settings.base_url or ""), self.model, 0)
         self.ledger.finish(
             request_id,
             status=status,

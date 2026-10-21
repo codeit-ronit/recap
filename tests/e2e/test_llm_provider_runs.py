@@ -11,15 +11,16 @@ test_recorded_model_runs.py.
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from recap.core.config import Settings
-from recap.core.ids import utcnow
 from recap.core.models import IncidentState, RunConfig, RunRecord, TraceEvent
 from recap.providers.factory import REPLAY_ENV, create_provider
+from recap.providers.protocol import PROMPT_VERSION
 from recap.providers.quota import OPT_IN_ENV
 from recap.runtime import Runtime
 from recap.telemetry.tracer import TraceCategory as C
@@ -36,6 +37,7 @@ from tests.llm_fakes import (
     FakeOllama,
     OperatorApproves,
     ScriptedModel,
+    as_ollama_body,
     error,
 )
 
@@ -75,7 +77,7 @@ async def test_a_model_driven_run_resolves_through_mcp_with_an_operator_approval
     assert record.state == IncidentState.RESOLVED
     assert record.recovery is not None and record.recovery.verified  # the oracle's own check
     assert record.provider_info is not None and record.provider_info.origin == "local_llm"
-    assert record.versions["prompt_version"] == "prompts-v4"
+    assert record.versions["prompt_version"] == PROMPT_VERSION
     assert [(a.action, a.target, a.result) for a in record.actions] == [
         ("execute_rollback", "checkout", "recovered")
     ]
@@ -144,8 +146,14 @@ async def test_a_recorded_run_replays_offline_to_the_same_outcome(
         replay_runtime, "bad-deployment", RunConfig(provider="replay", use_memory=False)
     )
 
+    assert replayed.error is None, replayed.error  # a ReplayMismatch would show here
     assert replayed.state == live.state == IncidentState.RESOLVED
-    assert replayed.run_id != live.run_id  # different evidence ID prefixes, remapped
+    # The recorded answers cited the LIVE run's evidence IDs; in the replay they must point
+    # at the replay's own evidence (each run's IDs carry its own prefix).
+    prefix = f"ev-{replayed.run_id.split('-')[-1][:6]}-"
+    assert replayed.verification is not None and replayed.verification.best is not None
+    cited = replayed.verification.best.supporting_evidence_ids
+    assert cited and all(evidence_id.startswith(prefix) for evidence_id in cited)
     assert replayed.provider_info is not None and replayed.provider_info.origin == "replay"
     assert replayed.provider_info.replay_of["original_provider"] == "ollama"  # type: ignore[index]
     assert replayed.usage.model_requests == 0  # nothing was sent to any model
@@ -162,7 +170,7 @@ async def test_a_free_quota_429_defers_the_run_and_the_key_is_never_stored(
 ) -> None:
     monkeypatch.setenv(OPT_IN_ENV, "1")
     monkeypatch.setenv("GROQ_API_KEY", FAKE_GROQ_KEY)
-    monkeypatch.setenv("RECAP_GROQ_FREE_PLAN_CONFIRMED_ON", utcnow().date().isoformat())
+    monkeypatch.setenv("RECAP_GROQ_FREE_PLAN_CONFIRMED_ON", date.today().isoformat())
     runtime = Runtime(settings)
     fake = FakeGroq([error(429, "rate_limit_exceeded", **{"retry-after": "600"})])
     use_fake_model(runtime, "groq", fake)
@@ -175,8 +183,74 @@ async def test_a_free_quota_429_defers_the_run_and_the_key_is_never_stored(
     assert len(fake.chats) == 1  # one request, no retry after a long retry-after
     skipped = events(runtime, record, C.MEMORY_SKIP)
     assert "run deferred" in skipped[-1].payload["reason"]
+    # The refused request itself is on the record: a trace event and one model request.
+    [refused] = events(runtime, record, C.LLM_CALL)
+    assert (refused.payload["status"], refused.payload["ok"]) == (429, False)
+    assert record.usage.model_requests == 1
     # The key went on the wire and nowhere else: no file RECAP wrote contains it.
     assert fake.requests[-1].headers["authorization"] == f"Bearer {FAKE_GROQ_KEY}"
-    for path in settings.paths.data_dir.rglob("*"):
-        if path.is_file():
-            assert FAKE_GROQ_KEY.encode() not in path.read_bytes(), path
+    written = [p for p in settings.paths.data_dir.rglob("*") if p.is_file()]
+    written.append(settings.paths.usage_ledger)  # the per-user ledger lives outside data/
+    for path in written:
+        assert FAKE_GROQ_KEY.encode() not in path.read_bytes(), path
+
+
+async def test_a_proposal_refused_by_quota_is_deferred_and_still_recorded(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The investigation succeeds, the proposal request gets a long 429: the run is deferred,
+    and that last request still appears in the trace and the usage (it was sent)."""
+    monkeypatch.setenv(OPT_IN_ENV, "1")
+    monkeypatch.setenv("GROQ_API_KEY", FAKE_GROQ_KEY)
+    monkeypatch.setenv("RECAP_GROQ_FREE_PLAN_CONFIRMED_ON", date.today().isoformat())
+    model = ScriptedModel()
+
+    def answer(body: dict[str, Any]) -> Any:
+        if "action" in body["response_format"]["json_schema"]["schema"]["properties"]:
+            return error(429, "rate_limit_exceeded", **{"retry-after": "600"})
+        return model(as_ollama_body(body))
+
+    runtime = Runtime(settings)
+    fake = FakeGroq(responder=answer)
+    use_fake_model(runtime, "groq", fake)
+
+    record = await run(runtime, "bad-deployment", RunConfig(provider="groq", use_memory=False))
+
+    assert record.state == IncidentState.QUOTA_EXHAUSTED and record.actions == []
+    calls = events(runtime, record, C.LLM_CALL)
+    assert calls[-1].payload["purpose"] == "propose" and calls[-1].payload["status"] == 429
+    assert record.usage.model_requests == len(fake.chats) == len(calls)
+
+
+@pytest.mark.parametrize("planner", ["default", "prompt_injected"])
+async def test_a_paid_plan_response_makes_the_run_say_cost_unknown(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch, planner: str
+) -> None:
+    """The tripwire's verdict reaches the run summary, also through the red-team wrapper."""
+    monkeypatch.setenv(OPT_IN_ENV, "1")
+    monkeypatch.setenv("GROQ_API_KEY", FAKE_GROQ_KEY)
+    monkeypatch.setenv("RECAP_GROQ_FREE_PLAN_CONFIRMED_ON", date.today().isoformat())
+    runtime = Runtime(settings)
+    fake = FakeGroq(
+        responder=lambda body: ScriptedModel()(as_ollama_body(body)), daily_limit="500000"
+    )
+
+    def make(config: RunConfig) -> Any:
+        return create_provider(
+            "groq",
+            runtime.settings,
+            planner=config.planner,
+            mock_http=fake.mock(),
+            ledger=runtime.ledger,
+        )
+
+    runtime.make_provider = make  # type: ignore[method-assign]
+    config = RunConfig(provider="groq", use_memory=False, planner=planner)  # type: ignore[arg-type]
+    record = await run(runtime, "bad-deployment", config)
+
+    assert record.state == IncidentState.FAILED and "free status" in (record.error or "")
+    assert len(fake.chats) == 1  # nothing after the response that showed the paid plan
+    [summary] = events(runtime, record, C.RUN_SUMMARY)
+    assert summary.payload["cost"].startswith("cost unknown")
+    assert record.provider_info is not None
+    assert record.provider_info.red_team is (planner == "prompt_injected")

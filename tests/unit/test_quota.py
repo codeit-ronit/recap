@@ -43,7 +43,9 @@ def ledger(tmp_path: Path) -> UsageLedger:
 
 
 def guard(tmp_path: Path, **environ: str) -> FreeTierGuard:
-    return FreeTierGuard("free", FREE, ledger(tmp_path), environ={**OWNER, **environ}, today=TODAY)
+    return FreeTierGuard(
+        "free", FREE, ledger(tmp_path), scope="free", environ={**OWNER, **environ}, today=TODAY
+    )
 
 
 # --- the ledger ----------------------------------------------------------------------------
@@ -155,6 +157,7 @@ def test_the_per_run_cap(tmp_path: Path) -> None:
         "free",
         FREE.model_copy(update={"caps": CAPS.model_copy(update={"requests_per_minute": 10})}),
         ledger(tmp_path),
+        scope="free",
         environ=OWNER,
         today=TODAY,
     )

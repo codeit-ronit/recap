@@ -96,6 +96,10 @@ class LiveTransport:
     `headers` is called at send time, so a credential read from the environment is put on
     the wire and nowhere else. `mock` replaces the network with an httpx.MockTransport in
     tests (the local protocol fixture); everything else runs exactly as in production.
+
+    Proxy settings from the environment or the operating system are ignored
+    (`trust_env=False`): a proxy would receive every prompt, could answer as "the model",
+    and would quietly turn a loopback-only local model into a remote one.
     """
 
     name = "live"
@@ -117,7 +121,9 @@ class LiveTransport:
     ) -> HttpExchange:
         started = time.perf_counter()
         try:
-            async with httpx.AsyncClient(transport=self._mock, follow_redirects=False) as client:
+            async with httpx.AsyncClient(
+                transport=self._mock, follow_redirects=False, trust_env=False
+            ) as client:
                 response = await client.request(
                     method,
                     self.base_url + path,
@@ -207,7 +213,10 @@ class Recorder:
         )
 
     def _append(self, record: dict[str, Any]) -> None:
-        line = self._redact(json.dumps(record, sort_keys=True, default=str))
+        # Redact the DATA (every string in it), then serialize: redacting the serialized line
+        # could cut through JSON escapes (a log line with token="..." inside a JSON string)
+        # and leave a line that no longer parses.
+        line = json.dumps(_scrub(record, self._redact), sort_keys=True, default=str)
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(line + "\n")
 
@@ -243,7 +252,11 @@ class Recording(Contract):
     def load(cls, path: Path) -> Recording:
         if not path.is_file():
             raise ConfigError(f"recording not found: {path}")
-        lines = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+        try:
+            text = path.read_text(encoding="utf-8")
+            lines = [json.loads(line) for line in text.splitlines() if line]
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ConfigError(f"{path.name} is not a valid recording ({exc})") from None
         if not lines or lines[0].get("type") != "header":
             raise ConfigError(f"{path} is not a RECAP recording (no header line)")
         header = lines[0]
@@ -293,6 +306,17 @@ class ReplayTransport:
 
 
 # --- fingerprints -------------------------------------------------------------------------
+
+
+def _scrub(value: Any, redact: Callable[[str], str]) -> Any:
+    """A copy of a JSON-like value with `redact` applied to every string in it."""
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, dict):
+        return {key: _scrub(item, redact) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_scrub(item, redact) for item in value]
+    return value
 
 
 def normalize(text: str) -> str:

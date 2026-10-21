@@ -7,13 +7,13 @@ and never a guessed answer. It is how CI exercises a real-model run offline.
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 
 import pytest
 
 from recap.core.config import Settings
 from recap.core.errors import ConfigError, ReplayMismatch
-from recap.core.ids import utcnow
 from recap.providers.factory import REPLAY_ENV, create_provider
 from recap.providers.http_llm import HttpLLMProvider
 from recap.providers.protocol import FINISH_TOOL
@@ -123,7 +123,7 @@ async def test_a_free_hosted_recording_replays_without_any_live_permission(
 ) -> None:
     monkeypatch.setenv(OPT_IN_ENV, "1")
     monkeypatch.setenv("GROQ_API_KEY", FAKE_GROQ_KEY)
-    monkeypatch.setenv("RECAP_GROQ_FREE_PLAN_CONFIRMED_ON", utcnow().date().isoformat())
+    monkeypatch.setenv("RECAP_GROQ_FREE_PLAN_CONFIRMED_ON", date.today().isoformat())
     request = investigation_request(settings)
     fake = FakeGroq([step("stop", summary="tampered data")])
     live_provider = create_provider("groq", settings, mock_http=fake.mock())

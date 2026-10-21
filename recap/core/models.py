@@ -847,6 +847,7 @@ class ProviderInfo(Contract):
     prompt_version: str | None = None  # None for the scripted policy, which uses no prompts
     replay_of: dict[str, Any] | None = None  # a replay's provenance: original provider, model, ...
     recording: str | None = None  # where this run's model exchanges are recorded (or replayed from)
+    red_team: bool = False  # a deliberately compromised planner wraps the provider (tests, evals)
 
 
 class ModelCall(Contract):

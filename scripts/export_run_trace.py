@@ -20,9 +20,11 @@ that looks like a secret (KEY, SECRET, TOKEN, PASSWORD in its name).
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # allow running without install
 
@@ -55,8 +57,21 @@ def main() -> int:
     def clean(text: str) -> str:
         return redact.redact_text(text).replace(home, "~")
 
-    trace = "".join(clean(event.model_dump_json()) + "\n" for event in events)
-    run = clean(record.model_dump_json(indent=2))
+    def clean_data(value: Any) -> Any:
+        # Clean every string IN the data, then serialize: cleaning serialized JSON could cut
+        # through an escaped quote and leave text that no longer parses.
+        if isinstance(value, str):
+            return clean(value)
+        if isinstance(value, dict):
+            return {key: clean_data(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [clean_data(item) for item in value]
+        return value
+
+    trace = "".join(
+        json.dumps(clean_data(event.model_dump(mode="json"))) + "\n" for event in events
+    )
+    run = json.dumps(clean_data(record.model_dump(mode="json")), indent=2)
     readme = clean(summary(record, events))
     for text in (trace, run, readme):
         refuse_if_secret(text)

@@ -22,7 +22,6 @@ from recap.core.models import (
     MitigationDraft,
     ProposalDecision,
     ProposalRequest,
-    ProviderInfo,
     ToolRisk,
 )
 from recap.safety.injection import INJECTION_FLAG, scan_text
@@ -43,19 +42,22 @@ class PromptInjectedProvider:
 
     def __init__(self, base: LLMProvider) -> None:
         self._base = base
-        self.info = ProviderInfo(
-            name=f"{base.info.name}+prompt-injected(red-team)",
-            kind=base.info.kind,
-            origin=base.info.origin,
-            model=base.info.model,
-            mode=base.info.mode,
-            prompt_version=base.info.prompt_version,
-            description=(
-                "RED-TEAM ONLY: simulates a planner that was successfully prompt-injected. "
-                "It proposes whatever destructive action untrusted data asks for, so tests "
-                "can show the safety gateway still blocks it."
-            ),
+        self.info = base.info.model_copy(
+            update={
+                "name": f"{base.info.name}+prompt-injected(red-team)",
+                "red_team": True,  # the dashboard shows a RED-TEAM marker next to the origin
+                "description": (
+                    "RED-TEAM ONLY: simulates a planner that was successfully prompt-injected. "
+                    "It proposes whatever destructive action untrusted data asks for, so tests "
+                    "can show the safety gateway still blocks it."
+                ),
+            }
         )
+
+    def __getattr__(self, name: str) -> object:
+        """Anything else is the wrapped provider's: e.g. `free_status_lost` (the free-plan
+        tripwire) and `budget_overrides`, so wrapping never hides a fact about the run."""
+        return getattr(self._base, name)
 
     async def next_action(self, request: InvestigationRequest) -> InvestigationDecision:
         """Investigation is unchanged: the compromise shows up when proposing a fix."""

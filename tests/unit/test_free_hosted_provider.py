@@ -10,7 +10,7 @@ key never appears anywhere RECAP writes.
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Any
 
 import pytest
@@ -53,6 +53,7 @@ ALLOWED_FIELDS = {
     "tool_choice",
 }
 LIST_SERVICES = step("tool_request", tool_calls=[call("list_services")])
+GROQ_SCOPE = "api.groq.com"  # the ledger counts and stops by host, not by provider name
 
 
 @pytest.fixture
@@ -60,7 +61,7 @@ def groq_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Everything the owner does before a live free call (with a fake key)."""
     monkeypatch.setenv(OPT_IN_ENV, "1")
     monkeypatch.setenv("GROQ_API_KEY", FAKE_GROQ_KEY)
-    monkeypatch.setenv(ATTESTATION_ENV, utcnow().date().isoformat())
+    monkeypatch.setenv(ATTESTATION_ENV, date.today().isoformat())  # the owner's local date
 
 
 @pytest.fixture
@@ -120,7 +121,7 @@ def test_without_every_owner_step_nothing_is_built_or_sent(
 def test_a_stale_or_future_free_plan_confirmation_is_refused(
     settings: Settings, groq_env: None, monkeypatch: pytest.MonkeyPatch, checked: int, message: str
 ) -> None:
-    day = (utcnow() - timedelta(days=checked)).date().isoformat()
+    day = (date.today() - timedelta(days=checked)).isoformat()
     monkeypatch.setenv(ATTESTATION_ENV, day)
     with pytest.raises(ConfigError, match=message):
         create_provider("groq", settings, mock_http=FakeGroq().mock())
@@ -241,7 +242,7 @@ async def test_a_response_that_does_not_look_free_stops_the_provider(
         create_provider("groq", settings, mock_http=later.mock())
     assert later.requests == []
     # ...until the owner checks the billing page and clears it.
-    assert UsageLedger(settings.paths.recap_db).clear_stop("groq") is True
+    assert UsageLedger(settings.paths.usage_ledger).clear_stop(GROQ_SCOPE) is True
     create_provider("groq", settings, mock_http=later.mock())
 
 
@@ -331,28 +332,29 @@ async def test_a_full_minute_cap_is_waited_out_not_exceeded(
     settings: Settings, groq_env: None, no_wait: list[float]
 ) -> None:
     """Another RECAP process used this minute's requests: wait for the window, never exceed it."""
-    ledger = UsageLedger(settings.paths.recap_db)
+    ledger = UsageLedger(settings.paths.usage_ledger)
     for _ in range(25):
-        ledger.reserve("groq", "openai/gpt-oss-120b", 10)
+        ledger.reserve(GROQ_SCOPE, "openai/gpt-oss-120b", 10)
     fake = FakeGroq([LIST_SERVICES])
     provider = groq(settings, fake)
 
-    # The fake clock never moves, so the window never frees up: RECAP waits (about a minute
-    # at a time) up to its pacing limit, and then defers the run instead of sending anyway.
+    # Sleeping is faked, so real time barely moves and the window never frees up: RECAP
+    # waits (up to a minute at a time) until its pacing limit, then defers the run instead
+    # of sending anyway. Each wait is "until the oldest request leaves the minute window".
     with pytest.raises(QuotaExhausted, match="per-minute cap is full"):
         await provider.next_action(investigation_request(settings))
     assert chat_requests(fake) == []
-    assert no_wait and all(55 <= wait <= 61 for wait in no_wait)
+    assert no_wait and all(0 < wait <= 60 for wait in no_wait)
     assert sum(no_wait) <= openai_compatible.MAX_PACING_SECONDS
 
 
 async def test_the_daily_cap_defers_without_waiting(
     settings: Settings, groq_env: None, no_wait: list[float]
 ) -> None:
-    ledger = UsageLedger(settings.paths.recap_db)
+    ledger = UsageLedger(settings.paths.usage_ledger)
     earlier = utcnow() - timedelta(hours=2)
     for _ in range(800):
-        ledger.reserve("groq", "openai/gpt-oss-120b", 10, now=earlier)
+        ledger.reserve(GROQ_SCOPE, "openai/gpt-oss-120b", 10, now=earlier)
     fake = FakeGroq([LIST_SERVICES])
     with pytest.raises(QuotaExhausted, match="requests in the last 24 hours"):
         await groq(settings, fake).next_action(investigation_request(settings))
@@ -374,7 +376,9 @@ async def test_the_caps_count_a_typical_answer_not_the_largest(
 
     # The schema failure keeps its reservation (it may have generated tokens); the second
     # request's reservation was replaced by its reported 900 + 120 tokens.
-    _, tokens = UsageLedger(settings.paths.recap_db).window("groq", utcnow() - timedelta(minutes=1))
+    _, tokens = UsageLedger(settings.paths.usage_ledger).window(
+        GROQ_SCOPE, utcnow() - timedelta(minutes=1)
+    )
     reserved = tokens - 1020
     free_tier = settings.providers.providers["groq"].free_tier
     assert free_tier is not None

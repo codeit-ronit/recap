@@ -42,6 +42,7 @@ M") comes last, so a local server can reuse its cache for the shared start.
 from __future__ import annotations
 
 import json
+import unicodedata
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -49,6 +50,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from recap.context.evidence import tool_source_ref
+from recap.core.config import PolicySettings
+from recap.core.errors import ConfigError
 from recap.core.models import (
     FailureMechanism,
     Hypothesis,
@@ -58,6 +61,7 @@ from recap.core.models import (
     ProposalDecision,
     ProposalRequest,
     ToolCall,
+    ToolRisk,
     ToolSpecView,
 )
 from recap.providers.prompts import (
@@ -74,7 +78,7 @@ from recap.providers.prompts import (
 
 # Recorded on every run that uses this protocol. Bump it whenever the text, the schemas or
 # the parsing rules change, so a trace always says which protocol produced a decision.
-PROMPT_VERSION = "prompts-v4"
+PROMPT_VERSION = "prompts-v4.1"  # v4.1 (M2 review): stable tool definitions, safer feedback
 
 Mode = Literal["json", "tools"]
 Message = dict[str, Any]  # {"role": "system" | "user", "content": "..."}
@@ -254,8 +258,12 @@ def tool_definitions(request: InvestigationRequest) -> list[dict[str, Any]]:
     """Native tool definitions for tools mode: the read-only tools plus the finish function.
 
     On the last step only the finish function is offered, so the model has to finish.
+    Evidence IDs are NOT listed here: servers do not enforce tool-argument schemas (Ollama
+    only shows them to the model), the visible IDs are in the prompt anyway, and the parser
+    drops unknown IDs. Keeping the definitions the same from step to step lets a local
+    server reuse its cache for the start of the prompt, where its template puts the tools.
     """
-    hypothesis = _hypothesis_schema(_services(request.tools), visible_evidence_ids(request))
+    hypothesis = _hypothesis_schema(_services(request.tools), [])
     finish = _function(
         FINISH_TOOL,
         "Finish this investigation: give root-cause hypotheses that cite evidence IDs, or say "
@@ -321,6 +329,36 @@ def for_strict_outputs(schema: Any) -> Any:
     return schema
 
 
+# Field names the protocol itself uses; a tool argument with one of these names could never
+# be passed (check_catalog refuses such a catalog at startup).
+RESERVED_CALL_FIELDS = ("tool_name", "reason")
+RESERVED_PROPOSAL_FIELDS = (
+    "rationale",
+    "kind",
+    "action",
+    "target_service",
+    "evidence_ids",
+    "citations",
+    "expected_health_change",
+    "rollback_hint",
+)
+
+
+def check_catalog(policies: PolicySettings) -> None:
+    """Refuse a tool catalog whose argument names collide with the protocol's own fields."""
+    for name, tool in policies.tools.items():
+        for arg, rule in tool.args.items():
+            if tool.risk == ToolRisk.READ and arg in RESERVED_CALL_FIELDS:
+                raise ConfigError(f"tool {name!r}: argument {arg!r} is reserved by the protocol")
+            target = rule.type in ("service", "namespace")
+            if (
+                name in policies.remediation_tools
+                and arg in RESERVED_PROPOSAL_FIELDS
+                and not target
+            ):
+                raise ConfigError(f"tool {name!r}: argument {arg!r} is reserved by the protocol")
+
+
 def visible_evidence_ids(request: InvestigationRequest) -> list[str]:
     """Evidence IDs this agent can see: the packed evidence plus its own earlier results."""
     ids = set(request.evidence) | {call.evidence_id for call in request.history if call.evidence_id}
@@ -342,12 +380,31 @@ def _call_schema(tools: Sequence[ToolSpecView]) -> dict[str, Any]:
     """
     names = [tool.name for tool in tools]
     properties: dict[str, Any] = {"tool_name": _enum(names) if names else {"type": "string"}}
+    rules_by_arg: dict[str, list[dict[str, Any]]] = {}
     for tool in tools:
         for arg, rule in tool.args.items():
-            if arg not in ("tool_name", "reason"):
-                properties.setdefault(arg, _nullable(_arg_schema(rule)))
+            rules_by_arg.setdefault(arg, []).append(rule)
+    for arg, rules in rules_by_arg.items():  # check_catalog keeps "tool_name"/"reason" free
+        properties[arg] = _nullable(_merged_arg_schema(rules))
     properties["reason"] = _text("One short sentence: why this call helps.")
     return _object(properties)
+
+
+def _merged_arg_schema(rules: list[dict[str, Any]]) -> dict[str, Any]:
+    """One schema for an argument several tools share (e.g. `limit`, `service`).
+
+    When the tools' rules differ, the schema is the loosest true statement (a union of the
+    allowed values, or "a whole number"); each tool's own rule is listed in the prompt, and
+    the registry checks the call against the tool it names.
+    """
+    shapes = [{key: value for key, value in rule.items() if key != "required"} for rule in rules]
+    if all(shape == shapes[0] for shape in shapes):
+        return _arg_schema(rules[0])
+    if all(rule.get("values") for rule in rules):
+        return _enum(sorted({str(value) for rule in rules for value in rule["values"]}))
+    if all(rule.get("type") == "int" for rule in rules):
+        return {"type": "integer", "description": "A whole number; each tool's range is listed."}
+    return {"type": "string"}
 
 
 def _hypothesis_schema(services: list[str], evidence_ids: list[str]) -> dict[str, Any]:
@@ -532,7 +589,12 @@ def parse_tool_step(
     reads = [call for call in calls if call.get("name") != FINISH_TOOL]
     notes: list[str] = []
     if reads and not is_last_step(request):
-        raw = [{"tool_name": str(call.get("name", "")), **_arguments(call)} for call in reads]
+        raw = []
+        for call in reads:
+            arguments = _arguments(call)
+            if "tool_name" in arguments:  # the function the model called decides, never an argument
+                notes.append("ignored a tool_name key inside a tool call's arguments")
+            raw.append({**arguments, "tool_name": str(call.get("name", ""))})
         answer = _StepAnswer(kind="tool_request", summary=text, tool_calls=raw)
         parsed = _step_decision(answer, request, notes)
         if parsed.decision is not None or not finish:
@@ -576,12 +638,14 @@ def parse_proposal(text: str, request: ProposalRequest) -> Parsed:
         return Parsed(None, answer.kind, notes, problem=problem)
 
     tool = next((t for t in request.allowed_actions if t.name == answer.action), None)
-    if tool is None:
+    if tool is None:  # (problems sent back never quote the model's own text)
         return unusable(
-            f"{answer.action[:60]!r} is not a listed remediation tool; choose one, or stop."
+            "the action is not one of the listed remediation tools; choose one, or stop."
         )
     target = answer.target_service or ""
     diagnosed = request.hypothesis.target_service
+    if not target:
+        return unusable("target_service is required: the service the action applies to.")
     if diagnosed and target != diagnosed:
         return unusable(f"target_service must be the diagnosed service {diagnosed!r}.")
     if any(a.action == tool.name and a.target == target for a in request.failed_actions):
@@ -630,10 +694,12 @@ def _step_decision(answer: _StepAnswer, request: InvestigationRequest, notes: li
             return Parsed(None, answer.kind, notes, problem=problem)
         calls = _tool_calls(answer.tool_calls, request, notes)
         if not calls:
-            why = "; ".join(notes[-2:]) or "no tool call was given"
+            # The notes (for the trace) say exactly what was dropped; the problem sent back
+            # to the model states the rules instead of quoting the model's own text.
             problem = (
-                f"none of the tool calls can run ({why}). Call a listed tool you have not "
-                "called yet, with valid arguments, or finish."
+                "none of the tool calls can run: each must name a listed tool, give its "
+                "required arguments, and not repeat a call already observed. Call such a "
+                "tool, or finish."
             )
             return Parsed(None, answer.kind, notes, problem=problem)
         decision = InvestigationDecision(
@@ -718,8 +784,8 @@ def _hypothesis(
         notes.append(f"ignored unknown target service {target[:40]!r}")
         target = None
     details: dict[str, Any] = {}
-    if raw.version and raw.version.strip():
-        details["version"] = raw.version.strip()[:40]
+    if raw.version and _clip(raw.version, 40):
+        details["version"] = _clip(raw.version, 40)
     if raw.dependency:
         if not services or raw.dependency in services:
             details["dependency"] = raw.dependency
@@ -749,7 +815,7 @@ def read_json_object(text: str) -> tuple[dict[str, Any] | None, str]:
         return None, "the answer is empty"
     try:
         value = json.loads(stripped)
-    except (json.JSONDecodeError, RecursionError) as exc:
+    except (ValueError, RecursionError) as exc:  # ValueError: bad JSON, or a giant integer
         return None, f"invalid JSON: {str(exc)[:80]}"
     if not isinstance(value, dict):
         return None, "the JSON is not an object"
@@ -781,4 +847,9 @@ def _first(exc: ValidationError) -> str:
 
 
 def _clip(text: str, limit: int = MAX_TEXT) -> str:
-    return " ".join(text.split())[:limit]
+    """Model text made safe to store and print: control characters (terminal escape codes)
+    dropped, whitespace collapsed, cut to `limit` characters."""
+    kept = "".join(
+        char for char in text if char.isspace() or not unicodedata.category(char).startswith("C")
+    )
+    return " ".join(kept.split())[:limit]

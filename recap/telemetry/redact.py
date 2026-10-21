@@ -39,8 +39,10 @@ SENSITIVE_KEY = re.compile(r"(?i)(api[_-]?key|token|secret|password|authorizatio
 SECRET_ENV_NAME = re.compile(r"(?i)(KEY|SECRET|TOKEN|PASSWORD)")
 MIN_ENV_SECRET_LENGTH = 8  # shorter values such as "1" or "true" would redact ordinary text
 
+# The value stops at whitespace, separators, quotes and backslashes (a backslash may start a
+# JSON escape: swallowing it would break the JSON text the value sits in).
 KEY_VALUE_SECRET = re.compile(
-    r"(?i)\b((?:password|passwd|pwd|secret|token|api[_-]?key)\s*[=:]\s*)[^\s,;'\"]+"
+    r"(?i)\b((?:password|passwd|pwd|secret|token|api[_-]?key)\s*[=:]\s*)[^\s,;'\"\\]+"
 )
 
 SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (

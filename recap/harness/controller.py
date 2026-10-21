@@ -35,7 +35,13 @@ from recap.agents.roles import agent_specs
 from recap.context.evidence import EvidenceRegistry
 from recap.context.packer import ContextPacker
 from recap.core.config import EnvironmentConfig, Settings
-from recap.core.errors import ApprovalError, BudgetExhausted, ConfigError, QuotaExhausted
+from recap.core.errors import (
+    ApprovalError,
+    BudgetExhausted,
+    ConfigError,
+    QuotaExhausted,
+    model_calls_of,
+)
 from recap.core.ids import new_id, utcnow
 from recap.core.interfaces import (
     ApprovalChannel,
@@ -523,14 +529,19 @@ class IncidentController:
             memory_hits=memories,
             failed_actions=failed_actions,
         )
-        decision = await self._before_deadline(
-            self.provider.propose_mitigation(request), "the remediation proposal"
-        )
-        self._add_usage(decision.usage)
-        for call in decision.model_calls:  # a real model's requests behind the proposal
-            self.tracer.emit(
-                TraceCategory.LLM_CALL, call.model_dump(mode="json"), duration_ms=call.duration_ms
+        try:
+            decision = await self._before_deadline(
+                self.provider.propose_mitigation(request), "the remediation proposal"
             )
+        except Exception as exc:
+            # Requests a real model already answered before the proposal failed still count.
+            calls, spent = model_calls_of(exc)
+            self._trace_model_calls(calls)
+            if spent is not None:
+                self._add_usage(spent)
+            raise
+        self._add_usage(decision.usage)
+        self._trace_model_calls(decision.model_calls)  # a real model's requests behind it
         if decision.draft is None:
             self.tracer.emit(TraceCategory.PROPOSAL, {"proposal": None, "notes": decision.notes})
             self._finish(S.FAILED, "no remediation could be drafted; a human should take over")
@@ -773,6 +784,13 @@ class IncidentController:
             agent_timeout_seconds=self.incident.budget.max_elapsed_seconds,
             remaining_seconds=self.budget.remaining_seconds,  # no agent outlives the run
         )
+
+    def _trace_model_calls(self, calls: list[Any]) -> None:
+        """One `llm.call` event per HTTP request a model provider sent for the proposal."""
+        for call in calls:
+            self.tracer.emit(
+                TraceCategory.LLM_CALL, call.model_dump(mode="json"), duration_ms=call.duration_ms
+            )
 
     def _target_scope(self) -> str:
         """Lock scope for conflicting-remediation checks: one sandbox per simulated run."""
@@ -1064,9 +1082,13 @@ class IncidentController:
         if self.config.budget is not None:
             return self.config.budget
         defaults = self.settings.budget.default_budget.model_dump()
-        name = self.config.provider or self.settings.providers.default
-        spec = self.settings.providers.providers.get(name)
-        provider_budget = spec.budget if spec is not None else {}
+        # The provider's own overrides: a replay carries those of the RECORDED run, so it
+        # gets the same limits (and the same "step N of M" in every prompt) as the original.
+        provider_budget = getattr(self.provider, "budget_overrides", None)
+        if provider_budget is None:
+            name = self.config.provider or self.settings.providers.default
+            spec = self.settings.providers.providers.get(name)
+            provider_budget = spec.budget if spec is not None else {}
         return RunBudget(**{**defaults, **provider_budget, **self.scenario.budget})
 
     def _versions(self, seed: int) -> dict[str, Any]:

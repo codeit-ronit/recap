@@ -16,6 +16,7 @@ import pytest
 from recap.core.config import Settings
 from recap.core.models import IncidentState, RunConfig
 from recap.providers.factory import REPLAY_ENV
+from recap.providers.protocol import PROMPT_VERSION
 from recap.runtime import Runtime
 from recap.telemetry.tracer import TraceCategory as C
 from tests.llm_fakes import OperatorApproves
@@ -50,10 +51,10 @@ async def test_the_recorded_qwen3_run_resolves_offline_and_says_it_is_a_replay(
     assert tools[:6] == [
         "get_service_health",
         "get_recent_deployments",
-        "get_k8s_like_events",
         "get_service_logs",
         "get_service_metrics",
         "get_service_metrics",
+        "get_k8s_like_events",
     ]
     [proposal] = record.proposals
     assert (proposal.action, proposal.target, proposal.source) == (
@@ -63,8 +64,12 @@ async def test_the_recorded_qwen3_run_resolves_offline_and_says_it_is_a_replay(
     )
     assert proposal.params == {"to_version": "v2.4.0"}
     calls = [e for e in events if e.category == C.LLM_CALL]
-    assert len(calls) == 7 and all(e.payload["replayed"] for e in calls)
-    assert sum(e.payload["input_tokens"] for e in calls) == 18331  # the original run's counts
+    assert len(calls) == 8 and all(e.payload["replayed"] for e in calls)
+    assert sum(e.payload["input_tokens"] for e in calls) == 21489  # the original run's counts
+    # The replay runs with the RECORDED run's limits (its provider's budget), not the
+    # replay entry's defaults, so every prompt says the same "step N of M".
+    assert record.incident is not None
+    assert record.incident.budget.max_elapsed_seconds == 1800
 
 
 def test_recordings_hold_no_secrets_or_local_paths() -> None:
@@ -75,4 +80,4 @@ def test_recordings_hold_no_secrets_or_local_paths() -> None:
         for marker in ("gsk_", "sk-ant-", "Bearer ", "authorization", "LICENSE"):
             assert marker not in text, (path.name, marker)
         header = json.loads(text.splitlines()[0])
-        assert header["type"] == "header" and header["prompt_version"] == "prompts-v4"
+        assert header["type"] == "header" and header["prompt_version"] == PROMPT_VERSION

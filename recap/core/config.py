@@ -180,6 +180,16 @@ class ProviderSettings(Contract):
         if self.kind == "llm" and self.origin in ("local_llm", "free_hosted_llm"):
             if self.api is None or not self.base_url or not self.model:
                 raise ValueError("an HTTP LLM provider needs api, base_url and model")
+        # The origin is what the run badge and the cost line say, so it must match what the
+        # code really does: Ollama is local, an OpenAI-compatible host is the free hosted
+        # provider (the only hosted kind RECAP supports), and nothing else may claim either.
+        expected_origin = {"ollama": "local_llm", "openai_compatible": "free_hosted_llm"}
+        if self.api is not None and self.origin != expected_origin[self.api]:
+            raise ValueError(f"api {self.api!r} must have origin {expected_origin[self.api]!r}")
+        if self.origin in ("local_llm", "free_hosted_llm") and self.api is None:
+            raise ValueError(f"origin {self.origin!r} needs an api")
+        if self.origin == "free_hosted_llm" and not (self.base_url or "").startswith("https://"):
+            raise ValueError("a hosted provider's base_url must use https:// (the key is sent)")
         if self.origin == "free_hosted_llm" and self.free_tier is None:
             raise ValueError("a free hosted provider needs a free_tier section")
         if self.origin == "free_hosted_llm" and self.free_tier is not None:
@@ -210,6 +220,9 @@ class Paths(Contract):
     sandbox_dir: Path
     recap_db: Path  # runs, events, evidence, approvals
     memory_db: Path  # experience episodes
+    # LLM usage and free-tier stops: per USER, outside every data folder, so every RECAP
+    # process (CLI, API, any RECAP_DATA_DIR) shares the same caps and tripwire stops.
+    usage_ledger: Path
 
 
 class Settings(Contract):
@@ -237,6 +250,19 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
+def _usage_ledger_path() -> Path:
+    """RECAP_USAGE_LEDGER, else $XDG_STATE_HOME/recap/llm-usage.db (~/.local/state/...).
+
+    Deliberately NOT under the data folder: a free-plan stop or a daily cap must hold for
+    every RECAP process of this user, whatever RECAP_DATA_DIR it runs with.
+    """
+    configured = os.environ.get("RECAP_USAGE_LEDGER", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    state = os.environ.get("XDG_STATE_HOME", "").strip() or str(Path.home() / ".local" / "state")
+    return Path(state).expanduser() / "recap" / "llm-usage.db"
+
+
 def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -262,6 +288,7 @@ def load_settings(root: Path | None = None, *, data_dir: Path | None = None) -> 
         sandbox_dir=data_dir / "sandbox",
         recap_db=data_dir / "recap.db",
         memory_db=data_dir / "memory.db",
+        usage_ledger=_usage_ledger_path(),
     )
 
     environment = EnvironmentConfig.model_validate(raw["environment.yaml"])

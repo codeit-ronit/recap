@@ -14,6 +14,14 @@ from recap.core.config import Settings, load_settings
 from tests.helpers import OPERATOR_TOKEN
 
 
+@pytest.fixture(autouse=True)
+def private_usage_ledger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Every test gets its own LLM usage ledger, never the user's real one (~/.local/state)."""
+    path = tmp_path / "llm-usage.db"
+    monkeypatch.setenv("RECAP_USAGE_LEDGER", str(path))
+    return path
+
+
 @pytest.fixture
 def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
     """Real configs/ settings, but with data written under a temp dir and zero latency.

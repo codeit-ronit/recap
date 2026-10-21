@@ -377,6 +377,7 @@ export interface ProviderInfo {
   prompt_version?: string | null;
   replay_of?: Record<string, unknown> | null;
   recording?: string | null;
+  red_team?: boolean; // a deliberately compromised planner wraps the provider (tests, evals)
 }
 
 /** GET /providers (recap/providers/catalog.py): one configured provider and whether it can run. */

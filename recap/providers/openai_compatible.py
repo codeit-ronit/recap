@@ -24,8 +24,12 @@ stream, n, logprobs.
     401 / 403                refused (bad key, model not permitted): stop, no retry
     402, blocked_api_access  free status no longer verified: the provider is stopped
     400 json_validate_failed the answer broke the schema: an unusable answer (retried once
-                             with feedback, like any other)
+        / tool_use_failed    with feedback, like any other)
     5xx                      one retry after 2 seconds, then ProviderError
+
+Every exchange, including a retried 429 or 5xx and the one that ends the decision, is
+appended to the base class's log, so each becomes its own ModelCall. A replay makes the same
+retry choices from the recorded settings, without waiting.
 """
 
 from __future__ import annotations
@@ -45,6 +49,9 @@ from recap.providers.transport import HttpExchange, ModelTransport
 
 SERVER_ERROR_RETRY_SECONDS = 2.0
 PROBE_TIMEOUT_SECONDS = 15.0
+# 400 errors that mean "the model's answer broke the schema": an unusable answer, retried
+# once with feedback, not a failure of the run.
+SCHEMA_FAILURES = ("json_validate_failed", "tool_use_failed")
 # Longest wait for RECAP's own per-minute cap, per request. Two parallel agents can each
 # need most of a minute's tokens, so one may wait for the other's minute to pass and then
 # for its own (measured on Groq Free, 2026-10-21). The run's wall-clock budget bounds it all.
@@ -55,6 +62,7 @@ class FreeHostedProvider(HttpLLMProvider):
     """A hosted free-plan model behind the LLMProvider interface (fails closed)."""
 
     api = "openai_compatible"
+    origin = "free_hosted_llm"
 
     def __init__(
         self,
@@ -101,6 +109,7 @@ class FreeHostedProvider(HttpLLMProvider):
         schema: dict[str, Any] | None,
         tools: list[dict[str, Any]] | None,
         purpose: Purpose,
+        log: list[ModelReply],
     ) -> ModelReply:
         await self.check_model()
         body = self._body(messages, schema, tools)
@@ -110,51 +119,61 @@ class FreeHostedProvider(HttpLLMProvider):
         if self.guard is not None:
             answer = min(answer, self.guard.settings.reserved_output_tokens)
         reserved = estimate_tokens(canonical_json(body)) + answer
-        for attempt in (1, 2):
+        for http_try in (1, 2):
             request_id = await self._reserve(reserved)
             exchange = await self.transport.request(
                 "POST", "/chat/completions", body, timeout=self.settings.request_timeout_seconds
             )
-            data = exchange.body if isinstance(exchange.body, dict) else {}
-            code = _error_code(data)
-            usage = data.get("usage") or {}
+            reply = self._reply(exchange)
+            log.append(reply)  # recorded whatever happens next (retry, raise or return)
             if self.guard is not None:
-                snapshot = self.guard.after_response(  # the tripwire raises if not free
+                self.guard.after_response(  # the tripwire raises FreeStatusLost if not free
                     request_id,
                     self.model,
                     status=exchange.status,
                     headers=exchange.headers,
-                    error_code=code,
-                    input_tokens=usage.get("prompt_tokens"),
-                    output_tokens=usage.get("completion_tokens"),
+                    error_code=reply.error_code,
+                    input_tokens=reply.input_tokens,
+                    output_tokens=reply.output_tokens,
                 )
-            else:
-                snapshot = rate_limit_snapshot(exchange.headers)
-            if exchange.status == 200:
-                return self._reply(data, exchange, snapshot)
-            if exchange.status == 429:
+            status, code = reply.status, reply.error_code
+            if status == 200:
+                if reply.model_reported != self.model:
+                    raise ProviderError(
+                        f"{self.name} answered with {reply.model_reported!r}, not {self.model}"
+                    )
+                return reply
+            if status == 429:
                 wait = _retry_after(exchange.headers)
-                limit = self.guard.settings.max_retry_after_seconds if self.guard else 0.0
-                if attempt == 1 and wait is not None and wait <= limit:
-                    await asyncio.sleep(wait)
+                if http_try == 1 and wait is not None and wait <= self._max_retry_after():
+                    await self._pause(wait, exchange.replayed)
                     continue
                 after = f"retry-after {wait:g}s" if wait is not None else "no retry-after"
                 raise QuotaExhausted(self.name, f"HTTP 429 rate limit ({after}); run deferred")
-            if exchange.status in (401, 403):
+            if status in (401, 403):
                 raise ProviderError(
-                    f"{self.name} refused the request (HTTP {exchange.status} {code}): check the "
-                    "key and the model permissions. RECAP does not retry or switch provider."
+                    f"{self.name} refused the request (HTTP {status} {code}): check the key "
+                    "and the model permissions. RECAP does not retry or switch provider."
                 )
-            if exchange.status == 400 and code == "json_validate_failed":
-                note = "the server rejected an answer that broke the schema"
-                return ModelReply(status=400, duration_ms=exchange.duration_ms, notes=[note])
-            if exchange.status >= 500 and attempt == 1:
-                await asyncio.sleep(SERVER_ERROR_RETRY_SECONDS)
+            if status == 400 and code in SCHEMA_FAILURES:
+                return reply  # an unusable answer: the base class asks again once
+            if status >= 500 and http_try == 1:
+                await self._pause(SERVER_ERROR_RETRY_SECONDS, exchange.replayed)
                 continue
-            raise ProviderError(
-                f"{self.name} returned HTTP {exchange.status} {code}: {_error_message(data)}"
-            )
+            raise ProviderError(f"{self.name} returned HTTP {status} {code}: {reply.notes[0]}")
         raise ProviderError(f"{self.name}: no answer after a retry")  # pragma: no cover
+
+    def _max_retry_after(self) -> float:
+        """The longest 429 wait worth one retry. A replay has no guard, but it must make the
+        same choice as the recorded run did, so it reads the same (recorded) setting."""
+        free_tier = self.guard.settings if self.guard is not None else self.settings.free_tier
+        return free_tier.max_retry_after_seconds if free_tier is not None else 0.0
+
+    @staticmethod
+    async def _pause(seconds: float, replayed: bool) -> None:
+        """Wait before retrying, except in a replay: nothing is sent, so nothing to wait for."""
+        if not replayed:
+            await asyncio.sleep(seconds)
 
     async def _reserve(self, tokens: int) -> int:
         """Run the guard's checks and reserve the request, pacing for a full minute cap.
@@ -206,15 +225,26 @@ class FreeHostedProvider(HttpLLMProvider):
             body["tool_choice"] = "required"  # a read-only tool, or submit_findings to finish
         return body
 
-    def _reply(
-        self, data: dict[str, Any], exchange: HttpExchange, snapshot: dict[str, Any]
-    ) -> ModelReply:
-        reported = data.get("model")
-        if reported != self.model:
-            raise ProviderError(f"{self.name} answered with {reported!r}, not {self.model}")
-        choice = (data.get("choices") or [{}])[0]
-        message = choice.get("message") or {}
+    def _reply(self, exchange: HttpExchange) -> ModelReply:
+        """Any exchange as a ModelReply (an error too: it is recorded like an answer)."""
+        data = exchange.body if isinstance(exchange.body, dict) else {}
         usage = data.get("usage") or {}
+        snapshot = rate_limit_snapshot(exchange.headers)
+        common: dict[str, Any] = {
+            "status": exchange.status,
+            "input_tokens": _count(usage.get("prompt_tokens")),
+            "output_tokens": _count(usage.get("completion_tokens")),
+            "model_reported": data.get("model"),
+            "duration_ms": exchange.duration_ms,
+            "rate_limit": snapshot,
+            "replayed": exchange.replayed,
+        }
+        if exchange.status != 200:
+            code = _error_code(data)
+            message = _error_message(data) if data else exchange.text or "no details"
+            return ModelReply(error_code=code, notes=[message], **common)
+        choice = (data.get("choices") or [{}])[0]
+        message_body = choice.get("message") or {}
         notes: list[str] = []
         if choice.get("finish_reason") == "length":
             limit = self.settings.max_output_tokens
@@ -224,21 +254,15 @@ class FreeHostedProvider(HttpLLMProvider):
                 "name": str((call.get("function") or {}).get("name", "")),
                 "arguments": (call.get("function") or {}).get("arguments") or "{}",
             }
-            for call in message.get("tool_calls") or []
+            for call in message_body.get("tool_calls") or []
         ]
         return ModelReply(
-            status=200,
-            content=str(message.get("content") or ""),
+            content=str(message_body.get("content") or ""),
             tool_calls=calls,
-            thinking=str(message.get("reasoning") or ""),  # gpt-oss reasoning, when included
+            thinking=str(message_body.get("reasoning") or ""),  # gpt-oss reasoning, if included
             finish_reason=choice.get("finish_reason"),
-            input_tokens=usage.get("prompt_tokens"),
-            output_tokens=usage.get("completion_tokens"),
-            model_reported=reported,
-            duration_ms=exchange.duration_ms,
-            rate_limit=snapshot,
-            replayed=exchange.replayed,
             notes=notes,
+            **common,
         )
 
 
@@ -263,6 +287,10 @@ def _retry_after(headers: dict[str, str]) -> float | None:
         return max(0.0, float(headers.get("retry-after", "")))
     except ValueError:
         return None
+
+
+def _count(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def _error_code(data: dict[str, Any]) -> str:

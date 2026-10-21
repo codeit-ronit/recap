@@ -6,6 +6,8 @@ The controller catches these to move an incident into the right terminal state
 
 from __future__ import annotations
 
+from typing import Any
+
 
 class RecapError(Exception):
     """Base class for all RECAP errors."""
@@ -50,6 +52,27 @@ class ProviderError(RecapError):
 
 class ReplayMismatch(ProviderError):
     """A replayed run sent a request the recording does not contain (the recording is stale)."""
+
+
+class FreeStatusLost(ProviderError):
+    """A hosted provider's response did not look like the free plan: it is stopped (quota.py)."""
+
+
+def attach_model_calls(exc: BaseException, calls: list[Any], usage: Any) -> None:
+    """Remember on `exc` the model requests a provider had already sent when it raised.
+
+    A decision can fail after requests went out (a 429, a refusal, the free-plan tripwire,
+    a model mismatch). Those requests may have cost tokens and are evidence of what
+    happened, so the harness and the controller record them (`llm.call` events and usage)
+    before letting the error go on. `calls` are ModelCalls; `usage` is their Usage.
+    """
+    exc.model_calls = list(calls)  # type: ignore[attr-defined]
+    exc.model_usage = usage  # type: ignore[attr-defined]
+
+
+def model_calls_of(exc: BaseException) -> tuple[list[Any], Any | None]:
+    """The (ModelCalls, Usage) attached by `attach_model_calls`, or ([], None)."""
+    return list(getattr(exc, "model_calls", [])), getattr(exc, "model_usage", None)
 
 
 class ApprovalError(RecapError):

@@ -15,6 +15,7 @@ import {
   environmentBadge,
   isTerminal,
   originBadge,
+  providerLabel,
   stateLabel,
   stateTone,
 } from "../src/format.ts";
@@ -126,3 +127,17 @@ test("environment badge trusts /system over a stale /health label", () => {
   assert.equal(badge.label, "LIVE ENVIRONMENT (kubernetes) · V1");
   assert.equal(badge.tone, "bad");
 });
+
+test("the header's provider label names the origin and never calls a replay live", () => {
+  assert.equal(providerLabel(SCRIPTED), "deterministic-scripted-policy — scripted, not an LLM");
+  assert.equal(providerLabel(LOCAL), "ollama:qwen3:8b — local llm (qwen3:8b)");
+  assert.equal(providerLabel(REPLAY), "replay:ollama:qwen3:8b — replay");
+  assert.doesNotMatch(providerLabel(REPLAY), /LLM/);
+  assert.equal(providerLabel(undefined), "provider unknown");
+});
+
+test("a replay's badge is amber, never the live-model tone", () => {
+  assert.equal(originBadge(REPLAY).tone, "warn");
+  assert.notEqual(originBadge(REPLAY).tone, originBadge(LOCAL).tone);
+});
+

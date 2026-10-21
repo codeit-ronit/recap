@@ -27,12 +27,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # allow running wi
 from recap.core.config import load_settings
 from recap.core.ids import utcnow
 from recap.providers.catalog import provider_status
-from recap.providers.quota import UsageLedger
+from recap.providers.quota import UsageLedger, ledger_scope
 
 
 async def check() -> int:
     settings = load_settings()
-    ledger = UsageLedger(settings.paths.recap_db)
+    ledger = UsageLedger(settings.paths.usage_ledger)
+    print(f"usage ledger: {settings.paths.usage_ledger} (shared by every RECAP process)")
     for entry in await provider_status(settings, ledger):
         default = " (server default)" if entry["default"] else ""
         model = f" · {entry['model']}" if entry["model"] else ""
@@ -47,21 +48,22 @@ async def check() -> int:
 
 def usage() -> int:
     settings = load_settings()
-    ledger = UsageLedger(settings.paths.recap_db)
+    ledger = UsageLedger(settings.paths.usage_ledger)
     now = utcnow()
     for name, spec in settings.providers.providers.items():
-        if spec.kind != "llm":
+        if spec.kind != "llm" or not spec.base_url:
             continue
-        minute = ledger.window(name, now - timedelta(minutes=1))
-        day = ledger.window(name, now - timedelta(days=1))
+        scope = ledger_scope(spec.base_url)  # the ledger counts and stops by host
+        minute = ledger.window(scope, now - timedelta(minutes=1))
+        day = ledger.window(scope, now - timedelta(days=1))
         print(
-            f"{name:<12} last minute: {minute[0]} requests, {minute[1]} tokens · "
+            f"{name:<12} ({scope}) last minute: {minute[0]} requests, {minute[1]} tokens · "
             f"last 24 h: {day[0]} requests, {day[1]} tokens"
         )
-        limit = ledger.last_rate_limit(name)
+        limit = ledger.last_rate_limit(scope)
         if limit:
             print(f"{'':<12} last rate-limit headers: {limit}")
-        stop = ledger.stopped(name)
+        stop = ledger.stopped(scope)
         if stop:
             print(f"{'':<12} STOPPED at {stop['stopped_at']}: {stop['reason']}")
     return 0
@@ -69,11 +71,19 @@ def usage() -> int:
 
 def clear_stop(name: str) -> int:
     settings = load_settings()
-    ledger = UsageLedger(settings.paths.recap_db)
-    if ledger.clear_stop(name):
-        print(f"cleared the stop on {name}. Remember to update its dated free-plan confirmation.")
+    spec = settings.providers.providers.get(name)
+    if spec is None or not spec.base_url:
+        print(f"unknown provider {name!r}")
+        return 2
+    scope = ledger_scope(spec.base_url)
+    ledger = UsageLedger(settings.paths.usage_ledger)
+    if ledger.clear_stop(scope):
+        print(
+            f"cleared the stop on {name} ({scope}). Remember to update its dated free-plan "
+            "confirmation."
+        )
         return 0
-    print(f"{name} was not stopped")
+    print(f"{name} ({scope}) was not stopped")
     return 1
 
 

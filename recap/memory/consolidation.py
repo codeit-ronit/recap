@@ -127,6 +127,10 @@ def _outcome(state: IncidentState, verified: bool) -> EpisodeOutcome:
     """Map a terminal state to an outcome. RESOLVED counts as SUCCESS only if verified."""
     if state == IncidentState.RESOLVED:
         return EpisodeOutcome.SUCCESS if verified else EpisodeOutcome.FAILED
+    if state not in _OUTCOMES:
+        # e.g. QUOTA_EXHAUSTED: a deferred run decided nothing, so it is never experience.
+        # (The controller skips it before calling; this keeps any other caller honest.)
+        raise ValueError(f"a run that ended {state.value} is not experience")
     return _OUTCOMES[state]
 
 

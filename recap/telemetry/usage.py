@@ -37,6 +37,12 @@ def cost_label(usage: Usage, origin: str, *, free_status_lost: str | None = None
     `origin` is the provider's ProviderInfo.origin. `free_status_lost` is the reason a free
     provider's tripwire fired during the run (None when every response looked free).
     """
+    if free_status_lost:
+        # Whatever the label says about the origin, a fired tripwire means it is not known.
+        return (
+            f"cost unknown: {free_status_lost}. RECAP stopped the provider; check the "
+            "account's billing page"
+        )
     if origin == "scripted":
         return DETERMINISTIC_COST_LABEL
     if origin == "replay":
@@ -44,11 +50,6 @@ def cost_label(usage: Usage, origin: str, *, free_status_lost: str | None = None
     if origin == "local_llm":
         return f"$0.00 - local model on this machine, no API; {_tokens(usage)}"
     if origin == "free_hosted_llm":
-        if free_status_lost:
-            return (
-                f"cost unknown: {free_status_lost}. RECAP stopped the provider; check the "
-                "account's billing page"
-            )
         return (
             "$0.00 - free plan (owner-confirmed; every response's limit header matched the "
             f"free plan); {_tokens(usage)}"

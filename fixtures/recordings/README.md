@@ -11,7 +11,7 @@ with `ReplayMismatch`; nothing is ever guessed.
 
 | File | Model | Recorded | What happened |
 |---|---|---|---|
-| `ollama-qwen3-8b-bad-deployment.jsonl` | `qwen3:8b` (Q4_K_M, 8.2B) via Ollama 0.34.4 on an M3 MacBook Air with 16 GB, `tools` mode, `think: false` | 2026-10-21 (recording `20261021-060412-ollama-2ac26e`) | `bad-deployment`, `use_memory: false`, adaptive routing, simulation auto-approver (the approval channel does not change what the model sees). One investigator chose 6 read-only tool calls over 5 steps (health, deployments, events, logs, two metrics), then cited a `bad_deployment` of `checkout` `v2.4.1`; the verifier supported it; the model proposed `execute_rollback` to `v2.4.0`; the oracle verified recovery. 7 model requests, 18,331 input / 809 output tokens, about 2.4 minutes. |
+| `ollama-qwen3-8b-bad-deployment.jsonl` | `qwen3:8b` (Q4_K_M, 8.2B) via Ollama 0.34.4 on an M3 MacBook Air with 16 GB, `tools` mode, `think: false`, prompts-v4.1 | 2026-10-21 (recording `20261021-065336-ollama-d424c7`) | `bad-deployment`, `use_memory: false`, adaptive routing, simulation auto-approver (the approval channel does not change what the model sees). One investigator chose 6 read-only tool calls over 6 steps (health, deployments, logs, error-rate and latency metrics, events), then cited a `bad_deployment` of `checkout` `v2.4.1` with 5 evidence IDs; the verifier supported it; the model proposed `execute_rollback` to `v2.4.0`; the oracle verified recovery. 8 model requests, 21,489 input / 771 output tokens, about 2.5 minutes. |
 
 What a recording keeps: the request bodies (prompts are built from simulated incident
 data only), the responses (Ollama's `/api/show` trimmed to capabilities, size and context
@@ -21,5 +21,6 @@ written.
 
 To record a new one: run an LLM provider (`python scripts/demo.py --scenario
 bad-deployment --provider ollama --no-memory`), then copy its recording from
-`data/recordings/` here. Re-record whenever `prompts-v4`, the schemas or the tool catalog
-change: the replay test fails loudly when the recording no longer matches.
+`data/recordings/` here. Re-record whenever the prompts (now `prompts-v4.1`), the schemas
+or the tool catalog change: the replay test fails loudly when the recording no longer
+matches.

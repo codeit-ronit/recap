@@ -9,32 +9,39 @@ Where it sits:
         |-- OllamaProvider      local model, /api/chat              (ollama_provider.py)
         '-- FreeHostedProvider  Groq Free plan, /chat/completions   (openai_compatible.py)
 
-One decision is at most `max_attempts` model requests:
+One decision is at most `max_attempts` answers from the model:
 
     1. render the messages and the request's own JSON schema (or tool definitions)
-    2. _send: the subclass turns that into its server's HTTP request and returns a
+    2. _send: the subclass turns that into its server's HTTP request(s) and returns a
        provider-neutral ModelReply (content, tool calls, exact token counts, ...)
     3. parse the reply with the step protocol
     4. usable?  -> return the decision
        not?     -> ask again once, with the problem as feedback (a corrective retry)
     5. still unusable -> an empty "finish" (or no proposal). Never a scripted fallback.
 
-Every request becomes a ModelCall in the decision (the harness turns those into `llm.call`
-trace events), and its exact token counts go into the decision's Usage.
+Every HTTP request is accounted for. The subclass logs each exchange it makes, including
+the ones it retries (a short 429, a 5xx) and the one that made it give up, and each becomes
+a ModelCall (an `llm.call` trace event) with its exact token counts in the Usage. When a
+decision fails after requests went out (a refusal, a quota stop, the free-plan tripwire),
+the requests already sent are attached to the exception (`attach_model_calls`), and the
+harness and controller record them before the error goes on: the request most likely to
+have cost something is never the one missing from the record.
 
-HTTP-level trouble (server down, refused, quota) is the subclass's job: it raises
-ProviderError (the run fails with that message) or QuotaExhausted (the run is deferred).
+HTTP-level trouble is the subclass's job: it raises ProviderError (the run fails with that
+message), FreeStatusLost (the provider is stopped) or QuotaExhausted (the run is deferred).
 """
 
 from __future__ import annotations
 
+import unicodedata
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from recap.context.tokens import estimate_tokens
 from recap.core.config import ProviderSettings
+from recap.core.errors import attach_model_calls
 from recap.core.ids import canonical_json, sha256_hex
 from recap.core.models import (
     InvestigationDecision,
@@ -51,13 +58,22 @@ from recap.providers.protocol import Message, Parsed
 from recap.providers.transport import ModelTransport
 
 EXCERPT_CHARS = 1500  # how much of a model's answer (or reasoning) a trace event keeps
+# What the model is told when the server itself rejected its answer (a schema failure).
+SCHEMA_REJECTED = (
+    "the server rejected your answer because it did not match the required JSON schema; "
+    "answer again, following the schema exactly."
+)
 
 Purpose = Literal["investigate", "propose"]
 
 
 @dataclass(frozen=True)
 class ModelReply:
-    """One model answer in a provider-neutral shape (what a subclass's _send returns)."""
+    """One HTTP exchange with the model server, in a provider-neutral shape.
+
+    `status` 200 is an answer; anything else is an exchange that produced no usable answer
+    (a 429, a 5xx, a refusal, a schema failure) and is still recorded.
+    """
 
     status: int
     content: str = ""  # the text answer (JSON in json mode)
@@ -70,6 +86,7 @@ class ModelReply:
     duration_ms: float = 0.0
     rate_limit: dict[str, Any] = field(default_factory=dict)
     replayed: bool = False
+    error_code: str = ""  # e.g. "rate_limit_exceeded", "json_validate_failed"
     notes: list[str] = field(default_factory=list)  # e.g. "the answer was cut off"
 
 
@@ -86,7 +103,10 @@ class Outcome:
 class HttpLLMProvider(ABC):
     """LLMProvider for a real model behind HTTP. Subclasses implement `_send` only."""
 
-    api: str  # "ollama" or "openai_compatible"
+    api: ClassVar[str]  # "ollama" or "openai_compatible"
+    # Where decisions come from, fixed by the CODE (never by configuration), because the
+    # run badge and the cost line depend on it. A replay transport turns it into "replay".
+    origin: ClassVar[ProviderOrigin]
 
     def __init__(
         self,
@@ -104,12 +124,14 @@ class HttpLLMProvider(ABC):
         self.model = settings.model
         self.mode = settings.mode
         self.transport = transport
+        # RunBudget overrides for runs with this provider. For a replay these come from the
+        # recording, so the replayed run gets the same limits (and the same "step N of M").
+        self.budget_overrides: dict[str, Any] = dict(settings.budget)
         replaying = transport.name == "replay"
-        origin: ProviderOrigin = "replay" if replaying else settings.origin
         self.info = ProviderInfo(
             name=f"{'replay:' if replaying else ''}{name}:{self.model}",
             kind="replay" if replaying else "llm",
-            origin=origin,
+            origin="replay" if replaying else type(self).origin,
             model=self.model,
             description=settings.description,
             mode=self.mode,
@@ -177,8 +199,24 @@ class HttpLLMProvider(ABC):
         problem = ""
         for attempt in range(1, self.settings.max_attempts + 1):
             sent = messages if not problem else [*messages, protocol.correction(problem)]
-            reply = await self._send(sent, schema=schema, tools=tools, purpose=purpose)
-            parsed = parse(reply)
+            log: list[ModelReply] = []  # every HTTP exchange of this attempt, in order
+            try:
+                reply = await self._send(sent, schema=schema, tools=tools, purpose=purpose, log=log)
+            except Exception as exc:
+                # Requests already sent are recorded before the error goes on (they may have
+                # cost tokens, and they show what happened).
+                for exchange in log:
+                    calls.append(self._model_call(purpose, attempt, sent, schema, exchange, None))
+                    usage = usage.plus(_reply_usage(exchange))
+                attach_model_calls(exc, calls, usage)
+                raise
+            for retried in log[:-1]:  # exchanges the subclass retried (a short 429, a 5xx)
+                calls.append(self._model_call(purpose, attempt, sent, schema, retried, None))
+                usage = usage.plus(_reply_usage(retried))
+            if reply.status == 200:
+                parsed = parse(reply)
+            else:  # the server rejected the answer (a schema failure): unusable, ask again
+                parsed = Parsed(None, "rejected", problem=SCHEMA_REJECTED)
             calls.append(self._model_call(purpose, attempt, sent, schema, reply, parsed))
             usage = usage.plus(_reply_usage(reply))
             if parsed.decision is not None:
@@ -195,8 +233,14 @@ class HttpLLMProvider(ABC):
         schema: dict[str, Any] | None,
         tools: list[dict[str, Any]] | None,
         purpose: Purpose,
+        log: list[ModelReply],
     ) -> ModelReply:
-        """Send one request to the model server. Raise ProviderError / QuotaExhausted."""
+        """Send the request to the model server and return the final exchange.
+
+        Append EVERY HTTP exchange to `log` as soon as it is made, before retrying or
+        raising: the base class records each one. Return the last one (status 200, or a
+        server-rejected answer); raise ProviderError / FreeStatusLost / QuotaExhausted.
+        """
 
     # --- trace records -------------------------------------------------------------------
 
@@ -207,14 +251,20 @@ class HttpLLMProvider(ABC):
         sent: list[Message],
         schema: dict[str, Any] | None,
         reply: ModelReply,
-        parsed: Parsed,
+        parsed: Parsed | None,
     ) -> ModelCall:
+        """The trace record of one HTTP exchange. `parsed` is None for an exchange that
+        produced no answer to parse (a retried 429 or 5xx, or one that ended the decision)."""
         answer = reply.content
         if reply.tool_calls:  # tools mode: show the calls the model made
             answer = (answer + "\n" if answer else "") + canonical_json(reply.tool_calls)
-        notes = [*reply.notes, *parsed.notes]
-        if parsed.problem:
-            notes.append(f"unusable: {parsed.problem}")
+        notes = list(reply.notes)
+        if parsed is not None:
+            notes += parsed.notes
+            if parsed.problem:
+                notes.append(f"unusable: {parsed.problem}")
+        if reply.status != 200 and reply.error_code:
+            notes.append(f"HTTP {reply.status} {reply.error_code}")
         return ModelCall(
             provider=self.name,
             model=self.model,
@@ -224,16 +274,16 @@ class HttpLLMProvider(ABC):
             mode="json" if schema is not None else "tools",
             attempt=attempt,
             status=reply.status,
-            ok=parsed.decision is not None,
-            response_kind=parsed.kind,
+            ok=parsed is not None and parsed.decision is not None,
+            response_kind=parsed.kind if parsed is not None else "http_error",
             input_tokens=reply.input_tokens,
             output_tokens=reply.output_tokens,
             duration_ms=reply.duration_ms,
             finish_reason=reply.finish_reason,
             prompt_sha256=sha256_hex(canonical_json(sent)),
             prompt_chars=sum(len(str(message.get("content", ""))) for message in sent),
-            output_excerpt=answer[:EXCERPT_CHARS],
-            thinking_excerpt=reply.thinking[:EXCERPT_CHARS],
+            output_excerpt=_printable(answer)[:EXCERPT_CHARS],
+            thinking_excerpt=_printable(reply.thinking)[:EXCERPT_CHARS],
             rate_limit=reply.rate_limit,
             replayed=reply.replayed,
             notes=notes,
@@ -241,16 +291,28 @@ class HttpLLMProvider(ABC):
 
 
 def _reply_usage(reply: ModelReply) -> Usage:
-    """What one request cost in tokens. A replayed answer consumed nothing now."""
+    """What one HTTP exchange cost. A replayed exchange consumed nothing now.
+
+    A request counts as "unreported" only when the server may have generated tokens (an
+    answer or a schema failure) but reported none; a 429 or a 5xx generated nothing.
+    """
     if reply.replayed:
         return Usage()
     reported = reply.input_tokens is not None and reply.output_tokens is not None
+    may_have_generated = reply.status == 200 or reply.status == 400
     return Usage(
         model_requests=1,
         actual_input_tokens=reply.input_tokens,
         actual_output_tokens=reply.output_tokens,
         is_estimate=not reported,
-        unreported_calls=0 if reported else 1,
+        unreported_calls=1 if may_have_generated and not reported else 0,
+    )
+
+
+def _printable(text: str) -> str:
+    """Model text without control characters (terminal escape codes), newlines kept."""
+    return "".join(
+        char for char in text if char in "\n\t" or not unicodedata.category(char).startswith("C")
     )
 
 

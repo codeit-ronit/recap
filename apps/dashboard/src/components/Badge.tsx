@@ -127,9 +127,16 @@ export function OriginChip({ provider }: { provider: Partial<ProviderInfo> | nul
   const badge = originBadge(provider);
   const title = provider?.name ? `${badge.title} (${provider.name})` : badge.title;
   return (
-    <Chip tone={badge.tone} outline title={title}>
-      {badge.label}
-    </Chip>
+    <>
+      <Chip tone={badge.tone} outline title={title}>
+        {badge.label}
+      </Chip>
+      {provider?.red_team ? (
+        <Chip tone="bad" title="A deliberately compromised planner proposes whatever injected text asks for, to prove the gateway blocks it.">
+          RED-TEAM
+        </Chip>
+      ) : null}
+    </>
   );
 }
 

@@ -73,6 +73,10 @@ def create_provider(
     if spec is None:
         known = ", ".join(settings.providers.providers)
         raise ConfigError(f"unknown provider '{name}' (configured: {known})")
+    if spec.kind in ("llm", "replay") and spec.origin != "paid_llm":
+        from recap.providers.protocol import check_catalog
+
+        check_catalog(settings.policies)  # tool arguments must not collide with protocol fields
     if spec.kind == "scripted":
         provider = _deterministic(settings)
     elif spec.kind == "replay":
@@ -123,11 +127,13 @@ def _ollama(
     mock_http: httpx.MockTransport | None,
     ledger: UsageLedger | None,
 ) -> LLMProvider:
-    from recap.providers.ollama_provider import OllamaProvider, check_local_settings
+    from recap.providers.ollama_provider import (
+        OllamaProvider,
+        check_local_settings,
+        trim_for_recording,
+    )
 
     check_local_settings(spec)  # loopback only, no cloud models: refuse before anything else
-    from recap.providers.ollama_provider import trim_for_recording
-
     live = LiveTransport(spec.base_url or "", mock=mock_http)
     wired, recording = _maybe_record(name, spec, settings, live, trim_for_recording)
     return OllamaProvider(name, spec, wired, ledger=ledger, recording=recording)
@@ -140,18 +146,21 @@ def _free_hosted(
     mock_http: httpx.MockTransport | None,
     ledger: UsageLedger | None,
 ) -> LLMProvider:
-    from recap.providers.openai_compatible import FreeHostedProvider
-    from recap.providers.quota import FreeTierGuard
+    from recap.providers.openai_compatible import FreeHostedProvider, trim_for_recording
+    from recap.providers.quota import FreeTierGuard, ledger_scope
 
     assert spec.free_tier is not None  # ProviderSettings guarantees it for this origin
-    guard = FreeTierGuard(name, spec.free_tier, ledger or UsageLedger(settings.paths.recap_db))
+    guard = FreeTierGuard(
+        name,
+        spec.free_tier,
+        ledger or UsageLedger(settings.paths.usage_ledger),
+        scope=ledger_scope(spec.base_url or ""),  # stops and caps count by host, not by name
+    )
     guard.check_allowed(spec.model or "")  # opt-in, allowlist, key, attestation, not stopped
 
     def auth() -> dict[str, str]:
         # Read at send time and put only on the wire: never stored, traced or recorded.
         return {"Authorization": f"Bearer {guard.api_key()}"}
-
-    from recap.providers.openai_compatible import trim_for_recording
 
     live = LiveTransport(spec.base_url or "", headers=auth, mock=mock_http)
     wired, recording = _maybe_record(

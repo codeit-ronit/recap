@@ -137,6 +137,17 @@ def test_tools_mode_offers_the_read_tools_and_the_finish_function(settings: Sett
     assert parameters["properties"]["service"]["enum"] == sorted(settings.policies.allowed_services)
 
 
+def test_tool_definitions_stay_the_same_from_step_to_step(settings: Settings) -> None:
+    # No evidence IDs in the definitions (the parser checks them), so a local server can
+    # reuse its cache for the start of every step's prompt.
+    first = protocol.tool_definitions(investigation_request(settings))
+    later = protocol.tool_definitions(
+        investigation_request(settings, seen=[DEPLOYS, LOGS], step_number=3)
+    )
+    assert later == first
+    assert "ev-abc123-001" not in json.dumps(later)
+
+
 def test_strict_outputs_drop_the_list_caps_only() -> None:
     schema = {"type": "array", "maxItems": 2, "items": {"type": "object", "maxItems": 1}}
     assert protocol.for_strict_outputs(schema) == {"type": "array", "items": {"type": "object"}}
@@ -206,7 +217,8 @@ def test_a_call_without_its_required_argument_is_dropped(settings: Settings) -> 
     text = answer(tool_calls=[{"tool_name": "get_service_health", "service": None, "reason": "x"}])
     parsed = protocol.parse_json_step(text, request)
     assert parsed.decision is None
-    assert "without its required service" in parsed.problem
+    assert "give its required arguments" in parsed.problem
+    assert any("without its required service" in note for note in parsed.notes)
 
 
 def test_no_more_than_two_calls_run_per_step(settings: Settings) -> None:
@@ -398,7 +410,7 @@ def test_a_valid_proposal_becomes_a_draft_with_the_trusted_risk(settings: Settin
 @pytest.mark.parametrize(
     ("fields", "problem"),
     [
-        ({"action": "delete_namespace"}, "not a listed remediation tool"),
+        ({"action": "delete_namespace"}, "not one of the listed remediation tools"),
         ({"target_service": "payment"}, "must be the diagnosed service"),
         ({"to_version": None}, "needs to_version"),
         ({"evidence_ids": ["ev-made-up-1"]}, "cite at least one evidence ID"),

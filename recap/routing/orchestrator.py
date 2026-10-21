@@ -18,7 +18,10 @@ Failure handling, so one broken agent cannot sink the whole run:
                           the run's own wall-clock budget, even inside one slow provider call
     crash (exception)  -> an AgentFinding with error "agent crashed: <type>: <message>"
     BudgetExhausted    -> re-raised once every agent has stopped (the budget is shared, so the
-                          controller ends the run as BUDGET_EXHAUSTED)
+                          controller ends the run as BUDGET_EXHAUSTED; a QuotaExhausted wins over
+                          any other budget stop, so the run is deferred)
+    FreeStatusLost,    -> re-raised once every agent has stopped: the free plan is no longer
+    ReplayMismatch        verified, or a replay went off its recording; the whole run must stop
     cancellation       -> propagates (someone is stopping the run)
 
 Each round emits one ORCHESTRATION trace event with every agent's start and finish time.
@@ -37,7 +40,13 @@ from typing import Any
 from pydantic import ConfigDict, Field
 
 from recap.core.config import AgentSpec
-from recap.core.errors import BudgetExhausted, ConfigError
+from recap.core.errors import (
+    BudgetExhausted,
+    ConfigError,
+    FreeStatusLost,
+    QuotaExhausted,
+    ReplayMismatch,
+)
 from recap.core.ids import utcnow
 from recap.core.models import AgentFinding, AgentRole, Contract, StrategyDecision, StrategyMode
 from recap.telemetry.tracer import TraceCategory, Tracer
@@ -53,6 +62,24 @@ class AgentRunPlan(Contract):
     max_steps: int
     # Services to examine first: named by the verifier or by an earlier fix attempt.
     focus_services: list[str] = Field(default_factory=list)
+
+
+def _run_stopper(outcomes: Sequence[AgentFinding | Exception]) -> Exception | None:
+    """The one error that must end the whole run, whichever agent raised it (or None).
+
+    Most errors only end their own agent. These end the run, in this order:
+      1. FreeStatusLost / ReplayMismatch: the free plan is no longer verified, or a replay
+         asked something its recording lacks; going on with the other agent would hide it;
+      2. QuotaExhausted: the run is deferred (and never counted as experience), even if
+         another agent hit an ordinary budget limit in the same round;
+      3. any other BudgetExhausted.
+    """
+    errors = [outcome for outcome in outcomes if isinstance(outcome, Exception)]
+    for kinds in ((FreeStatusLost, ReplayMismatch), (QuotaExhausted,), (BudgetExhausted,)):
+        for error in errors:
+            if isinstance(error, kinds):
+                return error
+    return None
 
 
 class _AgentTimedOut(Exception):
@@ -108,9 +135,9 @@ class Orchestrator:
         else:
             runs = [await self._run(spec, plan) for spec, plan in jobs]
         self._trace(decision, runs)
-        for run in runs:
-            if isinstance(run.outcome, BudgetExhausted):
-                raise run.outcome  # every agent has stopped; the controller ends the run cleanly
+        stop = _run_stopper([run.outcome for run in runs])
+        if stop is not None:
+            raise stop  # every agent has stopped; the controller ends the run cleanly
         return [self._finding(run) for run in runs]
 
     def _job(

@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from apps.api.main import create_app
 from recap.core.config import Settings
-from recap.core.ids import utcnow
 from recap.providers.catalog import provider_status
 from recap.providers.factory import PAID_OPT_IN_ENV, REPLAY_ENV
 from recap.providers.quota import UsageLedger
@@ -19,16 +20,19 @@ from recap.runtime import Runtime
 from tests.helpers import OPERATOR_HEADERS
 from tests.llm_fakes import FAKE_GROQ_KEY, FakeOllama
 
-OWNER_READY = {
-    "GROQ_API_KEY": FAKE_GROQ_KEY,
-    "RECAP_GROQ_FREE_PLAN_CONFIRMED_ON": utcnow().date().isoformat(),
-}
+
+def owner_ready() -> dict[str, str]:
+    """The owner's steps, dated now (the owner's local date, as the guard counts it)."""
+    return {
+        "GROQ_API_KEY": FAKE_GROQ_KEY,
+        "RECAP_GROQ_FREE_PLAN_CONFIRMED_ON": date.today().isoformat(),
+    }
 
 
 async def statuses(
     settings: Settings, environ: dict[str, str], fake: FakeOllama | None = None
 ) -> dict[str, dict]:
-    ledger = UsageLedger(settings.paths.recap_db)
+    ledger = UsageLedger(settings.paths.usage_ledger)
     mock = (fake or FakeOllama()).mock()
     entries = await provider_status(settings, ledger, environ=environ, mock_http=mock)
     return {entry["name"]: entry for entry in entries}
@@ -61,7 +65,7 @@ async def test_no_local_server_is_reported_not_guessed(settings: Settings) -> No
     def refuse(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("refused", request=request)
 
-    ledger = UsageLedger(settings.paths.recap_db)
+    ledger = UsageLedger(settings.paths.usage_ledger)
     entries = await provider_status(
         settings, ledger, environ={}, mock_http=httpx.MockTransport(refuse)
     )
@@ -76,19 +80,21 @@ async def test_the_hosted_provider_shows_each_missing_owner_step(settings: Setti
     key_only = (await statuses(settings, {"GROQ_API_KEY": FAKE_GROQ_KEY}))["groq"]
     assert key_only["status"] == "needs_setup" and "re-check the free plan" in key_only["detail"]
 
-    ready = (await statuses(settings, OWNER_READY))["groq"]
+    ready = (await statuses(settings, owner_ready()))["groq"]
     assert ready["status"] == "ready" and ready["confirmation_age_days"] == 0
     assert "RECAP_ALLOW_LIVE_FREE_INFERENCE=1" in ready["detail"]  # still a per-run opt-in
 
 
 async def test_a_stopped_provider_says_why(settings: Settings) -> None:
-    UsageLedger(settings.paths.recap_db).stop("groq", "x-ratelimit-limit-requests is '500000'")
-    groq = (await statuses(settings, OWNER_READY))["groq"]
+    UsageLedger(settings.paths.usage_ledger).stop(
+        "api.groq.com", "x-ratelimit-limit-requests is '500000'"
+    )
+    groq = (await statuses(settings, owner_ready()))["groq"]
     assert groq["status"] == "stopped" and "500000" in groq["detail"]
 
 
 async def test_the_key_value_is_never_reported(settings: Settings) -> None:
-    found = await statuses(settings, OWNER_READY)
+    found = await statuses(settings, owner_ready())
     assert found["groq"]["key_present"] is True
     assert FAKE_GROQ_KEY not in json.dumps(found)
 
@@ -117,8 +123,19 @@ async def test_a_replay_names_what_it_replays(settings: Settings, tmp_path: Path
     assert missing["replay"]["status"] == "unavailable"
 
 
-def test_the_api_serves_the_catalog_without_a_token(settings: Settings) -> None:
-    """Read-only and secret-free, like the other GET endpoints on localhost."""
+def test_the_api_serves_the_catalog_without_a_token(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Read-only and secret-free, like the other GET endpoints on localhost. The local Ollama
+    probe is answered by a fake, so this test touches no real server."""
+    import apps.api.main as api_main
+
+    real = api_main.provider_status
+
+    async def with_fake_ollama(settings_: Settings, ledger: UsageLedger, **kwargs: object) -> list:
+        return await real(settings_, ledger, mock_http=FakeOllama().mock())
+
+    monkeypatch.setattr(api_main, "provider_status", with_fake_ollama)
     with TestClient(create_app(Runtime(settings))) as client:
         response = client.get("/providers")
     assert response.status_code == 200

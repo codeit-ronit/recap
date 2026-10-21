@@ -25,9 +25,11 @@ from typing import Any
 import httpx
 
 from recap.core.config import ProviderSettings, Settings
+from recap.core.errors import ConfigError
 from recap.core.ids import utcnow
 from recap.providers.factory import PAID_OPT_IN_ENV, REPLAY_ENV
-from recap.providers.quota import OPT_IN_ENV, UsageLedger
+from recap.providers.ollama_provider import check_local_settings
+from recap.providers.quota import OPT_IN_ENV, UsageLedger, ledger_scope
 from recap.providers.transport import Recording
 
 PROBE_TIMEOUT_SECONDS = 1.0
@@ -69,8 +71,8 @@ async def provider_status(
                 if not enabled
                 else f"paid API enabled by {PAID_OPT_IN_ENV}=1",
             }
-        if spec.kind == "llm":
-            entry["usage"] = _usage(name, ledger)
+        if spec.kind == "llm" and spec.base_url:
+            entry["usage"] = _usage(ledger_scope(spec.base_url), ledger)
         entries.append(entry)
     return entries
 
@@ -84,10 +86,17 @@ async def _local(spec: ProviderSettings, mock_http: httpx.MockTransport | None) 
         "context_tokens": spec.context_tokens,
     }
     try:
-        async with httpx.AsyncClient(transport=mock_http) as client:
+        check_local_settings(spec)  # the same loopback-only rule as the provider itself
+    except ConfigError as refused:
+        return info | {"status": "unavailable", "detail": str(refused), "installed": []}
+    try:
+        # trust_env=False: no proxy may carry this "local" request (see transport.py).
+        async with httpx.AsyncClient(transport=mock_http, trust_env=False) as client:
             response = await client.get(f"{base}/api/tags", timeout=PROBE_TIMEOUT_SECONDS)
-        installed = [m.get("name") for m in response.json().get("models", [])]
-    except (httpx.HTTPError, ValueError):
+        body = response.json()
+        models = body.get("models", []) if isinstance(body, dict) else []
+        installed = [str(m.get("name")) for m in models if isinstance(m, dict)]
+    except (httpx.HTTPError, ValueError, AttributeError):
         return info | {
             "status": "unavailable",
             "detail": f"no Ollama server at {base}; start it with: OLLAMA_NO_CLOUD=1 ollama serve",
@@ -111,7 +120,8 @@ def _hosted(
     confirmed = environ.get(free.attestation_env, "").strip()
     age = _age_days(confirmed)
     fresh = age is not None and 0 <= age <= free.attestation_max_age_days
-    stop = ledger.stopped(name)
+    scope = ledger_scope(spec.base_url or "")
+    stop = ledger.stopped(scope)
     info = {
         "key_env": free.api_key_env,
         "key_present": key_present,  # whether the variable is set; the value is never read here
@@ -125,7 +135,7 @@ def _hosted(
         "free_daily_request_limit": free.free_daily_request_limit,
         "limits_checked_on": free.limits_checked_on,
         "caps": free.caps.model_dump(),
-        "last_rate_limit": ledger.last_rate_limit(name),
+        "last_rate_limit": ledger.last_rate_limit(scope),
         "stopped": stop,
     }
     if stop is not None:
@@ -162,10 +172,11 @@ def _replay(spec: ProviderSettings, root: Path, environ: Mapping[str, str]) -> d
     }
 
 
-def _usage(name: str, ledger: UsageLedger) -> dict[str, int]:
+def _usage(scope: str, ledger: UsageLedger) -> dict[str, int]:
+    """Requests and tokens in the user's ledger for this provider's host (all processes)."""
     now = utcnow()
-    minute = ledger.window(name, now - timedelta(minutes=1))
-    day = ledger.window(name, now - timedelta(days=1))
+    minute = ledger.window(scope, now - timedelta(minutes=1))
+    day = ledger.window(scope, now - timedelta(days=1))
     return {
         "requests_last_minute": minute[0],
         "requests_last_24h": day[0],
@@ -174,7 +185,8 @@ def _usage(name: str, ledger: UsageLedger) -> dict[str, int]:
 
 
 def _age_days(raw: str) -> int | None:
+    """Days since the owner's confirmation, by the owner's LOCAL date (as the guard counts)."""
     try:
-        return (utcnow().date() - date.fromisoformat(raw)).days
+        return (date.today() - date.fromisoformat(raw)).days
     except ValueError:
         return None

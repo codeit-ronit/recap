@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 
 from recap.context.evidence import EvidenceRegistry
 from recap.core.config import AgentSpec
+from recap.core.errors import model_calls_of
 from recap.core.ids import utcnow
 from recap.core.interfaces import LLMProvider
 from recap.core.models import (
@@ -28,6 +29,7 @@ from recap.core.models import (
     Incident,
     InvestigationRequest,
     MemoryHit,
+    ModelCall,
     RetrievedChunk,
     ToolCallRecord,
     Usage,
@@ -152,18 +154,21 @@ class AgentHarness:
                 memory_hints=memories,
                 focus_services=plan.focus_services,
             )
-            decision = await self.provider.next_action(request)
+            try:
+                decision = await self.provider.next_action(request)
+            except Exception as exc:
+                # A real model may have answered before the decision failed (a refusal, a
+                # quota stop, the free-plan tripwire): record those requests, then go on.
+                calls, spent = model_calls_of(exc)
+                self._trace_model_calls(calls, step, role.value)
+                if spent is not None:
+                    self.on_usage(spent)
+                raise
             usage = usage.plus(decision.usage)
             self.on_usage(decision.usage)
             # A real model's requests come first, so the timeline shows inference before
             # the decision it produced (the scripted policy sends none).
-            for call in decision.model_calls:
-                self.tracer.emit(
-                    TraceCategory.LLM_CALL,
-                    {"step": step, **call.model_dump(mode="json")},
-                    agent=role.value,
-                    duration_ms=call.duration_ms,
-                )
+            self._trace_model_calls(decision.model_calls, step, role.value)
             self.tracer.emit(
                 TraceCategory.AGENT_DECISION,
                 {
@@ -226,3 +231,13 @@ class AgentHarness:
             usage=finding.usage,
         )
         return finding
+
+    def _trace_model_calls(self, calls: Sequence[ModelCall], step: int, agent: str) -> None:
+        """One `llm.call` event per HTTP request a model provider sent for this step."""
+        for call in calls:
+            self.tracer.emit(
+                TraceCategory.LLM_CALL,
+                {"step": step, **call.model_dump(mode="json")},
+                agent=agent,
+                duration_ms=call.duration_ms,
+            )

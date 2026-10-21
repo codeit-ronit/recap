@@ -77,8 +77,9 @@ class Runtime:
         self.events = SqliteTraceSink(paths.recap_db)
         self.jsonl = JsonlTraceSink(paths.traces_dir)
         self.memory = ExperienceStore(paths.memory_db)
-        # Counts every live LLM request (and enforces free-tier caps) across all runs.
-        self.ledger = UsageLedger(paths.recap_db)
+        # Counts every live LLM request and enforces free-tier caps and stops. It is the
+        # user's ledger (paths.usage_ledger), shared by every RECAP process and data folder.
+        self.ledger = UsageLedger(paths.usage_ledger)
         self.knowledge = KnowledgeRetriever.from_directory(
             paths.knowledge_dir,
             root=paths.root,

@@ -10,9 +10,11 @@ can check exactly what RECAP sent to a model.
 from __future__ import annotations
 
 import json
+import re
 from collections import deque
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -167,6 +169,11 @@ class FakeOllama:
                     "capabilities": self.capabilities,
                     "details": {"parameter_size": "8.2B", "quantization_level": "Q4_K_M"},
                     "model_info": {"qwen3.context_length": self.context_length},
+                    # What a real server also returns, and a recording must NOT keep:
+                    "license": "LICENSE TEXT that RECAP never needs",
+                    "template": "{{ .System }} {{ .Prompt }}",
+                    "modelfile": f"FROM {Path.home()}/.ollama/models/blobs/sha256-abc123",
+                    "parameters": f"stop <|im_end|>\nnote {FAKE_GROQ_KEY}",
                 },
             )
         if path == "/api/chat":
@@ -216,13 +223,17 @@ class FakeGroq:
         self,
         answers: Iterable[Answer] = (),
         *,
+        responder: Responder | None = None,
         model: str = GROQ_MODEL,
+        active: bool = True,
         daily_limit: str = "1000",
         headers: bool = True,
         answered_by: str | None = None,
     ) -> None:
         self.answers: deque[Answer] = deque(answers)
+        self.responder = responder  # asked when `answers` is empty (body in OpenAI form)
         self.model = model
+        self.active = active
         self.daily_limit = daily_limit
         self.send_headers = headers
         self.answered_by = answered_by or model
@@ -237,14 +248,20 @@ class FakeGroq:
         path = request.url.path
         if path.endswith("/models"):
             return httpx.Response(
-                200, json={"data": [{"id": self.model, "active": True, "context_window": 131072}]}
+                200,
+                json={
+                    "data": [{"id": self.model, "active": self.active, "context_window": 131072}]
+                },
             )
         if path.endswith("/chat/completions"):
             body = json.loads(request.content)
             self.chats.append(body)
-            if not self.answers:
+            if self.answers:
+                answer = self.answers.popleft()
+            elif self.responder is not None:
+                answer = self.responder(body)
+            else:
                 raise AssertionError("the fake model has no answer left for this request")
-            answer = self.answers.popleft()
             if isinstance(answer, httpx.Response):
                 return answer
             message: dict[str, Any] = {"role": "assistant", "content": answer.get("content")}
@@ -478,14 +495,19 @@ class ScriptedModel:
 
     @staticmethod
     def _visible_ids(body: dict[str, Any]) -> list[str]:
-        """The evidence IDs the request's own schema lists (what an obedient model may cite)."""
-        if body.get("tools"):
-            finish = next(t for t in body["tools"] if t["function"]["name"] == "submit_findings")
-            hypothesis_schema = finish["function"]["parameters"]["properties"]["hypotheses"]
-        else:
-            hypothesis_schema = body["format"]["properties"]["hypotheses"]
-        ids = hypothesis_schema["items"]["properties"]["supporting_evidence_ids"]["items"]
-        return list(ids.get("enum", []))
+        """The evidence IDs in the prompt's context items (what a model can cite)."""
+        text = body["messages"][1]["content"]
+        return list(dict.fromkeys(re.findall(r'id="(ev-[0-9a-f]{6}-[0-9]+)"', text)))
+
+
+def as_ollama_body(body: dict[str, Any]) -> dict[str, Any]:
+    """An OpenAI-style request in the shape ScriptedModel reads (messages + format/tools)."""
+    converted: dict[str, Any] = {"messages": body["messages"]}
+    if "response_format" in body:
+        converted["format"] = body["response_format"]["json_schema"]["schema"]
+    if "tools" in body:
+        converted["tools"] = body["tools"]
+    return converted
 
 
 class OperatorApproves:

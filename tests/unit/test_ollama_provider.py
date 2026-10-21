@@ -213,8 +213,12 @@ async def test_an_unusable_answer_gets_one_corrective_retry(settings: Settings) 
 
 
 async def test_no_usable_answer_means_no_decision_never_a_scripted_one(settings: Settings) -> None:
-    fake = FakeOllama([{"content": "hmm"}, {"content": "still prose"}])
+    # A valid third answer waits: a third attempt (beyond max_attempts) would take it.
+    fake = FakeOllama(
+        [{"content": "hmm"}, {"content": "still prose"}, tool_answer(("list_services", {}))]
+    )
     decision = await ollama(settings, fake).next_action(investigation_request(settings))
+    assert len(fake.chats) == 2
 
     assert decision.action == "finish" and decision.hypotheses == [] and decision.tool_calls == []
     assert decision.summary.startswith("no usable answer from ollama:qwen3:8b")
@@ -283,7 +287,7 @@ async def test_every_exchange_is_recorded_for_replay(settings: Settings) -> None
 
 
 async def test_local_requests_are_counted_in_the_usage_ledger(settings: Settings) -> None:
-    ledger = UsageLedger(settings.paths.recap_db)
+    ledger = UsageLedger(settings.paths.usage_ledger)
     fake = FakeOllama([tool_answer(("list_services", {}))], prompt_tokens=100, output_tokens=20)
     provider = create_provider("ollama", settings, mock_http=fake.mock(), ledger=ledger)
     await provider.next_action(investigation_request(settings))
@@ -292,7 +296,7 @@ async def test_local_requests_are_counted_in_the_usage_ledger(settings: Settings
 
     from recap.core.ids import utcnow
 
-    assert ledger.window("ollama", utcnow() - timedelta(minutes=1)) == (1, 120)
+    assert ledger.window("127.0.0.1:11434", utcnow() - timedelta(minutes=1)) == (1, 120)
 
 
 def test_the_provider_says_what_it_is(settings: Settings) -> None:
