@@ -2,9 +2,16 @@ import { Component } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import { API_BASE, BACKEND_COMMAND } from "../api";
 import type { ApiError } from "../api";
-import { hrefFor } from "../hooks";
+import { PAGE_LABELS, hrefFor } from "../hooks";
 import { Icon } from "./Icon";
 import type { IconName } from "./Icon";
+import { EmptyBlock, ErrorView, LoadingView } from "./StateViews";
+
+/*
+ * The state views pages have used since V1. They render the shared StateViews
+ * (src/components/StateViews.tsx); new code can use those directly (EmptyView requires a
+ * reason, ErrorView takes onRetry, PolledView handles a whole usePolling result).
+ */
 
 export function EmptyState({
   title,
@@ -13,32 +20,27 @@ export function EmptyState({
   action,
 }: {
   title: ReactNode;
+  /** Why there is nothing to show. */
   children?: ReactNode;
   icon?: IconName;
   action?: ReactNode;
 }) {
-  return (
-    <div className="empty">
-      <Icon name={icon} size={22} />
-      <div className="empty-title">{title}</div>
-      {children ? <div className="empty-body">{children}</div> : null}
-      {action ? <div className="empty-action">{action}</div> : null}
-    </div>
-  );
+  return <EmptyBlock title={title} reason={children} icon={icon} action={action} />;
 }
 
 export function NoRuns() {
+  const lab = PAGE_LABELS.live;
   return (
     <EmptyState
-      title="No runs yet — start one on Live Incident Run"
+      title={`No runs yet. Start one in the ${lab}`}
       icon="live"
       action={
         <a className="btn btn-primary" href={hrefFor("live")}>
-          <Icon name="play" size={14} /> Open Live Incident Run
+          <Icon name="play" size={14} /> Open the {lab}
         </a>
       }
     >
-      Every view on this dashboard is built from real runs recorded by the backend.
+      Every view on this dashboard is built from runs the backend recorded; none exist yet.
     </EmptyState>
   );
 }
@@ -57,44 +59,12 @@ export function BackendHint() {
   );
 }
 
-export function ErrorState({ error, title }: { error: ApiError | Error; title?: string }) {
-  const offline = "offline" in error && error.offline;
-  const status = "status" in error && typeof error.status === "number" && error.status > 0 ? error.status : null;
-  if (offline) {
-    // The shell shows one banner with the start command; each view just waits.
-    return (
-      <div className="error-state waiting" role="status">
-        <Icon name="clock" size={18} />
-        <div>
-          <div className="error-title">{title ?? "Waiting for the RECAP API"}</div>
-          <div className="error-message">
-            {title ? `${error.message} ` : ""}This view loads as soon as the backend responds.
-          </div>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div className="error-state" role="alert">
-      <Icon name="alert" size={18} />
-      <div>
-        <div className="error-title">
-          {title ?? "Request failed"}
-          {status ? <span className="mono muted"> · HTTP {status}</span> : null}
-        </div>
-        <div className="error-message">{error.message}</div>
-      </div>
-    </div>
-  );
+export function ErrorState({ error, title, onRetry }: { error: ApiError | Error; title?: string; onRetry?: () => void }) {
+  return <ErrorView error={error} title={title} onRetry={onRetry} />;
 }
 
 export function Loading({ label = "Loading…" }: { label?: string }) {
-  return (
-    <div className="loading" role="status">
-      <span className="spinner" aria-hidden="true" />
-      {label}
-    </div>
-  );
+  return <LoadingView label={label} />;
 }
 
 /** Keeps one broken view (e.g. an unexpected payload) from blanking the whole dashboard. */
@@ -115,7 +85,14 @@ export class ErrorBoundary extends Component<{ children: ReactNode; resetKey?: s
 
   render() {
     if (this.state.error) {
-      return <ErrorState error={this.state.error} title="This view hit an unexpected error" />;
+      return (
+        <ErrorView
+          error={this.state.error}
+          title="This view hit an unexpected error"
+          retryLabel="Try again"
+          onRetry={() => this.setState({ error: null })}
+        />
+      );
     }
     return this.props.children;
   }

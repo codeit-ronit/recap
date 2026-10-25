@@ -13,6 +13,7 @@ import {
 import type { Tone } from "../format";
 import type { ProviderInfo } from "../types";
 import { Icon } from "./Icon";
+import { TONE_ICONS, stateIcon } from "./StatusToken";
 
 /** A small rounded label. Color is never the only signal: chips always carry text. */
 export function Chip({
@@ -39,9 +40,11 @@ export function Chip({
   );
 }
 
+/** A lifecycle state: icon + label (the icon's shape repeats what the color says). */
 export function StateChip({ state }: { state: string | null | undefined }) {
   return (
-    <Chip tone={stateTone(state)} dot title={state ?? undefined}>
+    <Chip tone={stateTone(state)} title={state ?? undefined}>
+      <Icon name={stateIcon(state)} size={12} />
       {stateLabel(state)}
     </Chip>
   );
@@ -58,16 +61,20 @@ export function VerdictChip({ verdict }: { verdict: string | null | undefined })
 }
 
 export function OutcomeChip({ outcome }: { outcome: string | null | undefined }) {
+  const tone = outcomeTone(outcome);
   return (
-    <Chip tone={outcomeTone(outcome)} dot>
+    <Chip tone={tone}>
+      <Icon name={outcome === "budget_exhausted" ? "stop" : TONE_ICONS[tone]} size={12} />
       {outcome ? humanize(outcome) : "—"}
     </Chip>
   );
 }
 
 export function HypothesisChip({ status }: { status: string | null | undefined }) {
+  const tone = hypothesisTone(status);
   return (
-    <Chip tone={hypothesisTone(status)} dot>
+    <Chip tone={tone}>
+      <Icon name={TONE_ICONS[tone]} size={12} />
       {status ?? "—"}
     </Chip>
   );

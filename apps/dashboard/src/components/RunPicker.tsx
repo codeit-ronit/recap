@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { fmtDateTime, stateLabel } from "../format";
-import { hrefFor } from "../hooks";
+import { PAGE_LABELS, RUN_SCOPED_PAGES, hrefFor } from "../hooks";
 import type { PageId, RunSelection } from "../hooks";
 import type { RunSummary } from "../types";
 import { Chip, StateChip } from "./Badge";
@@ -38,23 +38,18 @@ export function RunPicker({
   );
 }
 
-const RUN_PAGES: { page: PageId; label: string }[] = [
-  { page: "timeline", label: "Timeline" },
-  { page: "evidence", label: "Evidence" },
-  { page: "memory", label: "Memory" },
-  { page: "safety", label: "Safety" },
-];
-
 /** Links from one run-scoped page to the others, keeping the same run selected. */
 export function RunLinks({ runId, current }: { runId: string; current?: PageId }) {
   return (
     <nav className="run-links" aria-label="This run on other pages">
-      {RUN_PAGES.filter((p) => p.page !== current).map((p) => (
-        <a key={p.page} href={hrefFor(p.page, { run: runId })}>
-          {p.label}
-          <Icon name="chevronRight" size={12} />
-        </a>
-      ))}
+      {[...RUN_SCOPED_PAGES]
+        .filter((page) => page !== current)
+        .map((page) => (
+          <a key={page} href={hrefFor(page, { run: runId })}>
+            {PAGE_LABELS[page]}
+            <Icon name="chevronRight" size={12} />
+          </a>
+        ))}
     </nav>
   );
 }

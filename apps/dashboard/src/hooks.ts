@@ -13,11 +13,13 @@ import type { RunSummary, SystemSummary, TraceEvent } from "./types";
 // Hash routing:  #/timeline?run=run-abc  ->  { page: "timeline", params: run=run-abc }
 // ======================================================================================
 
+/** Every route, in navigation order. The route ids are stable: they are in shared deep links. */
 export const PAGES = [
   "overview",
   "live",
   "timeline",
   "evidence",
+  "knowledge",
   "memory",
   "safety",
   "evals",
@@ -25,6 +27,27 @@ export const PAGES = [
 ] as const;
 
 export type PageId = (typeof PAGES)[number];
+
+/** The name each route has in the navigation and the browser tab (RECAP Mission Control). */
+export const PAGE_LABELS: Readonly<Record<PageId, string>> = {
+  overview: "Overview",
+  live: "Incident Lab",
+  timeline: "Trace Explorer",
+  evidence: "Evidence & Decisions",
+  knowledge: "Knowledge",
+  memory: "Experience Memory",
+  safety: "Safety & Approvals",
+  evals: "Evaluations",
+  architecture: "Architecture & Learning",
+};
+
+/**
+ * Pages that show ONE run, chosen with `?run=`: the selected run follows the user between
+ * them, and the shell shows that run's data source. (The Incident Lab keeps its own live
+ * run.) A page that becomes run-scoped (e.g. Knowledge with agent-initiated searches) is
+ * added here.
+ */
+export const RUN_SCOPED_PAGES: ReadonlySet<PageId> = new Set<PageId>(["timeline", "evidence", "memory", "safety"]);
 
 export interface Route {
   page: PageId;
@@ -64,7 +87,8 @@ export function paramsOf(route: Route): Params {
 }
 
 export function useHashRoute(): Route {
-  const [hash, setHash] = useState(() => window.location.hash);
+  // No window outside a browser (component tests render on the server): the overview route.
+  const [hash, setHash] = useState(() => (typeof window === "undefined" ? "" : window.location.hash));
   useEffect(() => {
     const sync = () => setHash(window.location.hash);
     window.addEventListener("hashchange", sync);
