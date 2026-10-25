@@ -24,6 +24,11 @@ Failure handling, so one broken agent cannot sink the whole run:
     ReplayMismatch        verified, or a replay went off its recording; the whole run must stop
     cancellation       -> propagates (someone is stopping the run)
 
+A timeout and the run's deadline are timing, which a replay cannot reproduce: with the run's
+budget tracker, each cut is written into the run's recording at the agent's last check, and
+a replay, which has no clock of its own, cuts the agent there instead (ReplayedCut), with the
+same finding (recap/harness/budget.py).
+
 Each round emits one ORCHESTRATION trace event with every agent's start and finish time.
 Its overlap_ms is the proof of concurrency: it is above 0 only if agents ran side by side.
 """
@@ -45,11 +50,15 @@ from recap.core.errors import (
     ConfigError,
     FreeStatusLost,
     QuotaExhausted,
+    ReplayedCut,
     ReplayMismatch,
 )
 from recap.core.ids import utcnow
 from recap.core.models import AgentFinding, AgentRole, Contract, StrategyDecision, StrategyMode
+from recap.harness.budget import BudgetTracker
 from recap.telemetry.tracer import TraceCategory, Tracer
+
+TIME_SHARE = "time_share"  # a cut by an agent's own time limit, as a recording names it
 
 
 class AgentRunPlan(Contract):
@@ -124,6 +133,7 @@ class Orchestrator:
         agent_timeout_seconds: float = 60.0,
         remaining_seconds: Callable[[], float] | None = None,
         parallel_time_share: float = 1.0,
+        budget: BudgetTracker | None = None,
     ) -> None:
         self._runner = runner
         self._specs = dict(specs)
@@ -133,6 +143,9 @@ class Orchestrator:
         self._remaining = remaining_seconds
         # In a parallel round, each agent's own limit is this share of the time left.
         self._share = parallel_time_share
+        # The run's budget tracker: it gives each turn and each cut a place in the run, so a
+        # replay (no clock of its own) cuts the same agent at the same point.
+        self._budget = budget
 
     async def execute(
         self,
@@ -153,8 +166,10 @@ class Orchestrator:
         stop = _run_stopper([run.outcome for run in runs])
         if stop is not None:
             # Every agent has stopped; the controller ends the run cleanly. Findings other
-            # agents completed travel with the stop, so the record keeps them (labelled as
-            # partial; they never become experience).
+            # agents completed travel with the stop (partial findings), so the record keeps
+            # them. They were never verified, so their claims never become an episode's
+            # checked claims; a budget stop is still consolidated as a budget_exhausted
+            # caution episode, whose trajectory includes this round's evidence.
             stop.partial_findings = [  # type: ignore[attr-defined]
                 run.outcome for run in runs if isinstance(run.outcome, AgentFinding)
             ]
@@ -201,35 +216,68 @@ class Orchestrator:
         the time left, so one slow specialist ends as an error finding while the other's
         finding survives. When the run's clock is what ran out, the outcome is
         BudgetExhausted (a clean stop of the whole run), not an agent failure.
+
+        Each cut is recorded at the agent's last check; a replay has no clock of its own and
+        is cut where the recording says, with the outcome the original cut had.
         """
         started_at, started = utcnow(), time.perf_counter()
+        outcome: AgentFinding | Exception
+        try:
+            outcome = await self._turn(spec, plan, share)
+        except ReplayedCut as cut:  # a replay: the recorded run's clock cut this agent here
+            if cut.limit == TIME_SHARE:
+                outcome = _AgentTimedOut(cut.seconds)
+            else:
+                outcome = BudgetExhausted(cut.limit, cut.detail)
+        return _Run(plan, outcome, started_at, utcnow(), started, time.perf_counter())
+
+    async def _turn(
+        self, spec: AgentSpec, plan: AgentRunPlan, share: float
+    ) -> AgentFinding | Exception:
+        """One agent's turn under its time limit: its finding, or the error that ended it."""
+        actor, budget = spec.role.value, self._budget
+        try:
+            if budget is not None:
+                budget.begin_turn(actor)  # in a replay: a stop recorded before the turn's checks
+        except BudgetExhausted as refused:
+            return refused
+        timeout, deadline_first = self._time_limit(share)
+        if deadline_first and timeout is not None and timeout <= 0:
+            detail = f"no time was left on the run to start {actor}"
+            if budget is not None:
+                budget.record_refusal("max_elapsed_seconds", detail, actor=actor)
+            return BudgetExhausted("max_elapsed_seconds", detail)
+        try:
+            async with asyncio.timeout(timeout) as limit:
+                return await self._runner(spec, plan)
+        except TimeoutError as exc:
+            if not limit.expired():
+                # A TimeoutError raised inside the agent (for example by a provider's HTTP
+                # client) is an ordinary agent error, not this time limit.
+                return exc
+            if deadline_first:
+                detail = f"{actor} was still working when the run's time ran out"
+                if budget is not None:
+                    budget.record_cut("max_elapsed_seconds", detail, actor=actor)
+                return BudgetExhausted("max_elapsed_seconds", detail)
+            if budget is not None:
+                detail = f"timeout after {timeout:g}s"
+                budget.record_cut(TIME_SHARE, detail, actor=actor, seconds=timeout)
+            return _AgentTimedOut(timeout)
+        except Exception as exc:  # CancelledError is not an Exception, so cancelling still works
+            return exc
+
+    def _time_limit(self, share: float) -> tuple[float | None, bool]:
+        """This turn's timeout, and whether it is the run's deadline (not the agent's own
+        limit). None in a replay: it has no clock, and is cut only where the recording says."""
+        if self._budget is not None and self._budget.replaying:
+            return None, False
         remaining = self._remaining() if self._remaining is not None else None
         own = self._timeout
         if remaining is not None and share < 1.0:
             own = min(own, max(remaining, 0.0) * share)
         deadline_first = remaining is not None and remaining < own
-        timeout = remaining if deadline_first and remaining is not None else own
-        outcome: AgentFinding | Exception
-        if deadline_first and timeout is not None and timeout <= 0:
-            detail = f"no time was left on the run to start {spec.role.value}"
-            outcome = BudgetExhausted("max_elapsed_seconds", detail)
-            return _Run(plan, outcome, started_at, utcnow(), started, time.perf_counter())
-        try:
-            async with asyncio.timeout(timeout) as limit:
-                outcome = await self._runner(spec, plan)
-        except TimeoutError as exc:
-            if not limit.expired():
-                # A TimeoutError raised inside the agent (for example by a provider's HTTP
-                # client) is an ordinary agent error, not this time limit.
-                outcome = exc
-            elif deadline_first:
-                detail = f"{spec.role.value} was still working when the run's time ran out"
-                outcome = BudgetExhausted("max_elapsed_seconds", detail)
-            else:
-                outcome = _AgentTimedOut(timeout)
-        except Exception as exc:  # CancelledError is not an Exception, so cancelling still works
-            outcome = exc
-        return _Run(plan, outcome, started_at, utcnow(), started, time.perf_counter())
+        return (remaining if deadline_first and remaining is not None else own), deadline_first
 
     def _finding(self, run: _Run) -> AgentFinding:
         """The agent's own finding, or an error finding that says why it has none."""

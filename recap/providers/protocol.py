@@ -49,7 +49,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from recap.context.evidence import tool_source_ref
+from recap.context.evidence import free_text_args, tool_source_ref
 from recap.core.config import PolicySettings
 from recap.core.errors import ConfigError
 from recap.core.models import (
@@ -65,9 +65,13 @@ from recap.core.models import (
     ToolSpecView,
 )
 from recap.providers.prompts import (
+    FOCUS_TITLE,
+    allowlisted_services,
     call_line,
+    citable_ids,
     context_section,
     failed_line,
+    focus_services,
     incident_section,
     memory_line,
     root_cause_section,
@@ -82,7 +86,13 @@ from recap.providers.prompts import (
 # v4.4: the search_runbooks tool; free text a model wrote is shown only as data.
 # v4.5: memory items carry RECAP's reuse verdict and the checks a past run made; trusted
 #       memory lines repeat only plain values from an episode.
-PROMPT_VERSION = "prompts-v4.5"
+# v4.6 (M3 review): the verifier's leads join its open questions; focus services and memory
+#       fix parameters are repeated only when allowlisted; free-text arguments are always
+#       data; a request whose every call repeats one already made is told so by name.
+# v4.7: target_service is defined per mechanism (it contradicted dependency_failure before:
+#       "the service that must be fixed" vs "the fix belongs to the dependency"), and a failure
+#       chain is claimed link by link down to the deepest service's own failure.
+PROMPT_VERSION = "prompts-v4.7"
 
 Mode = Literal["json", "tools"]
 Message = dict[str, Any]  # {"role": "system" | "user", "content": "..."}
@@ -117,7 +127,11 @@ Failure mechanisms (choose the one the evidence supports, for the service that m
   its limit, restarts.
 - dependency_failure: the service fails only because a service it calls is failing. Put that
   service in "dependency"; the fix belongs to the dependency, so investigate it next.
-- unknown: none of these is supported by the evidence yet."""
+- unknown: none of these is supported by the evidence yet.
+When failures pass through several services (A calls B, B calls C), claim each link the
+evidence supports (a dependency_failure on A with dependency B, on B with dependency C), and
+claim the deepest service's own failure (for example resource_pressure on C) as soon as its
+own evidence shows it: RECAP fixes the deepest supported cause."""
 
 JSON_STEP_INSTRUCTIONS = [
     'Answer with one JSON object. Set "kind" to:',
@@ -190,21 +204,24 @@ def render_investigation(request: InvestigationRequest, mode: Mode) -> str:
         section("Your role", role),
         incident_section(request.incident),
     ]
-    if request.focus_services:
-        # Named by RECAP's evidence verifier or by an earlier fix attempt, never by the
-        # recovery oracle (whose findings are ground truth no agent may see).
-        title = "Services to examine first (named by RECAP's verifier or by an earlier fix attempt)"
-        sections.append(section(title, [", ".join(request.focus_services)]))
+    focus = focus_services(request)  # allowlisted services only (see prompts.focus_services)
+    if focus:
+        sections.append(section(FOCUS_TITLE, [", ".join(focus)]))
     if request.open_questions:
-        # Built by the verifier from checked values only (mechanisms, service names,
-        # versions), never from tool output or model text, so it may sit outside the
-        # untrusted data. Agreeing with another agent settles nothing: evidence does.
+        # Written by RECAP's trusted code (the verifier) from values it checked, not copied
+        # from tool output or model text, so it may sit outside the untrusted data. A service
+        # name or a release version it repeats does come from a claim or the evidence, and
+        # is repeated only when it has the shape of a service name or a release version
+        # (the merger enforces this); anything else reads "(unnamed)". Agreeing with another
+        # agent settles nothing: evidence does.
         title = "Open questions from RECAP's verifier (answer them with evidence)"
         sections.append(section(title, [f"- {q}" for q in request.open_questions]))
     if mode == "json":
         # In tools mode the server shows the model the tool definitions itself.
         sections.append(tools_section("Tools you may call (all read-only)", request.tools))
-    history = [call_line(number, call) for number, call in enumerate(request.history, 1)]
+    history = [
+        call_line(number, call, request.tools) for number, call in enumerate(request.history, 1)
+    ]
     sections += [
         section("Your previous calls", history),
         section("Already observed (do not repeat these calls)", tool_refs(request.observed_refs)),
@@ -223,7 +240,7 @@ def render_investigation(request: InvestigationRequest, mode: Mode) -> str:
 def render_proposal(request: ProposalRequest) -> str:
     """The user message asking for one remediation of the verified root cause."""
     failed = [failed_line(number, a) for number, a in enumerate(request.failed_actions, 1)]
-    memories = [memory_line(hit) for hit in request.memory_hits]
+    memories = [memory_line(hit, request.allowed_actions) for hit in request.memory_hits]
     sections = [
         "# Remediation proposal",
         incident_section(request.incident),
@@ -252,7 +269,7 @@ def step_schema(request: InvestigationRequest) -> dict[str, Any]:
     """JSON schema for one investigation step in json mode."""
     kinds = FINAL_KINDS if is_last_step(request) else STEP_KINDS
     hypothesis = _hypothesis_schema(
-        _services(request.tools), visible_evidence_ids(request), _mechanisms(request)
+        allowlisted_services(request.tools), visible_evidence_ids(request), _mechanisms(request)
     )
     return _object(
         {
@@ -279,7 +296,7 @@ def tool_definitions(request: InvestigationRequest) -> list[dict[str, Any]]:
     drops unknown IDs. Keeping the definitions the same from step to step lets a local
     server reuse its cache for the start of the prompt, where its template puts the tools.
     """
-    hypothesis = _hypothesis_schema(_services(request.tools), [], _mechanisms(request))
+    hypothesis = _hypothesis_schema(allowlisted_services(request.tools), [], _mechanisms(request))
     finish = _function(
         FINISH_TOOL,
         "Finish this investigation: give root-cause hypotheses that cite evidence IDs, or say "
@@ -302,7 +319,7 @@ def tool_definitions(request: InvestigationRequest) -> list[dict[str, Any]]:
 def proposal_schema(request: ProposalRequest) -> dict[str, Any]:
     """JSON schema for a remediation proposal (always json mode)."""
     tools = request.allowed_actions
-    services = _services(tools)
+    services = allowlisted_services(tools)
     properties: dict[str, Any] = {
         "rationale": _text(
             "Why this action fixes the verified root cause, or why no listed action is justified."
@@ -381,13 +398,6 @@ def visible_evidence_ids(request: InvestigationRequest) -> list[str]:
     return sorted(ids)
 
 
-def citable_ids(request: ProposalRequest) -> list[str]:
-    """Runbook chunk and past-incident IDs a proposal may cite."""
-    ids = {item.item_id for item in request.context.items if item.kind != "evidence"}
-    ids |= {hit.episode.episode_id for hit in request.memory_hits}
-    return sorted(ids)
-
-
 def _call_schema(tools: Sequence[ToolSpecView]) -> dict[str, Any]:
     """One tool call: the tool's name plus every argument any listed tool takes (null if unused).
 
@@ -437,7 +447,12 @@ def _hypothesis_schema(
         {
             "claim": _text("The root cause in one sentence."),
             "mechanism": _enum(mechanisms),
-            "target_service": _nullable(service, "The service that must be fixed."),
+            "target_service": _nullable(
+                service,
+                "The service the mechanism happens in: for bad_deployment and resource_pressure "
+                "the service whose own fault must be fixed; for dependency_failure the service "
+                "whose calls fail.",
+            ),
             "version": _nullable(
                 {"type": "string"},
                 "bad_deployment only: the bad release, exactly as the deployment evidence "
@@ -490,16 +505,6 @@ def _arg_schema(rule: dict[str, Any]) -> dict[str, Any]:
             ),
         }
     return {"type": "string"}
-
-
-def _services(tools: Iterable[ToolSpecView]) -> list[str]:
-    """Every allowlisted service named in the tools' argument rules."""
-    names: set[str] = set()
-    for tool in tools:
-        for rule in tool.args.values():
-            if rule.get("type") == "service":
-                names.update(str(value) for value in rule.get("values", []))
-    return sorted(names)
 
 
 def _is_target(rule: dict[str, Any]) -> bool:
@@ -732,7 +737,7 @@ def _step_decision(answer: _StepAnswer, request: InvestigationRequest, notes: li
         if is_last_step(request):
             problem = "tools can no longer be called on the last step; finish instead."
             return Parsed(None, answer.kind, notes, problem=problem)
-        calls = _tool_calls(answer.tool_calls, request, notes)
+        calls, repeated = _tool_calls(answer.tool_calls, request, notes)
         if not calls:
             # The notes (for the trace) say exactly what was dropped; the problem sent back
             # to the model states the rules instead of quoting the model's own text.
@@ -741,6 +746,18 @@ def _step_decision(answer: _StepAnswer, request: InvestigationRequest, notes: li
                 "required arguments, and not repeat a call already observed. Call such a "
                 "tool, or finish."
             )
+            if repeated and len(repeated) == len(answer.tool_calls):
+                # Every call repeats one already observed: a real model (qwen3:8b, in a
+                # parallel round) asked for the same checkout calls until it ran out of
+                # steps. Say exactly that. Each ref named equals one listed under "Already
+                # observed", which the gateway built from checked arguments (free text
+                # hashed), so no text the model wrote is repeated back to it.
+                problem = (
+                    "every tool call you asked for repeats a call already observed in this "
+                    f"run ({', '.join(dict.fromkeys(repeated))}); their results are already "
+                    "in the evidence above. Call a different tool, or the same tool for "
+                    "another service, or finish with your best-supported claim."
+                )
             return Parsed(None, answer.kind, notes, problem=problem)
         decision = InvestigationDecision(
             action="call_tools",
@@ -751,7 +768,7 @@ def _step_decision(answer: _StepAnswer, request: InvestigationRequest, notes: li
         )
         return Parsed(decision, answer.kind, notes)
     if answer.kind == "hypothesis":
-        services = set(_services(request.tools))
+        services = set(allowlisted_services(request.tools))
         known = set(visible_evidence_ids(request))
         allowed = set(_mechanisms(request))
         hypotheses = []
@@ -787,14 +804,16 @@ def _step_decision(answer: _StepAnswer, request: InvestigationRequest, notes: li
 
 def _tool_calls(
     raw_calls: Sequence[dict[str, Any]], request: InvestigationRequest, notes: list[str]
-) -> list[ToolCall]:
+) -> tuple[list[ToolCall], list[str]]:
     """Calls RECAP may pass to the gateway: listed tools, their own arguments, no repeats.
+    Also returns the refs of the calls dropped as repeats.
 
     The gateway still validates every argument (types, ranges, allowlists) and decides.
     """
     tools = {tool.name: tool for tool in request.tools}
     seen = set(request.observed_refs)  # what any agent already observed in this epoch
     calls: list[ToolCall] = []
+    repeated: list[str] = []
     for raw in raw_calls:
         name = str(raw.get("tool_name", ""))
         tool = tools.get(name)
@@ -816,9 +835,12 @@ def _tool_calls(
         if missing:
             notes.append(f"dropped a {name} call without its required {', '.join(missing)}")
             continue
-        ref = tool_source_ref(name, args, scheme=tool.source)
+        # Built exactly as the gateway builds evidence refs (free text hashed by its rule),
+        # or a repeated search would not be recognized.
+        ref = tool_source_ref(name, args, scheme=tool.source, free_text=free_text_args(tool.args))
         if ref in seen:
             notes.append(f"dropped a repeat of {ref}")
+            repeated.append(ref)
             continue
         if len(calls) == MAX_CALLS_PER_STEP:
             notes.append(f"kept only the first {MAX_CALLS_PER_STEP} calls")
@@ -827,7 +849,7 @@ def _tool_calls(
         calls.append(
             ToolCall(tool_name=name, args=args, reason=_clip(str(raw.get("reason", "")), 300))
         )
-    return calls
+    return calls, repeated
 
 
 def _hypothesis(

@@ -5,6 +5,7 @@ Where it sits (the evidence verifier, recap/agents/verifier.py, calls it):
     every agent's findings this epoch --> [merge_claims] --> one claim per distinct claim
     supported actionable claims       --> [choose]       --> the best one, or an open conflict
     judged claims + findings          --> [disagreements] --> Disagreement records (the report)
+    unexplained dependency failures   --> [leads]        --> where the next round should look
 
 Plain, deterministic code, and it never decides by vote: how many agents make a claim, or
 how much evidence a claim cites, changes nothing. The verifier's evidence rules decide:
@@ -18,10 +19,12 @@ how much evidence a claim cites, changes nothing. The verifier's evidence rules 
 
 Same claim = same origin, mechanism, target and detail. The detail is the bad release's
 version for a bad deployment and the blamed dependency for a dependency failure, resolved
-from the evidence when the claim names none. Two versions of one service's release cannot
-both be the bad current release, so they are judged apart (a detail_conflict) instead of one
-silently overwriting the other: before M3 the claim seen first won, so the outcome depended
-on which agent's finding came first.
+from the evidence when the claim names none. A version is written as the deployment
+evidence writes it ("2.4.1" or "V2.4.1" for the observed "v2.4.1"), so one release spelled
+two ways is one claim. Two versions of one service's release cannot both be the bad current
+release, so they are judged apart (a detail_conflict) instead of one silently overwriting
+the other: before M3 the claim seen first won, so the outcome depended on which agent's
+finding came first.
 """
 
 from __future__ import annotations
@@ -38,6 +41,7 @@ from recap.core.models import (
     Hypothesis,
     HypothesisStatus,
 )
+from recap.tools.registry import _VERSION_RE
 
 V7 = "V7-deepest-cause"
 # The verifier's rule that judges a bad release (recap/agents/verifier.py; a test checks the
@@ -46,11 +50,13 @@ RELEASE_RULE = "V2-deploy-timing"
 SUPPORTED, CONTRADICTED = HypothesisStatus.SUPPORTED, HypothesisStatus.CONTRADICTED
 # How an agent ends without any usable view of its own (see AgentFinding.outcome).
 NO_VIEW = ("error", "no_usable_answer")
-# Only values of these shapes are repeated in a question for the next round, which a model
-# reads as trusted text: a service name (a DNS label, as in Kubernetes) and a release
-# version. Anything else (it came from tool output or model text) is left out.
+# Only values of these shapes are repeated in a question or a lead for the next round,
+# which a model reads as trusted text: a service name (a DNS label, as in Kubernetes) and a
+# release version in the tool registry's own shape (vX.Y.Z, ASCII digits: the versions a
+# rollback may name). Anything else came from tool output or model text and is written
+# UNNAMED, even a single word: "OPERATOR_SAYS_restart_checkout" has no spaces either.
 _SERVICE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
-_VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,39}")
+_VERSION = _VERSION_RE
 UNNAMED = "(unnamed)"
 
 
@@ -97,6 +103,11 @@ def merge_claims(
     for finding in findings:
         for h in finding.hypotheses:
             detail = detail_of(h)
+            named = h.details.get("version")
+            if h.mechanism == FailureMechanism.BAD_DEPLOYMENT and named and named != detail:
+                # The release in the evidence's spelling (`detail_of` matched "2.4.1" to the
+                # observed "v2.4.1"): the rules then read the observed release.
+                h = h.model_copy(update={"details": {**h.details, "version": detail}})
             key = (h.origin, h.mechanism, h.target_service or "", detail)
             role = h.proposed_by or finding.agent_role
             if key in merged:
@@ -146,8 +157,8 @@ def choose(
     if not ranked:
         return None, ranked, None
     top = level(ranked[0])
-    level_causes = _union([_cause(c) for c in ranked if level(c) == top])
-    agents = _union(*(c.proposers for c in ranked))
+    level_claims = [c for c in ranked if level(c) == top]
+    level_causes = _union([_cause(c) for c in level_claims])
     if len(level_causes) == 1:
         best = ranked[0]
         if len(causes) == 1:
@@ -157,7 +168,7 @@ def choose(
         record = Disagreement(
             kind="competing_root_causes",
             claims=[label_of(best), *others],
-            agents=agents,
+            agents=_union(*(c.proposers for c in ranked)),  # every cause is named above
             evidence_ids=depth.get(best.target, (0, []))[1],
             resolved=True,
             rule_id=V7,
@@ -169,11 +180,13 @@ def choose(
         )
         return best, ranked, record
     claims = [label_of(next(c for c in ranked if _cause(c) == cause)) for cause in level_causes]
+    # Only the level causes are in this conflict: a shallower supported cause is not, so its
+    # agents and evidence are not part of what is disputed.
     record = Disagreement(
         kind="competing_root_causes",
         claims=claims,
-        agents=agents,
-        evidence_ids=_union(*(c.hypothesis.supporting_evidence_ids for c in ranked)),
+        agents=_union(*(c.proposers for c in level_claims)),
+        evidence_ids=_union(*(c.hypothesis.supporting_evidence_ids for c in level_claims)),
         resolved=False,
         resolution=(
             f"{_joined(claims)} are all supported and equally deep, and no evidence rule "
@@ -217,8 +230,10 @@ def disagreements(
 def _detail_conflicts(checks: Sequence[JudgedClaim]) -> list[Disagreement]:
     """Bad-release claims on one service that name different versions: one at most is right.
 
-    Settled when exactly one version is supported, or when the rules leave at most one
-    version that is not contradicted; open otherwise.
+    Settled when exactly one version is supported (by V2, the rule that tells releases
+    apart), or when the rules leave at most one version that is not contradicted (by the
+    rules that contradicted the others: the target's own health or its upstream errors
+    reject every release alike); open otherwise.
     """
     groups: dict[str, list[JudgedClaim]] = {}
     for check in checks:
@@ -244,6 +259,8 @@ def _detail_conflicts(checks: Sequence[JudgedClaim]) -> list[Disagreement]:
         else:
             outcome = "the rules rule out none of them"
         losers = [c for c in group if c.status == CONTRADICTED]
+        rejected_by = _union([rule for c in losers for rule, _ in c.contradictions])
+        settled_by = RELEASE_RULE if supported else ", ".join(rejected_by)
         found.append(
             Disagreement(
                 kind="detail_conflict",
@@ -251,7 +268,7 @@ def _detail_conflicts(checks: Sequence[JudgedClaim]) -> list[Disagreement]:
                 agents=_union(*(c.proposers for c in group)),
                 evidence_ids=_union(*(ids for c in losers for _, ids in c.contradictions)),
                 resolved=settled,
-                rule_id=RELEASE_RULE if settled else "",
+                rule_id=settled_by if settled else "",
                 resolution=f"claims name different bad releases of {service} ({named}); {outcome}",
                 question=""
                 if settled
@@ -320,6 +337,39 @@ def _missing_views(findings: Sequence[AgentFinding], diagnosed: bool) -> list[Di
                 resolved=diagnosed,
                 resolution=f"the {_role(role)} view is missing ({finding.outcome}); {rest}",
             )
+        )
+    return found
+
+
+# --- leads -------------------------------------------------------------------------------------
+
+
+def leads(unexplained: Sequence[JudgedClaim], checks: Sequence[JudgedClaim]) -> list[str]:
+    """Where the next round should look although no claims conflict (trusted text).
+
+    `unexplained` are the supported dependency failures (S's calls to D fail, D being the
+    claim's detail) that no supported root cause on D or below it explains (V4). When no
+    claim on D itself is supported either, the trail of failed calls ends at D so far, and
+    the next round should look at D: one lead per D, naming every such S, both in
+    alphabetical order. (When D's own calls are confirmed to fail, the trail goes on, and the
+    lead names the service after D.) Only names shaped like a service name are repeated: a
+    pair that fails the check makes no lead. A lead is not a disagreement: it settles nothing
+    and changes no claim.
+    """
+    confirmed = {c.target for c in checks if c.status == SUPPORTED}
+    callers: dict[str, set[str]] = {}
+    for claim in unexplained:
+        caller, dependency = claim.target, claim.detail
+        named = _SERVICE.fullmatch(caller) and _SERVICE.fullmatch(dependency)
+        if named and dependency not in confirmed:
+            callers.setdefault(dependency, set()).add(caller)
+    found = []
+    for dependency in sorted(callers):
+        calls = _joined([f"{caller}'s" for caller in sorted(callers[dependency])])
+        found.append(
+            f"{calls} calls to {dependency} fail and nothing on {dependency} itself is "
+            f"confirmed yet: find out what is wrong with {dependency} (its errors, memory, "
+            "restarts and releases)."
         )
     return found
 

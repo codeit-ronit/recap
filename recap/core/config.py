@@ -322,10 +322,14 @@ def _usage_ledger_path() -> Path:
 
 
 def _overlays(root: Path) -> list[Path]:
-    """RECAP_KNOWLEDGE_OVERLAYS: folders (separated like PATH), repo-relative or absolute."""
+    """RECAP_KNOWLEDGE_OVERLAYS: folders (separated like PATH), repo-relative or absolute.
+
+    Resolved, so a relative folder that climbs out of the repository ("../kb") counts as
+    outside it: a run then records it by its own name, never by the folders above it.
+    """
     raw = os.environ.get("RECAP_KNOWLEDGE_OVERLAYS", "").strip()
     folders = [Path(part) for part in raw.split(os.pathsep) if part.strip()]
-    return [folder if folder.is_absolute() else root / folder for folder in folders]
+    return [(folder if folder.is_absolute() else root / folder).resolve() for folder in folders]
 
 
 def _env_flag(name: str) -> bool:

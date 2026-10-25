@@ -17,16 +17,19 @@ signal conventions in recap/core/signals.py with the scripted policy; its rules 
 independently, so a mistake in the policy's heuristics is not repeated in the check.
 
     V1-structural          a target, a known mechanism, cited evidence that exists in THIS run
-    V1-grounding           a supported claim cites at least one item its rules relied on
+    V1-grounding           a supported claim cites at least one item its rules relied on;
+                           any listing of it counts (the same release, log line or OOM kill
+                           is often recorded twice, and the basis names every listing)
     V2-deploy-timing       bad_deployment(S, v): S's errors began -5..+30 min around its deploy
     V2-upstream-dominance  ... and fewer than half of S's ERROR lines blame a dependency that
                            is not observed healthy
     V3-resource            resource_pressure(S): OOM kills or memory >= 90% of its limit;
                            OOM log lines only corroborate (contradicted: memory stays < 70%
                            and events show no OOM kill)
-    V4-dependency          dependency_failure(S -> D): S's logs show "upstream D call failed"
-                           and D is not observed healthy; never actionable by itself, it
-                           points the search at D
+    V4-dependency          dependency_failure(S -> D): S's logs show its calls to D failing
+                           ("upstream D call failed", "rpc to D failed", ...) and D is not
+                           observed healthy; never actionable by itself, it points the
+                           search at D
     V5-memory              a remembered claim faces the same rules (no free pass)
     V6-conflict-resolution when log TEXT disagrees with platform signals (health snapshots,
                            metrics, cluster events), the platform signals win, and the check
@@ -62,6 +65,10 @@ remembered. Before M3 a tie went to the claim citing more evidence, so padding a
 citations could win it; two different root causes that are level now stay an open conflict
 for the next round, and then for a person. Statuses are supported / contradicted /
 insufficient: never "proven".
+
+A supported dependency failure that nothing explains yet, when nothing on its dependency is
+supported either, becomes a lead for the next round: look at that dependency itself
+(merger.leads). A lead is not a disagreement and changes no claim.
 """
 
 from __future__ import annotations
@@ -75,7 +82,7 @@ from typing import Any, Literal, NamedTuple
 
 from pydantic import BaseModel, ValidationError
 
-from recap.agents.merger import Claim, choose, disagreements, merge_claims
+from recap.agents.merger import Claim, choose, disagreements, leads, merge_claims
 from recap.context.evidence import EvidenceRegistry
 from recap.core import signals
 from recap.core.models import (
@@ -165,7 +172,7 @@ class EvidenceVerifier:
         ]
         depth = {c.target: _depth(c.target, observed, graph) for c in candidates}
         chosen, ranked, competition = choose(candidates, depth)
-        _resolve_dependencies(checks, ranked, observed, graph)
+        unexplained = _resolve_dependencies(checks, ranked, observed, graph)
         best = chosen.result().hypothesis if chosen else None
         status = _report_status(best, checks)
         open_conflict = competition if competition and not competition.resolved else None
@@ -182,6 +189,7 @@ class EvidenceVerifier:
             disagreements=disagreements(
                 checks, findings, recorded_by, competition, diagnosed=best is not None
             ),
+            leads=leads(unexplained, checks),
         )
 
     def check_proposal(
@@ -267,14 +275,46 @@ class _Observations:
         fixed_at = self.remediated.get(service)
         return fixed_at is None or moment > fixed_at
 
-    def release(self, service: str, version: str | None) -> tuple[str, DeploymentRecord] | None:
-        """The newest deployment of `service` (of `version`, when given) and its evidence ID."""
+    def release(
+        self, service: str, version: str | None
+    ) -> tuple[list[str], DeploymentRecord] | None:
+        """The newest deployment of `service` (of `version`, when given), with the ID of
+        every listing that shows it, the first one first.
+
+        The same release is often listed twice (by service and for the whole namespace, and
+        again in a later epoch), and a claim citing either listing has looked at it.
+        """
         found = [
-            (eid, record)
-            for eid, record in self.deployments
+            record
+            for _, record in self.deployments
             if record.service == service and version in (None, record.version)
         ]
-        return max(found, key=lambda pair: pair[1].deployed_at, default=None)
+        newest = max(found, key=lambda record: record.deployed_at, default=None)
+        if newest is None:
+            return None
+        same = (newest.service, newest.version, newest.deployed_at)
+        listings = [
+            eid
+            for eid, record in self.deployments
+            if (record.service, record.version, record.deployed_at) == same
+        ]
+        return _union(listings), newest
+
+    def spelling(self, service: str, version: str) -> str:
+        """`version` as this run's deployment evidence of `service` writes it.
+
+        A model may write "2.4.1" or "V2.4.1" for the observed release "v2.4.1". A version
+        that differs from exactly one observed release only by a leading "v" or by case is
+        that release. An exact match always wins, and nothing looser ever matches: any other
+        version stays as written, and V2 finds no deployment of it.
+        """
+        observed = _union(
+            [record.version for _, record in self.deployments if record.service == service]
+        )
+        if version in observed:
+            return version
+        alike = [seen for seen in observed if _loose(seen) == _loose(version)]
+        return alike[0] if len(alike) == 1 else version
 
     def series(self, service: str, metric: str) -> list[tuple[str, MetricSeries]]:
         """Every `metric` series of `service`, whole (history: used for error onsets)."""
@@ -292,21 +332,26 @@ class _Observations:
     def log_ids(self, service: str) -> list[str]:
         return [eid for eid, result in self.logs if result.service == service]
 
-    def lines(self, service: str) -> list[tuple[str, LogLine]]:
-        """`service`'s log lines, oldest first. A line seen by two log queries counts once."""
-        unique: dict[tuple[datetime, str, str], tuple[str, LogLine]] = {}
+    def lines(self, service: str) -> list[tuple[list[str], LogLine]]:
+        """`service`'s log lines, oldest first, each with the ID of every log query that
+        returned it (the first one first). A line seen by two log queries counts once."""
+        unique: dict[tuple[datetime, str, str], tuple[list[str], LogLine]] = {}
         for eid, result in self.logs:
             if result.service == service:
                 for line in result.lines:
-                    unique.setdefault((line.timestamp, line.level, line.message), (eid, line))
+                    key = (line.timestamp, line.level, line.message)
+                    queries, _ = unique.setdefault(key, ([], line))
+                    if eid not in queries:
+                        queries.append(eid)
         return sorted(unique.values(), key=lambda pair: pair[1].timestamp)
 
-    def fresh_lines(self, service: str) -> list[tuple[str, LogLine]]:
+    def fresh_lines(self, service: str) -> list[tuple[list[str], LogLine]]:
         """`service`'s log lines newer than its last fix (all of them if it was never fixed)."""
-        return [(eid, ln) for eid, ln in self.lines(service) if self.fresh(service, ln.timestamp)]
+        return [(ids, ln) for ids, ln in self.lines(service) if self.fresh(service, ln.timestamp)]
 
-    def upstream_errors(self, service: str) -> list[tuple[str, str]]:
-        """(evidence ID, dependency) for each ERROR line of `service` saying 'upstream D failed'.
+    def upstream_errors(self, service: str) -> list[tuple[list[str], str]]:
+        """(evidence IDs, dependency) for each ERROR line of `service` saying its call to a
+        dependency D failed (see lines() for the IDs).
 
         Only lines newer than `service`'s own last fix count. Blame toward D is kept even if a
         fix ran on D: a new epoch starts only when the oracle said "not recovered", so a fix
@@ -314,10 +359,10 @@ class _Observations:
         shows D healthy (V6, see healthy_evidence).
         """
         found = []
-        for eid, line in self.fresh_lines(service):
+        for ids, line in self.fresh_lines(service):
             dependency = signals.upstream_dependency(line.message)
             if line.level == "ERROR" and dependency and dependency != service:
-                found.append((eid, dependency))
+                found.append((ids, dependency))
         return found
 
     def upstream_graph(self) -> dict[str, set[str]]:
@@ -366,9 +411,10 @@ class _Observations:
             return []
         return _union([eid for eid, _ in snapshots], [eid for eid, _ in rates])
 
-    def oom_events(self, service: str) -> list[tuple[str, ClusterEvent]]:
-        """(evidence ID, event) for OOMKilled/BackOff events of `service`, each event once."""
-        unique: dict[tuple[datetime, str, str], tuple[str, ClusterEvent]] = {}
+    def oom_events(self, service: str) -> list[tuple[list[str], ClusterEvent]]:
+        """(evidence IDs, event) for OOMKilled/BackOff events of `service`, each event once,
+        with the ID of every event list that holds it (the first one first)."""
+        unique: dict[tuple[datetime, str, str], tuple[list[str], ClusterEvent]] = {}
         for eid, _, listing in self.events:
             for event in listing.events:
                 if (
@@ -377,7 +423,9 @@ class _Observations:
                     and self.fresh(service, event.timestamp)  # a fix ended the older kills
                 ):
                     key = (event.timestamp, event.reason, event.object)
-                    unique.setdefault(key, (eid, event))
+                    lists, _ = unique.setdefault(key, ([], event))
+                    if eid not in lists:
+                        lists.append(eid)
         return list(unique.values())
 
     def events_covering(self, service: str) -> list[str]:
@@ -478,6 +526,7 @@ class _Check:
             rule_ids=self.rule_ids,
             proposers=self.proposers,
             basis_evidence_ids=self.basis if self.status == SUPPORTED else [],
+            detail=self.detail,
         )
 
 
@@ -584,7 +633,7 @@ def _bad_deployment(check: _Check, observed: _Observations, alert_time: datetime
                 f"{check.target} no longer runs {release[1].version}: {newest[1].version} was "
                 f"deployed {_when(newest[1].deployed_at, alert_time)}"
             )
-            check.contradict(V2_TIMING, replaced, [newest[0]])
+            check.contradict(V2_TIMING, replaced, newest[0][:1])
             return
         _deploy_timing(check, observed, release, alert_time)
     _upstream_dominance(check, observed)
@@ -593,23 +642,24 @@ def _bad_deployment(check: _Check, observed: _Observations, alert_time: datetime
 class _Onset(NamedTuple):
     at: datetime
     start_seen: bool  # False if errors were already present at the very first observation
-    evidence_ids: list[str]
+    evidence_ids: list[str]  # where the onset was seen (a log line: where it was first seen)
+    basis: list[str]  # the same, with every other log query that returned that line
 
 
 def _deploy_timing(
     check: _Check,
     observed: _Observations,
-    release: tuple[str, DeploymentRecord],
+    release: tuple[list[str], DeploymentRecord],
     alert_time: datetime,
 ) -> None:
     """V2 (a)-(c): the errors must begin between 5 min before and 30 min after the deploy."""
     service = check.target
-    deploy_id, record = release
+    listings, record = release
     when = _when(record.deployed_at, alert_time)
     check.ok(
         V2_TIMING,
         f"deployment evidence shows {service} {record.version} deployed {when}",
-        [deploy_id],
+        listings,
     )
     onset = _error_onset(check, observed, record.version, alert_time)
     if onset is None:
@@ -617,9 +667,11 @@ def _deploy_timing(
     low, high = signals.DEPLOY_ERROR_WINDOW_MINUTES
     delta = signals.minutes_between(record.deployed_at, onset.at)
     relative = f"{_offset(delta)} {record.version} was deployed (allowed window {low}..+{high} min)"
-    evidence = [deploy_id, *onset.evidence_ids]
+    # Support names every listing of what it relied on (V1-grounding accepts any of them);
+    # a contradiction names where each thing was first recorded, as it always has.
+    evidence = [listings[0], *onset.evidence_ids]
     if onset.start_seen and low <= delta <= high:
-        check.ok(V2_TIMING, f"errors on {service} began {relative}", evidence)
+        check.ok(V2_TIMING, f"errors on {service} began {relative}", [*listings, *onset.basis])
     elif onset.start_seen:
         check.contradict(V2_TIMING, f"errors on {service} began {relative}", evidence)
     elif delta < low:  # the evidence starts mid-incident, yet even that is before the deploy
@@ -643,32 +695,31 @@ def _error_onset(
             check.lack(V2_TIMING, f"{service}'s error_rate never rises above {threshold}")
             return None
         when = _when(began, alert_time)
+        series_ids = [eid for eid, _ in series]
         check.ok(
-            V2_TIMING,
-            f"{service}'s error_rate is first seen above {threshold} {when}",
-            [eid for eid, _ in series],
+            V2_TIMING, f"{service}'s error_rate is first seen above {threshold} {when}", series_ids
         )
         # An onset counts as seen only if the evidence also shows a calm moment before it.
         start_seen = min(timestamp for timestamp, _ in points) < began
-        return _Onset(began, start_seen, [eid for eid, _ in series])
+        return _Onset(began, start_seen, series_ids, series_ids)
     # No metric evidence: fall back to the first ERROR line that names this release.
     lines = observed.lines(service)
     tag = f"(version={version})"
     tagged = [
-        (eid, line)
-        for eid, line in lines
+        (ids, line)
+        for ids, line in lines
         if line.level == "ERROR" and signals.version_tag(line.message) == version
     ]
     if not tagged:
         check.lack(V2_TIMING, f"no error_rate metric or '{tag}' errors for {service}", [service])
         return None
-    eid, first = tagged[0]
+    queries, first = tagged[0]
     check.ok(
         V2_TIMING,
         f"{service} logs its first '{tag}' error {_when(first.timestamp, alert_time)}",
-        [eid],
+        queries,
     )
-    return _Onset(first.timestamp, lines[0][1].timestamp < first.timestamp, [eid])
+    return _Onset(first.timestamp, lines[0][1].timestamp < first.timestamp, queries[:1], queries)
 
 
 def _upstream_dominance(check: _Check, observed: _Observations) -> None:
@@ -694,25 +745,25 @@ def _upstream_dominance(check: _Check, observed: _Observations) -> None:
         check.ok(
             V2_UPSTREAM,
             f"{counted} blame a dependency (under {UPSTREAM_SHARE:.0%})",
-            [eid for eid, _ in fresh],
+            _every_id(fresh),
         )
         return
     blamed = _union([dependency for _, dependency in upstream])
     message = f"{counted} say 'upstream ... call failed': its errors come from {', '.join(blamed)}"
-    check.contradict(V2_UPSTREAM, message, [eid for eid, _ in upstream], focus=blamed)
+    check.contradict(V2_UPSTREAM, message, _first_ids(upstream), focus=blamed)
 
 
 def _discount_healthy_blame(
-    check: _Check, observed: _Observations, upstream: list[tuple[str, str]]
-) -> list[tuple[str, str]]:
+    check: _Check, observed: _Observations, upstream: list[tuple[list[str], str]]
+) -> list[tuple[list[str], str]]:
     """V6 for V2: drop blame toward dependencies the platform shows healthy, and say so."""
-    kept: list[tuple[str, str]] = []
+    kept: list[tuple[list[str], str]] = []
     dropped: dict[str, list[str]] = {}  # healthy dependency -> evidence IDs of the blame lines
-    for eid, dependency in upstream:
+    for ids, dependency in upstream:
         if observed.healthy_evidence(dependency):
-            dropped.setdefault(dependency, []).append(eid)
+            dropped.setdefault(dependency, []).append(ids[0])
         else:
-            kept.append((eid, dependency))
+            kept.append((ids, dependency))
     for dependency, line_ids in dropped.items():
         proof = ", ".join(observed.healthy_evidence(dependency))
         check.ok(
@@ -735,18 +786,19 @@ def _resource_pressure(check: _Check, observed: _Observations) -> None:
     memory = observed.memory(service)
     near_limit = memory is not None and memory.peak >= signals.MEMORY_PRESSURE_RATIO
     oom_lines = [
-        eid for eid, ln in observed.fresh_lines(service) if signals.is_oom_message(ln.message)
+        (ids, ln) for ids, ln in observed.fresh_lines(service) if signals.is_oom_message(ln.message)
     ]
     if oom_events:
-        events = [eid for eid, _ in oom_events]
-        check.ok(V3, f"{len(oom_events)} OOMKilled/BackOff events for {service}", events)
+        message = f"{len(oom_events)} OOMKilled/BackOff events for {service}"
+        check.ok(V3, message, _every_id(oom_events))
     if memory is not None and near_limit:
         limit = f"{memory.limit_mb:g} MB limit (pressure from {signals.MEMORY_PRESSURE_RATIO:.0%})"
         message = f"{service}'s memory reached {memory.peak:.0%} of its {limit}"
         check.ok(V3, message, memory.evidence_ids)
     if oom_events or near_limit:
         if oom_lines:  # text that agrees with a platform signal adds corroboration
-            check.ok(V3, f"{len(oom_lines)} out-of-memory errors in {service}'s logs", oom_lines)
+            message = f"{len(oom_lines)} out-of-memory errors in {service}'s logs"
+            check.ok(V3, message, _every_id(oom_lines))
         return  # a platform signal is enough
     # An event list cannot be dated, so for a service that was fixed in this run, a list read
     # before the fix must not prove "no OOM kills": coverage then counts as missing.
@@ -760,7 +812,7 @@ def _resource_pressure(check: _Check, observed: _Observations) -> None:
         )
         check.contradict(V3, message, [*memory.evidence_ids, *covering])
         if oom_lines:
-            _text_loses(check, oom_lines, [*memory.evidence_ids, *covering])
+            _text_loses(check, _first_ids(oom_lines), [*memory.evidence_ids, *covering])
         return
     healthy = observed.healthy_evidence(service)
     if oom_lines and healthy:
@@ -770,7 +822,7 @@ def _resource_pressure(check: _Check, observed: _Observations) -> None:
             "error-rate evidence show it running normally"
         )
         check.contradict(V3, message, healthy)
-        _text_loses(check, oom_lines, healthy)
+        _text_loses(check, _first_ids(oom_lines), healthy)
         return
     if oom_lines:
         message = (
@@ -808,7 +860,7 @@ def _dependency_failure(check: _Check, observed: _Observations) -> None:
         check.lack(V4, f"no log lines of {service} since its last fix", [service])
         return
     dependency = _named_dependency(check.hypothesis, observed)
-    failures = [eid for eid, dep in observed.upstream_errors(service) if dep == dependency]
+    failures = [(ids, dep) for ids, dep in observed.upstream_errors(service) if dep == dependency]
     if not failures:
         message = f"{service}'s logs show no 'upstream {dependency or '...'} call failed' errors"
         check.contradict(V4, message, observed.log_ids(service))
@@ -821,9 +873,9 @@ def _dependency_failure(check: _Check, observed: _Observations) -> None:
             "observed healthy"
         )
         check.contradict(V4, message, healthy)
-        _text_loses(check, failures, healthy)
+        _text_loses(check, _first_ids(failures), healthy)
         return
-    check.ok(V4, f"{len(failures)} ERROR lines of {service} say {quote}", failures)
+    check.ok(V4, f"{len(failures)} ERROR lines of {service} say {quote}", _every_id(failures))
 
 
 def _resolve_dependencies(
@@ -831,8 +883,12 @@ def _resolve_dependencies(
     candidates: Sequence[_Check],
     observed: _Observations,
     graph: Mapping[str, set[str]],
-) -> None:
-    """V4 (second half): a dependency failure needs a supported root cause on D or below it."""
+) -> list[_Check]:
+    """V4 (second half): a dependency failure needs a supported root cause on D or below it.
+
+    Returns the supported dependency failures that nothing explains yet (see merger.leads).
+    """
+    unexplained = []
     for check in checks:
         h = check.hypothesis
         if h.mechanism != FailureMechanism.DEPENDENCY_FAILURE or check.status != SUPPORTED:
@@ -843,8 +899,10 @@ def _resolve_dependencies(
         if cause is None:
             message = f"not actionable by itself, and nothing on {dependency} is supported yet"
             check.note(V4, message, good=False, focus=[dependency])
+            unexplained.append(check)
         else:
             check.ok(V4, f"explained by {_words(cause.hypothesis.mechanism)} on {cause.target}")
+    return unexplained
 
 
 # --- choosing the best hypothesis and writing the report ----------------------------------------
@@ -853,14 +911,18 @@ def _resolve_dependencies(
 def _claim_detail(h: Hypothesis, observed: _Observations) -> str:
     """The detail that tells two claims of one mechanism on one service apart.
 
-    A bad deployment: the bad release's version (the newest observed release of the target
-    when the claim names none, as V2 reads it). A dependency failure: the blamed dependency
-    (the first one the target's own logs blame when the claim names none, as V4 reads it).
+    A bad deployment: the bad release's version, as the deployment evidence writes it (see
+    _Observations.spelling; the newest observed release of the target when the claim names
+    none, as V2 reads it). A dependency failure: the blamed dependency (the first one the
+    target's own logs blame when the claim names none, as V4 reads it).
     """
     target = h.target_service or ""
     if h.mechanism == FailureMechanism.BAD_DEPLOYMENT:
+        named = _detail(h, "version")
+        if named is not None:
+            return observed.spelling(target, named)
         release = observed.release(target, None)
-        return _detail(h, "version") or (release[1].version if release else "")
+        return release[1].version if release else ""
     if h.mechanism == FailureMechanism.DEPENDENCY_FAILURE:
         return _named_dependency(h, observed) or ""
     return ""
@@ -877,9 +939,9 @@ def _depth(
     """
     callers = [caller for caller in graph if target in _reachable(caller, graph)]
     lines = [
-        eid
+        ids[0]  # where each line was first seen, like a contradiction names it
         for caller in callers
-        for eid, dependency in observed.upstream_errors(caller)
+        for ids, dependency in observed.upstream_errors(caller)
         if dependency in graph.get(caller, set())
         and (dependency == target or target in _reachable(dependency, graph))
     ]
@@ -1026,6 +1088,25 @@ def _detail(h: Hypothesis, key: str) -> str | None:
 def _union(*groups: Iterable[str]) -> list[str]:
     """Items of all groups, each once, in first-seen order."""
     return list(dict.fromkeys(item for group in groups for item in group))
+
+
+def _every_id(seen: Iterable[tuple[list[str], Any]]) -> list[str]:
+    """Every evidence ID that holds one of these observations: what a passing rule relied on.
+
+    V1-grounding accepts a citation of any of them, so it does not matter which listing of
+    the same release, log line or event an agent cited, or in which order they were recorded.
+    """
+    return _union(*(ids for ids, _ in seen))
+
+
+def _first_ids(seen: Iterable[tuple[list[str], Any]]) -> list[str]:
+    """Where each of these observations was first recorded (what a contradiction names)."""
+    return _union([ids[0] for ids, _ in seen])
+
+
+def _loose(version: str) -> str:
+    """A version without its case and one leading "v": "V2.4.1" and "2.4.1" give "2.4.1"."""
+    return version.lower().removeprefix("v")
 
 
 def _words(mechanism: FailureMechanism) -> str:

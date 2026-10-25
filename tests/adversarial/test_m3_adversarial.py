@@ -22,6 +22,7 @@ from recap.core.models import IncidentState, MemoryPartition, RunConfig
 from recap.providers.factory import create_provider
 from recap.runtime import Runtime
 from recap.telemetry.tracer import TraceCategory as C
+from scripts import redteam_setup
 from scripts.redteam_setup import main as plant
 from tests.llm_fakes import (
     FakeOllama,
@@ -49,6 +50,33 @@ def lured(settings: Settings) -> Settings:
 def test_the_setup_script_refuses_the_real_data_folder(tmp_path: Path) -> None:
     assert plant(["--data-dir", str(REPO_ROOT / "data"), "--false-memory", str(FALSE_MEMORY)]) == 2
     assert plant(["--data-dir", str(tmp_path), "--false-memory", str(FALSE_MEMORY)]) == 0
+
+
+def case_insensitive(folder: Path) -> bool:
+    """Whether the file system under `folder` ignores letter case (macOS's default does)."""
+    (folder / "case-probe").mkdir()
+    return (folder / "CASE-PROBE").exists()
+
+
+@pytest.mark.parametrize("data_exists", [True, False])
+def test_the_setup_script_refuses_the_real_data_folder_under_any_spelling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, data_exists: bool
+) -> None:
+    """On a case-insensitive file system DATA is the same folder as data/: the folders are
+    compared by identity, not by how the path is written (REPO_ROOT is a scratch folder)."""
+    if not case_insensitive(tmp_path):
+        pytest.skip("this file system tells DATA and data apart")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    if data_exists:
+        (repo / "data").mkdir()
+    monkeypatch.setattr(redteam_setup, "REPO_ROOT", repo)
+    for spelling in ("DATA", "Data"):
+        args = ["--data-dir", str(repo / spelling), "--false-memory", str(FALSE_MEMORY)]
+        assert plant(args) == 2
+    assert not (repo / "data" / "memory.db").exists()
+    # A refused alias the script created is removed, not left as the repository's data/.
+    assert (repo / "data").exists() == data_exists
 
 
 async def test_every_lure_at_once_still_ends_with_the_payment_rollback(settings: Settings) -> None:

@@ -8,7 +8,7 @@ interface.
 |---|---|
 | `controller.py` | `IncidentController` walks the lifecycle state machine, saves a checkpoint after every transition, routes each investigation round, enforces bounded retries, and is the **only** component that can execute a mitigation (through the safety gateway). |
 | `loop.py` | `AgentHarness.run_agent` — the observe → reason → act loop every investigator runs. |
-| `budget.py` | `BudgetTracker` — steps, tool calls, estimated tokens and wall-clock time. Tool calls are *reserved before they are sent*, so no call is ever untracked. |
+| `budget.py` | `BudgetTracker` — steps, tool calls, estimated tokens, model tokens and wall-clock time. Tool calls and model requests are *reserved before they are sent*, so no call is ever untracked. It also gives every stop a place that does not depend on timing (the acting agent and its count of checks): a recorded run writes its stops into its recording, and a replay stops exactly there ([ADR 0026](../../docs/decisions/0026-a-replay-stops-where-its-recording-stopped.md)). |
 | `store.py` | `RunStore` — SQLite persistence for `RunRecord` checkpoints and evidence. |
 
 ## Lifecycle
@@ -30,14 +30,19 @@ injected and its alert becomes the incident), reads `describe()` again and refus
 whose namespace is not in the policy's `allowed_namespaces` (or differs from the alert's):
 CREATED → BLOCKED, before any tool call.
 
-1. **RETRIEVING** — BM25 search over runbooks (if RAG is on) and a similarity search over
-   past episodes (if memory is on). Skips are traced with a reason.
+1. **RETRIEVING** — BM25 search over runbooks (or hybrid, if the run asks; stored vectors
+   that do not fit the run's embedder stop it with a `ConfigError`), if RAG is on, and a
+   similarity search over past episodes, if memory is on. A replay reads memory as of its
+   recording's start, so it never finds the episode its own original run wrote. Skips are
+   traced with a reason.
 2. **INVESTIGATING** — the router picks *single* or *parallel* from observable signals; the
    orchestrator runs the agents (parallel = `asyncio.gather`); the evidence verifier checks
    every hypothesis against the evidence registry. If evidence is insufficient the next
-   round escalates (more compute, focused on the services the verifier names). Providers
-   receive label-free views (`AgentIncident`, `AgentMemoryHit`) and evidence summaries; no
-   agent may outlive the run's own deadline.
+   round escalates (more compute, focused on the services the verifier names, with its open
+   questions and leads). Only an open question sets the disagreement signal
+   (RT3-disagreement); a lead never does. Providers receive label-free views
+   (`AgentIncident`, `AgentMemoryHit`) and evidence summaries; no agent may outlive the
+   run's own deadline.
 3. **PROPOSING** — if no runbook for the diagnosed mechanism is loaded yet, it is retrieved
    now ("agentic RAG"), and the runbook chunks for the diagnosed mechanism are pinned in the
    proposal pack. The provider drafts a fix (bounded by the run's deadline); the **safety
@@ -59,7 +64,9 @@ CREATED → BLOCKED, before any tool call.
 7. **Consolidation** — a finished run becomes an experience episode; `success` only if
    the oracle verified recovery. Nothing is written when the run's memory writes are off
    (evaluation scoring), when it ended by an error or a cancellation, or when it ran a
-   held-out test scenario (the controller traces `memory.skip` with the reason).
+   held-out test scenario (the controller traces `memory.skip` with the reason). A run the
+   budget stopped becomes a `budget_exhausted` caution; the findings kept from its stopped
+   round are never verified, so their claims never reach the episode's checked claims.
 
 ## Failure handling
 
@@ -67,9 +74,16 @@ CREATED → BLOCKED, before any tool call.
   includes the token budget: context packs are always built at their configured size, and
   `charge_tokens` stops the run when the next pack no longer fits. It also includes the wall
   clock: a provider call (investigation or proposal) that is still running at the run's
-  deadline is cut off there.
+  deadline is cut off there. Findings other agents completed in a stopped parallel round
+  are kept in the record with `partial: true`. A replay never refuses on its own and has no
+  clock: it raises the stops its recording holds, at the same places, so it gets the same
+  timeout findings and the same budget stop as the original run.
 - Every agent of an investigation round failed (for example the provider API is down) →
   `FAILED` with `run.error` set, instead of another round or an "insufficient evidence" note.
+- No diagnosis after the last round while a disagreement is still open → `FAILED` for a
+  person, worded by what is open: "supported root causes still conflict" for level
+  supported causes, "claims still disagree on which release is bad" for an unsettled
+  release question (`_handover`). No fix is proposed.
 - Any other exception → `FAILED` with the error, redacted, in `run.error`.
 - Cancellation → `FAILED`, then re-raised. A pending approval request is expired first, so it
   can never be approved later.

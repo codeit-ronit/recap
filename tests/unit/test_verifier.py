@@ -11,10 +11,23 @@ import inspect
 import json
 import re
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from pydantic import BaseModel
 
-from recap.agents.verifier import EvidenceVerifier
+from recap.agents.merger import V7
+from recap.agents.verifier import (
+    PROPOSAL_RULES,
+    V1,
+    V1_GROUNDING,
+    V2_TIMING,
+    V2_UPSTREAM,
+    V3,
+    V4,
+    V5,
+    V6,
+    EvidenceVerifier,
+)
 from recap.context.evidence import EvidenceRegistry, tool_source_ref
 from recap.core.interfaces import Verifier
 from recap.core.models import (
@@ -465,6 +478,71 @@ def test_a_remembered_diagnosis_confirmed_by_live_evidence_is_supported() -> Non
     assert any("confirms" in line for line in check.passed)
 
 
+# --- V1-grounding: any listing of what the rules relied on counts -------------------------------
+
+
+def again(run: Run, evidence_id: str, model: type[BaseModel], **args: object) -> str:
+    """Record the observation of `evidence_id` once more, as a call with other arguments.
+
+    Real runs list the same things twice (deployments by limit and by service, events for
+    the namespace and for one service), and every new epoch repeats its calls.
+    """
+    item = run.registry.get(evidence_id)
+    assert item is not None and item.tool_name
+    return run.observe(item.tool_name, model.model_validate(item.data), **args)
+
+
+def test_a_claim_citing_either_listing_of_its_release_is_grounded() -> None:
+    run = Run()
+    first, _, _ = bad_checkout_release(run)
+    second = again(run, first, DeploymentList, service="checkout")
+
+    for cited in (second, first):
+        check = only_check(verify(run, hypothesis(DEPLOY, "checkout", cited, version="v2.4.1")))
+        # Before, the basis named only the listing recorded first, so a claim citing the
+        # second one (the listing its agent had just made) stayed insufficient.
+        assert check.hypothesis.status == SUPPORTED
+        assert {first, second} <= set(check.basis_evidence_ids)
+
+
+def test_a_claim_citing_either_event_list_of_its_oom_kill_is_grounded() -> None:
+    for per_service_first in (True, False):
+        run = Run()
+        kill = oom_event("inventory", -20)
+        if per_service_first:
+            per_service, namespace = run.events(kill, service="inventory"), run.events(kill)
+        else:
+            namespace, per_service = run.events(kill), run.events(kill, service="inventory")
+
+        for cited in (per_service, namespace):
+            check = only_check(verify(run, hypothesis(PRESSURE, "inventory", cited)))
+            assert check.hypothesis.status == SUPPORTED  # whichever list was recorded first
+            assert "1 OOMKilled/BackOff events for inventory" in check.passed  # counted once
+            assert {per_service, namespace} <= set(check.basis_evidence_ids)
+
+
+def test_a_claim_citing_either_log_query_of_the_same_lines_is_grounded() -> None:
+    run = Run()
+    first = run.logs("cart", upstream_errors("inventory", range(-10, 1)))
+    second = again(run, first, LogQueryResult, service="cart", level="ERROR")
+
+    for cited in (first, second):
+        claim = hypothesis(DEPENDENCY, "cart", cited, dependency="inventory")
+        check = only_check(verify(run, claim))
+        assert check.hypothesis.status == SUPPORTED
+        assert "11 ERROR lines of cart say 'upstream inventory call failed'" in check.passed
+
+    # The same for a release whose errors are read from its log lines (no error_rate metric).
+    release = Run()
+    deploy = release.deployments(("checkout", "v2.4.0", -2880), ("checkout", "v2.4.1", -12))
+    logs = release.logs("checkout", release_errors("v2.4.1", range(-11, 1)))
+    repeated = again(release, logs, LogQueryResult, service="checkout", level="ERROR")
+    for cited in (logs, repeated):
+        check = only_check(verify(release, hypothesis(DEPLOY, "checkout", cited)))
+        assert check.hypothesis.status == SUPPORTED
+        assert {deploy, logs, repeated} <= set(check.basis_evidence_ids)
+
+
 # --- merging, report status and determinism -------------------------------------------------------
 
 
@@ -577,6 +655,17 @@ def test_evidence_verifier_implements_the_verifier_interface() -> None:
         ours = inspect.signature(getattr(EvidenceVerifier, method)).parameters
         interface = inspect.signature(getattr(Verifier, method)).parameters
         assert list(ours) == list(interface)
+
+
+def test_the_agents_readme_names_every_rule_and_every_file() -> None:
+    # Before, it still described the pre-M3 verifier: no V1-grounding, V7 or VP4, and no
+    # merger.py (whose rules replaced the "more evidence wins a tie" ranking it described).
+    package = Path(inspect.getfile(EvidenceVerifier)).parent
+    readme = (package / "README.md").read_text(encoding="utf-8")
+    rules = [V1, V1_GROUNDING, V2_TIMING, V2_UPSTREAM, V3, V4, V5, V6, V7, *PROPOSAL_RULES]
+    files = sorted(path.name for path in package.glob("*.py") if path.name != "__init__.py")
+    assert [rule for rule in rules if f"`{rule}`" not in readme] == []
+    assert [name for name in files if f"`{name}`" not in readme] == []
 
 
 # --- V6: platform signals outrank log text (audit finding 2.2) -------------------------------

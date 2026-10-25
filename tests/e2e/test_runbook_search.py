@@ -19,6 +19,7 @@ from recap.knowledge.vectors import VectorIndex
 from recap.providers.factory import REPLAY_ENV, create_embedder, create_provider
 from recap.runtime import Runtime
 from recap.telemetry.tracer import TraceCategory as C
+from tests import llm_fakes
 from tests.llm_fakes import FakeOllama, OperatorApproves, ScriptedModel
 
 pytestmark = pytest.mark.e2e
@@ -101,6 +102,9 @@ async def test_an_agent_searches_the_runbooks_and_reads_what_it_found(settings: 
     assert record.verification is not None
     basis = {i for c in record.verification.checks for i in c.basis_evidence_ids}
     assert receipt.id not in basis
+    # A BM25 run's searches say so, whatever vectors are stored (hybrid_ready is a capability).
+    searches = [e.payload for e in events if e.category == C.RETRIEVAL]
+    assert searches and all(s["retriever"] == "bm25" for s in searches)
 
 
 async def test_the_search_budget_refuses_more_searches_without_stopping_the_run(
@@ -137,9 +141,15 @@ async def test_a_hybrid_run_is_recorded_with_its_embeddings_and_replays_offline(
     assert info is not None and (info.mode, info.embedder) == ("hybrid", "ollama:nomic-embed-text")
     assert info.embedding_requests == len(fake.embeds) >= 2  # the alert query and the search
     assert info.replayed_requests == 0 and info.embedding_input_tokens
-    assert info.server is not None and info.server["weights"] == "sha256:" + "e3be" * 16
+    assert info.server is not None and info.server[
+        "weights"
+    ] == llm_fakes.FAKE_EMBED_WEIGHTS.replace("-", ":", 1)
     assert target in [d.chunk.chunk_id for d in live.retrieved_docs]  # the dense ranking at work
     assert all(d.retriever == "hybrid-bm25-embeddings" for d in live.retrieved_docs)
+    searches = [
+        e.payload for e in runtime.events.list_events(live.run_id) if e.category == C.RETRIEVAL
+    ]
+    assert searches and all(s["retriever"] == "hybrid-bm25-embeddings" for s in searches)
 
     # The recording holds the embedding exchanges, trimmed like every Ollama answer.
     assert live.provider_info is not None and live.provider_info.recording
@@ -179,6 +189,21 @@ async def test_hybrid_retrieval_without_complete_vectors_fails_loudly(settings: 
     assert record.state == IncidentState.FAILED
     assert record.error is not None and "scripts/build_vector_index.py" in record.error
     assert fake.chats == [] and fake.embeds == []  # it stopped before asking anything
+
+
+async def test_hybrid_retrieval_refuses_vectors_made_from_other_weights(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A re-pulled model: the same name, but the server reports other weights than the
+    # committed vectors were made from, so their cosines would mean nothing.
+    monkeypatch.setattr(llm_fakes, "FAKE_EMBED_WEIGHTS", "sha256-" + "e3be" * 16)
+    fake = FakeOllama(responder=ScriptedModel())
+    hybrid = RunConfig(provider="ollama", use_memory=False, retrieval="hybrid")
+    _, record = await live_run(settings, hybrid, fake)
+    assert record.state == IncidentState.FAILED
+    assert record.error is not None and "weights" in record.error
+    assert "scripts/build_vector_index.py" in record.error
+    assert fake.chats == []  # refused after the first embedding, before any model decision
 
 
 async def test_the_model_token_budget_stops_the_run_before_an_over_budget_request(

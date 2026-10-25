@@ -84,8 +84,9 @@ class RulesRouter:
             return (
                 PARALLEL,
                 "RT3-disagreement",
-                "the last round left supported claims that conflict and no evidence rule "
-                "settles: ask both specialists again, with the verifier's open questions",
+                "the last round left claims that conflict (level root causes, or different "
+                "bad releases) and no evidence rule settles them: ask both specialists again, "
+                "with the verifier's open questions",
             )
         if s.escalation or s.prior_failed_attempts > 0:
             return (

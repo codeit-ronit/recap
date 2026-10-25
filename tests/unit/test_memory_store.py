@@ -7,7 +7,7 @@ that disagree), plus the rule that "similar" is never automatically "safe to reu
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -356,6 +356,18 @@ def test_a_remembered_rollback_the_evidence_no_longer_names_is_unsafe(
     assert still.safe_to_reuse  # the same fix, when today's evidence names it again
 
 
+def test_a_remembered_rollback_that_names_no_release_is_unsafe(store: ExperienceStore) -> None:
+    """A tampered episode can hide its version under another key: the rollback it remembers
+    cannot be checked against today's restore points, so it is never "safe"."""
+    episode = make_episode()
+    assert episode.successful_action is not None
+    hidden = episode.successful_action.model_copy(update={"params": {"restore": "v2.4.0"}})
+    hit = search_one(store, episode.model_copy(update={"successful_action": hidden}))
+    assessed = assess_reuse(hit, report_on("checkout", version="v2.4.1"), restore_points=["v2.4.0"])
+    assert not assessed.safe_to_reuse
+    assert "the remembered rollback names no release it restored" in assessed.contradicting
+
+
 def test_assessed_hits_rank_by_what_live_evidence_confirmed_not_similarity() -> None:
     look_alike = make_hit(0.95, PRESSURE, SUCCESS)  # very similar, wrong mechanism
     matching = make_hit(0.4, DEPLOY, SUCCESS)
@@ -424,3 +436,91 @@ def test_a_semantic_match_adds_a_paraphrased_episode_but_not_its_similarity(
         embedding_model="another-model",
     )
     assert other_model == []  # vectors from another model are never compared
+
+
+# --- review fixes: semantic recall at the real cutoffs, the same service, memory as of a moment ---
+
+
+def embedded(episode: ExperienceEpisode, vector: list[float]) -> ExperienceEpisode:
+    return episode.model_copy(
+        update={"embedding": encode_vector(vector), "embedding_model": "fake-model"}
+    )
+
+
+def test_a_close_semantic_match_is_added_even_when_k_lexical_hits_fill_the_list(
+    store: ExperienceStore,
+) -> None:
+    """Regression: at the controller's own k=3 and min_similarity=0.2, three checkout
+    episodes pass on the service alone (0.3), and a paraphrase only the semantic signal
+    finds sorted after them and was always cut off, so semantic recall added nothing."""
+    access = MemoryAccess.default()
+    for minute in range(3):
+        unrelated = [f"inventory reservations queue growing, batch {minute}"]
+        store.add(make_episode(f"ep-co{minute}", symptoms=unrelated, minutes=minute), access)
+    paraphrase = make_episode(
+        "ep-para", service="frontend", symptoms=["shoppers cannot finish buying anything"]
+    )
+    store.add(embedded(paraphrase, [0.99, 0.1, 0.0]), access)
+    near = make_episode("ep-near", service="frontend", symptoms=["buyers stuck at payment"])
+    store.add(embedded(near, [0.9, 0.3, 0.0]), access)  # cosine 0.95: close, but less close
+
+    lexical = store.search(QUERY, access)
+    assert [h.episode.episode_id for h in lexical] == ["ep-co2", "ep-co1", "ep-co0"]
+    hits = store.search(QUERY, access, query_vector=[1.0, 0.0, 0.0], embedding_model="fake-model")
+    # The lexical hits stay exactly as they were; the close matches are added after them.
+    assert hits[:3] == lexical
+    assert [h.episode.episode_id for h in hits[3:]] == ["ep-para", "ep-near"]
+    assert all(h.similarity == h.signals["lexical"] == 0.0 for h in hits[3:])
+    [one] = store.search(
+        QUERY, access, k=1, query_vector=[1.0, 0.0, 0.0], embedding_model="fake-model"
+    )[1:]
+    assert one.episode.episode_id == "ep-para"  # at most k added, the closest first
+
+
+def test_a_semantic_match_already_found_by_its_words_is_listed_once(
+    store: ExperienceStore,
+) -> None:
+    store.add(embedded(make_episode("ep-same"), [1.0, 0.0, 0.0]), MemoryAccess.default())
+    [hit] = store.search(
+        QUERY, MemoryAccess.default(), query_vector=[1.0, 0.0, 0.0], embedding_model="fake-model"
+    )
+    assert hit.similarity == 1.0 and hit.signals == {"lexical": 1.0, "semantic": 1.0}
+
+
+def test_an_episode_that_names_no_diagnosed_service_is_not_safe(store: ExperienceStore) -> None:
+    """Regression: a missing mechanism_target passed the same-service check, so an episode
+    could be "safe to reuse" on any service with the same mechanism."""
+    nameless = make_episode().model_copy(update={"mechanism_target": None})
+    hit = search_one(store, nameless)
+    for today in ("payment", "checkout"):
+        assessed = assess_reuse(hit, report_on(today))
+        assert assessed.mechanism_match is True and not assessed.safe_to_reuse
+        assert "the past episode names no service to compare" in assessed.contradicting
+
+
+def test_a_remembered_fix_on_another_service_is_not_safe(store: ExperienceStore) -> None:
+    """Regression: only the diagnosis' service was compared, never the fix's own target."""
+    elsewhere = make_episode().model_copy(update={"mechanism_target": "payment"})
+    assessed = assess_reuse(search_one(store, elsewhere), report_on("payment"))
+    assert assessed.mechanism_match is True and not assessed.safe_to_reuse
+    assert assessed.contradicting == ["the remembered fix acts on checkout, not on payment"]
+
+
+def test_memory_can_be_read_as_it_was_at_a_moment(store: ExperienceStore) -> None:
+    """A replay reads memory as its recording found it: an episode created at or after that
+    moment (such as the one its own original run wrote) is not returned."""
+    for minute in (0, 5, 10):
+        store.add(make_episode(f"ep-{minute}", minutes=minute), MemoryAccess.default())
+    moment = T0 + timedelta(minutes=5)
+
+    def found(access: MemoryAccess) -> list[str]:
+        return [h.episode.episode_id for h in store.search(QUERY, access, k=10)]
+
+    assert found(MemoryAccess.default()) == ["ep-10", "ep-5", "ep-0"]
+    assert found(MemoryAccess.default().as_of(moment)) == ["ep-0"]
+    india = timezone(timedelta(hours=5, minutes=30))
+    assert found(MemoryAccess.default().as_of(moment.astimezone(india))) == ["ep-0"]
+    naive = (moment + timedelta(seconds=1)).replace(tzinfo=None)  # RECAP reads naive as UTC
+    assert found(MemoryAccess.default().as_of(naive)) == ["ep-5", "ep-0"]
+    replay = MemoryAccess.for_origin("replay").as_of(moment)
+    assert replay.created_before == moment and not replay.write_enabled

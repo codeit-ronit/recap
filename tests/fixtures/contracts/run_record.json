@@ -1,5 +1,5 @@
 {
-  "run_id": "run-e34a70c005",
+  "run_id": "run-29af25180a",
   "scenario_id": "bad-deployment",
   "config": {
     "strategy": "adaptive",
@@ -22,7 +22,7 @@
     "label": ""
   },
   "incident": {
-    "incident_id": "inc-9c48b103c5",
+    "incident_id": "inc-ff0f748e93",
     "scenario_id": "bad-deployment",
     "service": "checkout",
     "affected_services": [
@@ -51,42 +51,42 @@
   "history": [
     {
       "state": "CREATED",
-      "at": "2026-10-21T15:02:04.966118Z",
+      "at": "2026-10-25T10:10:07.040404Z",
       "reason": "incident created"
     },
     {
       "state": "RETRIEVING",
-      "at": "2026-10-21T15:02:05.489999Z",
+      "at": "2026-10-25T10:10:08.270824Z",
       "reason": "gather runbooks and past experience"
     },
     {
       "state": "INVESTIGATING",
-      "at": "2026-10-21T15:02:05.492505Z",
+      "at": "2026-10-25T10:10:08.274069Z",
       "reason": "investigate with read-only tools"
     },
     {
       "state": "PROPOSING",
-      "at": "2026-10-21T15:02:05.587577Z",
+      "at": "2026-10-25T10:10:08.458252Z",
       "reason": "diagnosis: checkout v2.4.1, deployed 12 min before the alert, may have introduced the errors"
     },
     {
       "state": "AWAITING_APPROVAL",
-      "at": "2026-10-21T15:02:05.590695Z",
+      "at": "2026-10-25T10:10:08.464664Z",
       "reason": "approval required for execute_rollback"
     },
     {
       "state": "MITIGATING",
-      "at": "2026-10-21T15:02:05.591988Z",
+      "at": "2026-10-25T10:10:08.467085Z",
       "reason": "execute_rollback on checkout"
     },
     {
       "state": "VERIFYING",
-      "at": "2026-10-21T15:02:05.599790Z",
+      "at": "2026-10-25T10:10:08.481882Z",
       "reason": "independent oracle checks recovery"
     },
     {
       "state": "RESOLVED",
-      "at": "2026-10-21T15:02:05.601718Z",
+      "at": "2026-10-25T10:10:08.484654Z",
       "reason": "oracle verified recovery (simulated environment)"
     }
   ],
@@ -154,13 +154,13 @@
     {
       "agent_role": "investigator",
       "evidence_ids": [
-        "ev-e34a70-001",
-        "ev-e34a70-002",
-        "ev-e34a70-003",
-        "ev-e34a70-004",
-        "ev-e34a70-005",
-        "ev-e34a70-006",
-        "ev-e34a70-007"
+        "ev-29af25-001",
+        "ev-29af25-002",
+        "ev-29af25-003",
+        "ev-29af25-004",
+        "ev-29af25-005",
+        "ev-29af25-006",
+        "ev-29af25-007"
       ],
       "doc_refs": [
         "shop-architecture#service-level-objectives-1",
@@ -174,10 +174,10 @@
           "mechanism": "bad_deployment",
           "target_service": "checkout",
           "supporting_evidence_ids": [
-            "ev-e34a70-004",
-            "ev-e34a70-002",
-            "ev-e34a70-003",
-            "ev-e34a70-001"
+            "ev-29af25-004",
+            "ev-29af25-002",
+            "ev-29af25-003",
+            "ev-29af25-001"
           ],
           "contradicting_evidence_ids": [],
           "status": "proposed",
@@ -205,9 +205,10 @@
       },
       "summary": "Finished: every check in the playbook is done. Read-only calls by this agent: 7 (checkout). Hypotheses for the verifier: 1.",
       "error": null,
-      "started_at": "2026-10-21T15:02:05.493685Z",
-      "finished_at": "2026-10-21T15:02:05.585992Z",
-      "round": 1
+      "started_at": "2026-10-25T10:10:08.275478Z",
+      "finished_at": "2026-10-25T10:10:08.454994Z",
+      "round": 1,
+      "partial": false
     }
   ],
   "verification": {
@@ -217,10 +218,10 @@
       "mechanism": "bad_deployment",
       "target_service": "checkout",
       "supporting_evidence_ids": [
-        "ev-e34a70-004",
-        "ev-e34a70-002",
-        "ev-e34a70-003",
-        "ev-e34a70-001"
+        "ev-29af25-004",
+        "ev-29af25-002",
+        "ev-29af25-003",
+        "ev-29af25-001"
       ],
       "contradicting_evidence_ids": [],
       "status": "supported",
@@ -239,10 +240,10 @@
           "mechanism": "bad_deployment",
           "target_service": "checkout",
           "supporting_evidence_ids": [
-            "ev-e34a70-004",
-            "ev-e34a70-002",
-            "ev-e34a70-003",
-            "ev-e34a70-001"
+            "ev-29af25-004",
+            "ev-29af25-002",
+            "ev-29af25-003",
+            "ev-29af25-001"
           ],
           "contradicting_evidence_ids": [],
           "status": "supported",
@@ -273,25 +274,27 @@
           "investigator"
         ],
         "basis_evidence_ids": [
-          "ev-e34a70-004",
-          "ev-e34a70-003",
-          "ev-e34a70-002"
-        ]
+          "ev-29af25-004",
+          "ev-29af25-003",
+          "ev-29af25-002"
+        ],
+        "detail": "v2.4.1"
       }
     ],
     "unknown_evidence_ids": [],
     "merged_evidence_ids": [
-      "ev-e34a70-001",
-      "ev-e34a70-002",
-      "ev-e34a70-003",
-      "ev-e34a70-004",
-      "ev-e34a70-005",
-      "ev-e34a70-006",
-      "ev-e34a70-007"
+      "ev-29af25-001",
+      "ev-29af25-002",
+      "ev-29af25-003",
+      "ev-29af25-004",
+      "ev-29af25-005",
+      "ev-29af25-006",
+      "ev-29af25-007"
     ],
     "focus_services": [],
     "summary": "Best supported root cause: bad deployment on checkout (1 supported).",
-    "disagreements": []
+    "disagreements": [],
+    "leads": []
   },
   "retrieved_docs": [
     {
@@ -458,11 +461,11 @@
       },
       "rationale": "The evidence supports: checkout v2.4.1, deployed 12 min before the alert, may have introduced the errors. Runbook runbook-bad-deployment#remediation-1 recommends execute_rollback for bad deployment. Roll checkout back to v2.4.0 (the version the propose_rollback dry run names).",
       "evidence_ids": [
-        "ev-e34a70-004",
-        "ev-e34a70-002",
-        "ev-e34a70-003",
-        "ev-e34a70-001",
-        "ev-e34a70-007"
+        "ev-29af25-004",
+        "ev-29af25-002",
+        "ev-29af25-003",
+        "ev-29af25-001",
+        "ev-29af25-007"
       ],
       "expected_health_change": "error rate on checkout back under 5% and all replicas ready",
       "rollback_hint": "redeploy v2.4.1 after a fix",
@@ -472,9 +475,9 @@
       "citations": [
         "runbook-bad-deployment#remediation-1"
       ],
-      "proposal_id": "prop-28ba81aa56",
-      "incident_id": "inc-9c48b103c5",
-      "created_at": "2026-10-21T15:02:05.589598Z"
+      "proposal_id": "prop-064734460d",
+      "incident_id": "inc-ff0f748e93",
+      "created_at": "2026-10-25T10:10:08.462346Z"
     }
   ],
   "safety_decisions": [
@@ -501,22 +504,22 @@
       "risk": "reversible_write",
       "caller": "controller",
       "policy_version": "policy-v1",
-      "decided_at": "2026-10-21T15:02:05.589958Z"
+      "decided_at": "2026-10-25T10:10:08.462956Z"
     }
   ],
   "pending_approval": null,
   "approvals": [
     {
-      "approval_id": "apr-870ea47831",
-      "incident_id": "inc-9c48b103c5",
-      "proposal_id": "prop-28ba81aa56",
-      "proposal_digest": "4097ee494a09aa924cd27c12c5c914d1c450445b67fe24067ee69fda3cb239c9",
+      "approval_id": "apr-e4c5572aae",
+      "incident_id": "inc-ff0f748e93",
+      "proposal_id": "prop-064734460d",
+      "proposal_digest": "00294d2daf689e80d2470c8f19cd0631f12d55a7ef818eb92b0e3b39c5641b55",
       "scope": "single_action",
       "decision": "approved",
       "actor": "auto-approver[simulation]",
-      "decided_at": "2026-10-21T15:02:05.591587Z",
-      "expires_at": "2026-10-21T15:17:05.591056Z",
-      "consumed_at": "2026-10-21T15:02:05.593746Z"
+      "decided_at": "2026-10-25T10:10:08.466292Z",
+      "expires_at": "2026-10-25T10:25:08.465303Z",
+      "consumed_at": "2026-10-25T10:10:08.470707Z"
     }
   ],
   "actions": [
@@ -527,7 +530,7 @@
         "to_version": "v2.4.0"
       },
       "result": "recovered",
-      "at": "2026-10-21T15:02:05.601706Z",
+      "at": "2026-10-25T10:10:08.484635Z",
       "note": ""
     }
   ],
@@ -621,7 +624,7 @@
       "payment"
     ]
   },
-  "episode_id": "ep-1f39fc6783",
+  "episode_id": "ep-b91222b5b3",
   "usage": {
     "steps": 9,
     "tool_calls": 8,
@@ -638,10 +641,10 @@
   "versions": {
     "recap": "0.3.0",
     "schema": "recap.v1",
-    "prompt_version": "prompts-v3.2",
+    "prompt_version": "prompts-v3.3",
     "config_hash": "f876fe0250c93ac1",
-    "fixture_hash": "79e5c4c4f4098098",
-    "code_version": "23319a2e3a86+dirty",
+    "fixture_hash": "db1b4bbe5d0f3913",
+    "code_version": "0e217a11d0a5+dirty",
     "policy_version": "policy-v1",
     "router": "rules-router-v1",
     "verifier": "evidence-rule-verifier-v1",
@@ -650,8 +653,9 @@
     "recording": null,
     "environment": "simulated",
     "seed": 11,
+    "knowledge_overlays": [],
     "transport": "mcp-stdio"
   },
-  "created_at": "2026-10-21T15:02:04.966609Z",
-  "updated_at": "2026-10-21T15:02:05.673972Z"
+  "created_at": "2026-10-25T10:10:07.041306Z",
+  "updated_at": "2026-10-25T10:10:08.599066Z"
 }

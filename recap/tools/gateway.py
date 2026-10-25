@@ -36,7 +36,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
-from recap.context.evidence import EvidenceRegistry, tool_source_ref
+from recap.context.evidence import EvidenceRegistry, free_text_args, tool_source_ref
 from recap.core.config import PolicyLimits
 from recap.core.errors import ApprovalError, BudgetExhausted, ConfigError, ReplayMismatch
 from recap.core.ids import new_id
@@ -508,12 +508,18 @@ class ToolGateway:
         truncated = lists_cut or text_cut
         flags = injection_flags(content) + ([TRUNCATED_FLAG] if truncated else [])
         local = self.registry.is_local(request.tool_name)
+        # Prompts show the ref as trusted text, so an argument the registry lets a model fill
+        # freely is hashed in it whatever it looks like (providers build refs the same way).
+        free_text = free_text_args(self.registry.view(request.tool_name).args)
         evidence = self._evidence.add(
             # A local tool reads RECAP's own reference data (runbooks): DOC evidence, which
             # the verifier never counts as a live observation.
             source_type=SourceType.DOC if local else SourceType.TOOL,
             source_ref=tool_source_ref(
-                request.tool_name, request.args, scheme="local" if local else "mcp"
+                request.tool_name,
+                request.args,
+                scheme="local" if local else "mcp",
+                free_text=free_text,
             ),
             content=content,
             data=data,

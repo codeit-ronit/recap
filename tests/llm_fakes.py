@@ -46,7 +46,9 @@ FAKE_REQUEST_ID = "req_01FAKEACCOUNTLINK0000000000"  # shaped like a Groq reques
 FAKE_COMPLETION_ID = "chatcmpl-0f4e5a6b-fake-4c1d-9e8f-account0link"  # an answer's own ID
 FAKE_OLLAMA_VERSION = "0.0.0-fake"  # never a real Ollama version: fake runs stay recognizable
 FAKE_WEIGHTS = "sha256-" + "fa4e" * 16  # a weights file name as /api/show's modelfile gives it
-FAKE_EMBED_WEIGHTS = "sha256-" + "e3be" * 16  # the embedding model's
+# The embedding model's weights: those the committed runbook vectors were made from
+# (fixtures/knowledge/vectors/), since a hybrid run refuses vectors from other weights.
+FAKE_EMBED_WEIGHTS = "sha256-970aa74c0a90ef7482477cf803618e776e173c007bf957f635f1015bfcfef0e6"
 
 # An answer is a dict for the next 200 reply, or a ready httpx.Response (errors, 429s...).
 Answer = dict[str, Any] | httpx.Response

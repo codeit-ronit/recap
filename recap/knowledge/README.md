@@ -24,12 +24,12 @@ RetrievedChunk[] (with signals: bm25_rank, dense_rank, cosine, rrf)
 
 | File | What it does |
 |---|---|
-| `ingest.py` | Markdown files to `DocChunk`s: stable IDs, repo-relative path, title, heading, checksum, provenance |
+| `ingest.py` | Markdown files to `DocChunk`s: stable IDs, repo-relative path (a folder elsewhere: its own name), title, heading, checksum, provenance |
 | `bm25.py` | Tokenizer and an Okapi BM25 index written from scratch (no search library) |
 | `retriever.py` | `KnowledgeRetriever` (the `RetrievalIndex`) and `LexicalReranker` (the `Reranker`) |
 | `embeddings.py` | The `Embedder` interface (async; query and document sides), cosine similarity, reciprocal rank fusion, an optional sentence-transformers embedder |
 | `ollama_embedder.py` | `OllamaEmbedder`: `nomic-embed-text` on loopback through the recordable model transport |
-| `vectors.py` | `VectorIndex`: chunk vectors stored once (base64 float32), keyed by a hash of what was embedded |
+| `vectors.py` | `VectorIndex`: chunk vectors stored once (base64 float32), keyed by a hash of what was embedded; `mismatch` says whether they fit an embedder |
 | `hints.py` | Parses the `Mechanism:` / `Recommended action:` lines in runbooks |
 
 ## Usage
@@ -57,13 +57,26 @@ In a run, the controller embeds the query with the run's `OllamaEmbedder` (its r
 are recorded with the model's and replay offline) and passes the vector in; see
 [docs/flow.md](../../docs/flow.md), stage 3.
 
+Whether a search is hybrid is decided one search at a time, by the caller passing the
+query's vector. So the retriever's `name` is always `bm25` (what a search without a vector
+uses), `hybrid_ready` says whether hybrid search is possible, and
+`retriever_for(query_vector)` says what a given search ranks with, as each of its results
+does in `retriever`. The controller writes `retriever_for(vector)` into each
+`retrieval.docs` event, and `GET /system` reports `retriever` (what a run that does not
+choose would use) and `hybrid_ready`.
+
 ## From Markdown to chunks
 
 * The first `# ` line is the document title; each `## ` section becomes one chunk. Text
   between the title and the first section becomes an `Overview` chunk.
 * Chunk IDs are `<file stem>#<heading slug>-<n>`, for example
   `runbook-bad-deployment#remediation-1`. They are stable, so a citation stays valid
-  across runs.
+  across runs. Two files giving the same ID (a knowledge overlay holding a file named like
+  a shipped runbook, or one folder listed twice) stop startup with a `ConfigError` naming
+  both files: RECAP never guesses which one a citation meant.
+* Paths are stored relative to the repository root. A folder outside it (an overlay
+  elsewhere on disk, `RECAP_KNOWLEDGE_OVERLAYS`) is shown by its own name, for example
+  `redteam-kb/runbook-x.md`: the local folders above it never reach a record.
 * A section longer than 180 words is split into windows of 180 words that overlap by 30.
   Windows are slices of the original text, so line breaks (and therefore hint lines) survive.
 * Every chunk records `checksum` (first 12 hex characters of the file's SHA-256, which
@@ -105,7 +118,10 @@ same query always returns the same order.
   chunk vectors (`fixtures/knowledge/vectors/nomic-embed-text.json`, built by
   `scripts/build_vector_index.py` with the local model). Dense candidates below
   `min_dense_similarity` (0.55) are dropped, and the two rankings are merged with
-  reciprocal rank fusion: each chunk earns `1 / (60 + rank)` per ranking.
+  reciprocal rank fusion: each chunk earns `1 / (60 + rank)` per ranking. The V1
+  evaluation ignores `RECAP_ENABLE_EMBEDDINGS` (and `RECAP_KNOWLEDGE_OVERLAYS`): it pins
+  BM25 over the shipped runbooks, and its report records `retrieval_mode` and
+  `knowledge_overlays`.
 * nomic-embed-text expects task prefixes: chunks were embedded as `search_document: ...`,
   queries are embedded as `search_query: ...`.
 * Each result's `signals` say why it ranked where it did: `bm25_rank`, `bm25`,
@@ -114,6 +130,15 @@ same query always returns the same order.
   has no vector: `hybrid_ready` turns False, and a run that asks for hybrid fails with
   "run scripts/build_vector_index.py" instead of searching with stale vectors.
   `tests/unit/test_hybrid_retrieval.py` fails while the stored file is stale.
+* The key does not name the model, so the file records what made it (model, dimensions,
+  document prefix, weights) and `KnowledgeRetriever.vector_mismatch(embedder)` compares that
+  with the embedder a run would embed its queries with: query vectors of another model, or
+  of other weights of the same one, cannot be compared with the stored ones. The weights
+  are compared once the embedder's server has reported them. A hybrid run checks this when
+  it makes its embedder and again after each query it embeds, and stops with a
+  `ConfigError` that points at the script. `scripts/build_vector_index.py --check` makes
+  the same comparison (it asks the local server for metadata only; without a server it
+  compares everything but the weights).
 
 ### What hybrid search does better, and what it does not (measured 2026-10-21)
 

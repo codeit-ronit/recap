@@ -34,13 +34,15 @@ how an LLM would perform.
 ## Real models (M2): how one decision works
 
 `OllamaProvider` and `FreeHostedProvider` share one loop (`http_llm.py`) and one versioned
-step protocol (`protocol.py`, **prompts-v4.1**). For each decision:
+step protocol (`protocol.py`, **prompts-v4.6**). For each decision:
 
 1. **Render** the request: a static system prompt (the rules, and RECAP's failure
    mechanisms in generic SRE terms), then one user message with the role, the incident, the
-   tools, the agent's previous calls, what any agent already observed, and the context pack.
-   Everything RECAP did not write is inside `<untrusted_data>` tags. "Step N of M" comes
-   last, so a local server can reuse its cache for the shared start.
+   services to examine first (only allowlisted names), the verifier's open questions and
+   leads, the tools, the agent's previous calls, what any agent already observed, and the
+   context pack. Everything RECAP did not write is inside `<untrusted_data>` tags, and so is
+   an earlier call with a free-text argument (a search query), whatever it looks like.
+   "Step N of M" comes last, so a local server can reuse its cache for the shared start.
 2. **Constrain** the answer with a schema built for this request from RECAP's trusted
    catalog: tool names, services, metrics and mechanisms are enums, and evidence IDs are an
    enum of the IDs this agent can see. In `tools` mode the read tools are native functions
@@ -54,8 +56,12 @@ step protocol (`protocol.py`, **prompts-v4.1**). For each decision:
    proposal `final_proposal` or `stop`) and check it again: unlisted tools, foreign
    arguments, repeated calls, unknown IDs and services outside the allowlist are dropped with
    a note in the trace.
-5. **Unusable?** Send the reason back once (a corrective retry). Still unusable: the agent
-   finishes without a decision. There is **never** a fallback to scripted decisions.
+5. **Unusable?** Send the reason back once (a corrective retry). When every call in a
+   request repeats one already observed, the reason names those calls by their refs and
+   asks for a different tool, another service, or a finish (added in prompts-v4.6, after a
+   real `qwen3:8b` agent repeated checkout calls it had already made until it ran out of
+   steps). Still unusable: the agent finishes without a decision. There is **never** a
+   fallback to scripted decisions.
 
 Each request becomes a `ModelCall` in the decision (an `llm.call` trace event): model asked
 for and model that answered, mode, attempt, HTTP status, exact token counts as the server
@@ -120,15 +126,26 @@ RECAP_ALLOW_LIVE_FREE_INFERENCE=1 python scripts/demo.py --scenario bad-deployme
 `RECAP_PROVIDER=replay` (recording from `configs/providers.yaml` or
 `RECAP_REPLAY_RECORDING`) rebuilds the recorded provider and answers each request from the
 recording, matched by a fingerprint that ignores run-specific random IDs. A request that is
-not in the recording stops the run with `ReplayMismatch`. CI replays
+not in the recording stops the run with `ReplayMismatch`, whose message names what may
+have changed: the prompts, tools, tool results or memory. CI replays
 `fixtures/recordings/ollama-qwen3-8b-bad-deployment.jsonl` (ADR 0018), with the recorded
 run's limits and retry choices; every HTTP request (a retried 429 too) is its own `llm.call`.
+
+A recording also keeps what a replay cannot find out by itself, because it depends on
+timing (ADR 0026): a request that got no answer (the replay raises the same error), and the
+run's stops (a budget refusal, or a cut when an agent's time share or the run's deadline ran
+out), each at the acting agent's count of checks. A replay never refuses on its own and
+has no clock; it stops exactly where the recording says. A model request cut off while it
+was out settles its token reservation with at least its prompt's estimate, and when the
+budget refuses a corrective retry, the request already answered stays on the record.
 
 ## The optional Claude adapter (`anthropic`): paid, disabled
 
 It calls the paid Claude API, so it needs `RECAP_ALLOW_PAID_LLM=1` on top of the SDK
 (`pip install -e '.[llm]'`) and `ANTHROPIC_API_KEY`. This project's budget is $0: leave it
-off. It still uses prompts-v3 (`prompts.py`) with static schemas. Tests use a fake client.
+off. It still uses prompts-v3 (`prompts.py`, now prompts-v3.3: the same allowlisted focus
+services, catalog-named fix parameters and free-text rule as v4.6, and the same citable
+IDs) with static schemas. Tests use a fake client.
 
 ## Inspecting providers
 
@@ -143,15 +160,15 @@ curl -s localhost:8000/providers         # the same, from the API (keys: present
 | File | Purpose |
 |---|---|
 | `factory.py` | `create_provider(name, settings, ...)`: builds providers from `configs/providers.yaml`; recordings; the paid opt-in |
-| `protocol.py` | prompts-v4.1: the step protocol's text, per-request schemas and the parser |
+| `protocol.py` | prompts-v4.6: the step protocol's text, per-request schemas and the parser |
 | `http_llm.py` | the shared decision loop: render, send, parse, one corrective retry, `ModelCall`s |
 | `ollama_provider.py` | the local provider |
 | `openai_compatible.py` | the free hosted provider (Groq) |
 | `quota.py` | the usage ledger and the free-tier guard |
-| `transport.py` | live HTTP, recording, replay and fingerprints |
+| `transport.py` | live HTTP, recording, replay and fingerprints; failed requests and the run's stops in recordings |
 | `catalog.py` | provider readiness for `GET /providers` (no inference, no hosted calls) |
 | `deterministic.py`, `playbooks.py`, `heuristics.py` | the scripted default policy |
-| `anthropic_provider.py`, `prompts.py` | the paid adapter and prompts-v3 (section builders shared with v4) |
+| `anthropic_provider.py`, `prompts.py` | the paid adapter and prompts-v3.3 (section builders shared with v4) |
 
 ## Limitations
 

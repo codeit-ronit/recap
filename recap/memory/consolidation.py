@@ -15,9 +15,10 @@ it can always be traced back to the run that produced it.
 
 Since consolidator-v2 (M3) an episode also summarizes the trajectory: what the run
 observed (one step per piece of evidence, with the agent and the call), every claim it
-checked with the verifier's verdict, the rules' lines behind the diagnosis (its temporal
-signals, e.g. "errors on checkout began 2 min after v2.4.1 was deployed"), and what must
-hold for the fix to apply again. All of it is DETERMINISTIC EXTRACTION from RECAP's own
+checked with the verifier's verdict (and the release or dependency that told it apart),
+the passing rules' lines of the supported diagnosis itself (its temporal signals, e.g.
+"errors on checkout began 2 min after v2.4.1 was deployed"), and what must hold for the
+fix to apply again. All of it is DETERMINISTIC EXTRACTION from RECAP's own
 records, labeled as such (`summary_method`): no model writes about its own reasoning, and
 no reasoning is invented.
 """
@@ -36,7 +37,10 @@ from recap.core.models import (
     Evidence,
     EvidenceSummary,
     ExperienceEpisode,
+    FailureMechanism,
     Hypothesis,
+    HypothesisCheck,
+    HypothesisStatus,
     Incident,
     IncidentState,
     MemoryPartition,
@@ -54,6 +58,12 @@ _OUTCOMES = {
     IncidentState.FAILED: EpisodeOutcome.FAILED,
     IncidentState.BLOCKED: EpisodeOutcome.BLOCKED,
     IncidentState.BUDGET_EXHAUSTED: EpisodeOutcome.BUDGET_EXHAUSTED,
+}
+# Where a claim names the detail that tells it apart from others of its mechanism on its
+# service, as the evidence merger reads it (recap/agents/merger.py).
+_DETAIL_KEYS = {
+    FailureMechanism.BAD_DEPLOYMENT: "version",
+    FailureMechanism.DEPENDENCY_FAILURE: "dependency",
 }
 
 
@@ -230,6 +240,8 @@ def _checked_claims(record: RunRecord) -> list[ClaimRecord]:
             proposers=list(check.proposers),
             rule_ids=list(check.rule_ids),
             failed=list(check.failed)[:4],
+            # What told this claim apart from others of its mechanism on its service.
+            detail=check.detail or _named_detail(check.hypothesis),
         )
         for check in report.checks
     ]
@@ -242,14 +254,35 @@ def _diagnosis_basis(record: RunRecord) -> list[str]:
     if report is None or best is None:
         return []
     for check in report.checks:
-        h = check.hypothesis
-        if (h.mechanism, h.target_service, h.origin) == (
-            best.mechanism,
-            best.target_service,
-            best.origin,
-        ):
+        if _is_the_diagnosis(check, best):
             return list(check.passed)
     return []
+
+
+def _is_the_diagnosis(check: HypothesisCheck, best: Hypothesis) -> bool:
+    """True for the verifier's check of the supported diagnosis itself.
+
+    Claims of one mechanism on one service are judged apart when their detail differs (two
+    releases: a detail_conflict), so mechanism, service and origin are not enough, or the
+    rejected release's lines could become the basis of the accepted one. The check must be
+    supported and have the diagnosis' detail: its claim names the same one (or, like the
+    diagnosis, none: the verifier resolved it from the evidence), or the verifier recorded
+    that detail for it.
+    """
+    h, wanted = check.hypothesis, _named_detail(best)
+    return (
+        h.status == HypothesisStatus.SUPPORTED
+        and (h.origin, h.mechanism, h.target_service)
+        == (best.origin, best.mechanism, best.target_service)
+        and (_named_detail(h) == wanted or (bool(wanted) and check.detail == wanted))
+    )
+
+
+def _named_detail(h: Hypothesis) -> str:
+    """The detail a claim names itself: the bad release's version, or the blamed dependency."""
+    key = _DETAIL_KEYS.get(h.mechanism)
+    value = h.details.get(key) if key else None
+    return str(value) if value else ""
 
 
 def _fix_preconditions(successful: ActionRecord | None, best: Hypothesis | None) -> dict[str, str]:

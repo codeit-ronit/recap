@@ -5,7 +5,14 @@
 
 Hybrid retrieval needs a vector for every chunk. Searching then needs only the query
 embedded, so CI and replays work from the stored file without any model. Run this again
-whenever a runbook in fixtures/knowledge/ changes: a test fails while the file is stale.
+whenever a runbook in fixtures/knowledge/ changes (a test fails while the file is stale),
+or when configs/retrieval.yaml names another embedding model, dimensions or prefix.
+
+The stored file is current when it has a vector for every chunk AND fits the configured
+embedder, the same comparison a hybrid run makes (VectorIndex.mismatch): the model, its
+dimensions, the document prefix and, when the local server answers, its weights (asked
+for as metadata; nothing is embedded by --check). Without a server, the weights are not
+compared and the output says so.
 
 Local only: it talks to Ollama on loopback (nomic-embed-text must already be installed by
 the owner; RECAP never downloads models). Every request is free and stays on this machine.
@@ -35,20 +42,23 @@ async def main(check_only: bool) -> int:
     path = settings.paths.root / spec.vectors
     chunks = load_documents(settings.paths.knowledge_dir, root=settings.paths.root)
     texts = [searchable_text(chunk) for chunk in chunks]
+    embedder = OllamaEmbedder(spec, LiveTransport(spec.base_url))
 
     if path.is_file():
         stored = VectorIndex.load(path)
-        missing = stored.missing(texts) if stored.embedder == f"ollama:{spec.model}" else texts
+        unchecked = await _ask_for_weights(embedder)
+        problem = stored.mismatch(embedder)  # vectors of another embedder: every one is stale
+        missing = texts if problem else stored.missing(texts)
         if not missing and len(stored) == len(set(texts)):
-            print(f"{path.relative_to(settings.paths.root)} is current ({len(texts)} chunks)")
+            shown = path.relative_to(settings.paths.root)
+            print(f"{shown} is current ({len(texts)} chunks){unchecked}")
             return 0
-        print(f"stale: {len(missing)} of {len(texts)} chunks have no vector")
+        print(f"stale: {problem or f'{len(missing)} of {len(texts)} chunks have no vector'}")
     elif check_only:
         print(f"missing: {path}")
     if check_only:
         return 1
 
-    embedder = OllamaEmbedder(spec, LiveTransport(spec.base_url))
     try:
         server = await embedder.ensure_ready()
         index = await VectorIndex.build(
@@ -69,6 +79,16 @@ async def main(check_only: bool) -> int:
     index.save(path)
     print(f"wrote {len(index)} vectors to {path.relative_to(settings.paths.root)} ({spec.model})")
     return 0
+
+
+async def _ask_for_weights(embedder: OllamaEmbedder) -> str:
+    """Ask the local server which weights it has (metadata only: nothing is embedded), so
+    the stored file's can be compared with them. Returns why they could not be, or ""."""
+    try:
+        await embedder.ensure_ready()
+    except ProviderError as exc:
+        return f" (weights not compared: {exc})"
+    return ""
 
 
 if __name__ == "__main__":

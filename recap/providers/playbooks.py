@@ -32,7 +32,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, NamedTuple
 
-from recap.context.evidence import tool_source_ref
+from recap.context.evidence import free_text_args, tool_source_ref
 from recap.core.models import (
     AgentRole,
     EpisodeOutcome,
@@ -112,7 +112,7 @@ def plan_next_calls(request: InvestigationRequest, familiar_similarity: float) -
     done = _done_refs(request)
     remaining: list[ToolCall] = []
     for call in planned:
-        ref = tool_source_ref(call.tool_name, call.args)
+        ref = _ref(request, call.tool_name, call.args)
         # Only tools the harness offered to this role, and each call at most once per run.
         if call.tool_name in offered and ref not in done:
             remaining.append(call)
@@ -129,7 +129,7 @@ def memory_confirmation_done(
         return False, ""
     done = _done_refs(request)
     checks = [_call(check, guide.target) for check in CONFIRMATION_CHECKS[guide.mechanism]]
-    if any(tool_source_ref(call.tool_name, call.args) not in done for call in checks):
+    if any(_ref(request, call.tool_name, call.args) not in done for call in checks):
         return False, ""
     # Only live evidence counts: a memory-origin hypothesis would always "agree" with memory.
     live = generate_hypotheses(list(request.evidence.values()), request.incident)
@@ -249,8 +249,17 @@ def _memory_suspect(parsed: ParsedEvidence, service: str) -> bool:
 def _done_refs(request: InvestigationRequest) -> set[str]:
     """Calls already made: evidence anyone recorded in this run, plus this agent's own history."""
     done = set(request.observed_refs)
-    done.update(tool_source_ref(record.tool_name, record.args) for record in request.history)
+    done.update(_ref(request, record.tool_name, record.args) for record in request.history)
     return done
+
+
+def _ref(request: InvestigationRequest, tool_name: str, args: dict[str, Any]) -> str:
+    """A call's source ref exactly as the gateway writes it (the tool's scheme, free-text
+    arguments hashed), so "already done" compares like with like."""
+    view = next((tool for tool in request.tools if tool.name == tool_name), None)
+    if view is None:
+        return tool_source_ref(tool_name, args)
+    return tool_source_ref(tool_name, args, scheme=view.source, free_text=free_text_args(view.args))
 
 
 def _call(check: Check, service: str | None = None, prefix: str = "") -> ToolCall:

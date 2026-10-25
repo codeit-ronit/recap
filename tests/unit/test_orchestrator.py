@@ -21,9 +21,11 @@ from recap.core.models import (
     AgentFinding,
     AgentRole,
     RoutingSignals,
+    RunBudget,
     StrategyDecision,
     StrategyMode,
 )
+from recap.harness.budget import BudgetTracker
 from recap.routing.orchestrator import AgentRunPlan, Orchestrator
 from recap.telemetry.tracer import MemorySink, TraceCategory, Tracer
 
@@ -306,3 +308,104 @@ async def test_findings_completed_before_a_stop_travel_with_it() -> None:
         await Orchestrator(agents, SPECS, recording_tracer()).execute(decision())
     [kept] = stop.value.partial_findings  # type: ignore[attr-defined]
     assert kept.agent_role == INFRA and kept.error is None
+
+
+# --- cuts are recorded, and a replay cuts the same agent at the same place (review of M3) ---
+
+
+def recording_budget() -> tuple[BudgetTracker, list[dict[str, Any]]]:
+    lines: list[dict[str, Any]] = []
+    budget = BudgetTracker(RunBudget())
+    budget.record_stops(lines.append)
+    return budget, lines
+
+
+def replaying_budget(stops: list[dict[str, Any]]) -> BudgetTracker:
+    budget = BudgetTracker(RunBudget())
+    budget.replay_stops(stops)
+    return budget
+
+
+async def test_a_time_share_cut_is_recorded_and_the_replay_cuts_the_same_agent() -> None:
+    budget, lines = recording_budget()
+    live = Orchestrator(
+        FakeAgents({TELEMETRY: sleep_for(5), INFRA: sleep_for(0.01)}),
+        SPECS,
+        recording_tracer(),
+        agent_timeout_seconds=60,
+        remaining_seconds=lambda: 1.0,
+        parallel_time_share=0.2,
+        budget=budget,
+    )
+    telemetry, infra = await live.execute(decision())
+    assert telemetry.error == "timeout after 0.2s" and infra.error is None
+    [cut] = lines
+    assert (cut["actor"], cut["at"], cut["kind"], cut["cut"]) == (
+        TELEMETRY.value,
+        "turn",  # the fake agent makes no check of its own: its turn start is its place
+        "time_share",
+        True,
+    )
+
+    # The replay's agents answer at once and its clock is gone (no time is left at all):
+    # only the recording cuts, and the finding says what the original's said.
+    agents = FakeAgents({})
+    replay = Orchestrator(
+        agents,
+        SPECS,
+        recording_tracer(),
+        agent_timeout_seconds=60,
+        remaining_seconds=lambda: 0.0,
+        parallel_time_share=0.2,
+        budget=replaying_budget(lines),
+    )
+    again, survivor = await replay.execute(decision())
+    assert (again.error, again.outcome) == ("timeout after 0.2s", "error")
+    assert survivor.error is None and agents.finished == [INFRA]
+
+
+async def test_a_replay_is_never_cut_by_its_own_clock() -> None:
+    """A replay may run slower than the original did; with no recorded cut, it is not cut."""
+    agents = FakeAgents({TELEMETRY: sleep_for(0.3), INFRA: sleep_for(0.3)})
+    replay = Orchestrator(
+        agents,
+        SPECS,
+        recording_tracer(),
+        agent_timeout_seconds=0.05,  # far shorter than the agents take
+        remaining_seconds=lambda: 0.05,
+        parallel_time_share=0.5,
+        budget=replaying_budget([]),
+    )
+    findings = await replay.execute(decision())
+    assert [f.error for f in findings] == [None, None]
+
+
+@pytest.mark.parametrize(
+    ("remaining", "agent_seconds", "words"),
+    [
+        (0.0, 0, "no time was left on the run to start"),
+        (0.1, 5, "was still working when the run's time ran out"),
+    ],
+    ids=["no_time_to_start", "deadline_cut"],
+)
+async def test_the_run_deadline_is_recorded_and_stops_the_replay_the_same_way(
+    remaining: float, agent_seconds: float, words: str
+) -> None:
+    budget, lines = recording_budget()
+    live = Orchestrator(
+        FakeAgents({TELEMETRY: sleep_for(agent_seconds), INFRA: sleep_for(agent_seconds)}),
+        SPECS,
+        recording_tracer(),
+        agent_timeout_seconds=60,
+        remaining_seconds=lambda: remaining,
+        budget=budget,
+    )
+    with pytest.raises(BudgetExhausted, match=words) as stopped:
+        await live.execute(decision([TELEMETRY], StrategyMode.SINGLE))
+    [stop] = lines
+    assert (stop["at"], stop["kind"]) == ("turn", "max_elapsed_seconds")
+
+    replay = Orchestrator(FakeAgents({}), SPECS, recording_tracer(), budget=replaying_budget(lines))
+    with pytest.raises(BudgetExhausted) as again:
+        await replay.execute(decision([TELEMETRY], StrategyMode.SINGLE))
+    assert str(again.value) == str(stopped.value)

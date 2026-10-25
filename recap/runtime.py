@@ -32,7 +32,7 @@ from recap.environments.registry import create_environment
 from recap.harness.controller import ControllerDeps, IncidentController, TransportFactory
 from recap.harness.store import RunStore
 from recap.knowledge.embeddings import Embedder
-from recap.knowledge.retriever import KnowledgeRetriever
+from recap.knowledge.retriever import BM25, HYBRID, KnowledgeRetriever
 from recap.memory.consolidation import Consolidator
 from recap.memory.store import ExperienceStore
 from recap.providers.factory import create_embedder, create_provider, describe_providers
@@ -184,9 +184,11 @@ class Runtime:
             "tool_transport": "MCP over stdio (official Python SDK, subprocess per run)",
             "provider": provider,
             "providers_available": describe_providers(self.settings),
-            "retriever": self.knowledge.name,
+            # What a run that does not choose searches with, and whether hybrid could run.
+            "retriever": HYBRID if self.settings.retrieval.mode == "hybrid" else BM25,
             "retrieval_mode": self.settings.retrieval.mode,
-            "embedder": self.knowledge.embedder_name,
+            "hybrid_ready": self.knowledge.hybrid_ready,
+            "embedder": self.knowledge.embedder_name,  # the stored vectors' embedder
             "knowledge_chunks": len(self.knowledge.chunks),
             "router": self.router.name,
             "safety_policy": f"{self.policy.name} ({self.policy.version})",

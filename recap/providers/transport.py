@@ -21,6 +21,14 @@ answer back. That one seam gives three things:
     fingerprint of the request and fails loudly (ReplayMismatch) when the request was never
     recorded: a stale recording is an error, never a silent substitute.
 
+A recording also keeps what a replay cannot find out by itself, because it depends on
+timing: a request that failed before any answer (the server could not be reached, or did
+not answer in time; the replay fails it the same way), and the run's stops (a shared
+budget refused, a clock cut an agent short). Those are written by the run's budget tracker,
+which every request through a recording or replay transport also counts as a check of the
+acting agent (bind_stops; recap/harness/budget.py), so a replay raises each stop at the
+same place.
+
 Fingerprints skip what changes from run to run but means nothing: random run, incident,
 proposal and episode IDs, and the 6-character run prefix inside evidence IDs
 ("ev-3f9a2c-007" becomes "ev-*-007"). When a recorded answer cites evidence, the replay
@@ -35,7 +43,7 @@ import time
 from collections import Counter, defaultdict, deque
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
 import httpx
@@ -85,6 +93,21 @@ class ModelTransport(Protocol):
     async def request(
         self, method: str, path: str, body: dict[str, Any] | None = None, *, timeout: float
     ) -> HttpExchange: ...
+
+
+@runtime_checkable
+class StopJournal(Protocol):
+    """The run's budget tracker, as its recording sees it (recap/harness/budget.py)."""
+
+    def check_request(self) -> None:
+        """A request is about to go out: one check of the acting agent. In a replay it
+        raises the stop the recorded run made at this point, if any."""
+
+    def record_stops(self, write: Callable[[dict[str, Any]], None]) -> None:
+        """A recorded run: `write` appends each of the run's stops to the recording."""
+
+    def replay_stops(self, stops: list[dict[str, Any]]) -> None:
+        """A replay: raise exactly these recorded stops, at their places."""
 
 
 # --- live HTTP ----------------------------------------------------------------------------
@@ -187,30 +210,36 @@ class Recorder:
         self._redact = redact
         self._trim = trim
         self._seq = 0
+        # The run's budget tracker, once the run binds it (bind_stops): every request through
+        # a transport of this recording is one of its checks, and its stops are written here.
+        self.journal: StopJournal | None = None
 
     def write(
         self, method: str, path: str, body: dict[str, Any] | None, exchange: HttpExchange
     ) -> None:
+        if self._trim is not None:
+            exchange = exchange.model_copy(update={"body": self._trim(path, exchange.body)})
+        self._line(_exchange_line(method, path, body, response=exchange.model_dump(mode="json")))
+
+    def write_failure(
+        self, method: str, path: str, body: dict[str, Any] | None, error: ProviderError
+    ) -> None:
+        """A request that got no answer at all (the server could not be reached, or did not
+        answer in time). A replay raises the same error for it, so what the run did next
+        (a retry, a failed tool call) lines up."""
+        self._line(_exchange_line(method, path, body, response=None, failed=str(error)))
+
+    def write_stop(self, stop: dict[str, Any]) -> None:
+        """One of the run's stops, at its place (recap/harness/budget.py)."""
+        self._line({"type": "stop", **stop})
+
+    def _line(self, record: dict[str, Any]) -> None:
         if self._seq == 0:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.header["created_at"] = utcnow().isoformat()
             self._append(self.header)
         self._seq += 1
-        text = canonical_json(body or {})
-        if self._trim is not None:
-            exchange = exchange.model_copy(update={"body": self._trim(path, exchange.body)})
-        self._append(
-            {
-                "type": "exchange",
-                "seq": self._seq,
-                "method": method,
-                "path": path,
-                "fingerprint": fingerprint(method, path, body),
-                "evidence_prefix": _evidence_prefix(text),
-                "request": body,
-                "response": exchange.model_dump(mode="json"),
-            }
-        )
+        self._append({**record, "seq": self._seq})
 
     def _append(self, record: dict[str, Any]) -> None:
         # Redact the DATA (every string in it), then serialize: redacting the serialized line
@@ -233,7 +262,13 @@ class RecordingTransport:
     async def request(
         self, method: str, path: str, body: dict[str, Any] | None = None, *, timeout: float
     ) -> HttpExchange:
-        exchange = await self.inner.request(method, path, body, timeout=timeout)
+        if self.recorder.journal is not None:
+            self.recorder.journal.check_request()
+        try:
+            exchange = await self.inner.request(method, path, body, timeout=timeout)
+        except ProviderError as error:  # no answer at all: recorded, so a replay fails alike
+            self.recorder.write_failure(method, path, body, error)
+            raise
         self.recorder.write(method, path, body, exchange)
         return exchange
 
@@ -242,11 +277,13 @@ class RecordingTransport:
 
 
 class Recording(Contract):
-    """A recording file loaded into memory: its header plus every recorded exchange."""
+    """A recording file loaded into memory: its header, every recorded exchange (answered or
+    failed) and the run's stops."""
 
     path: str
     header: dict[str, Any]
     exchanges: list[dict[str, Any]]
+    stops: list[dict[str, Any]] = Field(default_factory=list)
 
     @classmethod
     def load(cls, path: Path) -> Recording:
@@ -263,17 +300,19 @@ class Recording(Contract):
         if header.get("schema") != RECORDING_SCHEMA:
             raise ConfigError(f"{path}: unsupported recording schema {header.get('schema')!r}")
         exchanges = [line for line in lines[1:] if line.get("type") == "exchange"]
-        return cls(path=str(path), header=header, exchanges=exchanges)
+        stops = [line for line in lines[1:] if line.get("type") == "stop"]
+        return cls(path=str(path), header=header, exchanges=exchanges, stops=stops)
 
 
 class ReplayTransport:
     """Answers each request from a recording. No network, and never a guessed answer.
 
-    Requests are matched by fingerprint, not by order. Agents that ran side by side may
-    still ask something never recorded: their prompts include what every agent has already
-    observed, so a different finishing order makes different prompts (ADR 0018). Each
-    recorded answer is used once; asking the same thing again uses the next recording of it,
-    and asking something never recorded raises ReplayMismatch.
+    Requests are matched by fingerprint, not by order: agents that ran side by side ask in
+    a different order when answers come at once. Each recorded answer is used once; asking
+    the same thing again uses the next recording of it, a request recorded as failed fails
+    the same way, and asking something never recorded raises ReplayMismatch. Once the run
+    binds its budget tracker (bind_stops), every request is one of its checks, which raises
+    the recorded run's stop when one was made here.
     """
 
     name = "replay"
@@ -283,19 +322,27 @@ class ReplayTransport:
         self._answers: dict[str, deque[dict[str, Any]]] = defaultdict(deque)
         for exchange in recording.exchanges:
             self._answers[exchange["fingerprint"]].append(exchange)
+        self.journal: StopJournal | None = None  # the run's budget tracker (bind_stops)
 
     async def request(
         self, method: str, path: str, body: dict[str, Any] | None = None, *, timeout: float
     ) -> HttpExchange:
+        if self.journal is not None:
+            self.journal.check_request()
         key = fingerprint(method, path, body)
         queue = self._answers.get(key)
         if not queue:
             raise ReplayMismatch(
                 f"the recording {Path(self.recording.path).name} has no answer for this "
-                f"{method} {path} request (fingerprint {key[:12]}). Prompts, tools or tool "
-                "results changed since it was recorded: record the run again."
+                f"{method} {path} request (fingerprint {key[:12]}). Something the run reads "
+                "changed since it was recorded: the prompts, tools, tool results or memory "
+                "(replay with the memory the original run had, or none), or the recording "
+                "predates recorded stops and its run was stopped by timing (an agent's time "
+                "share, the run's deadline, a shared budget): record the run again."
             )
         recorded = queue.popleft()
+        if recorded.get("failed") is not None:  # the recorded request got no answer at all
+            raise ProviderError(str(recorded["failed"]))
         response = dict(recorded["response"])
         current = _evidence_prefix(canonical_json(body or {}))
         old = recorded.get("evidence_prefix")
@@ -305,6 +352,38 @@ class ReplayTransport:
             response["body"] = json.loads(text)
         response["replayed"] = True
         return HttpExchange.model_validate(response)
+
+
+def bind_stops(transport: ModelTransport, journal: StopJournal) -> None:
+    """Tie the run's budget tracker to the transport's recording (recap/harness/budget.py).
+
+    From now on every request through it (and through the run's embedder, which shares the
+    recording) is a check of the acting agent. A recorded run writes its stops into the
+    recording, between the exchanges; a replay raises the recording's stops at the same
+    places. A live transport without a recording has nothing to tie.
+    """
+    if isinstance(transport, RecordingTransport):
+        transport.recorder.journal = journal
+        journal.record_stops(transport.recorder.write_stop)
+    elif isinstance(transport, ReplayTransport):
+        transport.journal = journal
+        journal.replay_stops(transport.recording.stops)
+
+
+def _exchange_line(
+    method: str, path: str, body: dict[str, Any] | None, **outcome: Any
+) -> dict[str, Any]:
+    """A recording's line for one request: its fingerprint, then how it went (`response`, or
+    `failed` with the error of a request that got no answer)."""
+    return {
+        "type": "exchange",
+        "method": method,
+        "path": path,
+        "fingerprint": fingerprint(method, path, body),
+        "evidence_prefix": _evidence_prefix(canonical_json(body or {})),
+        "request": body,
+        **outcome,
+    }
 
 
 # --- fingerprints -------------------------------------------------------------------------

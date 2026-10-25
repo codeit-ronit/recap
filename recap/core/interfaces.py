@@ -32,7 +32,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, ClassVar, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, runtime_checkable
 
 from recap.core.models import (
     AgentFinding,
@@ -189,7 +189,8 @@ class RetrievalIndex(Protocol):
     """Searches the static knowledge base (runbooks) and returns cited chunks.
 
     `query_vector` (the query's embedding) turns on hybrid search when the index has the
-    chunks' vectors; `hybrid_ready` says whether it has all of them.
+    chunks' vectors; `hybrid_ready` says whether it has all of them. `name` is what a search
+    without a query vector ranks with; `retriever_for` says what a given search used.
     """
 
     name: str
@@ -198,6 +199,12 @@ class RetrievalIndex(Protocol):
     def search(
         self, query: str, k: int = 4, query_vector: Sequence[float] | None = None
     ) -> list[RetrievedChunk]: ...
+
+    def retriever_for(self, query_vector: Sequence[float] | None) -> str: ...
+
+    def vector_mismatch(self, embedder: Any) -> str:
+        """Why the stored chunk vectors cannot be searched with `embedder`'s ("" if they can)."""
+        ...
 
 
 @runtime_checkable

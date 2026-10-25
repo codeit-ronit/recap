@@ -2,10 +2,10 @@
 
 This page follows one incident from the moment it starts to the moment it is remembered.
 For every step it says **what comes in**, **which code handles it**, **what comes out**, and
-**where that output goes next**. It describes the code as of milestone M2 (real model
-providers at $0). The decisions can come from the scripted policy (the default), a local
-model (Ollama), a free hosted model (Groq Free), or a replay of a recorded model run; section
-3b follows one model decision in detail. The numbers in the example (section 6) come from a
+**where that output goes next**. It describes the code as of milestone M3, still in
+progress (M2 brought real model providers at $0). The decisions can come from the scripted
+policy (the default), a local model (Ollama), a free hosted model (Groq Free), or a replay
+of a recorded model run; section 3b follows one model decision in detail. The numbers in the example (section 6) come from a
 real run of the `bad-deployment` scenario with the scripted policy (an operator approved the
 fix): 67 trace events, 8 tool calls, 9 provider decisions, RESOLVED.
 
@@ -42,7 +42,7 @@ flowchart TD
     RTR --> ORC["Orchestrator"]
     ORC --> AG["Agent harness loop (one per agent)"]
     AG -->|"ContextPacker: summaries, label-free views"| PRV["Provider: scripted policy, Ollama, Groq Free, or a replay"]
-    PRV -->|"prompts-v4.3 + a schema built from the trusted catalog"| LLM["Model server: Ollama on loopback, or Groq Free behind the free-tier guard"]
+    PRV -->|"prompts-v4.6 + a schema built from the trusted catalog"| LLM["Model server: Ollama on loopback, or Groq Free behind the free-tier guard"]
     LLM -->|"answer: tool_request / hypothesis / need_more_evidence / stop"| PRV
     PRV -.->|"every exchange, without the key"| REC["Recording: data/recordings/*.jsonl"]
     PRV -->|"read tool calls"| GW["ToolGateway"]
@@ -51,7 +51,7 @@ flowchart TD
     GW -->|"bounded, redacted Evidence"| REG["EvidenceRegistry"]
     AG -->|"AgentFinding (hypotheses citing evidence IDs)"| VER["Merger + EvidenceVerifier (V1-V7)"]
     REG --> VER
-    VER -.->|"open conflict: one question for the next round"| RTR
+    VER -.->|"open questions and leads for the next round"| RTR
 
     VER -->|"best supported hypothesis"| PROP["PROPOSING: provider drafts one fix"]
     PROP --> POL{"Safety policy"}
@@ -154,15 +154,20 @@ and streamed live to the dashboard.
   `retrieval: hybrid` the controller first embeds the query with the run's local
   `nomic-embed-text` embedder (recorded with the model's exchanges, so a replay needs no
   model) and the retriever fuses BM25 with a cosine ranking over the stored chunk vectors
-  (ADR 0022). Each result carries its ranking signals.
+  (ADR 0022). Stored vectors made by another model, dimensions, prefix or weights stop the
+  run with a pointer to `scripts/build_vector_index.py`. Each result carries its ranking
+  signals.
 - **Memory:** hits from the partitions this kind of run may read, found by word overlap (and,
-  in hybrid mode, also by an embedding of the alert). Every hit starts "not yet checked":
-  after each verification `assess_reuse` marks it safe only when live evidence confirms the
-  same mechanism on the same service and the fix still fits (a rollback must restore a
-  version today's evidence names), then re-ranks the hits (`memory.assessment`).
+  in hybrid mode, up to k more close matches by an embedding of the alert, listed after the
+  word-overlap hits). A replay reads memory as of its recording's start, so it never finds
+  the episode its own original run wrote. Every hit starts "not yet checked": after each
+  verification `assess_reuse` marks it safe only when live evidence confirms the same
+  mechanism on the same service and the fix still fits (a rollback must restore a version
+  today's evidence names), then re-ranks the hits (`memory.assessment`).
 - **Output:** `RetrievedChunk`s and `MemoryHit`s on the run record, and `RunRecord.retrieval`
-  (mode, embedder, embedding requests and tokens); `retrieval.docs` and `memory.search`
-  events.
+  (mode, embedder, embedding requests and tokens); `retrieval.docs` events (each names the
+  retriever that search used) and a `memory.search` event (for a replay, with
+  `created_before`).
 - **Next:** both are handed to the agent harness for stage 4.
 
 ### Stage 4. Investigate (INVESTIGATING)
@@ -171,13 +176,15 @@ and streamed live to the dashboard.
 - **Code:**
   1. `RulesRouter.decide` ([recap/routing/router.py](../recap/routing/router.py)) picks one
      generalist or two specialists in parallel → `routing.decision`, `investigation.round`
-     (with the verifier's open questions from the previous round, if any).
+     (with the verifier's open questions and leads from the previous round, if any).
   2. The `Orchestrator` runs the agents (concurrently in parallel mode), each with a
      deadline: its own limit or the time left on the run, whichever is shorter (in a
      parallel round at most 70% of the time left). The two specialists have disjoint tools
      and a role contract ([configs/agents.yaml](../configs/agents.yaml)): telemetry reads
      logs and metrics and may not claim a bad release; infrastructure reads releases,
-     events, health and topology (ADR 0020).
+     events, health and topology (ADR 0020). A recorded run writes each cut and each budget
+     refusal into its recording at the agent's own count of checks; a replay has no clock,
+     never refuses on its own, and stops there instead (ADR 0026).
   3. Each agent runs the harness loop ([recap/harness/loop.py](../recap/harness/loop.py)),
      one **step** at a time:
      - **observe:** in a parallel round an agent sees the evidence from before the round
@@ -219,11 +226,12 @@ deployments, events, the memory metric, and a rollback dry run (`propose_rollbac
   context pack, the agent's tools, its history, the step number).
 - **Code:** `HttpLLMProvider.next_action` ([recap/providers/http_llm.py](../recap/providers/http_llm.py)):
   1. **render** ([recap/providers/protocol.py](../recap/providers/protocol.py),
-     prompts-v4.5): a static system prompt (rules, and RECAP's failure mechanisms in generic
+     prompts-v4.6): a static system prompt (rules, and RECAP's failure mechanisms in generic
      terms), then one user message: role (goal, responsibilities, the mechanisms it may
-     conclude), incident, focus, the verifier's open questions, tools, previous calls, what
-     this agent may count as already observed, the context pack (every item inside
-     `<untrusted_data>`), what to return, and "step N of M" last;
+     conclude), incident, focus (allowlisted services only), the verifier's open questions
+     and leads, tools, previous calls (a call with a free-text argument, such as a search
+     query, is shown as data), what this agent may count as already observed, the context
+     pack (every item inside `<untrusted_data>`), what to return, and "step N of M" last;
   2. **constrain**: in `json` mode a JSON schema built for this request (tool names,
      services, metrics and mechanisms as enums; evidence IDs as an enum of the IDs this
      agent can see; at most 2 calls); in `tools` mode the read tools as native functions
@@ -231,16 +239,18 @@ deployments, events, the memory metric, and a rollback dry run (`propose_rollbac
      evidence IDs); on the last step only finishing is offered;
   3. **check before sending**: the run's model-token budget (the estimated prompt plus
      `max_output_tokens` is reserved against `max_model_tokens` and settled with the
-     server's own counts after the answer, ADR 0024; running out stops the run before the
-     request goes out). Ollama: loopback only (proxy settings ignored), the model
-     installed, not served from a remote host and able to call tools, the prompt fits
-     `num_ctx`. Groq: the free-tier guard
+     server's own counts after the answer, or with at least the prompt's estimate when the
+     request is cut off while it is out, ADR 0024; running out stops the run before the
+     request goes out; a replay never refuses on its own, ADR 0026). Ollama: loopback only
+     (proxy settings ignored), the model installed, not served from a remote host and able
+     to call tools, the prompt fits `num_ctx`. Groq: the free-tier guard
      ([recap/providers/quota.py](../recap/providers/quota.py)): opt-in, allowlist, key,
      the owner's dated confirmation, no stop on its host, RECAP's caps in the user's ledger
      (a full minute cap waits, a full day cap defers);
   4. **send** through the transport ([recap/providers/transport.py](../recap/providers/transport.py)):
-     one HTTP request, recorded to `data/recordings/` without the key (a replay answers from
-     a recording instead, offline);
+     one HTTP request, recorded to `data/recordings/` without the key, also when it got no
+     answer (a replay answers from a recording instead, offline, and fails such a request
+     the same way);
   5. **check after**: the answering model must be the requested one; on every Groq
      response that carries it, whatever its status, `x-ratelimit-limit-requests` must equal
      the free plan's (else the host is stopped for every RECAP process of this user); a
@@ -250,11 +260,16 @@ deployments, events, the memory metric, and a rollback dry run (`propose_rollbac
      targets, typed `version`/`dependency` and only known evidence IDs; `need_more_evidence`
      or `stop` → finish without a diagnosis;
   7. **unusable?** send the reason back once (a corrective retry); still unusable → the
-     agent finishes with no decision. Never a scripted stand-in.
+     agent finishes with no decision. Never a scripted stand-in. When every call in a
+     request repeats one already observed, the reason names those calls by their refs and
+     asks for a different tool, another service, or a finish (prompts-v4.6: in an early real
+     `qwen3:8b` parallel run, one agent repeated checkout calls it had already made until
+     it ran out of steps).
 - **Output:** an `InvestigationDecision` with exact `Usage` (input and output tokens as the
   server reported them, `model_requests`) and its `ModelCall`s → one `llm.call` event per
   HTTP request, including a retried 429 or 5xx. If the decision fails after requests went
-  out, those requests travel with the error and are recorded before it goes on.
+  out (a corrective retry the token budget refuses included), those requests travel with
+  the error and are recorded before it goes on.
   Proposals (stage 6) follow the same path with a proposal schema (`final_proposal` or
   `stop`): the action must be in the catalog, on the diagnosed service, cite real evidence
   and not repeat a fix that failed.
@@ -272,8 +287,9 @@ free-plan header checked. Details in [status.md](status.md).
   and `remediated` (the time of each fix already executed in this run).
 - **Code:** `EvidenceVerifier.verify` ([recap/agents/verifier.py](../recap/agents/verifier.py)).
   1. The merger ([recap/agents/merger.py](../recap/agents/merger.py)) pools the agents'
-     claims: the same claim (mechanism, target, release version or dependency) from two
-     agents becomes one, listing both as proposers → `verification.merge`.
+     claims: the same claim (mechanism, target, release version or dependency; a version
+     written without its "v" or in another case is the observed release) from two agents
+     becomes one, listing both as proposers → `verification.merge`.
   2. The rules judge each claim: V1 structure and grounding (it must cite evidence its rules
      used), V2 deploy timing and upstream dominance, V3 resource pressure, V4 dependency
      failure, V5 remembered claims, V6 platform signals outrank log text (and a target the
@@ -284,12 +300,20 @@ free-plan header checked. Details in [status.md](status.md).
      conflict (ADR 0021).
 - **Output:** a `VerificationReport`: every hypothesis supported, contradicted or
   insufficient (never "proven") with its proposers and basis, the best actionable one,
-  where to look next, and every disagreement between agents with the rule that settled it
+  where to look next, every disagreement between agents with the rule(s) that settled it,
+  and leads for the next round (a failing dependency nothing explains yet)
   → `verification.evidence`. Memory hits are re-assessed against it (`memory.assessment`).
+  Leads came from the first real `qwen3:8b` parallel runs (prompts-v4.5). Both ended
+  FAILED: the specialists confirmed in round 1 that checkout's calls to payment (in one
+  run) and frontend's calls to cart (in the other) fail, but in round 2 did not examine the
+  dependency itself. Not yet re-measured with prompts-v4.6.
 - **Next:** a supported best hypothesis goes to stage 6; otherwise another round of stage 4
-  (bounded by `max_investigation_rounds`). An open conflict's question goes to that round
-  (`RT3-disagreement`); if it is still open at the end, the run is FAILED and a person
-  decides. Otherwise FAILED with "evidence stayed insufficient".
+  (bounded by `max_investigation_rounds`). The open questions and the leads go to that
+  round's agents. Only an open question can route it by `RT3-disagreement` (level
+  supported root causes, or claims naming different bad releases); a lead never does. If a
+  question is still open at the end, the run is FAILED and a person decides, told what is
+  open ("supported root causes still conflict", or "claims still disagree on which release
+  is bad"). Otherwise FAILED with "evidence stayed insufficient".
 
 ### Stage 6. Propose one fix (PROPOSING)
 
@@ -388,7 +412,10 @@ free-plan header checked. Details in [status.md](status.md).
   own records (ADR 0023);
   then `run.summary` (state, attempts, unsafe actions, budget, cost label) and the final
   checkpoint. A run that crashed, was cancelled or was **deferred** (`QUOTA_EXHAUSTED`: a
-  free model's quota ran out) writes no episode: it says nothing about the incident.
+  free model's quota ran out) writes no episode: it says nothing about the incident. A run
+  the budget stopped is remembered as a `budget_exhausted` caution; findings kept from its
+  stopped round are marked `partial` in the record, and their claims, never verified, do
+  not reach the episode's checked claims.
 
 ---
 
@@ -470,11 +497,11 @@ Reproduce it:
 | Composition root (what implements each interface) | [recap/runtime.py](../recap/runtime.py) |
 | Lifecycle, retries, epochs, stabilization, deadlines | [recap/harness/controller.py](../recap/harness/controller.py), [recap/core/lifecycle.py](../recap/core/lifecycle.py) |
 | Agent loop | [recap/harness/loop.py](../recap/harness/loop.py) |
-| Budgets | [recap/harness/budget.py](../recap/harness/budget.py) |
+| Budgets, and where a run's stops are recorded for replays | [recap/harness/budget.py](../recap/harness/budget.py) |
 | Routing and concurrency | [recap/routing/router.py](../recap/routing/router.py), [recap/routing/orchestrator.py](../recap/routing/orchestrator.py) |
 | What a provider sees | [recap/core/models.py](../recap/core/models.py) (views), [recap/context/packer.py](../recap/context/packer.py), [recap/context/summaries.py](../recap/context/summaries.py), [recap/providers/prompts.py](../recap/providers/prompts.py) |
 | The scripted provider | [recap/providers/deterministic.py](../recap/providers/deterministic.py), [playbooks.py](../recap/providers/playbooks.py), [heuristics.py](../recap/providers/heuristics.py) |
-| Real model providers | [recap/providers/protocol.py](../recap/providers/protocol.py) (prompts-v4.5, schemas, parsing), [http_llm.py](../recap/providers/http_llm.py) (the shared loop), [ollama_provider.py](../recap/providers/ollama_provider.py), [openai_compatible.py](../recap/providers/openai_compatible.py), [factory.py](../recap/providers/factory.py) |
+| Real model providers | [recap/providers/protocol.py](../recap/providers/protocol.py) (prompts-v4.6, schemas, parsing), [http_llm.py](../recap/providers/http_llm.py) (the shared loop), [ollama_provider.py](../recap/providers/ollama_provider.py), [openai_compatible.py](../recap/providers/openai_compatible.py), [factory.py](../recap/providers/factory.py) |
 | Free-tier guard, recordings, replay | [recap/providers/quota.py](../recap/providers/quota.py), [transport.py](../recap/providers/transport.py), [catalog.py](../recap/providers/catalog.py) (`GET /providers`) |
 | Tool boundary | [recap/tools/gateway.py](../recap/tools/gateway.py), [registry.py](../recap/tools/registry.py), [actions.py](../recap/tools/actions.py), [mcp_client.py](../recap/tools/mcp_client.py), [mcp_server.py](../recap/tools/mcp_server.py) |
 | Safety | [recap/safety/policy.py](../recap/safety/policy.py), [approvals.py](../recap/safety/approvals.py), [capabilities.py](../recap/safety/capabilities.py) |

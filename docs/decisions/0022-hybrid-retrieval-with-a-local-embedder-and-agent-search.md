@@ -34,7 +34,13 @@ pluggable `Embedder` interface. Extends [ADR 0016](0016-zero-cost-llm-providers-
    built once by `scripts/build_vector_index.py` (42 chunks, 173 KB, base64 float32) and
    committed, keyed by a hash of exactly what was embedded. CI and replays need no model;
    an edited runbook section has no vector, `hybrid_ready` turns False, and a run that asks
-   for hybrid fails with a pointer to the script instead of using stale vectors.
+   for hybrid fails with a pointer to the script instead of using stale vectors. Vectors
+   made by another model, with other dimensions, another document prefix or other weights
+   are refused the same way (`KnowledgeRetriever.vector_mismatch`, checked when the run's
+   embedder is made and again after it embeds a query, once its server has reported the
+   weights); `scripts/build_vector_index.py --check` compares the same things. (Added in the
+   M3 review: the hash key does not name the model, so a run searched with such vectors,
+   and `--check` compared only the model's name.)
 3. **Hybrid search** ([recap/knowledge/retriever.py](../../recap/knowledge/retriever.py)):
    synchronous and pure; the caller passes the query's vector. Dense candidates under a
    cosine of 0.55 are dropped, then reciprocal rank fusion (k = 60) and the lexical
@@ -42,7 +48,14 @@ pluggable `Embedder` interface. Extends [ADR 0016](0016-zero-cost-llm-providers-
 4. **BM25 stays the default** (`configs/retrieval.yaml`); a run picks
    `RunConfig.retrieval = "hybrid"` (or the owner sets `RECAP_ENABLE_EMBEDDINGS=1`). The
    run record's `retrieval` says which mode ran, the embedder, its weights file, and how
-   many embedding requests and tokens it used.
+   many embedding requests and tokens it used. Each retrieval event's `retriever` names
+   what that search ranked with (`retriever_for`: hybrid only with a query vector and a
+   vector for every chunk); `GET /system` reports what a run that does not choose would use
+   (`retriever`) and whether hybrid could run (`hybrid_ready`). (Corrected in the M3
+   review: both used to read the index's name, which said hybrid whenever the vector file
+   was complete.) The V1 evaluation pins BM25 over the shipped runbooks whatever
+   `RECAP_ENABLE_EMBEDDINGS` and `RECAP_KNOWLEDGE_OVERLAYS` say, and its report records
+   `retrieval_mode` and `knowledge_overlays`.
 5. **Agent-initiated search**: `search_runbooks(query, k)` is a read tool with
    `source: local` in `configs/policies.yaml`. It takes the gateway's read path (policy,
    argument checks, timeout, redaction, bounds, injection flags, audit), but a handler in
@@ -53,10 +66,14 @@ pluggable `Embedder` interface. Extends [ADR 0016](0016-zero-cost-llm-providers-
    server offering a tool of that name is reported and never called, and only a local
    tool's result may carry documents.
 6. **Free text stays data.** A search query is the first tool argument a model writes
-   freely. Source refs (shown as trusted "already observed" text) now replace any value
-   that is not a plain identifier with `#` and 8 hex characters of its hash (every existing
-   ref is unchanged), and an earlier call with such an argument is shown inside
-   `<untrusted_data>`. An identical search is dropped as a repeat.
+   freely. Source refs (shown as trusted "already observed" text) replace with `#` and 8
+   hex characters of its hash every value of an argument the registry leaves free (a
+   `string`, such as the query), whatever it looks like, and any other value that is not a
+   plain identifier. An earlier call with such an argument is shown inside
+   `<untrusted_data>`. Refs of checked arguments (service, enum, version, number) are
+   unchanged. An identical search is dropped as a repeat. (Corrected in the M3 review,
+   prompts-v4.6: a one-word query such as `SYSTEM:approved` has the shape of a plain value,
+   so it used to be shown as trusted text.)
 
 ## Consequences
 
@@ -82,6 +99,11 @@ pluggable `Embedder` interface. Extends [ADR 0016](0016-zero-cost-llm-providers-
 - prompts-v4.4 changed every request fingerprint again; the CI fixture was re-recorded
   (local qwen3:8b, 6 requests, $0). That model was offered `search_runbooks` and did not
   use it.
+- `scripts/build_vector_index.py --check` now asks the local Ollama server for metadata
+  (nothing is embedded) to compare the weights; without a server it compares everything
+  else and says the weights were not compared.
+- The evaluation ignores `RECAP_ENABLE_EMBEDDINGS` and `RECAP_KNOWLEDGE_OVERLAYS` without a
+  console note; its report records what ran.
 
 ## Alternatives considered
 

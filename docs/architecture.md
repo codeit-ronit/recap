@@ -179,7 +179,7 @@ How to read it:
 | `Runtime` | [`recap/runtime.py`](../recap/runtime.py) | Builds the long-lived parts from config once; `run_incident()` creates one `IncidentController` per run. |
 | `IncidentController` | [`recap/harness/controller.py`](../recap/harness/controller.py) | Owns one incident: walks the lifecycle, saves a checkpoint after every transition, routes investigation rounds, bounds retries. The only component that can execute a write. |
 | `Lifecycle` | [`recap/core/lifecycle.py`](../recap/core/lifecycle.py) | The legal state moves. Any other move raises `IllegalTransition`. |
-| `BudgetTracker` | [`recap/harness/budget.py`](../recap/harness/budget.py) | Counts steps, tool calls, estimated tokens and wall-clock time. Every tool call is reserved *before* it is sent. |
+| `BudgetTracker` | [`recap/harness/budget.py`](../recap/harness/budget.py) | Counts steps, tool calls, estimated tokens, model tokens and wall-clock time. Every tool call and model request is reserved *before* it is sent. Each stop gets a place that does not depend on timing, so a recorded run keeps its stops and a replay stops there ([ADR 0026](decisions/0026-a-replay-stops-where-its-recording-stopped.md)). |
 | `RunStore` | [`recap/harness/store.py`](../recap/harness/store.py) | Saves `RunRecord` checkpoints and evidence to SQLite. |
 | `KnowledgeRetriever`, `LexicalReranker`, `OllamaEmbedder`, `VectorIndex` | [`recap/knowledge/`](../recap/knowledge/) | BM25 search over runbook chunks with stable chunk IDs as citations; hybrid search fuses it with a cosine ranking from `nomic-embed-text` (local, recorded and replayed) over stored chunk vectors. |
 | `ExperienceStore`, `assess_reuse` | [`recap/memory/store.py`](../recap/memory/store.py) | Episodic memory with train/test/demo/live partitions (DEMO for scripted runs, LIVE for real models). A similar episode is not reusable until live evidence confirms the same mechanism on the same service and that its fix still fits. |
@@ -575,15 +575,15 @@ terminal approval prompt run in worker threads, which is why the shared stores u
 
 | Shared during a parallel round | Why sharing is safe |
 |---|---|
-| `EvidenceRegistry` | Append-only, and `Evidence` is frozen. Agents exchange evidence by ID (for example `ev-c8724f-003`), never by mutable object. IDs are assigned in arrival order on the single event loop. |
-| `BudgetTracker` | One central count of steps and tool calls. A call is reserved before it is sent. If the budget runs out, `BudgetExhausted` is re-raised once both agents have stopped. |
+| `EvidenceRegistry` | Append-only, and `Evidence` is frozen. Agents exchange evidence by ID (for example `ev-c8724f-003`), never by mutable object. IDs are sequential outside a parallel round. Inside one, each agent numbers its own (`ev-3f9a2c-r2t01`), and `close_round` puts the round in canonical order in the registry and in the run store. |
+| `BudgetTracker` | One central count of steps and tool calls. A call is reserved before it is sent. If the budget runs out, `BudgetExhausted` is re-raised once both agents have stopped. Which agent hit the limit is recorded by that agent's count of checks, not by time, so a replay stops the same agent ([ADR 0026](decisions/0026-a-replay-stops-where-its-recording-stopped.md)). |
 | `ToolGateway` and the MCP session | Every call is judged, redacted, bounded and recorded on its own. |
 | The provider instance | `DeterministicProvider` keeps no state between calls. |
 | `Tracer` | Numbers events (`seq`) in the order they are emitted. |
 
 | Private to each agent | |
 |---|---|
-| Its frozen `AgentRunPlan` | Role, round, step limit and focus services. |
+| Its frozen `AgentRunPlan` | Role, round, step limit, focus services, and the verifier's open questions and leads from the previous round. |
 | Its `ReadOnlyTools` handle | Only the read tools listed for its role in `configs/agents.yaml`. |
 | Its call history | Fed back to its own provider requests. |
 
@@ -931,7 +931,7 @@ Everything is local files. The `data/` folder is git-ignored. `RECAP_DATA_DIR` m
 | Path | Written by | Contents |
 |---|---|---|
 | `data/recap.db` | `RunStore`, `SqliteTraceSink`, `ApprovalStore` | Table `runs`: one `RunRecord` checkpoint per run, saved after every transition. Table `evidence`: every `Evidence` item per run. Table `events`: every trace event (the API pages through it with `after_seq`). Tables `approval_requests` and `approvals`. |
-| `data/memory.db` | `ExperienceStore` | Table `episodes`: metadata columns (partition, outcome, verified, ...) plus the full episode as JSON. Demo and CLI runs read the `train` and `demo` partitions and write to `demo`. |
+| `data/memory.db` | `ExperienceStore` | Table `episodes`: metadata columns (partition, outcome, verified, ...) plus the full episode as JSON. Scripted demo and CLI runs read the `train` and `demo` partitions and write to `demo`; real-model runs read `train` and `live` and write to `live`; a replay writes nothing. Table `partition_moves`: each pre-M3 model episode moved from `demo` to `live` when the store opened the file (ADR 0023). |
 | `data/sandbox/<run_id>.db` | `SandboxStateStore`, from both adapter instances | Table `sandbox_state`: exactly one row, the run's simulated world as JSON, including an audit log of every attempted write with its approval ID and proposal digest. |
 | `data/traces/<run_id>.jsonl` | `JsonlTraceSink` | One trace event per line. The easiest audit log to read, grep or attach to a bug report. |
 | `evals/reports/runs/<report_id>/data/` | Evaluation runner | Its own `recap.db`, `memory.db`, `sandbox/` and `traces/`, created fresh for every evaluation, so demo memory can never leak into it. Git-ignored. |
@@ -976,7 +976,7 @@ environment, so export them in your shell:
 | `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`) | Required only for the opt-in Claude adapter. Without it, choosing `anthropic` fails with a `ConfigError`; there is no silent fallback. |
 | `RECAP_DATA_DIR` | Where the SQLite files, sandboxes and traces go (default `data/`). |
 | `RECAP_TOOL_LATENCY_MS` | Overrides the simulated read latency. |
-| `RECAP_ENABLE_EMBEDDINGS` | Makes hybrid retrieval the default for runs that do not choose (needs Ollama with `nomic-embed-text` and the stored vectors, `scripts/build_vector_index.py`). |
+| `RECAP_ENABLE_EMBEDDINGS` | Makes hybrid retrieval the default for runs that do not choose (needs Ollama with `nomic-embed-text` and the stored vectors, `scripts/build_vector_index.py`). The V1 evaluation ignores it and pins BM25; it ignores `RECAP_KNOWLEDGE_OVERLAYS` too. |
 | `RECAP_ENABLE_OTEL` | Adds OpenTelemetry console spans (needs `pip install -e ".[otel]"`). |
 
 These variables are read only in the controller process. The MCP subprocess receives its settings
@@ -1031,7 +1031,9 @@ were produced from identical configuration and fixtures.
 
 - IDs (runs, evidence, proposals, approvals, episodes) are random, so they differ between runs.
 - Timestamps, latencies and durations come from the real clock.
-- In parallel rounds, the order in which the two agents' results arrive can vary with timing.
+- In parallel rounds, the order in which the two agents' results arrive can vary with timing
+  (their evidence IDs and stored order do not, and a replay stops where its recording says
+  the original run stopped, ADR 0020 and ADR 0026).
 - Memory is an input. A demo run reads episodes that earlier demo runs wrote to `data/memory.db`; the
   `ambiguous-incident` demo found the episode written by `bad-deployment`. To repeat a run exactly,
   start from the same memory. The evaluation runner always starts from an empty, evaluation-only data

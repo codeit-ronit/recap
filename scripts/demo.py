@@ -27,12 +27,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # allow running wi
 from recap.core.models import (
     EnvironmentInfo,
     EpisodeOutcome,
-    MemoryPartition,
+    ProviderInfo,
     RunConfig,
     RunRecord,
     ScenarioInfo,
     TraceEvent,
 )
+from recap.memory.store import MemoryAccess
 from recap.runtime import Runtime
 from recap.safety.approvals import ConsoleApprovalChannel
 from recap.telemetry.tracer import TraceCategory as C
@@ -173,18 +174,47 @@ def expected_state(scenario: ScenarioInfo, config: RunConfig) -> str:
     return "RESOLVED"
 
 
-async def ensure_prerequisites(runtime: Runtime, scenario: ScenarioInfo, sink: ConsoleSink) -> None:
-    """Some demos need earlier experience (e.g. memory-caution needs a verified episode)."""
-    episodes = runtime.memory.list([MemoryPartition.DEMO])
+async def ensure_prerequisites(
+    runtime: Runtime,
+    scenario: ScenarioInfo,
+    config: RunConfig,
+    provider: ProviderInfo,
+    sink: ConsoleSink,
+) -> None:
+    """Some demos need earlier experience (e.g. memory-caution needs a verified episode).
+
+    It must be where the demo's own run reads memory, and a run reads its own kind (the
+    scripted policy DEMO, a real model LIVE): so the prerequisite runs with the demo's
+    provider and lands in that provider's partition. A scripted episode never stands in
+    for a model's, and a replay, which never writes memory, cannot make one.
+    """
+    if not config.use_memory:
+        return  # the demo's run reads no memory: nothing to prepare
+    access = MemoryAccess.for_origin(provider.origin)
+    episodes = runtime.memory.list(access.readable_partitions)
     for needed in scenario.requires_memory_of:
         if any(
             ep.scenario_id == needed and ep.outcome == EpisodeOutcome.SUCCESS and ep.verified
             for ep in episodes
         ):
             continue
-        print(f"→ prerequisite: running '{needed}' first to create a verified experience episode")
+        if not access.write_enabled:
+            where = ", ".join(partition.value for partition in access.readable_partitions)
+            print(
+                f"→ prerequisite: no verified '{needed}' episode where this run reads memory "
+                f"({where}), and a replay never writes memory: the demo runs without it"
+            )
+            continue
+        print(
+            f"→ prerequisite: running '{needed}' first with {provider.name} to create a "
+            f"verified experience episode ({access.write_partition.value} memory)"
+        )
+        if provider.origin != "scripted":
+            print("  with a real model this takes a few minutes (about a minute per decision)")
         sink.quiet = True
-        record = await runtime.run_incident(needed, RunConfig(approval_mode="auto"))
+        record = await runtime.run_incident(
+            needed, RunConfig(approval_mode="auto", provider=config.provider)
+        )
         sink.quiet = False
         print(f"→ prerequisite finished: {record.state.value} (episode {record.episode_id})\n")
 
@@ -294,7 +324,7 @@ async def main() -> int:
     )
     print(LINE)
 
-    await ensure_prerequisites(runtime, scenario, sink)
+    await ensure_prerequisites(runtime, scenario, config, provider.info, sink)
     sink.started = time.perf_counter()
     channel = ConsoleApprovalChannel(runtime.approvals) if args.approve == "ask" else None
     record = await runtime.run_incident(scenario.id, config, approval_channel=channel)

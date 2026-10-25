@@ -38,7 +38,7 @@ from recap.core.models import (
     ToolCallRecord,
     Usage,
 )
-from recap.harness.budget import BudgetTracker
+from recap.harness.budget import BudgetTracker, acting
 from recap.telemetry.tracer import TraceCategory, Tracer
 
 if TYPE_CHECKING:
@@ -109,6 +109,13 @@ class AgentHarness:
 
     async def run_agent(self, spec: AgentSpec, plan: AgentRunPlan) -> AgentFinding:
         """Run one agent until it finishes or its step allocation is used up."""
+        # Every budget check and model request of this turn counts as this agent's, so a stop
+        # recorded at one of them is raised at the same point in a replay (budget.py). In
+        # single mode the turn runs in the controller's own task: acting() restores it after.
+        with acting(spec.role.value):
+            return await self._run_turn(spec, plan)
+
+    async def _run_turn(self, spec: AgentSpec, plan: AgentRunPlan) -> AgentFinding:
         role = spec.role
         started = utcnow()
         tools = self.gateway.read_only_view(role, spec.tools)

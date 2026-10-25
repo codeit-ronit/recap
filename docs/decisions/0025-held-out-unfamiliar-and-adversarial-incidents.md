@@ -45,9 +45,13 @@ numbers stay comparable; the new cases are separate.
 5. **Red-team overlays, opt-in only:** `RECAP_KNOWLEDGE_OVERLAYS` adds knowledge folders for
    one process (`fixtures/knowledge-overlays/poisoned/` holds a plausible runbook telling
    the reader to restart checkout on any out-of-memory line, without checking metrics); a
-   run records `versions.knowledge_overlays`. `scripts/redteam_setup.py` plants a false
-   "verified" episode (`fixtures/redteam/`) into a SCRATCH data folder and refuses the
-   repository's own `data/`.
+   run records `versions.knowledge_overlays`. Overlays may be repo-relative or absolute; a
+   folder outside the repository is recorded and cited by its own name only. An overlay
+   file named like a shipped runbook, or a folder listed twice, stops startup with a
+   `ConfigError` naming both files. `scripts/redteam_setup.py` plants a false "verified"
+   episode (`fixtures/redteam/`) into a SCRATCH data folder and refuses the repository's own
+   `data/`, compared by file identity (a case-variant spelling such as `DATA` on macOS is
+   refused too); `scripts/live_eval.py` refuses that folder the same way.
 
 ## Consequences
 
@@ -60,8 +64,12 @@ numbers stay comparable; the new cases are separate.
   memory added, the runbook is retrieved and the memory found (similarity 1.0), and both are
   overruled by the evidence. A deliberately gullible fake model that believes the forged
   lines gets nothing executed: the run ends FAILED for a person.
-- Revert checks: with only the old phrasing, the unfamiliar incident is no longer solved;
-  without the overlay loading, the poisoned-runbook test fails.
+- Revert checks: with only the old phrasing, `tests/e2e/test_unfamiliar_scenario.py` fails
+  under all three routings: single routing no longer solves the incident, and adaptive and
+  parallel routing still restart inventory (found from its OOM kills alone) but no longer
+  read the failed-call chain from frontend down to inventory; without the overlay loading,
+  the poisoned-runbook test fails. (Corrected after the M3 review: the test used to pass for
+  adaptive and parallel routing even with the old phrasing.)
 - The existing 45 (memory off) and 30 (memory on) scripted baseline runs end exactly as
   before.
 

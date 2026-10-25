@@ -9,7 +9,8 @@ not on which agent finished first, so a recorded parallel run replays offline.
 
 Accepted (M3, 2026-10-21). Extends [ADR 0016](0016-zero-cost-llm-providers-and-a-constrained-step-protocol.md)
 (prompts-v4.3) and [ADR 0018](0018-record-every-model-exchange-and-replay-in-ci.md) (parallel
-replay).
+replay). Its replay claim was corrected by the M3 review
+([ADR 0026](0026-a-replay-stops-where-its-recording-stopped.md)).
 
 ## Context
 
@@ -36,7 +37,9 @@ Before M3 the two specialists of a parallel round shared everything as it happen
    `open_round` gives each agent its own counter (`ev-3f9a2c-r2t01` for telemetry's first
    result in round 2, `-r2i01` for infrastructure's); `close_round` puts the round's
    evidence in agent order, then each agent's own order. Single-agent rounds keep the old
-   sequential numbers. The run store lists evidence in that order (`ORDER BY rowid`).
+   sequential numbers. The run store lists evidence in that order too (`ORDER BY rowid`):
+   `close_round` writes the round's items again in that order. (Corrected after the M3
+   review: until then the store kept the order in which the items arrived.)
 3. **Role contracts** ([configs/agents.yaml](../../configs/agents.yaml)). Telemetry reads
    logs and metrics; infrastructure reads releases, cluster events, health and topology:
    disjoint tool sets. Each role lists its responsibilities (rendered in its prompt) and the
@@ -53,9 +56,14 @@ Before M3 the two specialists of a parallel round shared everything as it happen
    In a parallel round each agent may use at most `parallel_agent_time_share` (0.7) of the
    time left, so a slow specialist ends as an error finding and the other's survives. When
    the shared budget stops the run, findings other agents completed travel with the stop
-   and are kept in the record, labelled partial (never consolidated into memory). Each
-   provider guards its one-time readiness check with a lock, so two concurrent agents never
-   check the model twice.
+   and are kept in the record with `partial: true` (`AgentFinding.partial`). They were never
+   verified, so their claims never reach an episode's checked claims, although the stopped
+   run is still stored as a `budget_exhausted` caution. (Corrected after the M3 review: this
+   said "never consolidated into memory", and the label was only in a trace event.) Each
+   cut and each budget refusal is recorded at its place, so a replay stops the same agent
+   there ([ADR 0026](0026-a-replay-stops-where-its-recording-stopped.md)). Each provider
+   guards its one-time readiness check with a lock, so two concurrent agents never check the
+   model twice.
 
 ## Consequences
 
@@ -64,7 +72,12 @@ Before M3 the two specialists of a parallel round shared everything as it happen
 - Two specialists are now two views: each claim rests on what its own tools observed, and
   the verifier combines them (ADR 0021).
 - A recorded parallel run replays offline whatever the live timing was
-  (`tests/e2e/test_parallel_replay.py` delays either specialist in the live run).
+  (`tests/e2e/test_parallel_replay.py` delays either specialist in the live run), and the
+  run store lists a round in the same order whichever agent was slower
+  (`tests/e2e/test_parallel_evidence_order.py`). (Corrected after the M3 review: this held
+  only while timing stopped nothing. A specialist cut by its time share, or a shared budget
+  that ran out for whichever agent asked first, made the replay fail with `ReplayMismatch`
+  until [ADR 0026](0026-a-replay-stops-where-its-recording-stopped.md) recorded the stops.)
 - The scripted policy's 45 baseline runs (15 scenarios, adaptive/single/parallel) end
   exactly as before.
 
@@ -74,6 +87,14 @@ Before M3 the two specialists of a parallel round shared everything as it happen
   infrastructure agent cannot claim a bad release in round 1, because the error evidence
   it needs is in telemetry's view; RECAP then fixes one fault, sees "not recovered" and
   finds the other in the next epoch (observed with the scripted policy).
+- The same holds for a single bad release when parallel routing is forced: measured with
+  the scripted policy against the commit before M3, 6 of the 15 parallel baseline runs
+  (bad-deployment, malicious-log, test-cart-injection, test-frontend-bad-release,
+  test-inventory-bad-release, train-checkout-bad-release) now need a second round, because
+  telemetry may not conclude a bad deployment and the infrastructure agent cannot see the
+  error onset in round 1; two more (memory-caution, test-checkout-misleading-deploy) no
+  longer record a contradicted bad-release claim on checkout. End state, diagnosis and fix
+  are unchanged in all 45 runs; "end exactly as before" above means that.
 - prompts-v4.3 changes every request fingerprint, so the CI replay fixture recorded with
   v4.2 must be recorded again once the M3 prompts are final.
 

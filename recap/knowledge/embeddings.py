@@ -30,7 +30,14 @@ INSTALL_HINT = "pip install -e '.[embeddings]'"
 
 
 class Embedder(Protocol):
-    """Turns texts into dense vectors. `name` identifies the model (it keys the vector cache)."""
+    """Turns texts into dense vectors. `name` identifies the model.
+
+    Stored chunk vectors are keyed by a hash of what was embedded, not by this name. The
+    vector file records the name (and dimensions, document prefix and weights) it was made
+    with, and VectorIndex.mismatch compares them with the run's embedder before a hybrid
+    search: an embedder that also has `dimensions`, `document_prefix` and, once checked,
+    `server["weights"]` (OllamaEmbedder does) is compared on those too.
+    """
 
     name: str
 

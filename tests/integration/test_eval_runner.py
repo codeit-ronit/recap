@@ -12,7 +12,9 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from evals import runner
 from evals.runner import (
+    CaseResult,
     EvalConfig,
     EvalReport,
     Split,
@@ -24,7 +26,7 @@ from evals.runner import (
     update_latest,
 )
 from recap.core.errors import ConfigError
-from recap.core.models import MemoryPartition, ProviderInfo
+from recap.core.models import MemoryPartition, ProviderInfo, RunConfig, ScenarioInfo
 from recap.harness.store import RunStore
 from recap.memory.store import ExperienceStore
 from recap.runtime import Runtime
@@ -106,6 +108,8 @@ def test_the_report_scores_every_test_scenario_and_is_written_to_disk(
     assert [c.scenario_id for c in report.train] == split.train
     assert [c.scenario_id for c in report.cases] == split.test
     assert len(report.cases) == 6 and {c.config for c in report.cases} == {"baseline_single"}
+    assert {c.retrieval for c in report.train} == {"bm25"}  # train runs search the runbooks
+    assert {c.retrieval for c in report.cases} == {"off"}  # baseline_single searches none
     assert [s.name for s in report.summaries] == ["baseline_single"]
     for name in ("results.json", "results.csv", "summary.md"):
         assert (out_dir / name).is_file()
@@ -168,3 +172,56 @@ async def test_only_the_scripted_policy_can_be_evaluated(
             tmp_path / "report", config_names=["baseline_single"], progress=progress.append
         )
     assert progress == []  # refused before any scenario ran
+
+
+async def test_the_benchmark_ignores_the_retrieval_switches_and_records_what_it_used(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RECAP_KNOWLEDGE_OVERLAYS and RECAP_ENABLE_EMBEDDINGS are for demo and red-team runs:
+    left set in a shell, they would change what the benchmark measures (a poisoned runbook
+    in every run, hybrid search calling a local model) without the report showing it."""
+    monkeypatch.delenv("RECAP_PROVIDER", raising=False)
+    monkeypatch.setenv("RECAP_KNOWLEDGE_OVERLAYS", "fixtures/knowledge-overlays/poisoned")
+    monkeypatch.setenv("RECAP_ENABLE_EMBEDDINGS", "1")
+    runtimes: list[Runtime] = []
+
+    async def no_run(
+        runtime: Runtime, scenario: ScenarioInfo, config: RunConfig, name: str, suite: str
+    ) -> CaseResult:
+        """Nothing runs: this test checks what the runner set up, and what it reports."""
+        runtimes.append(runtime)
+        counted = ["seed", "investigation_rounds", "steps", "tool_calls", "estimated_tokens"]
+        counted += ["mitigation_attempts", "memory_hits", "injection_flags"]
+        counted += ["unsafe_attempts", "unsafe_blocked", "unsafe_executed", "unsafe_refused"]
+        return CaseResult(
+            config=name,
+            suite=suite,
+            scenario_id=scenario.id,
+            family=scenario.family,
+            final_state="RESOLVED",
+            expected_state="RESOLVED",
+            outcome_as_expected=True,
+            recovered=False,
+            diagnosed=None,
+            expected_root="",
+            diagnosis_correct=False,
+            routing_modes=[],
+            latency_ms=0.0,
+            run_id="run-none",
+            **dict.fromkeys(counted, 0),
+        )
+
+    monkeypatch.setattr(runner, "_run_case", no_run)
+    out_dir = tmp_path / "report"
+    report = await run_evaluation(out_dir, config_names=["baseline_single"], progress=quiet)
+
+    runtime = runtimes[0]
+    assert all(other is runtime for other in runtimes)
+    assert runtime.settings.retrieval.mode == "bm25" and not runtime.settings.features.embeddings
+    assert runtime.settings.paths.knowledge_overlays == []
+    assert not [c for c in runtime.knowledge.chunks if c.doc_path.startswith("fixtures/knowledge-")]
+    assert (report.retrieval_mode, report.knowledge_overlays) == ("bm25", [])
+    saved = EvalReport.model_validate_json((out_dir / "results.json").read_text(encoding="utf-8"))
+    assert (saved.retrieval_mode, saved.knowledge_overlays) == ("bm25", [])
+    summary = (out_dir / "summary.md").read_text(encoding="utf-8")
+    assert "Runbook search: BM25 over the shipped runbooks, no knowledge overlays" in summary

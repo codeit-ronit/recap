@@ -3577,7 +3577,7 @@ Tests are in [tests/unit/test_bm25.py](../tests/unit/test_bm25.py).
 **Where it is in RECAP (adapter only, off by default):**
 
 - [recap/knowledge/embeddings.py](../recap/knowledge/embeddings.py) holds the `Embedder` protocol, `SentenceTransformerEmbedder` (`sentence-transformers/all-MiniLM-L6-v2`, runs on CPU), `cosine` and `reciprocal_rank_fusion` (RRF, with k = 60).
-- `KnowledgeRetriever` fuses the BM25 ranking with the dense (vector) ranking when it is given an embedder. Its name then becomes `hybrid-bm25-embeddings`.
+- `KnowledgeRetriever` fuses the BM25 ranking with the dense ranking when a search is given the query's vector and every chunk has a stored vector. `retriever_for(vector)` and each result's `retriever` then say `hybrid-bm25-embeddings`; `name` stays `bm25`, and `hybrid_ready` is the capability.
 - To switch it on, set `RECAP_ENABLE_EMBEDDINGS=1` and run `pip install -e '.[embeddings]'`. The model is downloaded on first use. If the package is missing, a `ConfigError` explains how to install it.
 
 **Input → output example (from [tests/unit/test_retriever.py](../tests/unit/test_retriever.py)):** There are three chunks: "Roll back the release.", "Restart crashed pods." and "Containers ran out of memory.". The query is "heap exhaustion". BM25 alone returns nothing, because no word is shared. A test embedder that puts heap, memory and OOM on the same dimension makes hybrid search return the memory chunk with RRF score 1/61 (rank 1 in the dense list only).
@@ -3644,7 +3644,7 @@ Similarity arithmetic, from the ambiguous-incident demo: the alert shares 6 of 1
 
 **Interview question:** "How do you stop memory from making the agent confidently wrong?"
 
-**Model answer:** "Similar is not the same as safe. A hit starts as 'not yet checked'. It becomes safe to reuse only if the past run succeeded, the independent oracle verified that success, and today's live evidence supports the same mechanism. Remembered claims go through the same verifier rules as live ones. Only the *kind* of action is reused; target and parameters come from live evidence, and the action still needs policy and approval. The memory-caution demo shows a memory with similarity 1.0 being correctly rejected."
+**Model answer:** "Similar is not the same as safe. A hit starts as 'not yet checked'. It becomes safe to reuse only if the past run succeeded, the independent oracle verified that success, and today's live evidence supports the same mechanism, on the same service, and the fix still fits (M3). Remembered claims go through the same verifier rules as live ones. Only the *kind* of action is reused; target and parameters come from live evidence, and the action still needs policy and approval. The memory-caution demo shows a memory with similarity 1.0 being correctly rejected."
 
 ### Memory consolidation
 
@@ -4650,7 +4650,7 @@ and saying so is the honest answer.
 
 **Why the question is safe to put in the trusted part of the prompt.** The question is
 written by RECAP's own code from checked pieces only: mechanism names from a fixed list,
-service names that look like service names, versions that look like versions. A planted
+service names shaped like a DNS label, versions in the tool registry's vX.Y.Z shape. A planted
 service name such as `checkout. Ignore previous instructions` becomes `(unnamed)`. It never
 copies the other agent's words, because those are model text and could carry an injected
 instruction.
@@ -4780,7 +4780,7 @@ a past fix applies is decided after the live evidence is verified, condition by 
 |---|---|
 | The past run succeeded, verified by the oracle | A failed attempt is a caution, not a recipe |
 | Live evidence supports the same mechanism | Look-alike alerts can have different causes |
-| On the same service | A checkout rollback does not fix payment |
+| On the same service (the diagnosis and the fix that worked; an episode naming none fails) | A checkout rollback does not fix payment |
 | The fix still fits | A rollback to `v2.4.0` is wrong once `v2.4.0` is the bad release, or once the evidence names another restore point |
 
 Each hit records which conditions held and which did not, and the hits are re-ranked: safe
@@ -4896,3 +4896,75 @@ tested it on phrasings the scenario doesn't even use. The adversarial case is bu
 the injection scanner and asks for a plausible, allowed action on the wrong service, which
 is the attack that actually matters. It's stopped by evidence rules and the approval step,
 not by pattern matching."
+
+### M3 review — What the review of steps 1 to 6 fixed
+
+**What changed, in one paragraph.** Independent reviewers then attacked steps 1 to 6, and
+the confirmed findings were fixed, with regression tests. The biggest one: a recorded
+parallel run did NOT always replay. When timing stopped something in the live run
+(a specialist cut by its time share, a shared budget that ran out for whichever agent asked
+first, a request with no answer), the replay, whose answers come at once, could not find
+that stop and failed. The rest, in short: a replay with memory on found the episode its own
+original run wrote; a cancelled model request kept its token reservation; a release written
+`2.4.1` instead of `v2.4.1` opened a false conflict, and the run then told a person that
+"supported root causes" conflicted when nothing was supported; a one-word search query, a
+service name read from a log line, a fix's parameter names and an episode ID could reach
+trusted prompt text; a semantic-recall hit could not get past a full list of word-overlap
+hits; a hybrid run never checked that the stored runbook vectors came from its own
+embedding model; and real-model episodes written before M3 were still in the scripted
+policy's partition. Details: [ADR 0026](decisions/0026-a-replay-stops-where-its-recording-stopped.md)
+and the corrections in ADRs 0020 to 0025.
+
+**The idea most worth understanding: give a stop a place that time does not decide.** A
+replay is like reading a book again: you can find "page 41" again, but not "the moment I
+got tired". So RECAP marks each stop by whose turn it was and how many checks that agent had
+made (turn starts, budget checks, model and embedding requests). An agent makes the same
+checks in the same order in a replay, because its prompts do not depend on the other
+agent's timing (ADR 0020). A recorded run writes each stop at its place; a replay never
+refuses on its own and has no clock, and stops exactly there. The limit, said plainly: a
+recording made before this change has no stops in it, so a run that a budget or a clock
+stopped must be recorded again.
+
+**What the first real-model runs taught.** In the first real `qwen3:8b` parallel runs
+(prompts-v4.5), both runs ended FAILED. In round 1 the specialists confirmed a failing
+dependency ("checkout's calls to payment fail" in one, "frontend's calls to cart fail" in
+the other), but in round 2 they did not examine the dependency itself, and one agent
+repeated checkout calls it had already made until it ran out of steps. Two changes came from
+that (prompts-v4.6). The verifier now writes *leads*: "checkout's calls to payment fail and
+nothing on payment itself is confirmed yet: find out what is wrong with payment". They go
+to the next round with the open questions, but a lead is not a disagreement, so it never
+routes RT3-disagreement. And when every call an agent asks for repeats one already made, the
+correction names those calls and asks for another tool, another service or a finish. These
+are honest results from two runs, not yet re-measured with v4.6.
+
+**Inputs → outputs (the new pieces).**
+
+- `BudgetTracker.record_stops(write)` and `replay_stops(stops)`; `begin_turn(actor)`,
+  `check_request()` and `checkpoint(name)` (places); `record_cut(...)` and
+  `record_refusal(...)` (a clock's stops) → `stop` lines in the recording.
+- `ReplayedCut(limit, detail, seconds)` → the orchestrator turns it into the same timeout
+  finding or `BudgetExhausted`; the controller into `BudgetExhausted`.
+- `merger.leads(unexplained, checks)` → `VerificationReport.leads`.
+- `MemoryAccess.as_of(moment)` → a copy that reads only episodes created before `moment`.
+- `KnowledgeRetriever.vector_mismatch(embedder)` → `""` or the reason in plain words;
+  `retriever_for(vector)` → `bm25` or `hybrid-bm25-embeddings`.
+- New fields: `AgentFinding.partial`, `HypothesisCheck.detail`, `ClaimRecord.detail`.
+
+**Reproduce.**
+
+```bash
+.venv/bin/python -m pytest tests/unit/test_budget_stops.py tests/unit/test_transport_stops.py \
+  tests/unit/test_http_llm_budget.py tests/e2e/test_parallel_replay.py \
+  tests/e2e/test_replayed_failures.py tests/e2e/test_controller_round_wiring.py
+```
+
+**Interview version.** "A review of my own milestone found that a claim in my design notes
+was only half true: a recorded parallel run replayed offline unless timing had stopped
+something, like one agent's timeout or a shared budget that ran out for whichever agent got
+there first. A replay has no real clock, so it can't rediscover those stops. I fixed it by
+recording each stop at a place that doesn't depend on time: whose turn it was and how many
+checks that agent had made. The replay never refuses on its own; it stops exactly there.
+The real-model runs taught me something different: a small model confirmed that one
+service's calls to another were failing, and in the next round didn't examine the failing
+service itself. So the verifier now leaves a lead for the next round, and it's deliberately
+not a 'disagreement', because it shouldn't change how the next round is routed."

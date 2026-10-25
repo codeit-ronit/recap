@@ -36,22 +36,25 @@ def load_documents(knowledge_dir: Path, *, root: Path | None = None) -> list[Doc
     """Read every Markdown file in `knowledge_dir` (sorted by name) into cited chunks.
 
     With `root` (normally the repo root), paths are stored relative to it, e.g.
-    "fixtures/knowledge/runbook-bad-deployment.md". The output is deterministic.
+    "fixtures/knowledge/runbook-bad-deployment.md". A folder outside `root` (a knowledge
+    overlay elsewhere on disk) is shown by its own name, e.g. "redteam-kb/runbook-x.md".
+    The output is deterministic.
     """
     knowledge_dir = Path(knowledge_dir)
     if not knowledge_dir.is_dir():
         raise ConfigError(f"knowledge directory not found: {knowledge_dir}")
-    source = _display_path(knowledge_dir, root)
+    shown = _shown_folder(knowledge_dir, root)
     files = sorted((p for p in knowledge_dir.glob("*.md") if p.is_file()), key=lambda p: p.name)
-    return [chunk for path in files for chunk in _chunk_file(path, root, source)]
+    return [chunk for path in files for chunk in _chunk_file(path, shown)]
 
 
-def _chunk_file(path: Path, root: Path | None, source: str) -> list[DocChunk]:
-    """All chunks of one Markdown file."""
+def _chunk_file(path: Path, shown: Path) -> list[DocChunk]:
+    """All chunks of one Markdown file; `shown` is how its folder appears in citations."""
     raw = path.read_bytes()
     checksum = hashlib.sha256(raw).hexdigest()[:12]  # detects edits to the source file
     title, sections = _split_sections(raw.decode("utf-8"), fallback_title=path.stem)
-    doc_path = _display_path(path, root)
+    doc_path = (shown / path.name).as_posix()
+    source = shown.as_posix()
     provenance = {"source": source, "kind": PROVENANCE_KIND, "license": PROVENANCE_LICENSE}
 
     chunks: list[DocChunk] = []
@@ -131,8 +134,14 @@ def _slug(heading: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", heading.lower()).strip("-") or "section"
 
 
-def _display_path(path: Path, root: Path | None) -> str:
-    """Path relative to `root` for citations, or the path as given when there is no root."""
+def _shown_folder(folder: Path, root: Path | None) -> Path:
+    """How a knowledge folder appears in citations: relative to `root` when it is inside it,
+    as given when there is no root, and by its own name when it is elsewhere on disk.
+
+    Only the folder's own name, as the run record shows an overlay: the local folders above
+    it can name a person or a project, and citations end up in shared records and exports.
+    """
     if root is None:
-        return path.as_posix()
-    return path.resolve().relative_to(Path(root).resolve()).as_posix()
+        return folder
+    resolved, base = folder.resolve(), Path(root).resolve()
+    return resolved.relative_to(base) if resolved.is_relative_to(base) else Path(resolved.name)

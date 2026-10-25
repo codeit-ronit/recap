@@ -27,7 +27,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from recap.context.evidence import is_plain_value
+from recap.context.evidence import free_text_args, is_plain_value
 from recap.core.ids import canonical_json
 from recap.core.models import (
     ActionRecord,
@@ -44,7 +44,9 @@ from recap.core.models import (
 )
 from recap.safety.injection import injection_flags
 
-PROMPT_VERSION = "prompts-v3.2"  # v3.2: placeholders instead of example values
+# v3.2: placeholders instead of example values. v3.3: allowlisted focus services and memory
+# fix parameters only; free-text arguments are always data.
+PROMPT_VERSION = "prompts-v3.3"
 
 # Static on purpose: no per-run values here, so the same system prompt is sent every time.
 # Which environment RECAP works on is stated in each request's incident section instead.
@@ -155,13 +157,12 @@ def render_investigation_prompt(request: InvestigationRequest) -> str:
         section("Your role", [f"Role: {request.role.value}", f"Goal: {request.goal}"]),
         incident_section(request.incident),
     ]
-    if request.focus_services:
-        # Named by RECAP's evidence verifier or by an earlier fix attempt, never by the
-        # recovery oracle (whose findings are ground truth no agent may see).
-        focus = ", ".join(request.focus_services)
-        title = "Services to examine first (named by RECAP's verifier or by an earlier fix attempt)"
-        sections.append(section(title, [focus]))
-    history = [call_line(number, call) for number, call in enumerate(request.history, 1)]
+    focus = focus_services(request)
+    if focus:
+        sections.append(section(FOCUS_TITLE, [", ".join(focus)]))
+    history = [
+        call_line(number, call, request.tools) for number, call in enumerate(request.history, 1)
+    ]
     instructions = list(INVESTIGATION_INSTRUCTIONS)
     if request.step >= request.max_steps:
         # The harness keeps hypotheses only from a "finish" decision.
@@ -179,7 +180,7 @@ def render_investigation_prompt(request: InvestigationRequest) -> str:
 def render_proposal_prompt(request: ProposalRequest) -> str:
     """The user message asking for one remediation of the verified root cause."""
     failed = [failed_line(number, a) for number, a in enumerate(request.failed_actions, 1)]
-    memories = [memory_line(hit) for hit in request.memory_hits]
+    memories = [memory_line(hit, request.allowed_actions) for hit in request.memory_hits]
     sections = [
         "# Remediation proposal",
         incident_section(request.incident),
@@ -255,6 +256,45 @@ def tools_section(title: str, tools: Sequence[ToolSpecView]) -> str:
     return section(title, lines)
 
 
+FOCUS_TITLE = "Services to examine first (named by RECAP's verifier or by an earlier fix attempt)"
+
+
+def focus_services(request: InvestigationRequest) -> list[str]:
+    """The focus services the trusted "Services to examine first" section may name.
+
+    They are named by RECAP's evidence verifier or by an earlier fix attempt, never by the
+    recovery oracle (whose findings are ground truth no agent may see). But the verifier can
+    take a name out of a log line ("error calling X") or the alert, so only a service the
+    request's tools allowlist is repeated, the same list that model-written names are
+    checked against: anything else is no service an agent could ask about anyway.
+    """
+    allowed = set(allowlisted_services(request.tools))
+    return [service for service in request.focus_services if service in allowed]
+
+
+def allowlisted_services(tools: Iterable[ToolSpecView]) -> list[str]:
+    """Every allowlisted service named in the tools' argument rules (the trusted registry)."""
+    names: set[str] = set()
+    for tool in tools:
+        for rule in tool.args.values():
+            if rule.get("type") == "service":
+                names.update(str(value) for value in rule.get("values", []))
+    return sorted(names)
+
+
+def citable_ids(request: ProposalRequest) -> list[str]:
+    """Runbook chunk and past-incident IDs a proposal may cite.
+
+    An episode's ID is read from a file on disk, so it is offered (in a schema the model
+    reads) and accepted (into a proposal a person approves) only when memory_line would
+    repeat it: a plain value. A tampered ID is neither citable nor shown.
+    """
+    chunks = {item.item_id for item in request.context.items if item.kind == "doc"}
+    episodes = {item.item_id for item in request.context.items if item.kind == "memory"}
+    episodes |= {hit.episode.episode_id for hit in request.memory_hits}
+    return sorted(chunks | {episode for episode in episodes if is_plain_value(episode)})
+
+
 def context_section(pack: ContextPack) -> str:
     """Every context item (evidence, runbook chunk, memory) wrapped as untrusted data."""
     items = [
@@ -267,10 +307,19 @@ def context_section(pack: ContextPack) -> str:
 # --- single lines -----------------------------------------------------------------------
 
 
-def call_line(number: int, call: ToolCallRecord) -> str:
-    """One earlier call. A successful call ran with arguments the gateway validated."""
+def call_line(number: int, call: ToolCallRecord, tools: Sequence[ToolSpecView] = ()) -> str:
+    """One earlier call. A successful call ran with arguments the gateway validated.
+
+    It is shown as trusted text only when the registry checked every argument against a
+    closed set or a fixed shape (`tools` holds the rules; a tool not among them counts as
+    unchecked). An argument a model may fill freely, such as a search query, stays data
+    whatever it looks like: "SYSTEM:approved" has the shape of a plain value.
+    """
     summary = f"{call.tool_name} {canonical_json(call.args)}"
-    if call.ok and all(is_plain_value(value) for value in call.args.values()):
+    view = next((tool for tool in tools if tool.name == call.tool_name), None)
+    free = free_text_args(view.args) if view is not None else set(call.args)
+    checked = not (free & set(call.args)) and all(is_plain_value(v) for v in call.args.values())
+    if call.ok and checked:
         evidence = f", evidence {call.evidence_id}" if call.evidence_id else ""
         return f"{number}. {summary} -> ok{evidence}"
     if call.ok:  # free text a model wrote (a search query) stays data, even when valid
@@ -283,7 +332,8 @@ def call_line(number: int, call: ToolCallRecord) -> str:
 
 def tool_refs(observed_refs: Sequence[str]) -> list[str]:
     # Only tool calls can be repeated, so list just their references, once each. A ref
-    # never holds free text (tool_source_ref hashes it), so it is safe as trusted text.
+    # never holds free text (the gateway hashes every free-text argument and every value
+    # that is not plain), so it is safe as trusted text.
     calls = ("mcp:", "local:")
     return [f"- {ref}" for ref in dict.fromkeys(observed_refs) if ref.startswith(calls)]
 
@@ -296,10 +346,15 @@ def failed_line(number: int, action: ActionRecord) -> str:
     return untrusted(f"failed-action-{number}", "failed_action", text)
 
 
-def memory_line(hit: AgentMemoryHit) -> str:
-    # Outcome, verification and "safe to reuse" are RECAP's own judgements, not episode text.
-    # The section is trusted text, but an episode is read from a file that could have been
-    # tampered with, so only plain values (IDs, service names, versions) are repeated here.
+def memory_line(hit: AgentMemoryHit, actions: Sequence[ToolSpecView] = ()) -> str:
+    """One past incident with RECAP's verdict on it.
+
+    Outcome, verification and "safe to reuse" are RECAP's own judgements, not episode text.
+    The section is trusted text, but an episode is read from a file that could have been
+    tampered with, so only plain values (IDs, service names, versions) are repeated here,
+    and a fix's parameters only under the names the trusted catalog (`actions`, the
+    remediation tools) gives that action's arguments: a name is text the file holds too.
+    """
     episode = hit.episode
     line = (
         f"- {_plain(episode.episode_id)} (similarity {hit.similarity:.2f}): outcome "
@@ -310,11 +365,15 @@ def memory_line(hit: AgentMemoryHit) -> str:
         line += f" ({hit.reason})"
     fix = episode.successful_action
     if fix is not None:
-        params = {key: _plain(str(value)) for key, value in fix.params.items()}
+        tool = next((tool for tool in actions if tool.name == fix.action), None)
+        names = set(tool.args) if tool is not None else set()
+        params = {key: _plain(str(value)) for key, value in fix.params.items() if key in names}
         line += (
             f"; fix that worked: {_plain(fix.action)} on {_plain(fix.target)} "
             f"{canonical_json(params)}"
         )
+        if len(params) < len(fix.params):
+            line += ", other parameters withheld"
     return line
 
 

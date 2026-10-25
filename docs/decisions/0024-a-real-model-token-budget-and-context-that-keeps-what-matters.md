@@ -9,6 +9,8 @@ shortened rather than dropped.
 
 Accepted (M3, 2026-10-21). Extends [ADR 0011](0011-structured-evidence-summaries.md)
 (structured summaries; no cut keeps only the head) and the run budget of the V1 harness.
+Decision 1's replay claim was corrected by the M3 review
+([ADR 0026](0026-a-replay-stops-where-its-recording-stopped.md)).
 
 ## Context
 
@@ -28,11 +30,19 @@ Accepted (M3, 2026-10-21). Extends [ADR 0011](0011-structured-evidence-summaries
    `BudgetTracker.reserve_model_tokens` before every model request (its estimated prompt
    plus `max_output_tokens`), `settle_model_tokens` after it with the server's own input and
    output counts (the prompt estimate for an answer that reported none, nothing for a 429 or
-   a 5xx). Reservations of requests in flight count, so parallel agents cannot overshoot
-   together. Running out raises BudgetExhausted before the request is sent; the run ends
-   BUDGET_EXHAUSTED, and the run summary shows `model_tokens` next to the limit. The
-   controller binds the budget to the provider (`bind_token_budget`); a replay settles with
-   the recorded counts, so it stops where the original run did.
+   a 5xx, and at least the prompt estimate for a request cancelled while it was out, which
+   the server may have read). Reservations of requests in flight count, so parallel agents
+   cannot overshoot together. Running out raises BudgetExhausted before the request is
+   sent; the run ends BUDGET_EXHAUSTED, and the run summary shows `model_tokens` next to the
+   limit. When the budget refuses a corrective retry, the request already answered stays on
+   the record (an `llm.call` event and usage). The controller binds the budget to the
+   provider (`bind_token_budget`), which also ties it to the provider's recording. A replay
+   settles with the recorded counts but never refuses on its own: in a replay, parallel
+   agents' requests no longer overlap, so where the budget ran out is read from the
+   recording ([ADR 0026](0026-a-replay-stops-where-its-recording-stopped.md)). (Corrected
+   after the M3 review: this said "a replay settles with the recorded counts, so it stops
+   where the original run did", which held only for one agent at a time; and a cancelled
+   request kept its reservation for the rest of the run.)
 2. **Errors first when a log list is cut** (`_errors_first` in
    [recap/tools/gateway.py](../../recap/tools/gateway.py)): the first ERROR line (the
    onset), then the newest ERROR and WARN lines up to half of the room, then the newest

@@ -13,9 +13,11 @@ from typing import Literal
 
 import pytest
 
+from recap.agents.verifier import EvidenceVerifier
 from recap.core.models import (
     TERMINAL_STATES,
     ActionRecord,
+    AgentFinding,
     AgentRole,
     EpisodeOutcome,
     Evidence,
@@ -38,6 +40,7 @@ from recap.core.models import (
 )
 from recap.memory.consolidation import Consolidator
 from recap.memory.store import ExperienceStore, MemoryAccess
+from tests.unit.test_verifier import DEPLOY, Run, hypothesis, release_errors
 
 T0 = datetime(2026, 3, 14, 10, 0, tzinfo=UTC)
 SYMPTOMS = ["checkout: HTTP 5xx ratio above 30% (SLO 1%)"]
@@ -124,6 +127,10 @@ def make_record(
         recovery=recovery,
         versions={"seed": 11, "config_hash": "cfg-hash", "fixture_hash": "fix-hash"},
     )
+
+
+def finding(role: AgentRole, *hypotheses: Hypothesis) -> AgentFinding:
+    return AgentFinding(agent_role=role, hypotheses=list(hypotheses), started_at=T0, finished_at=T0)
 
 
 def consolidate(
@@ -249,6 +256,8 @@ def test_episode_carries_incident_labels_and_provenance() -> None:
 
 
 def test_a_v2_episode_summarizes_the_trajectory_by_deterministic_extraction() -> None:
+    # The diagnosis is the hypothesis of the check that supported it, as in a real report.
+    diagnosis = BEST.model_copy(update={"details": {"version": "v2.4.1"}})
     record = make_record().model_copy(
         update={
             "provider_info": ProviderInfo(
@@ -261,10 +270,10 @@ def test_a_v2_episode_summarizes_the_trajectory_by_deterministic_extraction() ->
             ),
             "verification": VerificationReport(
                 status="supported",
-                best=BEST.model_copy(update={"details": {"version": "v2.4.1"}}),
+                best=diagnosis,
                 checks=[
                     HypothesisCheck(
-                        hypothesis=BEST,
+                        hypothesis=diagnosis,
                         passed=["errors on checkout began 2 min after v2.4.1 was deployed"],
                         rule_ids=["V1-structural", "V2-deploy-timing"],
                         proposers=[AgentRole.INFRASTRUCTURE],
@@ -297,6 +306,56 @@ def test_a_v2_episode_summarizes_the_trajectory_by_deterministic_extraction() ->
     view = episode.agent_view()
     assert view.checks == [e.source_ref for e in EVIDENCE]
     assert not hasattr(view, "provenance") and not hasattr(view, "scenario_id")
+
+
+def test_the_diagnosis_basis_is_the_supported_releases_own_lines_in_any_order() -> None:
+    """Regression: two bad-release claims on checkout are judged apart by their version (a
+    detail_conflict). The basis was the first check with the same mechanism and service, so
+    with the contradicted v2.4.0 claim first, its lines were stored as the reason for v2.4.1."""
+    run = Run()
+    deploy = run.deployments(("checkout", "v2.4.0", -2880), ("checkout", "v2.4.1", -12))
+    rate = run.error_rate("checkout", onset=-10)
+    logs = run.logs("checkout", release_errors("v2.4.1", range(-11, 1)))
+    older = finding(
+        AgentRole.INVESTIGATOR, hypothesis(DEPLOY, "checkout", deploy, rate, version="v2.4.0")
+    )
+    newer = finding(
+        AgentRole.INFRASTRUCTURE, hypothesis(DEPLOY, "checkout", deploy, logs, version="v2.4.1")
+    )
+
+    for order in ([older, newer], [newer, older]):
+        report = EvidenceVerifier().verify(order, run.registry, run.incident)
+        statuses = {c.hypothesis.details["version"]: c for c in report.checks}
+        rejected, accepted = statuses["v2.4.0"], statuses["v2.4.1"]
+        assert rejected.hypothesis.status == HypothesisStatus.CONTRADICTED
+        assert accepted.hypothesis.status == HypothesisStatus.SUPPORTED
+        assert rejected.passed != accepted.passed
+
+        episode = consolidate(make_record().model_copy(update={"verification": report}))
+        assert episode.diagnosis_basis == accepted.passed
+        # The two claims can be told apart in the episode, as the verifier told them apart.
+        claims = {c.detail: c.status for c in episode.checked_claims}
+        assert claims == {
+            "v2.4.0": HypothesisStatus.CONTRADICTED,
+            "v2.4.1": HypothesisStatus.SUPPORTED,
+        }
+
+
+def test_the_basis_is_the_claim_with_the_diagnosis_own_detail() -> None:
+    """Mechanism, service and origin alone do not identify the diagnosis' check: even if two
+    claims that differ only in their detail were both supported, the basis is the one whose
+    detail the diagnosis has. The verifier records each check's detail, resolved from the
+    evidence when the claim names none (here: the newest release, v2.4.1)."""
+    named = BEST.model_copy(update={"details": {"version": "v2.4.0"}})
+    checks = [
+        HypothesisCheck(hypothesis=named, passed=["v2.4.0 was deployed then"], detail="v2.4.0"),
+        HypothesisCheck(hypothesis=BEST, passed=["v2.4.1 was deployed then"], detail="v2.4.1"),
+    ]
+    report = VerificationReport(status="supported", best=BEST, checks=checks)
+    episode = consolidate(make_record().model_copy(update={"verification": report}))
+
+    assert episode.diagnosis_basis == ["v2.4.1 was deployed then"]
+    assert [c.detail for c in episode.checked_claims] == ["v2.4.0", "v2.4.1"]
 
 
 def test_run_without_oracle_has_no_verification_source() -> None:

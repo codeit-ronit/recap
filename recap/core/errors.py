@@ -58,13 +58,35 @@ class FreeStatusLost(ProviderError):
     """A hosted provider's response did not look like the free plan: it is stopped (quota.py)."""
 
 
+class ReplayedCut(BaseException):
+    """In a replay: the cancellation that cut the recorded run's work short at this point.
+
+    In the recorded run a clock ran out while an agent (or the controller) waited, and its
+    work was cancelled: an agent's time share (its finding became a timeout and the run went
+    on) or the run's deadline. A replay answers at once, so no clock runs out; the budget
+    tracker raises this where the recording says the cut happened (recap/harness/budget.py).
+
+    Like the asyncio.CancelledError it stands for, it is not an Exception, so no handler of
+    ordinary errors on the way catches it. The code whose clock cut the original turns it
+    into what that cut became (the orchestrator: a timeout finding, or BudgetExhausted when
+    the run's deadline ran out).
+    """
+
+    def __init__(self, limit: str, detail: str = "", seconds: float | None = None) -> None:
+        self.limit = limit  # what ran out: "time_share" or "max_elapsed_seconds"
+        self.detail = detail
+        self.seconds = seconds  # an agent's own time limit, for its timeout finding
+        super().__init__(f"cut short: {limit}" + (f" ({detail})" if detail else ""))
+
+
 def attach_model_calls(exc: BaseException, calls: list[Any], usage: Any) -> None:
     """Remember on `exc` the model requests a provider had already sent when it raised.
 
     A decision can fail after requests went out (a 429, a refusal, the free-plan tripwire,
-    a model mismatch). Those requests may have cost tokens and are evidence of what
-    happened, so the harness and the controller record them (`llm.call` events and usage)
-    before letting the error go on. `calls` are ModelCalls; `usage` is their Usage.
+    a model mismatch, a corrective retry the run's model-token budget refuses). Those
+    requests may have cost tokens and are evidence of what happened, so the harness and the
+    controller record them (`llm.call` events and usage) before letting the error go on.
+    `calls` are ModelCalls; `usage` is their Usage.
     """
     exc.model_calls = list(calls)  # type: ignore[attr-defined]
     exc.model_usage = usage  # type: ignore[attr-defined]

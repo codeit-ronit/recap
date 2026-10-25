@@ -366,6 +366,9 @@ class AgentFinding(Contract):
     started_at: datetime
     finished_at: datetime
     round: int = 1
+    # True for a finding kept from a round a budget stop cut short: it was never verified,
+    # so it never reaches memory and must not be read as a finished view.
+    partial: bool = False
 
 
 class HypothesisCheck(Contract):
@@ -380,6 +383,10 @@ class HypothesisCheck(Contract):
     # The evidence the passing rules relied on. A claim must cite at least one of these
     # (V1-grounding): support it never looked at does not count as its own.
     basis_evidence_ids: list[str] = Field(default_factory=list)
+    # What tells two claims of one mechanism on one service apart (recap/agents/merger.py):
+    # the bad release's version, or the blamed dependency, resolved from the evidence when
+    # the claim names none. "" when the mechanism has no such detail.
+    detail: str = ""
 
 
 class Disagreement(Contract):
@@ -402,7 +409,9 @@ class Disagreement(Contract):
     agents: list[AgentRole] = Field(default_factory=list)
     evidence_ids: list[str] = Field(default_factory=list)  # what decided it, or what is disputed
     resolved: bool
-    rule_id: str = ""  # the rule that settled it; empty while it is open
+    # The rule(s) that settled it (a settled detail_conflict names every rule that rejected
+    # the other versions, comma-separated); empty while it is open.
+    rule_id: str = ""
     resolution: str = ""  # one plain sentence for people
     question: str = ""  # an open disagreement: what the next round must find out
 
@@ -418,6 +427,9 @@ class VerificationReport(Contract):
     focus_services: list[str] = Field(default_factory=list)  # where to look next
     summary: str = ""
     disagreements: list[Disagreement] = Field(default_factory=list)
+    # Leads for the next round that are not disagreements, e.g. a supported dependency
+    # failure whose dependency nothing explains yet. Trusted text, built from checked values.
+    leads: list[str] = Field(default_factory=list)
 
     def open_questions(self) -> list[str]:
         """Questions of the disagreements no rule settled, for the next round (trusted text)."""
@@ -733,6 +745,7 @@ class ClaimRecord(Contract):
     proposers: list[AgentRole] = Field(default_factory=list)
     rule_ids: list[str] = Field(default_factory=list)
     failed: list[str] = Field(default_factory=list)  # the rules' own lines (RECAP's text)
+    detail: str = ""  # the version or dependency that told this claim apart (HypothesisCheck)
 
 
 class ExperienceEpisode(Contract):
@@ -822,7 +835,9 @@ class MemoryHit(Contract):
     similarity: float  # 0..1 lexical similarity to the current incident
     mechanism_match: bool | None = None  # None until checked against live evidence
     outcome: EpisodeOutcome
-    safe_to_reuse: bool = False  # success + verified + mechanism matches live evidence
+    # Every reuse condition held (memory/store.py assess_reuse): success, independently
+    # verified, the same mechanism on the same service as today, a fix that still fits.
+    safe_to_reuse: bool = False
     reason: str = ""
     # How the hit was found: lexical (word overlap, the `similarity` above) and, when the
     # run embeds, semantic (cosine). Only `similarity` drives routing and the scripted policy.

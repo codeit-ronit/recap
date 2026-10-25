@@ -22,20 +22,24 @@ One decision is at most `max_attempts` answers from the model:
 Every HTTP request is accounted for. The subclass logs each exchange it makes, including
 the ones it retries (a short 429, a 5xx) and the one that made it give up, and each becomes
 a ModelCall (an `llm.call` trace event) with its exact token counts in the Usage. When a
-decision fails after requests went out (a refusal, a quota stop, the free-plan tripwire),
-the requests already sent are attached to the exception (`attach_model_calls`), and the
-harness and controller record them before the error goes on: the request most likely to
-have cost something is never the one missing from the record.
+decision fails after requests went out (a refusal, a quota stop, the free-plan tripwire, a
+corrective retry the run's token budget refuses), the requests already sent are attached to
+the exception (`attach_model_calls`), and the harness and controller record them before the
+error goes on: the request most likely to have cost something is never the one missing from
+the record.
 
 HTTP-level trouble is the subclass's job: it raises ProviderError (the run fails with that
 message), FreeStatusLost (the provider is stopped) or QuotaExhausted (the run is deferred).
 
 The run's model-token budget (RunBudget.max_model_tokens) is enforced here when the
 controller binds it (`bind_token_budget`): each attempt reserves its estimated prompt plus
-`max_output_tokens` BEFORE it is sent, and settles with the tokens the server reported
-afterwards (the estimate for an answer that reported none). Running out raises
-BudgetExhausted before anything is sent. A replay settles with the recorded counts, so it
-stops where the original run would have.
+`max_output_tokens` BEFORE it is sent, and settles however the attempt ends: with the tokens
+the server reported (the prompt's estimate for an answer that reported none), or with the
+prompt's estimate when the attempt was cancelled while its request was out (the server may
+have read it). Running out raises BudgetExhausted before anything is sent. A replay settles
+with the recorded counts, but parallel agents' requests no longer overlap in it, so where
+the budget ran out is not recomputed: the same tracker is tied to this provider's recording,
+and the replay stops where the recording says the original did (recap/harness/budget.py).
 """
 
 from __future__ import annotations
@@ -48,7 +52,7 @@ from typing import Any, ClassVar, Literal, Protocol
 
 from recap.context.tokens import estimate_tokens
 from recap.core.config import ProviderSettings
-from recap.core.errors import attach_model_calls
+from recap.core.errors import BudgetExhausted, attach_model_calls
 from recap.core.ids import canonical_json, sha256_hex
 from recap.core.models import (
     InvestigationDecision,
@@ -62,7 +66,7 @@ from recap.core.models import (
 )
 from recap.providers import protocol
 from recap.providers.protocol import Message, Parsed
-from recap.providers.transport import ModelTransport
+from recap.providers.transport import ModelTransport, StopJournal, bind_stops
 
 EXCERPT_CHARS = 1500  # how much of a model's answer (or reasoning) a trace event keeps
 # What the model is told when the server itself rejected its answer (a schema failure).
@@ -158,8 +162,13 @@ class HttpLLMProvider(ABC):
         self.token_budget: TokenBudget | None = None
 
     def bind_token_budget(self, budget: TokenBudget) -> None:
-        """Enforce the run's max_model_tokens on every request this provider sends."""
+        """Enforce the run's max_model_tokens on every request this provider sends.
+
+        The run's budget tracker also places the run's stops: it is tied to this provider's
+        recording, which keeps them (a recorded run) or replays them (a replay)."""
         self.token_budget = budget
+        if isinstance(budget, StopJournal):
+            bind_stops(self.transport, budget)
 
     # --- the LLMProvider interface -------------------------------------------------------
 
@@ -226,7 +235,13 @@ class HttpLLMProvider(ABC):
             prompt = estimate_tokens(canonical_json(sent)) + estimate_tokens(
                 canonical_json(schema or tools or {})
             )
-            reserved = self._reserve_run_tokens(prompt + self.settings.max_output_tokens)
+            try:
+                reserved = self._reserve_run_tokens(prompt + self.settings.max_output_tokens)
+            except BudgetExhausted as exc:
+                # Nothing was sent for this attempt, but an earlier attempt's request was
+                # answered (and may have cost tokens): it goes on the record with the stop.
+                attach_model_calls(exc, calls, usage)
+                raise
             try:
                 reply = await self._send(sent, schema=schema, tools=tools, purpose=purpose, log=log)
             except Exception as exc:
@@ -237,6 +252,12 @@ class HttpLLMProvider(ABC):
                     calls.append(self._model_call(purpose, attempt, sent, schema, exchange, None))
                     usage = usage.plus(_reply_usage(exchange))
                 attach_model_calls(exc, calls, usage)
+                raise
+            except BaseException:
+                # Cancelled while the request was out: an agent's time share or the run's
+                # deadline ran out (in a replay, the same cut raised from the recording). The
+                # reservation must not outlive it, and the server may have read the prompt.
+                self._settle_run_tokens(reserved, log, prompt, cancelled=True)
                 raise
             self._settle_run_tokens(reserved, log, prompt)
             for retried in log[:-1]:  # exchanges the subclass retried (a short 429, a 5xx)
@@ -259,9 +280,15 @@ class HttpLLMProvider(ABC):
         """Reserve one request's worst case against the run's budget (0 when unbound)."""
         return self.token_budget.reserve_model_tokens(tokens) if self.token_budget else 0
 
-    def _settle_run_tokens(self, reserved: int, log: Sequence[ModelReply], prompt: int) -> None:
+    def _settle_run_tokens(
+        self, reserved: int, log: Sequence[ModelReply], prompt: int, *, cancelled: bool = False
+    ) -> None:
+        """Settle one attempt's reservation; a cancelled attempt counts at least its prompt."""
         if self.token_budget is not None:
-            self.token_budget.settle_model_tokens(reserved, _spent(log, prompt))
+            spent = _spent(log, prompt)
+            self.token_budget.settle_model_tokens(
+                reserved, (spent or prompt) if cancelled else spent
+            )
 
     @abstractmethod
     async def _send(

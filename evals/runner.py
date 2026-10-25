@@ -12,7 +12,10 @@ Protocol (see evals/splits/v1.yaml):
      safety gateway on and off. "Off" is refused by the controller outside the simulator.
 
 Every approval is granted by the simulation auto-approver. The benchmark is defined for the
-scripted default policy, so the runner refuses any other provider (LLM evaluation is V2).
+scripted default policy, so the runner refuses any other provider (LLM evaluation is V2). It
+searches the shipped runbooks with BM25 whatever this process's switches say
+(RECAP_ENABLE_EMBEDDINGS, RECAP_KNOWLEDGE_OVERLAYS are for demo and red-team runs), and
+the report records the search mode and knowledge folders it used.
 
 Outputs: results.json, results.csv and summary.md with per-case outcomes and denominators.
 These are synthetic, simulator-only measurements on a small N. They are NOT SREGym results,
@@ -96,6 +99,9 @@ class CaseResult(BaseModel):
     memory_hits: int
     injection_flags: int
     run_id: str
+    # How this run searched the runbooks: bm25 or hybrid, or "off" for a configuration
+    # without runbook retrieval ("" in reports from before this was recorded).
+    retrieval: str = ""
 
 
 class ConfigSummary(BaseModel):
@@ -125,6 +131,10 @@ class EvalReport(BaseModel):
     config_hash: str
     fixture_hash: str
     provider: str
+    # The runbook search every run uses unless its configuration chooses (always BM25), and
+    # the extra knowledge folders indexed (always none). Defaults match older reports.
+    retrieval_mode: str = "bm25"
+    knowledge_overlays: list[str] = Field(default_factory=list)
     split: Split
     latency: dict[str, int]
     train: list[CaseResult]
@@ -179,10 +189,22 @@ def _check_split(split: Split, scenarios: dict[str, ScenarioInfo]) -> None:
 
 
 def _eval_settings(data_dir: Path, read_ms: int, write_ms: int) -> Settings:
+    """The benchmark's settings: its own data folder and latencies, and BM25 over the shipped
+    runbooks only. RECAP_ENABLE_EMBEDDINGS (hybrid search by default) and
+    RECAP_KNOWLEDGE_OVERLAYS (extra runbook folders, e.g. a poisoned one) are switches for
+    demo and red-team runs; left set in a shell, either would change what every train and
+    test run reads, and a hybrid search would call a local model without being recorded."""
     settings = load_settings(data_dir=data_dir)
     options = dict(settings.environment.options, tool_latency_ms=read_ms, write_latency_ms=write_ms)
     environment = settings.environment.model_copy(update={"options": options})
-    return settings.model_copy(update={"environment": environment})
+    return settings.model_copy(
+        update={
+            "environment": environment,
+            "paths": settings.paths.model_copy(update={"knowledge_overlays": []}),
+            "retrieval": settings.retrieval.model_copy(update={"mode": "bm25"}),
+            "features": settings.features.model_copy(update={"embeddings": False}),
+        }
+    )
 
 
 def _memory_fields(access: MemoryAccess) -> dict[str, Any]:
@@ -240,6 +262,7 @@ def _case_from_record(
 ) -> CaseResult:
     expected = scenario.expected
     expected_root = f"{expected.get('mechanism')}@{expected.get('root_cause_service')}"
+    retrieval = record.retrieval.mode if record.retrieval else ""
     best = record.verification.best if record.verification else None
     diagnosed = f"{best.mechanism.value}@{best.target_service}" if best else None
     if suite == "redteam":
@@ -273,6 +296,7 @@ def _case_from_record(
         memory_hits=len(record.memory_hits),
         injection_flags=sum(1 for e in events if e.category == TraceCategory.INJECTION),
         run_id=record.run_id,
+        retrieval=retrieval if record.config.use_rag else "off",
     )
 
 
@@ -358,6 +382,8 @@ async def run_evaluation(
         config_hash=settings.config_hash,
         fixture_hash=runtime.fixture_hash,
         provider=provider.name,
+        retrieval_mode=settings.retrieval.mode,
+        knowledge_overlays=[_shown(folder) for folder in settings.paths.knowledge_overlays],
         split=split,
         latency={"read_ms": read_latency_ms, "write_ms": write_latency_ms},
         train=train_results,
@@ -421,6 +447,7 @@ def render_markdown(report: EvalReport) -> str:
         f"`{report.config_hash}` · fixture hash `{report.fixture_hash}`",
         f"- Provider: `{report.provider}` · simulated latency: read {report.latency['read_ms']} ms,"
         f" write {report.latency['write_ms']} ms",
+        f"- {_search_line(report)}",
         f"- Split `{report.split.name}`: train {len(report.split.train)} · test "
         f"{len(report.split.test)} · red-team {len(report.split.redteam)}",
         "",
@@ -475,6 +502,23 @@ def render_markdown(report: EvalReport) -> str:
     lines += ["", "## Reading these numbers honestly", ""]
     lines += [f"- {caveat}" for caveat in report.caveats]
     return "\n".join(lines) + "\n"
+
+
+def _shown(folder: Path) -> str:
+    """A repo-relative path, or the folder's own name: local folders never reach a report."""
+    return (
+        folder.relative_to(REPO_ROOT).as_posix()
+        if folder.is_relative_to(REPO_ROOT)
+        else folder.name
+    )
+
+
+def _search_line(report: EvalReport) -> str:
+    """How every run searched the runbooks, unless its configuration chose otherwise."""
+    mode = "BM25" if report.retrieval_mode == "bm25" else report.retrieval_mode
+    overlays = ", ".join(f"`{folder}`" for folder in report.knowledge_overlays)
+    folders = f"knowledge overlays {overlays}" if overlays else "no knowledge overlays"
+    return f"Runbook search: {mode} over the shipped runbooks, {folders}"
 
 
 def _git_commit() -> str:

@@ -26,10 +26,11 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from recap.core.errors import ConfigError
 from recap.core.interfaces import Reranker
 from recap.core.models import DocChunk, RetrievedChunk
 from recap.knowledge.bm25 import BM25Index, tokenize
-from recap.knowledge.embeddings import cosine, reciprocal_rank_fusion
+from recap.knowledge.embeddings import Embedder, cosine, reciprocal_rank_fusion
 from recap.knowledge.ingest import load_documents
 from recap.knowledge.vectors import VectorIndex
 
@@ -77,7 +78,14 @@ class KnowledgeRetriever:
     `vectors` holds the chunks' embeddings: a VectorIndex (looked up by each chunk's text)
     or, in tests, a mapping from chunk ID to vector. Hybrid search needs a vector for EVERY
     chunk; with any missing, `hybrid_ready` is False and `dense_missing` says which.
+
+    Whether a search is hybrid is the caller's choice, one search at a time (it passes the
+    query's vector), so the index is named after what a search uses without one: `name` is
+    always BM25. `hybrid_ready` is the capability, and `retriever_for` says what a given
+    search ranks with (what each of its results says too).
     """
+
+    name = BM25
 
     def __init__(
         self,
@@ -93,10 +101,13 @@ class KnowledgeRetriever:
         self._reranker = reranker
         self.min_dense_similarity = min_dense_similarity
         self.candidate_pool = candidate_pool
+        _refuse_duplicate_ids(self._chunks)
         # The heading is indexed with the text: "Remediation" is a useful search word.
         documents = [(chunk.chunk_id, searchable_text(chunk)) for chunk in self._chunks]
-        self._bm25 = BM25Index(documents)  # raises ValueError on duplicate chunk ids
+        self._bm25 = BM25Index(documents)
         self.embedder_name: str | None = None
+        # The stored vector file, kept to check it against the embedder of a hybrid run.
+        self.vectors = vectors if isinstance(vectors, VectorIndex) else None
         self._dense: dict[str, list[float]] = {}
         if isinstance(vectors, VectorIndex):
             self.embedder_name = vectors.embedder
@@ -108,12 +119,26 @@ class KnowledgeRetriever:
             self.embedder_name = "given"
             self._dense = {cid: [float(v) for v in vec] for cid, vec in vectors.items()}
         self.dense_missing = [cid for cid, _ in documents if cid not in self._dense]
-        self.name = HYBRID if self.hybrid_ready else BM25
 
     @property
     def hybrid_ready(self) -> bool:
         """True when every chunk has a vector, so a dense ranking covers the whole corpus."""
         return bool(self._chunks) and self.embedder_name is not None and not self.dense_missing
+
+    def retriever_for(self, query_vector: Sequence[float] | None) -> str:
+        """What a search with this query vector ranks with: hybrid only with a vector for the
+        query and for every chunk, else BM25 alone."""
+        return HYBRID if query_vector is not None and self.hybrid_ready else BM25
+
+    def vector_mismatch(self, embedder: Embedder) -> str:
+        """Why the stored chunk vectors cannot be searched with `embedder`'s query vectors,
+        in plain words ("" when they can): another model, other dimensions, another task
+        prefix or, once the embedder's server has reported them, other weights (see
+        VectorIndex.mismatch). A hybrid run must be refused when this is not empty."""
+        if self.vectors is None:
+            # Vectors given directly (tests) record nothing about how they were made.
+            return "" if self._dense else "no stored chunk vectors are loaded"
+        return self.vectors.mismatch(embedder)
 
     @classmethod
     def from_directory(
@@ -165,7 +190,8 @@ class KnowledgeRetriever:
         if k <= 0 or not query.strip():
             return []
         pool = max(k, self.candidate_pool)
-        hybrid = query_vector is not None and self.hybrid_ready
+        retriever = self.retriever_for(query_vector)
+        hybrid = retriever == HYBRID
         lexical = self._bm25.search(query, pool)
         signals: dict[str, dict[str, float]] = {}
         for rank, (chunk_id, score) in enumerate(lexical, start=1):
@@ -185,7 +211,7 @@ class KnowledgeRetriever:
                 chunk=self._by_id[chunk_id],
                 score=score,
                 rank=rank,
-                retriever=HYBRID if hybrid else BM25,
+                retriever=retriever,
                 signals=signals.get(chunk_id, {}),
             )
             for rank, (chunk_id, score) in enumerate(candidates, start=1)
@@ -208,3 +234,22 @@ class KnowledgeRetriever:
 def searchable_text(chunk: DocChunk) -> str:
     """What the indexes see (and what was embedded) for one chunk: its heading, then its text."""
     return f"{chunk.heading}\n{chunk.text}"
+
+
+def _refuse_duplicate_ids(chunks: Sequence[DocChunk]) -> None:
+    """Two chunks with one ID would make a citation ambiguous (and BM25 refuses them).
+
+    IDs come from file names, so this happens when a knowledge overlay holds a file named
+    like a shipped runbook, or the same folder is loaded twice. The owner decides which
+    file to rename; RECAP neither guesses nor renames chunk IDs that other records cite.
+    """
+    first: dict[str, DocChunk] = {}
+    for chunk in chunks:
+        other = first.setdefault(chunk.chunk_id, chunk)
+        if other is not chunk:
+            raise ConfigError(
+                f"two knowledge files give the chunk ID {chunk.chunk_id!r}: {other.doc_path} "
+                f"and {chunk.doc_path}. Chunk IDs come from file names (<file stem>#<section>), "
+                "so rename one of them (a knowledge overlay cannot reuse a shipped runbook's "
+                "name, and a folder can be listed only once)"
+            )

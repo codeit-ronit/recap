@@ -11,7 +11,8 @@ The service score is 1.0 when the past episode was alerted on the same service,
 
 A high score only means the incidents *look* alike. Whether the past fix is safe to
 reuse is decided later, against live evidence (see `assess_reuse` in store.py).
-Embedding similarity could replace this function without changing the store.
+Since M3 the store also compares stored incident embeddings, but only to add candidates
+after the lexical hits (see store.py); this lexical score stays the one that decides.
 """
 
 from __future__ import annotations

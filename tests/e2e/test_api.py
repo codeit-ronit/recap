@@ -28,7 +28,10 @@ def test_dashboard_flow_over_http(settings: Settings) -> None:
     with TestClient(create_app(Runtime(settings)), headers=OPERATOR_HEADERS) as client:
         assert client.get("/health").json()["label"].startswith("SIMULATED")
         assert any(s["id"] == "bad-deployment" for s in client.get("/scenarios").json())
-        assert client.get("/system").json()["environment"]["is_simulated"] is True
+        system = client.get("/system").json()
+        assert system["environment"]["is_simulated"] is True
+        # What a run that does not choose searches with, and whether hybrid could run.
+        assert (system["retriever"], system["hybrid_ready"]) == ("bm25", True)
 
         run_id = client.post(
             "/incidents/run",

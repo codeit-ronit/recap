@@ -8,12 +8,14 @@ on which agent finished first, which is what makes a recorded parallel run repla
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 from recap.context.evidence import EvidenceRegistry
 from recap.context.packer import ContextPacker
 from recap.core.models import AgentRole, Incident, RunBudget, SourceType
 from recap.harness.budget import BudgetTracker
 from recap.harness.loop import AgentHarness
+from recap.harness.store import RunStore
 from recap.telemetry.tracer import MemorySink, Tracer
 
 TEL, INFRA, INV = AgentRole.TELEMETRY, AgentRole.INFRASTRUCTURE, AgentRole.INVESTIGATOR
@@ -50,6 +52,35 @@ def test_closing_a_round_orders_its_evidence_by_agent_not_arrival() -> None:
     one = run([(deploys, INFRA), (logs, TEL)])  # infrastructure finished first
     other = run([(logs, TEL), (deploys, INFRA)])  # telemetry finished first
     assert one == other == ["ev-abc123-001", "ev-abc123-r2t01", "ev-abc123-r2i01"]
+
+
+def test_the_run_store_lists_a_round_in_the_canonical_order_too(tmp_path: Path) -> None:
+    """Each item is stored the moment it arrives (a crash keeps it), so the store first holds
+    the round in arrival order; closing the round must leave it in the canonical order."""
+
+    def run(arrival: list[tuple[str, AgentRole]], folder: Path) -> tuple[list[str], list[str]]:
+        store = RunStore(folder / "recap.db")
+        registry = EvidenceRegistry(
+            "run-abc123def0", "inc-1", on_add=lambda e: store.add_evidence("run-abc123def0", e)
+        )
+        add(registry, "mcp:list_services()", INV)
+        registry.open_round(2, [TEL, INFRA])
+        for ref, role in arrival:
+            add(registry, ref, role)
+        registry.close_round([TEL, INFRA])
+        add(registry, "mcp:get_service_health(service=checkout)", INV)  # after the round
+        return registry.ids(), [e.id for e in store.evidence("run-abc123def0")]
+
+    logs, deploys = "mcp:get_service_logs()", "mcp:get_recent_deployments()"
+    metrics = "mcp:get_service_metrics()"
+    arrival = [(deploys, INFRA), (logs, TEL), (metrics, TEL)]  # infrastructure was faster
+    (tmp_path / "a").mkdir()
+    canonical, stored = run(arrival, tmp_path / "a")
+    expected = ["001", "r2t01", "r2t02", "r2i01", "005"]
+    assert [i.split("-")[-1] for i in canonical] == expected
+    assert stored == canonical
+    (tmp_path / "b").mkdir()
+    assert run([(logs, TEL), (deploys, INFRA), (metrics, TEL)], tmp_path / "b")[1] == stored
 
 
 def test_sequential_ids_stay_unique_after_a_round() -> None:

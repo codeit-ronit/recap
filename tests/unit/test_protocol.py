@@ -13,9 +13,16 @@ import pytest
 
 from recap.context.evidence import tool_source_ref
 from recap.core.config import Settings
-from recap.core.models import ActionRecord, AgentRole, FailureMechanism, ToolCallRecord
+from recap.core.models import (
+    ActionRecord,
+    AgentRole,
+    FailureMechanism,
+    RawToolResult,
+    ToolCallRecord,
+)
 from recap.providers import protocol
 from tests.llm_fakes import evidence, investigation_request, proposal_request
+from tests.unit.test_gateway import make_kit
 
 DEPLOYS = evidence(
     "ev-abc123-001", "mcp:get_recent_deployments(service=checkout)", "v2.4.1 at 09:55"
@@ -221,10 +228,14 @@ def test_unlisted_tools_and_repeats_are_dropped(settings: Settings) -> None:
 def test_a_tool_request_with_nothing_left_to_run_is_sent_back(settings: Settings) -> None:
     request = investigation_request(settings, seen=[LOGS])
     text = answer(
-        tool_calls=[{"tool_name": "get_service_logs", "service": "checkout", "reason": "x"}]
+        tool_calls=[
+            {"tool_name": "get_service_logs", "service": "checkout", "reason": "x"},
+            {"tool_name": "execute_rollback", "service": "checkout", "reason": "y"},
+        ]
     )
     parsed = protocol.parse_json_step(text, request)
     assert parsed.decision is None
+    # One repeat and one unlisted tool: the general rules are sent back.
     assert "none of the tool calls can run" in parsed.problem
 
 
@@ -488,3 +499,61 @@ def test_an_identical_search_is_dropped_as_a_repeat(settings: Settings) -> None:
     parsed = protocol.parse_json_step(again, request)
     assert parsed.decision is None or parsed.decision.tool_calls == []
     assert any("dropped a repeat of local:search_runbooks" in note for note in parsed.notes)
+
+
+async def test_a_repeated_one_word_search_is_still_dropped_as_a_repeat(settings: Settings) -> None:
+    """The gateway hashes a free-text argument in the evidence's ref whatever its shape, so
+    the protocol must build the same ref for a new call, or a repeat would slip through."""
+
+    async def search(args: dict, caller: AgentRole) -> RawToolResult:
+        return RawToolResult(ok=True, structured={"query": args["query"], "results": []})
+
+    kit = make_kit(settings, local_tools={"search_runbooks": search})
+    args = {"query": "OOMKilled", "k": 2}
+    result = await kit.gateway.call_read("search_runbooks", args, AgentRole.INVESTIGATOR)
+    observed = kit.evidence.get(result.evidence_id or "")
+    assert observed is not None and "query=#" in observed.source_ref
+    request = investigation_request(settings).model_copy(
+        update={"observed_refs": [observed.source_ref]}
+    )
+    again = answer(tool_calls=[{"tool_name": "search_runbooks", "reason": "r", **args}])
+    parsed = protocol.parse_json_step(again, request)
+    assert parsed.decision is None
+    assert f"dropped a repeat of {observed.source_ref}" in parsed.notes
+
+
+# --- a request that only repeats what was observed ---------------------------------------------
+
+
+def test_only_repeated_calls_are_named_by_their_refs_in_the_correction(settings: Settings) -> None:
+    """A real model (qwen3:8b, in a parallel run) asked for the same checkout calls until it
+    ran out of steps. The correction says exactly that, names the calls by RECAP's own refs
+    (never by what the model wrote) and says what to do instead."""
+    request = investigation_request(settings, seen=[DEPLOYS, LOGS])
+    text = answer(
+        tool_calls=[
+            {
+                "tool_name": "get_service_logs",
+                "service": "checkout",
+                "note": PLANTED,
+                "reason": "a",
+            },
+            {"tool_name": "get_recent_deployments", "service": "checkout", "reason": PLANTED},
+            {"tool_name": "get_service_logs", "service": "checkout", "reason": "again"},
+        ]
+    )
+    parsed = protocol.parse_json_step(text, request)
+    assert parsed.decision is None
+    problem = parsed.problem
+    assert problem.startswith("every tool call you asked for repeats a call already observed")
+    refs = "mcp:get_service_logs(service=checkout), mcp:get_recent_deployments(service=checkout)"
+    assert f"({refs})" in problem  # each named once, by its ref
+    assert "already in the evidence above" in problem
+    assert "a different tool" in problem and "for another service" in problem
+    assert "best-supported claim" in problem
+    assert PLANTED not in problem and "note" not in problem
+
+    calls = [{"name": "get_recent_deployments", "arguments": {"service": "checkout"}}]
+    in_tools_mode = protocol.parse_tool_step(calls, "", request)
+    assert in_tools_mode.decision is None
+    assert "(mcp:get_recent_deployments(service=checkout))" in in_tools_mode.problem

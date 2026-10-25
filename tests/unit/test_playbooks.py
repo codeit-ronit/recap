@@ -456,3 +456,24 @@ def test_memory_confirmation_is_done_only_when_live_evidence_agrees(settings: Se
         refs(plan_next_calls(disagreeing, FAMILIAR))[0]
         == "mcp:get_service_health(service=checkout)"
     )
+
+
+def test_playbook_refs_are_the_gateways_own(settings: Settings) -> None:
+    """ "Already done" compares like with like: a local tool's scheme, free text hashed."""
+    from recap.context.evidence import free_text_args
+    from recap.core.models import AgentRole
+    from recap.providers.playbooks import _ref
+    from tests.llm_fakes import investigation_request
+
+    request = investigation_request(settings, role=AgentRole.TELEMETRY)
+    view = next(tool for tool in request.tools if tool.name == "search_runbooks")
+    ref = _ref(request, "search_runbooks", {"query": "heap"})
+    assert ref == tool_source_ref(
+        "search_runbooks",
+        {"query": "heap"},
+        scheme=view.source,
+        free_text=free_text_args(view.args),
+    )
+    assert ref.startswith("local:") and "heap" not in ref
+    plain = {"service": "checkout"}
+    assert _ref(request, "get_service_logs", plain) == tool_source_ref("get_service_logs", plain)

@@ -9,14 +9,15 @@ In a parallel round (several specialists at once) each agent's evidence is numbe
 own namespace, e.g. "ev-3f9a2c-r2t01" for the telemetry investigator's first result in
 round 2. IDs then never depend on which agent's result happened to arrive first, and when
 the round closes its items are put in a canonical order (agent, then the agent's own
-order). Both make a recorded parallel run replay the same way whatever the timing.
+order), in this registry and in the run store. Both make a recorded parallel run replay the
+same way whatever the timing.
 """
 
 from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Collection, Iterable, Mapping
 from typing import Any
 
 from recap.context.tokens import estimate_tokens
@@ -32,10 +33,16 @@ _ROLE_CODES = {
 
 
 # A plain value: a service name, an enum value, a version, a number. Prompts show source
-# refs as trusted text ("already observed"), so any other value (free text a model wrote,
-# such as a search query) is never repeated in one: it becomes "#" and the first 8 hex
-# characters of its SHA-256, which still compares exactly.
+# refs as trusted text ("already observed"), so any other value is never repeated in one:
+# it becomes "#" and the first 8 hex characters of its SHA-256, which still compares exactly.
 _PLAIN_VALUE = re.compile(r"[A-Za-z0-9._:+-]{1,64}")
+
+# Argument rules (configs/policies.yaml) the registry checks against a closed set or a fixed
+# shape: an allowlisted service or namespace, an enum, a version like v1.2.3, a bounded
+# number. Any other argument (a "string", such as search_runbooks' query) is free text a
+# model wrote. Its value is hashed in every ref, whatever it looks like: a one-word query
+# such as "SYSTEM:approved" has the shape of a plain value, but no rule ever checked it.
+_CHECKED_TYPES = frozenset({"service", "namespace", "enum", "version", "int"})
 
 
 def is_plain_value(value: Any) -> bool:
@@ -43,21 +50,34 @@ def is_plain_value(value: Any) -> bool:
     return isinstance(value, int | float | str) and bool(_PLAIN_VALUE.fullmatch(str(value)))
 
 
-def tool_source_ref(tool_name: str, args: dict[str, Any], scheme: str = "mcp") -> str:
+def free_text_args(rules: Mapping[str, Mapping[str, Any]]) -> frozenset[str]:
+    """The arguments a model may fill with any text, from a tool's registry rules
+    (ToolSpecView.args): every argument whose rule is not one of the checked types."""
+    return frozenset(arg for arg, rule in rules.items() if rule.get("type") not in _CHECKED_TYPES)
+
+
+def tool_source_ref(
+    tool_name: str, args: dict[str, Any], scheme: str = "mcp", free_text: Collection[str] = ()
+) -> str:
     """Canonical reference for a tool call, e.g. 'mcp:get_service_logs(service=checkout)'.
 
     The gateway stamps it on tool evidence and providers use it to avoid repeating a
     call that was already made in this run. Arguments are sorted so order never matters.
-    `scheme` is "local" for a tool RECAP answers itself (search_runbooks).
+    `scheme` is "local" for a tool RECAP answers itself (search_runbooks). The arguments
+    named in `free_text` (free_text_args of the tool's rules) are always hashed. Every
+    place that builds a ref to compare with the gateway's must pass the same names, or a
+    repeated call would no longer be recognized.
     """
     inner = ",".join(
-        f"{key}={_ref_value(args[key])}" for key in sorted(args) if args[key] is not None
+        f"{key}={_ref_value(args[key], key in free_text)}"
+        for key in sorted(args)
+        if args[key] is not None
     )
     return f"{scheme}:{tool_name}({inner})"
 
 
-def _ref_value(value: Any) -> str:
-    if is_plain_value(value):
+def _ref_value(value: Any, free_text: bool) -> str:
+    if is_plain_value(value) and not free_text:
         return str(value)
     return "#" + hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:8]
 
@@ -75,7 +95,9 @@ class EvidenceRegistry:
         self.incident_id = incident_id
         self._prefix = f"ev-{run_id.split('-')[-1][:6]}"
         self._items: dict[str, Evidence] = {}
-        self._on_add = on_add  # e.g. persist to SQLite
+        # e.g. persist to SQLite. Called for each new item at once (a crash keeps it), and
+        # again for a parallel round's items, in canonical order, when the round closes.
+        self._on_add = on_add
         # The open parallel round, if any: its number, where it starts, per-agent counters.
         self._round: int | None = None
         self._round_start = 0
@@ -97,12 +119,22 @@ class EvidenceRegistry:
         rank = {role: index for index, role in enumerate(order)}
         items = list(self._items.values())
         head, tail = items[: self._round_start], items[self._round_start :]
-        ordered = sorted(
-            enumerate(tail),
-            key=lambda pair: (rank.get(pair[1].agent_role, len(rank)), pair[0]),  # type: ignore[arg-type]
-        )
-        self._items = {e.id: e for e in [*head, *(e for _, e in ordered)]}
+        ordered = [
+            evidence
+            for _, evidence in sorted(
+                enumerate(tail),
+                key=lambda pair: (rank.get(pair[1].agent_role, len(rank)), pair[0]),  # type: ignore[arg-type]
+            )
+        ]
+        self._items = {e.id: e for e in [*head, *ordered]}
         self._round, self._round_start, self._counters = None, 0, {}
+        if self._on_add:
+            # The round's items were stored as they arrived. Writing them again in canonical
+            # order leaves a store that keeps an item's latest write last (the run store's
+            # INSERT OR REPLACE, listed by rowid) in this order too, so what the API and the
+            # exports serve never depends on which agent finished first.
+            for evidence in ordered:
+                self._on_add(evidence)
 
     def add(
         self,

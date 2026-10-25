@@ -8,21 +8,26 @@ index instead; this store only holds what RECAP itself experienced.
 Three rules keep memory honest:
   1. Similar is not safe. `search` returns hits marked "not yet checked". Later,
      `assess_reuse` compares each hit with the live verification report: only a verified
-     success whose mechanism AND target match today's evidence, and whose fix still fits
-     it (a rollback must restore a version today's evidence names), is safe to reuse.
+     success whose mechanism AND service match today's evidence (its diagnosis and the
+     fix that worked were both on the service diagnosed now), and whose fix still fits it
+     (a rollback must restore a version today's evidence names), is safe to reuse.
      Measured on the scenarios: alerts with different causes can read exactly alike, so
      no similarity, lexical or semantic, is ever evidence of the cause.
   2. No contamination. A `MemoryAccess` says which partitions a run may read and where
      it may write. Evaluation test runs read TRAIN only and never write, held-out test
      scenarios never become episodes (see consolidation.py), and `add` refuses any
-     TEST-partition episode. Scripted runs use DEMO, real-model runs LIVE, by default.
+     TEST-partition episode. Scripted runs use DEMO, real-model runs LIVE, by default; a
+     replay writes nothing, and can read memory as it was when its recording began
+     (`MemoryAccess.as_of`). Opening a file from before M3, when every run wrote DEMO,
+     moves the episodes a real model made to LIVE and records each move (`partition_moves`).
   3. Success needs proof. An episode can be stored as SUCCESS only if the independent
      recovery oracle verified it. Failed runs are kept as cautionary cases.
 
 Search uses word overlap (`similarity`, which routing and the scripted policy use) and,
-when the run embeds its incident, a semantic signal that can only ADD candidates: an
-episode whose text means nearly the same (cosine >= SEMANTIC_RECALL) is returned even when
-few words match, but its decision-relevant `similarity` stays the lexical one.
+when the run embeds its incident, a semantic signal that can only ADD candidates: after
+the k most similar episodes by their words come up to k more whose text means nearly the
+same (cosine >= SEMANTIC_RECALL), closest first, however few words they share. Their
+decision-relevant `similarity` stays the lexical one.
 
 Memory is historical data, not instructions: agents must treat hits as untrusted text.
 """
@@ -30,6 +35,7 @@ Memory is historical data, not instructions: agents must treat hits as untrusted
 from __future__ import annotations
 
 import base64
+import json
 import sqlite3
 import struct
 from collections.abc import Iterator, Sequence
@@ -39,6 +45,7 @@ from pathlib import Path
 
 from recap.context.evidence import is_plain_value
 from recap.core.db import connect
+from recap.core.ids import utcnow
 from recap.core.models import (
     Contract,
     EpisodeOutcome,
@@ -76,6 +83,20 @@ CREATE TABLE IF NOT EXISTS episodes (
     json           TEXT NOT NULL
 )
 """
+# Every episode the store moved to another partition when it opened, with its original
+# partition, why and when (see `_move_pre_m3_model_episodes`).
+_MOVES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS partition_moves (
+    episode_id     TEXT NOT NULL,
+    from_partition TEXT NOT NULL,
+    to_partition   TEXT NOT NULL,
+    reason         TEXT NOT NULL,
+    moved_at       TEXT NOT NULL
+)
+"""
+# Before M3 every run wrote DEMO. This consolidator wrote those episodes; since M3 a run's
+# partition follows its origin, so a newer episode is in DEMO because its run chose DEMO.
+_PRE_M3_CONSOLIDATOR = "consolidator-v1"
 
 
 class MemoryAccess(Contract):
@@ -84,6 +105,10 @@ class MemoryAccess(Contract):
     readable_partitions: list[MemoryPartition]
     write_enabled: bool = True
     write_partition: MemoryPartition = MemoryPartition.DEMO
+    # Memory as it was at this moment: episodes created at or after it are not read. A
+    # replay reads as of the moment its recording began, so it finds what the original run
+    # could have found, never the episode that run wrote when it ended. None: as it is now.
+    created_before: datetime | None = None
 
     @classmethod
     def default(cls) -> MemoryAccess:
@@ -117,7 +142,8 @@ class MemoryAccess(Contract):
 
         scripted: TRAIN + DEMO, writes DEMO. A real model: TRAIN + LIVE, writes LIVE (its
         episodes never mix with the scripted policy's). A replay reproduces a recorded run:
-        it reads like the model it replays and never writes (it is not new experience).
+        it reads like the model it replays and never writes (it is not new experience). To
+        read what the original run read, it must also read `as_of` the recording's start.
         """
         if origin == "scripted":
             return cls.default()
@@ -139,6 +165,10 @@ class MemoryAccess(Contract):
             write_partition=config.memory_write_partition or default.write_partition,
         )
 
+    def as_of(self, moment: datetime) -> MemoryAccess:
+        """The same access, reading memory as it was at `moment` (a naive time is UTC)."""
+        return self.model_copy(update={"created_before": moment})
+
 
 class ExperienceStore:
     """SQLite-backed episodic memory with partition-aware, deterministic search."""
@@ -147,6 +177,8 @@ class ExperienceStore:
         self.db_path = Path(db_path)
         with self._connect() as conn:
             conn.execute(_SCHEMA)
+            conn.execute(_MOVES_SCHEMA)
+            _move_pre_m3_model_episodes(conn)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -220,21 +252,24 @@ class ExperienceStore:
     ) -> list[MemoryHit]:
         """Up to `k` readable episodes at least `min_similarity` alike, most similar first.
 
-        With `query_vector` (the incident embedded by `embedding_model`), an episode
-        embedded by the same model also counts when its cosine is at least
-        SEMANTIC_RECALL. Every hit starts as "similar but unchecked" (safe_to_reuse=False).
-        Only `assess_reuse` can mark it safe, after comparing it with live evidence.
+        With `query_vector` (the incident embedded by `embedding_model`), up to `k` more
+        follow: episodes embedded by the same model whose cosine is at least
+        SEMANTIC_RECALL and that the list does not hold yet, closest first. Every hit starts
+        as "similar but unchecked" (safe_to_reuse=False). Only `assess_reuse` can mark it
+        safe, after comparing it with live evidence.
         """
-        candidates = self._select(access.readable_partitions)
+        candidates = self._select(access.readable_partitions, created_before=access.created_before)
         hits: list[MemoryHit] = []
+        close: dict[str, float] = {}  # episode ID -> cosine, for each semantic match to recall
         for episode in candidates:
             similarity = episode_similarity(query, episode)
             signals = {"lexical": similarity}
             semantic = _semantic(query_vector, embedding_model, episode)
             if semantic is not None:
                 signals["semantic"] = round(semantic, 3)
-            close = semantic is not None and semantic >= SEMANTIC_RECALL
-            if similarity >= min_similarity or close:
+                if semantic >= SEMANTIC_RECALL:
+                    close[episode.episode_id] = semantic
+            if similarity >= min_similarity or episode.episode_id in close:
                 hits.append(
                     MemoryHit(
                         episode=episode,
@@ -248,19 +283,38 @@ class ExperienceStore:
                 )
         # Candidates arrive newest first (then by ID), and Python's sort is stable,
         # so equally similar hits keep that order: the result is fully deterministic.
-        hits.sort(key=lambda hit: hit.similarity, reverse=True)
-        return hits[:k]
+        lexical = sorted(
+            (hit for hit in hits if hit.similarity >= min_similarity),
+            key=lambda hit: hit.similarity,
+            reverse=True,
+        )[:k]
+        # Semantic recall only adds, after the lexical hits and with a cut of its own: ranked
+        # with them, a paraphrase (few shared words) would sort last, and k episodes alerted
+        # on the same service (0.3 for the service alone) would always fill the list first.
+        unlisted = close.keys() - {hit.episode.episode_id for hit in lexical}
+        recalled = sorted(
+            (hit for hit in hits if hit.episode.episode_id in unlisted),
+            key=lambda hit: close[hit.episode.episode_id],
+            reverse=True,
+        )
+        return lexical + recalled[:k]
 
     def _select(
-        self, partitions: Sequence[MemoryPartition], *, limit: int = -1
+        self,
+        partitions: Sequence[MemoryPartition],
+        *,
+        limit: int = -1,
+        created_before: datetime | None = None,
     ) -> list[ExperienceEpisode]:
-        """Episodes in `partitions`, newest first, then by ID."""
+        """Episodes in `partitions` (created before `created_before`), newest first, then by ID."""
         # Only "?" placeholders are formatted into the SQL; values are always bound.
-        sql = (
-            f"SELECT json FROM episodes WHERE partition IN ({_placeholders(partitions)})"
-            " ORDER BY created_at DESC, episode_id LIMIT ?"
-        )
+        sql = f"SELECT json FROM episodes WHERE partition IN ({_placeholders(partitions)})"
         params: list[object] = [partition.value for partition in partitions]
+        if created_before is not None:
+            # Both sides are fixed-width UTC text, so comparing the text compares the times.
+            sql += " AND created_at < ?"
+            params.append(_sortable_time(created_before))
+        sql += " ORDER BY created_at DESC, episode_id LIMIT ?"
         params.append(limit)  # SQLite reads LIMIT -1 as "no limit"
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
@@ -273,11 +327,12 @@ def assess_reuse(
     """Decide whether a *similar* past episode is also *safe to reuse* today.
 
     Safe needs every condition: the past run succeeded, the oracle verified its recovery,
-    live evidence supports the same mechanism on the same service, and the remembered fix
-    still fits today's evidence. For a rollback that means its version is one of today's
-    `restore_points` (the versions the deployment evidence or a dry run names) and not
-    the release diagnosed as bad. A high similarity never outweighs a failed condition.
-    Returns a new hit; the one passed in is not changed.
+    live evidence supports the same mechanism on the same service (the past diagnosis and
+    the fix that worked were both on it), and the remembered fix still fits today's
+    evidence. For a rollback that means its version is one of today's `restore_points`
+    (the versions the deployment evidence or a dry run names) and not the release
+    diagnosed as bad. A high similarity never outweighs a failed condition. Returns a new
+    hit; the one passed in is not changed.
     """
     supporting, contradicting = _conditions(hit, report, restore_points)
     live = report.best.mechanism if report.best is not None else None
@@ -338,6 +393,63 @@ def _check_storable(episode: ExperienceEpisode, access: MemoryAccess) -> None:
         raise ValueError("an episode is a success only after independent recovery verification")
 
 
+def _move_pre_m3_model_episodes(conn: sqlite3.Connection) -> None:
+    """Move the episodes a real model wrote to DEMO before M3 to LIVE, recording each move.
+
+    Before M3 every run wrote DEMO, so a data folder from then has model episodes where
+    scripted runs read them and model runs never do. Only an episode whose provenance says
+    a model made it moves (`_pre_m3_model`), and only its partition changes, in the column
+    and in the stored episode. Safe at every start: a moved episode is no longer in DEMO,
+    and an unreadable row is left as it is.
+    """
+    demo, live = MemoryPartition.DEMO.value, MemoryPartition.LIVE.value
+    rows = conn.execute("SELECT episode_id, json FROM episodes WHERE partition = ?", (demo,))
+    for row in rows.fetchall():
+        try:
+            stored = json.loads(row["json"])
+        except ValueError:
+            continue
+        provider = _pre_m3_model(stored.get("provenance") if isinstance(stored, dict) else None)
+        if provider is None:
+            continue
+        stored["partition"] = live
+        moved = conn.execute(
+            "UPDATE episodes SET partition = ?, json = ? WHERE episode_id = ? AND partition = ?",
+            (
+                live,
+                json.dumps(stored, ensure_ascii=False, separators=(",", ":")),
+                row["episode_id"],
+                demo,
+            ),
+        )
+        if moved.rowcount == 1:  # another process opening the file may have moved it first
+            conn.execute(
+                "INSERT INTO partition_moves (episode_id, from_partition, to_partition, reason,"
+                " moved_at) VALUES (?, ?, ?, ?, ?)",
+                (
+                    row["episode_id"],
+                    demo,
+                    live,
+                    f"made by {provider} before M3, when every run wrote {demo}",
+                    _sortable_time(utcnow()),
+                ),
+            )
+
+
+def _pre_m3_model(provenance: object) -> str | None:
+    """The provider of a pre-M3 episode whose decisions came from a real model, else None.
+
+    Every model provider is named "<provider>:<model>" ("anthropic:...", "ollama:qwen3:8b";
+    a replay of a recorded model "replay:ollama:qwen3:8b"), and a red-team planner wrapping
+    one only appends "+prompt-injected(red-team)". The scripted policy's name,
+    "deterministic-scripted-policy", has no model part, with or without that suffix.
+    """
+    if not isinstance(provenance, dict) or provenance.get("created_by") != _PRE_M3_CONSOLIDATOR:
+        return None
+    provider = provenance.get("provider")
+    return provider if isinstance(provider, str) and ":" in provider else None
+
+
 def _conditions(
     hit: MemoryHit, report: VerificationReport, restore_points: Sequence[str] | None
 ) -> tuple[list[str], list[str]]:
@@ -353,10 +465,7 @@ def _conditions(
         contradicting.append("the past episode has no verified diagnosis to compare")
     elif live == past:
         supporting.append(f"live evidence also points to {_words(live)}")
-        target = best.target_service if best is not None else None
-        if episode.mechanism_target and target and episode.mechanism_target != target:
-            remembered = _shown(episode.mechanism_target)
-            contradicting.append(f"the live diagnosis is on {_shown(target)}, not on {remembered}")
+        contradicting += _other_service(episode, best.target_service if best is not None else None)
     else:
         contradicting.append(f"live evidence points to {_words(live)}, not {_words(past)}")
 
@@ -373,13 +482,39 @@ def _conditions(
     return supporting, contradicting
 
 
+def _other_service(episode: ExperienceEpisode, target: str | None) -> list[str]:
+    """Why a remembered episode is not about the service diagnosed now (empty if it is).
+
+    The same service means both the past diagnosis and the fix that worked: a fix that acted
+    on another service is a recipe for that one. An episode (or a live diagnosis) that names
+    no service cannot show it, so it does not pass by saying nothing.
+    """
+    remembered = episode.mechanism_target
+    if not remembered:
+        return ["the past episode names no service to compare"]
+    if not target:
+        return ["the live diagnosis names no service to compare"]
+    if remembered != target:
+        return [f"the live diagnosis is on {_shown(target)}, not on {_shown(remembered)}"]
+    fix = episode.successful_action
+    if fix is not None and fix.target != target:
+        return [f"the remembered fix acts on {_shown(fix.target)}, not on {_shown(target)}"]
+    return []
+
+
 def _stale_fix(
     hit: MemoryHit, report: VerificationReport, restore_points: Sequence[str] | None
 ) -> list[str]:
     """A remembered rollback whose version no longer fits today's evidence."""
     fix = hit.episode.successful_action
-    version = str(fix.params.get("to_version") or "") if fix is not None else ""
-    if not version:
+    if fix is None:
+        return []
+    version = str(fix.params.get("to_version") or "")
+    if not version or not is_plain_value(version):
+        # A rollback that names no plain release cannot be checked against today's restore
+        # points (a tampered episode can hide its version under another key): never "safe".
+        if fix.action == "execute_rollback":
+            return ["the remembered rollback names no release it restored"]
         return []
     best = report.best
     bad = str(best.details.get("version") or "") if best is not None else ""

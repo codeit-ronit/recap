@@ -11,8 +11,12 @@ model) and stored in a file that CI and replays read without any model:
 
 Each vector is keyed by a hash of exactly the text that was embedded (prefix included), so
 an edited runbook section simply has no vector: the index then reports itself incomplete,
-and RECAP searches with BM25 alone and says why, instead of silently using a stale vector.
-Base64 float32 keeps the file small, and a vector reads back bit for bit the same.
+and a run that asks for hybrid search is refused with a pointer to the script instead of
+silently using a stale vector. The key says nothing about the model, though: `mismatch`
+compares the file's model, dimensions, document prefix and weights with the embedder a
+run would embed its queries with, because vectors from two models (or two versions of one)
+cannot be compared. Base64 float32 keeps the file small, and a vector reads back bit for
+bit the same.
 """
 
 from __future__ import annotations
@@ -68,6 +72,37 @@ class VectorIndex:
     def missing(self, texts: Iterable[str]) -> list[str]:
         """The texts this index has no vector for."""
         return [text for text in texts if self.key(text) not in self._vectors]
+
+    def mismatch(self, embedder: Embedder) -> str:
+        """Why these vectors cannot be compared with `embedder`'s, in plain words ("" when
+        they can).
+
+        A cosine between vectors means something only when one model made both, with the
+        task prefixes it was trained with, from the same weights. Checked: the model name;
+        then, when the embedder says them (an OllamaEmbedder does), its dimensions and
+        document prefix; and the weights, once both the file and the embedder's server
+        (after its first check) report a digest.
+        """
+        problems: list[str] = []
+        if embedder.name != self.embedder:
+            problems.append(f"they were made by {self.embedder}, not {embedder.name}")
+        dimensions = getattr(embedder, "dimensions", None)
+        if dimensions is not None and dimensions != self.dimensions:
+            problems.append(
+                f"they have {self.dimensions} dimensions, the embedder's have {dimensions} "
+                "dimensions"
+            )
+        prefix = getattr(embedder, "document_prefix", None)
+        if prefix is not None and prefix != self.document_prefix:
+            problems.append(
+                f"the runbooks were embedded with the prefix {self.document_prefix!r}, "
+                f"the embedder uses {prefix!r}"
+            )
+        stored = self.meta.get("weights")
+        weights = (getattr(embedder, "server", None) or {}).get("weights")
+        if stored and weights and stored != weights:
+            problems.append(f"they come from the weights {stored}, the server has {weights}")
+        return "; ".join(problems)
 
     @classmethod
     def load(cls, path: Path) -> VectorIndex:

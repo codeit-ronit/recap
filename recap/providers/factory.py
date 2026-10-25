@@ -107,6 +107,9 @@ def create_embedder(
       a provider that records   live loopback requests, recorded in the same file
       any other provider        live loopback requests, not recorded (the scripted policy)
 
+    Sharing the recording also makes each embedding request a check of the run's budget
+    tracker (transport.bind_stops), so a stop that came while one was out replays in place.
+
     Tests only: `mock_http` stands in for the local server.
     """
     from recap.knowledge.ollama_embedder import OllamaEmbedder

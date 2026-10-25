@@ -41,6 +41,7 @@ from recap.core.errors import (
     BudgetExhausted,
     ConfigError,
     QuotaExhausted,
+    ReplayedCut,
     model_calls_of,
 )
 from recap.core.ids import new_id, utcnow
@@ -236,7 +237,9 @@ class IncidentController:
         self.environment.bind_executor(self.capabilities.public_key)
         self.budget = BudgetTracker(self.incident.budget)
         # A model provider reserves each request's tokens against this run's budget and
-        # settles with the server's real counts (max_model_tokens). Scripted: nothing to bind.
+        # settles with the server's real counts (max_model_tokens). It also ties the budget to
+        # its recording: a recorded run writes its stops there, a replay raises them from it
+        # instead of refusing on its own (budget.py). Scripted: nothing to bind.
         bind = getattr(self.provider, "bind_token_budget", None)
         if callable(bind):
             bind(self.budget)
@@ -324,6 +327,11 @@ class IncidentController:
 
         if self.config.use_memory:
             access = MemoryAccess.from_run_config(self.config)
+            recorded = (self.provider.info.replay_of or {}).get("created_at")
+            if self.provider.info.origin == "replay" and recorded:
+                # A replay reads memory as its recording found it: never the episode its
+                # original run wrote when it ended (its prompts would differ from the record).
+                access = access.as_of(datetime.fromisoformat(str(recorded)))
             embedder = self.embedder.name if self.embedder and self._incident_vector else None
             self.record.memory_hits = self.deps.memory.search(
                 MemoryQuery.from_incident(incident),
@@ -335,6 +343,9 @@ class IncidentController:
                 TraceCategory.MEMORY_SEARCH,
                 {
                     "readable_partitions": [p.value for p in access.readable_partitions],
+                    "created_before": access.created_before.isoformat()
+                    if access.created_before
+                    else None,
                     "semantic": embedder,
                     "hits": [_hit_ref(h) for h in self.record.memory_hits],
                 },
@@ -356,13 +367,9 @@ class IncidentController:
         while True:
             self._transition(S.INVESTIGATING, "investigate with read-only tools")
             report = await self._investigate(focus, len(failed_actions))
-            if report is not None and report.best is None and report.open_questions():
-                conflict = next(d for d in report.disagreements if not d.resolved and d.question)
-                self._finish(
-                    S.FAILED,
-                    f"supported root causes still conflict ({'; '.join(conflict.claims)}) and "
-                    "no evidence rule decides between them; a human should take over",
-                )
+            handover = _handover(report) if report is not None and report.best is None else ""
+            if handover:
+                self._finish(S.FAILED, handover)
                 return
             if report is None or report.best is None:
                 self._finish(
@@ -451,6 +458,7 @@ class IncidentController:
         report: VerificationReport | None = None
         escalate = failed_attempts > 0
         questions: list[str] = []  # the verifier's open questions from the previous round
+        leads: list[str] = []  # and its leads (e.g. a dependency nothing explains yet)
         for _ in range(rounds):
             self.investigation_round += 1
             signals = compute_signals(
@@ -485,6 +493,7 @@ class IncidentController:
                     "focus_services": focus,
                     "escalation": escalate,
                     "open_questions": questions,
+                    "leads": leads,
                 },
             )
             parallel = decision.mode.value == "parallel"
@@ -493,13 +502,14 @@ class IncidentController:
                     self.investigation_round, decision.selected_agents
                 )
             try:
-                findings = await self.orchestrator.execute(decision, focus, questions)
+                findings = await self.orchestrator.execute(decision, focus, [*questions, *leads])
             except BudgetExhausted as stop:  # QuotaExhausted is one too
-                # Keep what other agents completed before the stop, labelled as partial.
-                # (A stopped run is never consolidated into experience.)
+                # Keep what other agents completed before the stop, labelled as partial: they
+                # were never verified. (The run is still stored as a budget_exhausted caution,
+                # but these claims never reach its checked claims.)
                 partial = getattr(stop, "partial_findings", [])
                 if partial:
-                    self._add_findings(partial)
+                    self._add_findings([f.model_copy(update={"partial": True}) for f in partial])
                     self.tracer.emit(
                         TraceCategory.ORCHESTRATION,
                         {
@@ -538,6 +548,7 @@ class IncidentController:
             escalate = True
             focus = report.focus_services or focus
             questions = report.open_questions()
+            leads = report.leads
             if self.budget.remaining_tool_calls() == 0:
                 break
         return report
@@ -746,9 +757,11 @@ class IncidentController:
             window_left = window - (time.monotonic() - started)
             if window_left <= 0:
                 break  # the target had its full window: the verdict stands
+            self.budget.checkpoint("settle_wait")  # in a replay: a recorded stop is raised here
             run_left = self.budget.remaining_seconds()
             if run_left <= 0:
                 detail = "the run's time ran out while waiting for the target to settle"
+                self.budget.record_refusal("max_elapsed_seconds", detail)
                 raise BudgetExhausted("max_elapsed_seconds", detail)
             await asyncio.sleep(min(self.info.stabilization_poll_seconds, window_left, run_left))
             after = await self.oracle.probe()
@@ -767,7 +780,10 @@ class IncidentController:
             if not deadline.expired():
                 raise  # the call itself raised TimeoutError: an error, not the run's deadline
             detail = f"{what} was still running when the run's time ran out"
+            self.budget.record_cut("max_elapsed_seconds", detail)  # a replay stops there too
             raise BudgetExhausted("max_elapsed_seconds", detail) from None
+        except ReplayedCut as cut:  # a replay: the recorded run's deadline cut this call
+            raise BudgetExhausted(cut.limit, cut.detail) from None
 
     # ==================================================================================
     # Helpers
@@ -860,6 +876,7 @@ class IncidentController:
             agent_timeout_seconds=self.incident.budget.max_elapsed_seconds,
             remaining_seconds=self.budget.remaining_seconds,  # no agent outlives the run
             parallel_time_share=self.settings.budget.routing.parallel_agent_time_share,
+            budget=self.budget,  # places each cut, so a replay cuts the same agent there
         )
 
     def _trace_model_calls(self, calls: list[Any]) -> None:
@@ -954,6 +971,9 @@ class IncidentController:
             embedder = self._hybrid_embedder()
             vector = await self._before_deadline(embedder.embed_query(query), "embedding a query")
             embedding = self._last_embed_call
+            # The server reports its weights after the first request: vectors made from other
+            # weights (a re-pulled model) cannot be compared with this query's either.
+            _refuse_unfit_vectors(knowledge, embedder)
             if stage == "initial":  # the incident as text: memory searches and stores it too
                 self._incident_vector = vector
         docs = knowledge.search(query, k=k, query_vector=vector)
@@ -964,7 +984,7 @@ class IncidentController:
                 "reason": reason,
                 "query": query,
                 "mode": self.retrieval.mode,
-                "retriever": knowledge.name,
+                "retriever": knowledge.retriever_for(vector),
                 "embedding": embedding,
                 "results": [_doc_ref(d) for d in docs],
             },
@@ -986,6 +1006,7 @@ class IncidentController:
             if self.deps.embedder_factory is None:
                 raise ConfigError("hybrid retrieval needs an embedder; none is configured")
             self.embedder = self.deps.embedder_factory(self.provider)
+            _refuse_unfit_vectors(knowledge, self.embedder)
             self.embedder.on_call = self._on_embed  # type: ignore[attr-defined]
             self.retrieval = self.retrieval.model_copy(update={"embedder": self.embedder.name})
             self.record.retrieval = self.retrieval
@@ -1019,11 +1040,13 @@ class IncidentController:
         limits = self.settings.retrieval.agent_search
         if not self.config.use_rag or self.deps.knowledge is None:
             return RawToolResult(ok=False, error="runbook search is turned off for this run")
-        if self.retrieval.agent_searches >= limits.max_per_run:
-            return RawToolResult(
-                ok=False,
-                error=f"the runbook search budget is used up ({limits.max_per_run} per run)",
-            )
+        used_up = f"the runbook search budget is used up ({limits.max_per_run} per run)"
+        # Shared by parallel agents: which one finds it used up is timing, so a recorded run
+        # writes each refusal at its place and a replay refuses exactly there (budget.allow).
+        if not self.budget.allow(
+            "search_runbooks", self.retrieval.agent_searches < limits.max_per_run, used_up
+        ):
+            return RawToolResult(ok=False, error=used_up)
         self.retrieval = self.retrieval.model_copy(
             update={"agent_searches": self.retrieval.agent_searches + 1}
         )
@@ -1414,6 +1437,7 @@ def _report_payload(report: VerificationReport) -> dict[str, Any]:
                 "status": c.hypothesis.status.value,
                 "proposers": [role.value for role in c.proposers],
                 "basis_evidence_ids": c.basis_evidence_ids,
+                "detail": c.detail,  # the release or dependency that told this claim apart
                 "passed": c.passed,
                 "failed": c.failed,
                 "rule_ids": c.rule_ids,
@@ -1423,7 +1447,43 @@ def _report_payload(report: VerificationReport) -> dict[str, Any]:
         "unknown_evidence_ids": report.unknown_evidence_ids,
         "focus_services": report.focus_services,
         "disagreements": [d.model_dump(mode="json") for d in report.disagreements],
+        "leads": report.leads,
     }
+
+
+def _handover(report: VerificationReport) -> str:
+    """Why a person must take over when no root cause is supported but a disagreement is
+    still open after the follow-up round, worded by what is really open ("" when none is).
+
+    Only level SUPPORTED root causes are "supported causes in conflict"; an open release
+    question means claims name different releases and the evidence settles none of them.
+    """
+    open_ = [d for d in report.disagreements if not d.resolved and d.question]
+    for d in open_:
+        if d.kind == "competing_root_causes":
+            return (
+                f"supported root causes still conflict ({'; '.join(d.claims)}) and no evidence "
+                "rule decides between them; a human should take over"
+            )
+    for d in open_:
+        if d.kind == "detail_conflict":
+            return (
+                f"claims still disagree on which release is bad ({'; '.join(d.claims)}) and "
+                "the evidence settles none of them; a human should take over"
+            )
+    return ""
+
+
+def _refuse_unfit_vectors(knowledge: Any, embedder: Embedder) -> None:
+    """Hybrid search compares query vectors with the stored chunk vectors: both must come
+    from the same model, dimensions, task prefix and weights, or the ranking is noise."""
+    problem = knowledge.vector_mismatch(embedder)
+    if problem:
+        raise ConfigError(
+            "hybrid retrieval was asked for, but the stored runbook vectors do not fit this "
+            f"run's embedder ({problem}): run scripts/build_vector_index.py (or use "
+            "retrieval: bm25)"
+        )
 
 
 def _merge_payload(findings: list[AgentFinding], report: VerificationReport) -> dict[str, Any]:
@@ -1449,6 +1509,7 @@ def _merge_payload(findings: list[AgentFinding], report: VerificationReport) -> 
             for d in report.disagreements
         ],
         "open_questions": report.open_questions(),
+        "leads": report.leads,
     }
 
 

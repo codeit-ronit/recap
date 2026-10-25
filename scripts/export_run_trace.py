@@ -336,7 +336,17 @@ def _overview(
         f"- **Time:** {record.created_at.isoformat()} to {record.updated_at.isoformat()}",
     ]
     if recording:
-        exchanges = recording[1:]
+        # A recording also keeps the run's stops (budget.py) and requests that got no answer.
+        lines_after = recording[1:]
+        exchanges = [
+            x
+            for x in lines_after
+            if x.get("type", "exchange") == "exchange" and not x.get("failed")
+        ]
+        failed = sum(
+            1 for x in lines_after if x.get("type", "exchange") == "exchange" and x.get("failed")
+        )
+        stops = sum(1 for x in lines_after if x.get("type") == "stop")
         chats = sum(1 for x in exchanges if _is_chat(x))
         original = str(record.versions.get("recording"))
         where = (
@@ -348,7 +358,10 @@ def _overview(
         lines.append(
             f"- **Recording:** `recording.jsonl` in this folder: a header and {len(exchanges)} "
             f"HTTP exchanges with the model server ({chats} model requests with the server's "
-            f"responses; metadata and answers are trimmed to the fields RECAP reads); {where}."
+            f"responses; metadata and answers are trimmed to the fields RECAP reads)"
+            + (f", {failed} request(s) that got no answer" if failed else "")
+            + (f", {stops} recorded stop(s) (budget or clock)" if stops else "")
+            + f"; {where}."
         )
     return [*lines, ""]
 

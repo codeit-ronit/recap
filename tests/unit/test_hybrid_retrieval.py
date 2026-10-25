@@ -24,6 +24,7 @@ from recap.knowledge.ollama_embedder import OllamaEmbedder
 from recap.knowledge.retriever import KnowledgeRetriever, searchable_text
 from recap.knowledge.vectors import VectorIndex
 from recap.providers.transport import LiveTransport
+from tests import llm_fakes
 from tests.llm_fakes import FakeOllama
 
 QUERY_VECTORS = REPO_ROOT / "tests" / "fixtures" / "retrieval" / "nomic-query-vectors.json"
@@ -65,6 +66,49 @@ def test_the_stored_vectors_cover_every_runbook_chunk(
     assert stored.document_prefix == spec.document_prefix
     texts = [searchable_text(c) for c in load_documents(settings.paths.knowledge_dir)]
     assert len(stored) == len(set(texts))  # no vector of a chunk that no longer exists
+
+
+def test_a_complete_vector_file_does_not_make_a_search_hybrid(hybrid: KnowledgeRetriever) -> None:
+    """Hybrid search is a per-search choice (the caller passes the query's vector), so the
+    index's own name says what a search without one uses, and logs never claim embeddings."""
+    assert hybrid.hybrid_ready  # the capability
+    assert hybrid.name == "bm25"
+    assert hybrid.retriever_for(None) == "bm25"
+    query = "heap exhaustion makes the container restart over and over"
+    assert hybrid.retriever_for(query_vector(query)) == "hybrid-bm25-embeddings"
+
+
+# --- the stored vectors fit the embedder that embeds the query ----------------------------------
+
+
+@pytest.mark.parametrize(
+    ("change", "named"),
+    [
+        ({"model": "granite-embedding"}, "ollama:granite-embedding"),  # another model
+        ({"dimensions": 1024}, "1024 dimensions"),
+        ({"document_prefix": "passage: "}, "'passage: '"),  # another task prefix
+    ],
+)
+def test_stored_vectors_do_not_fit_another_embedder(
+    hybrid: KnowledgeRetriever, change: dict, named: str
+) -> None:
+    """A vector means something only next to vectors of the same model, task prefix and
+    weights: a query vector of another embedder would be compared with them all the same."""
+    assert hybrid.vector_mismatch(embedder(FakeOllama())) == ""  # the configured one fits
+    problem = hybrid.vector_mismatch(embedder(FakeOllama(), **change))
+    assert named in problem
+
+
+async def test_stored_vectors_do_not_fit_other_weights_of_the_same_model(
+    hybrid: KnowledgeRetriever, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A re-pulled model: the same name, other weights than the stored vectors were made with.
+    monkeypatch.setattr(llm_fakes, "FAKE_EMBED_WEIGHTS", "sha256-" + "e3be" * 16)
+    local = embedder(FakeOllama())
+    assert hybrid.vector_mismatch(local) == ""  # unknown until the server has been asked
+    await local.ensure_ready()
+    problem = hybrid.vector_mismatch(local)
+    assert "weights" in problem and str(local.server["weights"]) in problem  # type: ignore[index]
 
 
 # --- golden: what meaning adds to keywords ------------------------------------------------------
@@ -183,7 +227,9 @@ async def test_queries_and_documents_get_their_task_prefixes() -> None:
     assert all(body["model"] == "nomic-embed-text" for body in fake.embeds)
     assert [c["purpose"] for c in calls] == ["query", "documents"]
     assert calls[0]["input_tokens"] == 3 and calls[0]["replayed"] is False
-    assert local.server is not None and local.server["weights"] == "sha256:" + "e3be" * 16
+    assert local.server is not None and local.server[
+        "weights"
+    ] == llm_fakes.FAKE_EMBED_WEIGHTS.replace("-", ":", 1)
 
 
 def test_the_embedder_is_local_only() -> None:

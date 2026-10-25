@@ -184,7 +184,9 @@ def test_hybrid_retrieval_finds_a_match_that_bm25_misses() -> None:
 
     vectors = {chunk.chunk_id: keyword_vector(f"{chunk.heading} {chunk.text}") for chunk in chunks}
     hybrid = KnowledgeRetriever(chunks, vectors=vectors)
-    assert hybrid.hybrid_ready and hybrid.name == "hybrid-bm25-embeddings"
+    # Ready for hybrid search, but a search is hybrid only when given the query's vector.
+    assert hybrid.hybrid_ready and hybrid.name == "bm25"
+    assert hybrid.retriever_for(keyword_vector(query)) == "hybrid-bm25-embeddings"
     assert hybrid.search(query) == []  # without the query's vector it is BM25 alone
     results = hybrid.search(query, query_vector=keyword_vector(query))
 

@@ -53,6 +53,7 @@ from recap.providers.prompts import (
     InvestigationOutput,
     ProposalOutput,
     ToolCallOutput,
+    citable_ids,
     render_investigation_prompt,
     render_proposal_prompt,
 )
@@ -282,8 +283,8 @@ def _mitigation_draft(
     if params is None:
         notes.append("rejected the draft: params_json is not a JSON object")
         return None
-    citable = {item.item_id for item in request.context.items if item.kind != "evidence"}
-    citable |= {hit.episode.episode_id for hit in request.memory_hits}
+    # The same rule as the step protocol: a tampered episode ID is never accepted.
+    citable = set(citable_ids(request))
     return MitigationDraft(
         action=tool.name,
         target=raw.target,
