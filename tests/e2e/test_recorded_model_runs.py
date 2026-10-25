@@ -4,6 +4,10 @@ The run goes through the whole system (controller, MCP subprocess, gateway, simu
 verifier, approval, oracle) exactly as live, but every model answer comes from the
 recording. It proves, in CI and at $0, that the recorded model's own decisions resolve the
 incident through RECAP's real path, and that a replay is always labeled as one.
+
+These runs name their recording by path (RECAP_REPLAY_RECORDING, the route for scripts);
+the dashboard's replay names it by manifest id (tests/e2e/test_golden_replay.py). Either
+way the replay is labeled with the committed fixture whose bytes it answers from.
 """
 
 from __future__ import annotations
@@ -47,6 +51,10 @@ async def test_the_recorded_qwen3_run_resolves_offline_and_says_it_is_a_replay(
     info = record.provider_info
     assert info is not None and (info.kind, info.origin) == ("replay", "replay")
     assert info.replay_of is not None and info.replay_of["model"] == "qwen3:8b"
+    # Named by its bytes: these are the committed fixture's, given here by absolute path,
+    # and the record shows that path repo-relative (no local folder in a run record).
+    assert info.replay_of["fixture"] == "qwen3-8b-bad-deployment"
+    assert info.recording == record.versions["recording"] == f"fixtures/recordings/{QWEN.name}"
     assert record.usage.model_requests == 0  # no model was called in this run
     # The model's own choices, as recorded: its tool calls and its proposal.
     events = runtime.events.list_events(record.run_id)
@@ -102,6 +110,8 @@ async def test_the_recorded_two_agent_run_resolves_the_unfamiliar_incident_offli
     info = record.provider_info
     assert info is not None and (info.kind, info.origin) == ("replay", "replay")
     assert info.replay_of is not None and info.replay_of["model"] == "qwen3:8b"
+    assert info.replay_of["fixture"] == "qwen3-8b-unfamiliar-parallel"
+    assert info.recording == f"fixtures/recordings/{QWEN_PARALLEL.name}"
     assert record.usage.model_requests == 0  # no model was called in this run
     events = runtime.events.list_events(record.run_id)
     # Two rounds of two specialists; round 2 got the verifier's leads for the chain.
@@ -136,7 +146,12 @@ async def test_the_recorded_two_agent_run_resolves_the_unfamiliar_incident_offli
 
 
 def test_recordings_hold_no_secrets_or_local_paths() -> None:
-    """Recordings are committed: no key formats, no home folder, no Ollama model files."""
+    """Recordings and their manifest are committed: no key formats, no home folder, no
+    Ollama model files. (tests/unit/test_published_artifacts.py checks them decoded.)"""
+    manifest = (RECORDINGS / "MANIFEST.json").read_text(encoding="utf-8")
+    for marker in ("/Users/", "/home/", "/private/", "~/"):
+        found = marker in manifest
+        assert not found, ("MANIFEST.json", marker)
     for path in RECORDINGS.glob("*.jsonl"):
         text = path.read_text(encoding="utf-8")
         # Booleans on purpose: on failure pytest must not print the file into the CI log.

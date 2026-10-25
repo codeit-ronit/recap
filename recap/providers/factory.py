@@ -7,7 +7,9 @@ override it). What gets built depends on the entry's kind and origin:
     kind scripted                 DeterministicProvider (the default; NOT an LLM, $0)
     origin local_llm   (ollama)   OllamaProvider     over a live, recorded HTTP transport
     origin free_hosted_llm        FreeHostedProvider guarded by FreeTierGuard (quota.py)
-    kind replay                   the recorded provider again, answering from a recording
+    kind replay                   the recorded provider again, answering from a recording:
+                                  a committed one by its manifest id (RunConfig.replay_fixture,
+                                  hash-checked, recordings.py), or a file (RECAP_REPLAY_RECORDING)
     origin paid_llm               the optional Claude adapter: refused unless the owner sets
                                   RECAP_ALLOW_PAID_LLM=1 (this project's budget is $0)
 
@@ -24,6 +26,7 @@ Two rules keep this honest:
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 from typing import Any
@@ -36,6 +39,7 @@ from recap.core.errors import ConfigError
 from recap.core.ids import new_id, utcnow
 from recap.core.interfaces import LLMProvider
 from recap.knowledge.embeddings import Embedder
+from recap.providers import recordings
 from recap.providers.quota import UsageLedger
 from recap.providers.transport import (
     LiveTransport,
@@ -45,6 +49,7 @@ from recap.providers.transport import (
     RecordingTransport,
     ReplayTransport,
     Trim,
+    shown_path,
 )
 
 KNOWN_PLANNERS = ("default", "prompt_injected")
@@ -61,8 +66,13 @@ def create_provider(
     client: object | None = None,
     mock_http: httpx.MockTransport | None = None,
     ledger: UsageLedger | None = None,
+    replay_fixture: str | None = None,
 ) -> LLMProvider:
     """Build the provider called `name`.
+
+    `replay_fixture` (RunConfig.replay_fixture) names a committed recording by its id in
+    fixtures/recordings/MANIFEST.json; only the replay provider takes one, and an unknown id
+    or a file whose bytes no longer match the manifest is refused here, before any request.
 
     Tests only: `client` injects an SDK client, and `mock_http` stands in for the network
     (a local protocol fixture), so the real HTTP code still runs. `ledger` is the shared
@@ -74,6 +84,11 @@ def create_provider(
     if spec is None:
         known = ", ".join(settings.providers.providers)
         raise ConfigError(f"unknown provider '{name}' (configured: {known})")
+    if replay_fixture is not None and spec.kind != "replay":
+        # Never quietly ignored: the run would claim to replay a recording it does not use.
+        raise ConfigError(
+            f"replay_fixture {replay_fixture!r} needs the replay provider, not '{name}'"
+        )
     if spec.kind in ("llm", "replay") and spec.origin != "paid_llm":
         from recap.providers.protocol import check_catalog
 
@@ -81,7 +96,7 @@ def create_provider(
     if spec.kind == "scripted":
         provider = _deterministic(settings)
     elif spec.kind == "replay":
-        provider = _replay(spec, settings)
+        provider = _replay(spec, settings, replay_fixture)
     elif spec.origin == "paid_llm":
         provider = _anthropic(spec, client)
     elif spec.api == "ollama":
@@ -201,33 +216,64 @@ def _free_hosted(
     return FreeHostedProvider(name, spec, wired, guard=guard, recording=recording)
 
 
-def _replay(spec: ProviderSettings, settings: Settings) -> LLMProvider:
-    """The provider that made a recording, answering from it: same code path, no network."""
-    raw = os.environ.get(REPLAY_ENV, "").strip() or spec.recording
-    if not raw:
-        raise ConfigError(
-            f"the replay provider needs a recording (configs/providers.yaml or {REPLAY_ENV})"
-        )
-    path = Path(raw) if Path(raw).is_absolute() else settings.paths.root / raw
-    recording = Recording.load(path)
+def _replay(spec: ProviderSettings, settings: Settings, fixture: str | None) -> LLMProvider:
+    """The provider that made a recording, answering from it: same code path, no network.
+
+    Which recording, the first that is set:
+
+      fixture (RunConfig.replay_fixture)  a committed recording by its manifest id; its bytes
+                                          must match the pinned SHA-256 (a client never
+                                          names a path)
+      RECAP_REPLAY_RECORDING              a file, for scripts and tests
+      configs/providers.yaml              the replay entry's `recording`
+
+    Either way the replay parses exactly the bytes it hashed, and its provenance (`replay_of`)
+    names them: their SHA-256, and the committed fixture they are when the manifest pins
+    that hash, so a copy of a fixture is that fixture and a file with one changed byte is
+    not. The API labels a replay of a committed fixture a recorded real-LLM run.
+    """
+    if fixture is not None:
+        verified = recordings.read_fixture(fixture)  # an unknown id or altered bytes: refused
+        path, data = verified.path, verified.data
+    else:
+        raw = os.environ.get(REPLAY_ENV, "").strip() or spec.recording
+        if not raw:
+            raise ConfigError(
+                f"the replay provider needs a recording (configs/providers.yaml or {REPLAY_ENV})"
+            )
+        path = Path(raw) if Path(raw).is_absolute() else settings.paths.root / raw
+        if not path.is_file():
+            raise ConfigError(f"recording not found: {shown_path(path, settings.paths.root)}")
+        data = path.read_bytes()
+    recording = Recording.parse(data, path)
     header = recording.header
     original = ProviderSettings.model_validate(header["settings"])
+    digest = hashlib.sha256(data).hexdigest()
+    committed = recordings.fixture_for(digest)
     provenance = {
         key: header.get(key)
         for key in ("recording_id", "original_provider", "model", "created_at", "prompt_version")
     }
-    provenance["recording_schema"] = header.get("schema")
+    provenance |= {
+        "recording_schema": header.get("schema"),
+        "original_origin": original.origin,  # what made the recording (e.g. local_llm)
+        "sha256": digest,  # the exact bytes this replay answers from
+        "fixture": committed.id if committed else None,  # None: not a committed recording
+    }
+    # Where the answers come from, as run records and the API show it: repo-relative, or
+    # only the file name for a file outside the repository (never a local folder).
+    shown = shown_path(path, settings.paths.root)
     transport = ReplayTransport(recording)
     name = str(header.get("original_provider", "recorded"))
     if original.api == "ollama":
         from recap.providers.ollama_provider import OllamaProvider
 
-        return OllamaProvider(name, original, transport, replay_of=provenance, recording=raw)
+        return OllamaProvider(name, original, transport, replay_of=provenance, recording=shown)
     if original.api == "openai_compatible":
         from recap.providers.openai_compatible import FreeHostedProvider
 
         return FreeHostedProvider(
-            name, original, transport, guard=None, replay_of=provenance, recording=raw
+            name, original, transport, guard=None, replay_of=provenance, recording=shown
         )
     raise ConfigError(f"{path.name}: cannot replay a recording of api {original.api!r}")
 

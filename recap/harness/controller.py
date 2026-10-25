@@ -212,7 +212,9 @@ class IncidentController:
         self.config = self._effective_config()
         self.info = self.environment.describe()  # is_simulated is fixed per adapter
         self._check_safety_scope()
+        self._check_replay_scope(self._replay_requested())  # before any recording is read
         self.provider = self.deps.provider_factory(self.config)
+        self._check_replay_scope(self.provider.info.origin == "replay")  # whatever its name
         self.config = _memory_defaults(self.config, self.provider.info.origin)
         seed = self._seed()
 
@@ -1282,6 +1284,26 @@ class IncidentController:
             raise ConfigError("safety can only be disabled against a simulated environment")
         if self.config.approval_mode == "auto" and not self.info.is_simulated:
             raise ConfigError("the auto-approver is allowed only in a simulated environment")
+
+    def _replay_requested(self) -> bool:
+        """Does this run's configuration ask for a replay (the replay provider, or a fixture)?"""
+        name = self.config.provider or self.settings.providers.default
+        spec = self.settings.providers.providers.get(name)
+        replay_provider = spec is not None and spec.kind == "replay"
+        return replay_provider or self.config.replay_fixture is not None
+
+    def _check_replay_scope(self, replay: bool) -> None:
+        """A replay re-runs a recorded model's decisions, made about another system at another
+        time. Its fix must never reach anything real, even with a person's approval, so a
+        replay against an environment that is not simulated is refused before it starts:
+        before the environment is reset, a run record exists or an approval is asked for.
+        Checked by the configuration before the provider is built (so no recording is even
+        read), and again by what was built (a replay under any provider name)."""
+        if replay and not self.info.is_simulated:
+            raise ConfigError(
+                f"a replay may run only against a simulated environment; {self.info.name!r} "
+                f"({self.info.kind}) is not simulated, so the replay was refused before it started"
+            )
 
     def _seed(self) -> int:
         if self.config.seed is not None:

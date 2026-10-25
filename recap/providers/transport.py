@@ -49,6 +49,7 @@ from urllib.parse import urlsplit
 import httpx
 from pydantic import Field
 
+from recap.core.config import REPO_ROOT
 from recap.core.errors import ConfigError, ProviderError, ReplayMismatch
 from recap.core.ids import canonical_json, sha256_hex, utcnow
 from recap.core.models import Contract
@@ -288,20 +289,40 @@ class Recording(Contract):
     @classmethod
     def load(cls, path: Path) -> Recording:
         if not path.is_file():
-            raise ConfigError(f"recording not found: {path}")
+            raise ConfigError(f"recording not found: {shown_path(path)}")
+        return cls.parse(path.read_bytes(), path)
+
+    @classmethod
+    def parse(cls, data: bytes, path: Path) -> Recording:
+        """A recording from its bytes; `path` only names it. The replay of a committed
+        fixture parses the very bytes whose SHA-256 it checked (recordings.read_fixture), so
+        nothing can change between the check and the replay."""
         try:
-            text = path.read_text(encoding="utf-8")
-            lines = [json.loads(line) for line in text.splitlines() if line]
+            lines = [json.loads(line) for line in data.decode("utf-8").splitlines() if line]
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ConfigError(f"{path.name} is not a valid recording ({exc})") from None
-        if not lines or lines[0].get("type") != "header":
-            raise ConfigError(f"{path} is not a RECAP recording (no header line)")
+        if not lines or not isinstance(lines[0], dict) or lines[0].get("type") != "header":
+            raise ConfigError(f"{shown_path(path)} is not a RECAP recording (no header line)")
+        if not all(isinstance(line, dict) for line in lines):
+            raise ConfigError(f"{path.name} is not a valid recording (a line is not an object)")
         header = lines[0]
         if header.get("schema") != RECORDING_SCHEMA:
-            raise ConfigError(f"{path}: unsupported recording schema {header.get('schema')!r}")
+            raise ConfigError(
+                f"{shown_path(path)}: unsupported recording schema {header.get('schema')!r}"
+            )
         exchanges = [line for line in lines[1:] if line.get("type") == "exchange"]
         stops = [line for line in lines[1:] if line.get("type") == "stop"]
         return cls(path=str(path), header=header, exchanges=exchanges, stops=stops)
+
+
+def shown_path(path: Path, root: Path = REPO_ROOT) -> str:
+    """A recording's location as RECAP shows it (messages, run records, API answers): relative
+    to the repository when the file is inside it, else only its name. Never a local folder: a
+    home folder names its user, and a recording's path may reach a shared run record."""
+    try:
+        return str(path.resolve().relative_to(root.resolve()))
+    except (ValueError, OSError):
+        return path.name
 
 
 class ReplayTransport:

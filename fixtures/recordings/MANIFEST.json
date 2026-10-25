@@ -8,7 +8,7 @@
    "bytes": 225578,
    "recording_id": "20261025-121828-ollama-6a5cfd",
    "title": "Unfamiliar incident, two specialists, owner-approved fix (M3 deliverable)",
-   "description": "qwen3:8b on the held-out m3-inventory-leak-behind-frontend incident: two specialists in parallel for two rounds, a rejected 'bad cart release', resource pressure on inventory supported, restart approved by the owner at a terminal, oracle verified.",
+   "description": "qwen3:8b on the held-out m3-inventory-leak-behind-frontend incident: two specialists in parallel for two rounds; a claim that cart's recent deployment broke frontend was not accepted (it cited none of the evidence its rules relied on); resource pressure on inventory supported; restart approved by the owner at an interactive terminal; oracle verified.",
    "scenario": "m3-inventory-leak-behind-frontend",
    "strategy": "parallel",
    "use_memory": true,
