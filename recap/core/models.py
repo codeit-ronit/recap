@@ -1126,6 +1126,9 @@ class RunConfig(Contract):
     approval_mode: Literal["manual", "auto"] = "manual"  # auto = simulation auto-approver
     planner: Literal["default", "prompt_injected"] = "default"  # red-team compromised planner
     provider: str | None = None  # None -> settings default
+    # With provider "replay": which COMMITTED recording to replay, by its id in
+    # fixtures/recordings/MANIFEST.json (never a path from a client). None -> RECAP_REPLAY.
+    replay_fixture: str | None = None
     seed: int | None = None  # None -> scenario seed
     budget: RunBudget | None = None  # None -> scenario budget or defaults
     tool_latency_ms: int | None = None  # override simulated tool latency
