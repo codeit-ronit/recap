@@ -1,0 +1,142 @@
+/*
+ * Experience Memory page, M3 additions: the red-team plant marker, untrusted data text, an
+ * episode's consolidator-v2 run summary and the memory check of a run. Colors come from the
+ * theme variables in ../styles.css; reuse its classes wherever they fit.
+ */
+
+/* A red-team plant is loud: a planted "verified success" must never pass as experience. */
+.mem-plant .notice {
+  border-width: 2px;
+  background: rgba(248, 81, 73, 0.1);
+}
+.mem-plant .notice-title {
+  color: var(--bad-text);
+  letter-spacing: 0.03em;
+}
+.mem-plant-note {
+  margin-top: 8px;
+  max-height: 120px;
+}
+
+/* Untrusted text (alert symptoms, tool output) is shown as data, in monospace. */
+.mem-data {
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+/* A mini title with a tag or chip next to it. */
+.mem-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.mem-title-row .mini-title {
+  margin: 0;
+}
+
+/* A mini title that follows inline text ("none ...") needs its own room above. */
+.mini-title.mem-after {
+  margin-top: 14px;
+}
+
+/* Right column of an episode's detail: titles after the first get room above them. */
+.mem-side {
+  min-width: 0;
+}
+.mem-side > .mini-title:not(:first-child) {
+  margin-top: 16px;
+}
+
+/* consolidator-v2 run summary */
+.mem-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.mem-summary-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 16px;
+}
+.mem-summary-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.mem-summary-grid .mini-title {
+  margin: 0;
+}
+.mem-summary-grid > div > .mini-title:not(:first-child) {
+  margin-top: 8px;
+}
+.mem-claims {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mem-claims .check {
+  gap: 6px;
+  padding: 10px 12px;
+}
+
+/*
+ * The trajectory table sits inside an expanded row: undo the detail row's cell padding. styles.css
+ * loads after this file, so each selector must outrank its rule there: `.table tr.row-detail td`
+ * and, while the pointer is over the row, `.table tr.row-detail:hover td`; `.table th` too.
+ */
+.table tr.row-detail .mem-trajectory td,
+.table tr.row-detail:hover .mem-trajectory td,
+.mem-trajectory td {
+  padding: 5px 10px;
+  background: transparent;
+}
+.table .mem-trajectory th {
+  padding: 6px 10px;
+}
+/* Long calls wrap instead of pushing the Evidence column out of view. */
+.mem-trajectory code {
+  overflow-wrap: anywhere;
+}
+
+/* A hit's reuse conditions: what held, and what argues against reuse. */
+.mem-conditions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 200px;
+}
+/* A checked claim's release in the claim's own words (not a version): quoted data. */
+q.mem-quote {
+  quotes: "\201C" "\201D";
+}
+.mem-rule-tag {
+  margin-left: 8px;
+}
+.mem-cond-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.mem-cond-label:not(:first-child) {
+  margin-top: 4px;
+}
+
+/* How the run searched memory, above its hits. */
+.mem-check .kv-row {
+  grid-template-columns: 170px minmax(0, 1fr);
+}
+
+@media (max-width: 1280px) {
+  .mem-summary-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

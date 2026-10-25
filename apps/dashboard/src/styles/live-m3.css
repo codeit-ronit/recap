@@ -1,0 +1,57 @@
+/*
+ * M3 additions to the Live Incident Run page and its event feed (imported by
+ * pages/LiveRun.tsx and components/EventFeed.tsx). Everything else reuses styles.css.
+ */
+
+/*
+ * Untrusted text an agent's provider or a tool wrote (a search query, an agent's summary, a
+ * model's confidence note): quoted and set apart, so it never reads as RECAP's own words.
+ * React renders it as text, never as markup.
+ */
+.feed-quote,
+.live-quote {
+  color: var(--text-2);
+  font-style: italic;
+  quotes: "\201C" "\201D";
+}
+.feed-quote::before,
+.live-quote::before {
+  content: open-quote;
+  color: var(--muted);
+  font-style: normal;
+}
+.feed-quote::after,
+.live-quote::after {
+  content: close-quote;
+  color: var(--muted);
+  font-style: normal;
+}
+
+/* A labeled block of untrusted text inside a key/value row (the diagnosis' confidence note). */
+.live-untrusted {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--border-2);
+  border-radius: 0 6px 6px 0;
+  background: var(--inset);
+}
+.live-untrusted-label,
+.live-label {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* One disagreement between agents in the result panel. */
+.live-conflict {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+}

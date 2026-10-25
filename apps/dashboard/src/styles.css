@@ -2453,6 +2453,10 @@ select:focus {
   .app {
     grid-template-columns: minmax(0, 1fr);
   }
+  /* A card's actions (a filter, say) drop below its title instead of squeezing it. */
+  .card-head {
+    flex-wrap: wrap;
+  }
   .sidebar {
     position: static;
     height: auto;

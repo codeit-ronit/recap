@@ -6,7 +6,7 @@ import { EmptyState, ErrorState, Loading, NoRuns } from "../components/EmptyStat
 import { Icon } from "../components/Icon";
 import type { IconName } from "../components/Icon";
 import { DataTable } from "../components/Table";
-import { fmtInt, fmtRelative, isTerminal, providerLabel, stateLabel, stateTone } from "../format";
+import { fmtInt, fmtRelative, hybridReadiness, isTerminal, providerLabel, searchModeLabel, stateLabel, stateTone } from "../format";
 import { hrefFor, navigate, useNow, usePolling } from "../hooks";
 import type { PageProps } from "../hooks";
 import type { EvalReport, RunSummary, SystemSummary } from "../types";
@@ -26,8 +26,24 @@ function SystemCard({ icon, label, value, detail }: { icon: IconName; label: str
   );
 }
 
+/**
+ * The retriever card's detail. Since M3 /system also reports the default search mode, whether
+ * hybrid can run (`hybrid_ready`: stored vectors cover every chunk) and the vectors' embedder.
+ * The retriever names what a run that does not choose searches with (a server from before
+ * hybrid_ready named the capability there: see hybridReadiness).
+ */
+function retrieverDetail(system: SystemSummary): string {
+  const parts = [`${fmtInt(system.knowledge_chunks)} knowledge chunks indexed`];
+  if (system.retrieval_mode) parts.push(`default search: ${searchModeLabel(system.retrieval_mode, true)}`);
+  const hybrid = hybridReadiness(system);
+  if (hybrid === "ready") parts.push(`hybrid available${system.embedder ? ` (vectors: ${system.embedder})` : ""}`);
+  if (hybrid === "unavailable") parts.push("hybrid unavailable: stored vectors missing or incomplete");
+  return parts.join(" · ");
+}
+
 function SystemCards({ system }: { system: SystemSummary }) {
   const env = system.environment;
+  const promptVersion = system.provider.prompt_version;
   return (
     <div className="sys-grid">
       <SystemCard
@@ -44,19 +60,18 @@ function SystemCards({ system }: { system: SystemSummary }) {
         icon="cpu"
         label="Decision provider"
         value={<Mono>{system.provider.name}</Mono>}
-        detail={system.provider.origin === "scripted" || system.provider.kind === "scripted" ? "scripted policy — not an LLM, $0 cost" : providerLabel(system.provider)}
+        detail={
+          system.provider.origin === "scripted" || system.provider.kind === "scripted"
+            ? "scripted policy — not an LLM, $0 cost"
+            : `${providerLabel(system.provider)}${promptVersion ? ` · ${promptVersion}` : ""}`
+        }
       />
-      <SystemCard
-        icon="book"
-        label="Retriever (RAG)"
-        value={<Mono>{system.retriever}</Mono>}
-        detail={`${fmtInt(system.knowledge_chunks)} knowledge chunks indexed`}
-      />
+      <SystemCard icon="book" label="Retriever (RAG)" value={<Mono>{system.retriever}</Mono>} detail={retrieverDetail(system)} />
       <SystemCard
         icon="memory"
         label="Experience memory"
         value={`${fmtInt(system.memory_episodes)} episodes`}
-        detail="successes only when the oracle verified recovery"
+        detail="successes only when the oracle verified recovery · scripted runs write the DEMO partition, real models LIVE"
       />
       <SystemCard icon="route" label="Router" value={<Mono>{system.router}</Mono>} detail="single vs parallel from signals + budget" />
       <SystemCard icon="shield" label="Safety policy" value={<Mono>{system.safety_policy}</Mono>} detail="trusted code at the tool gateway" />

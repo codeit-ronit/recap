@@ -9,7 +9,29 @@ import { EventFeed } from "../components/EventFeed";
 import { Icon } from "../components/Icon";
 import { RunLinks } from "../components/RunPicker";
 import { StateStepper } from "../components/StateStepper";
-import { costLabel, fmtArgs, fmtInt, fmtMs, isTerminal, num, obj, str, stateTone, tsMs } from "../format";
+import {
+  arr,
+  budgetUses,
+  costLabel,
+  disagreementCounts,
+  disagreementLabel,
+  fmtArgs,
+  fmtInt,
+  fmtMs,
+  humanize,
+  hybridReadiness,
+  isTerminal,
+  liveModelTokenUse,
+  memoryAccessLabel,
+  modelTokenUse,
+  num,
+  obj,
+  plural,
+  searchModeLabel,
+  str,
+  stateTone,
+  tsMs,
+} from "../format";
 import { navigate, usePolling, useRunEvents } from "../hooks";
 import type { PageProps, RunEventsState } from "../hooks";
 import type {
@@ -17,13 +39,32 @@ import type {
   ExperienceEpisode,
   ProposalPayload,
   ProviderInfo,
+  RunConfig,
   RunConfigInput,
   RunDetail,
+  RunRecord,
   RunSummaryPayload,
   ScenarioInfo,
   SystemSummary,
   TraceEvent,
+  Usage,
+  VerificationReport,
 } from "../types";
+import { knowledgeOverlays } from "../view/retrieval";
+import {
+  checkDetail,
+  detailLabel,
+  diagnosisCheck,
+  isCheckedValue,
+  reportLeads,
+  ruleIdsOf,
+  textAuthor,
+  verifiedBeforeM3,
+} from "../view/verification";
+import "../styles/live-m3.css";
+
+/** How runbooks are searched (RunConfig.retrieval, M3): keywords, or keywords + meaning. */
+type SearchMode = NonNullable<RunConfig["retrieval"]>;
 
 const DEFAULT_CONFIG: RunConfigInput = {
   strategy: "adaptive",
@@ -130,12 +171,79 @@ function ScenarioCard({
   );
 }
 
-function ConfigForm({
+/**
+ * Runbook search (RunConfig.retrieval, M3): keywords (BM25) or keywords + meaning (hybrid).
+ * Sent only once the operator picks one; until then the server's default (GET /system) applies.
+ */
+function SearchField({
   config,
   onChange,
+  system,
 }: {
   config: RunConfigInput;
   onChange: (config: RunConfigInput) => void;
+  system: SystemSummary | undefined;
+}) {
+  const serverDefault = system?.retrieval_mode; // reported by servers since M3
+  const chosen = config.retrieval;
+  const shown = chosen ?? serverDefault;
+  const readiness = hybridReadiness(system);
+  const useDefault = () => {
+    const next = { ...config };
+    delete next.retrieval;
+    onChange(next);
+  };
+  return (
+    <div className="field">
+      <span className="field-label">Runbook search</span>
+      <Segmented<SearchMode | "">
+        label="Runbook search"
+        value={shown ?? ""}
+        onChange={(v) => onChange({ ...config, retrieval: v || undefined })}
+        options={[
+          { value: "bm25", label: "Keywords (BM25)" },
+          { value: "hybrid", label: "Keywords + meaning (hybrid)" },
+        ]}
+      />
+      <span className="field-hint">
+        {shown === "hybrid"
+          ? "Adds a meaning ranking from nomic-embed-text on local Ollama to BM25. Needs Ollama running with nomic-embed-text and the stored runbook vectors (scripts/build_vector_index.py); without them the run fails at its first search."
+          : shown === "bm25"
+            ? "Keyword ranking only: offline and deterministic, no model needed."
+            : "GET /system has not reported the server's default search."}
+      </span>
+      {shown === "hybrid" && readiness !== "unknown" ? (
+        <span className="field-hint">
+          {readiness === "ready" ? (
+            `GET /system: stored vectors cover every runbook chunk${system?.embedder ? ` (${system.embedder})` : ""}.`
+          ) : (
+            <span className="text-warn">GET /system: the stored runbook vectors are missing or incomplete, so a hybrid run would fail now.</span>
+          )}
+        </span>
+      ) : null}
+      <span className="field-hint">
+        {chosen
+          ? `Sent with the run as retrieval: ${chosen}.`
+          : `Not chosen: ${serverDefault ? `the server's default (${searchModeLabel(serverDefault)})` : "the server's default"} applies and nothing is sent.`}
+        {config.use_rag ? "" : " RAG is off, so no runbook search runs."}
+      </span>
+      {chosen ? (
+        <button type="button" className="btn btn-ghost btn-small" onClick={useDefault}>
+          Use the server default
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function ConfigForm({
+  config,
+  onChange,
+  system,
+}: {
+  config: RunConfigInput;
+  onChange: (config: RunConfigInput) => void;
+  system: SystemSummary | undefined;
 }) {
   const set = <K extends keyof RunConfigInput>(key: K, value: RunConfigInput[K]) => onChange({ ...config, [key]: value });
   const hints: Record<RunConfigInput["strategy"], string> = {
@@ -179,9 +287,10 @@ function ConfigForm({
       </div>
       <div className="field">
         <span className="field-label">Context</span>
-        <Toggle checked={config.use_rag} onChange={(v) => set("use_rag", v)} label="Runbook retrieval (RAG)" hint="BM25 over fixtures/knowledge" />
+        <Toggle checked={config.use_rag} onChange={(v) => set("use_rag", v)} label="Runbook retrieval (RAG)" hint="runbooks in fixtures/knowledge, cited by chunk id" />
         <Toggle checked={config.use_memory} onChange={(v) => set("use_memory", v)} label="Experience memory" hint="past episodes, checked against live evidence" />
       </div>
+      <SearchField config={config} onChange={onChange} system={system} />
       <div className="field">
         <label className="field-label" htmlFor="latency">
           Simulated tool latency (ms)
@@ -209,16 +318,180 @@ function ConfigForm({
 // Run view
 // ======================================================================================
 
+/** How the run searched the runbooks (RunRecord.retrieval, M3), and any extra runbook folders. */
+function SearchFacts({ record }: { record: RunRecord }) {
+  if (!record.config.use_rag) return <span className="muted">RAG off: no runbook search ran</span>;
+  const info = record.retrieval;
+  if (!info) return <span className="muted">not recorded</span>;
+  const requests = num(info.embedding_requests);
+  const tokens = num(info.embedding_input_tokens);
+  const replayed = num(info.replayed_requests);
+  const searches = num(info.agent_searches);
+  // RECAP_KNOWLEDGE_OVERLAYS: extra runbook folders (e.g. a red-team overlay) were indexed.
+  const overlays = arr<string>(obj(record.versions).knowledge_overlays).filter((o) => typeof o === "string");
+  return (
+    <span className="cell-stack">
+      <span className="chip-row">
+        <Chip tone={info.mode === "hybrid" ? "info" : "neutral"}>{searchModeLabel(info.mode, true)}</Chip>
+        <span className="muted">{record.config.retrieval ? "chosen for this run" : "server default"}</span>
+      </span>
+      {info.mode === "hybrid" ? (
+        <span className="muted small">
+          embedder <Mono>{info.embedder ?? "not recorded"}</Mono>
+          {requests !== null ? ` · ${plural(requests, "embedding request")}` : ""}
+          {tokens !== null ? ` · ${fmtInt(tokens)} input tokens reported by the server` : ""}
+          {replayed ? ` · ${fmtInt(replayed)} replayed from the recording` : ""}
+        </span>
+      ) : null}
+      <span className="muted small">
+        {searches !== null ? `${plural(searches, "search", "searches")} by the agents (search_runbooks)` : "agent searches not recorded"}
+      </span>
+      {overlays.length ? (
+        <span className="chip-row">
+          <Chip tone="warn">
+            <Icon name="alert" size={12} /> extra runbook folders indexed
+          </Chip>
+          {overlays.map((o) => (
+            <Mono key={o}>{o}</Mono>
+          ))}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * The final verification's disagreements between agents (M3): what conflicted, and the rule
+ * that settled it; and RECAP's leads for a next round. A run verified before M3 recorded none
+ * (the API serves the missing list as []): "not recorded".
+ */
+function DisagreementFacts({ report, findings }: { report: VerificationReport | null; findings: RunRecord["findings"] }) {
+  if (!report) return <span className="muted">no verification ran</span>;
+  const counts = verifiedBeforeM3(report, findings) ? null : disagreementCounts(report.disagreements);
+  if (!counts) return <span className="muted">not recorded</span>;
+  const leads = reportLeads(report);
+  return (
+    <span className="cell-stack">
+      <span>
+        {disagreementLabel(counts)} <span className="muted">(final verification)</span>
+      </span>
+      {arr<NonNullable<VerificationReport["disagreements"]>[number]>(report.disagreements).map((d, i) => {
+        const claims = arr<string>(d.claims);
+        const agents = arr<string>(d.agents);
+        const rules = ruleIdsOf(d.rule_id);
+        return (
+          <span key={i} className="live-conflict">
+            <span className="chip-row">
+              <Chip tone={d.resolved ? "ok" : "warn"}>{d.resolved ? (rules.length ? "settled by" : "settled") : "open"}</Chip>
+              {d.resolved
+                ? rules.map((id) => (
+                    <Chip key={id} mono>
+                      {id}
+                    </Chip>
+                  ))
+                : null}
+              <span className="muted small">
+                {humanize(str(d.kind, "disagreement"))}
+                {agents.length ? ` · ${agents.join(", ")}` : ""}
+              </span>
+            </span>
+            {claims.length ? <span className="small">{claims.join(" vs ")}</span> : null}
+            {d.resolution ? <span className="muted small">{d.resolution}</span> : null}
+          </span>
+        );
+      })}
+      {leads.length ? (
+        <span className="live-conflict">
+          <span className="live-label">RECAP's leads for the next round (its own text)</span>
+          {leads.map((lead) => (
+            <span key={lead} className="small">
+              {lead}
+            </span>
+          ))}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * The diagnosis: RECAP's checked facts (mechanism, service, and the release or dependency the
+ * merger keyed it by), then the claim sentence and confidence note quoted as the agent's own
+ * untrusted words. The verifier never reads the sentence: only its mechanism, service and detail.
+ */
+function DiagnosisFacts({ report, provider }: { report: VerificationReport; provider: Partial<ProviderInfo> | null | undefined }) {
+  const best = report.best;
+  if (!best) return <span className="muted">no supported diagnosis</span>;
+  const author = textAuthor(provider);
+  const check = diagnosisCheck(report);
+  const detail = check ? checkDetail(check) : "";
+  return (
+    <span className="cell-stack">
+      <span className="chip-row">
+        <Mono>
+          {best.mechanism}@{best.target_service ?? "?"}
+        </Mono>
+        {detail && isCheckedValue(best.mechanism, detail) ? <span className="muted">{detailLabel(best.mechanism, detail)}</span> : null}
+      </span>
+      {detail && !isCheckedValue(best.mechanism, detail) ? (
+        <span className="live-untrusted">
+          <span className="live-untrusted-label">judged as · untrusted {author.who} text</span>
+          <q className="live-quote">{detail}</q>
+        </span>
+      ) : null}
+      {best.claim ? (
+        <span className="live-untrusted">
+          <span className="live-untrusted-label">claim · untrusted {author.who} text</span>
+          <q className="live-quote">{best.claim}</q>
+        </span>
+      ) : null}
+      {best.confidence_note ? (
+        <span className="live-untrusted">
+          <span className="live-untrusted-label">confidence note · {author.words}, not a score</span>
+          <q className="live-quote">{best.confidence_note}</q>
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/** The budget as the run's run.summary recorded it: each counter against its limit, real counts only. */
+function BudgetFacts({
+  budget,
+  usage,
+  provider,
+}: {
+  budget: unknown;
+  usage: Usage;
+  provider: Partial<ProviderInfo> | null | undefined;
+}) {
+  const uses = budgetUses(budget).filter((b) => b.key !== "model_tokens");
+  if (!uses.length) return <span className="muted">not recorded</span>;
+  const model = modelTokenUse(budget, usage, provider);
+  return (
+    <span className="cell-stack">
+      <span>{uses.map((b) => b.text).join(" · ")}</span>
+      <span>
+        model tokens <strong className={model.tone === "warn" ? "text-warn" : undefined}>{model.value}</strong>
+        {model.note ? <span className="muted"> · {model.note}</span> : null}
+      </span>
+    </span>
+  );
+}
+
 function ResultPanel({
   detail,
   summary,
   system,
   runId,
+  memorySkip,
 }: {
   detail: RunDetail | undefined;
   summary: RunSummaryPayload | undefined;
   system: SystemSummary | undefined;
   runId: string;
+  /** Why the run wrote no episode (its last memory.skip reason, RECAP's own text). */
+  memorySkip: string;
 }) {
   const record = detail?.record;
   if (!record) {
@@ -230,7 +503,6 @@ function ResultPanel({
       <Loading label="Loading the final checkpoint…" />
     );
   }
-  const best = record.verification?.best;
   const recovery = record.recovery;
   // Where the decisions came from: the run's own record (runs before M2: the live system's).
   const provider = record.provider_info ?? (system && record.provider === system.provider.name ? system.provider : null);
@@ -253,17 +525,13 @@ function ResultPanel({
         rows={[
           [
             "Diagnosis",
-            best ? (
-              <span className="cell-stack">
-                <span>{best.claim}</span>
-                <Mono>
-                  {best.mechanism}@{best.target_service ?? "?"}
-                </Mono>
-              </span>
+            record.verification ? (
+              <DiagnosisFacts report={record.verification} provider={provider} />
             ) : (
               <span className="muted">no supported diagnosis</span>
             ),
           ],
+          ["Disagreements", <DisagreementFacts report={record.verification} findings={record.findings} />],
           [
             "Oracle verdict",
             recovery ? (
@@ -307,7 +575,16 @@ function ResultPanel({
               ) : null}
             </span>,
           ],
-          ["Episode written", record.episode_id ? <Mono>{record.episode_id}</Mono> : <span className="muted">not written</span>],
+          ["Runbook search", <SearchFacts record={record} />],
+          ["Memory partitions", <span>{memoryAccessLabel(record.config, !!record.episode_id)}</span>],
+          [
+            "Episode written",
+            record.episode_id ? (
+              <Mono>{record.episode_id}</Mono>
+            ) : (
+              <span className="muted">not written{memorySkip ? ` — ${memorySkip}` : ""}</span>
+            ),
+          ],
           [
             "Usage",
             <span>
@@ -326,6 +603,7 @@ function ResultPanel({
               ) : null}
             </span>,
           ],
+          ["Budget", <BudgetFacts budget={summary?.budget} usage={u} provider={provider} />],
           ["Cost", costLabel(summary?.cost, provider)],
           [
             "Run config",
@@ -333,6 +611,7 @@ function ResultPanel({
               {fmtArgs({
                 strategy: record.config.strategy,
                 use_rag: record.config.use_rag,
+                retrieval: record.config.retrieval,
                 use_memory: record.config.use_memory,
                 approval_mode: record.config.approval_mode,
                 planner: record.config.planner,
@@ -366,12 +645,26 @@ function ResultPanel({
   );
 }
 
-function LiveFacts({ events }: { events: TraceEvent[] }) {
+function LiveFacts({
+  events,
+  provider,
+  modelTokenLimit,
+}: {
+  events: TraceEvent[];
+  provider: Partial<ProviderInfo> | undefined;
+  modelTokenLimit: number | null;
+}) {
   const count = (category: string) => events.filter((e) => e.category === category).length;
   const modes = events.filter((e) => e.category === "routing.decision").map((e) => str(e.payload.mode, "?"));
   const elapsed = events.length > 1 ? tsMs(events[events.length - 1].ts) - tsMs(events[0].ts) : 0;
   const injections = count("safety.injection_flag");
   const denials = events.filter((e) => e.category === "policy.decision" && e.payload.verdict === "DENY").length;
+  // M3: how the run searches, the latest merge's disagreements, and reported model tokens.
+  const search = events.find((e) => e.category === "retrieval.docs");
+  const ragOff = events.some((e) => e.category === "retrieval.skip" && e.payload.stage === "initial");
+  const merge = lastOf(events, "verification.merge");
+  const conflicts = merge ? disagreementCounts(merge.payload.disagreements) : null;
+  const tokens = liveModelTokenUse(events, provider, modelTokenLimit);
   return (
     <div className="stat-grid compact">
       <StatTile label="Elapsed" value={fmtMs(elapsed)} tone="neutral" />
@@ -379,6 +672,14 @@ function LiveFacts({ events }: { events: TraceEvent[] }) {
       <StatTile label="Routing" value={modes.length ? modes.join(" → ") : "—"} tone="accent" />
       <StatTile label="Injection flags" value={fmtInt(injections)} tone={injections ? "warn" : "neutral"} />
       <StatTile label="Policy denials" value={fmtInt(denials)} tone={denials ? "bad" : "neutral"} />
+      <StatTile label="Runbook search" value={search ? searchModeLabel(search.payload.mode) : ragOff ? "off" : "—"} tone="info" />
+      <StatTile
+        label="Disagreements"
+        value={conflicts ? (conflicts.total ? `${conflicts.total} · ${conflicts.open} open` : "none") : "—"}
+        note={merge ? "latest merge" : undefined}
+        tone={conflicts?.open ? "warn" : "neutral"}
+      />
+      <StatTile label="Model tokens" value={tokens.value} note={tokens.note} tone={tokens.tone} />
     </div>
   );
 }
@@ -464,6 +765,8 @@ function RunPanel({ runId, system, onNewRun }: { runId: string; system: SystemSu
   const incident = events.length ? obj(events[0].payload.incident) : {};
   // The first event (CREATED) names the provider: the run-origin badge needs nothing else.
   const runProvider = events.length ? (obj(events[0].payload.provider) as Partial<ProviderInfo>) : undefined;
+  // The run's model-token limit, from the incident's budget (recorded since M3).
+  const modelTokenLimit = num(obj(incident.budget).max_model_tokens);
 
   return (
     <div className="run-panel" id="run-panel">
@@ -508,7 +811,7 @@ function RunPanel({ runId, system, onNewRun }: { runId: string; system: SystemSu
 
       <div className="run-grid">
         <Card title="Live event feed" subtitle="Real trace events from the controller, agents and gateway (newest at the bottom)" flush>
-          <EventFeed events={events} live={live} height={560} />
+          <EventFeed events={events} live={live} height={560} overlays={knowledgeOverlays(detail.data?.record?.versions)} />
         </Card>
         <div className="run-side">
           {showApproval && shown ? (
@@ -536,10 +839,16 @@ function RunPanel({ runId, system, onNewRun }: { runId: string; system: SystemSu
             </Notice>
           ) : null}
           {finished ? (
-            <ResultPanel detail={detail.data} summary={summary} system={system} runId={runId} />
+            <ResultPanel
+              detail={detail.data}
+              summary={summary}
+              system={system}
+              runId={runId}
+              memorySkip={str(lastOf(events, "memory.skip")?.payload.reason)}
+            />
           ) : (
             <Card title="So far" subtitle="Counted from the trace">
-              <LiveFacts events={events} />
+              <LiveFacts events={events} provider={runProvider} modelTokenLimit={modelTokenLimit} />
             </Card>
           )}
         </div>
@@ -595,6 +904,7 @@ export function LiveRunPage({ route, system }: PageProps) {
     setStarting(true);
     setStartError(null);
     try {
+      // `retrieval` is in the body only when the operator chose a search (see SearchField).
       const response = await api.startRun({ scenario_id: scenario.id, config });
       setSetupOpen(false);
       navigate("live", { run: response.run_id });
@@ -656,13 +966,14 @@ export function LiveRunPage({ route, system }: PageProps) {
 
       {setupOpen ? (
         <Card title="2 · Configure and run" subtitle="Sent as RunConfig in POST /incidents/run (safety cannot be disabled from the API)">
-          <ConfigForm config={config} onChange={setConfig} />
+          <ConfigForm config={config} onChange={setConfig} system={system.data} />
           <div className="run-bar">
             <div className="muted">
               {scenario ? (
                 <>
-                  Scenario <Mono>{scenario.id}</Mono> · {config.strategy} · RAG {config.use_rag ? "on" : "off"} · memory{" "}
-                  {config.use_memory ? "on" : "off"} · {config.approval_mode} approval · {config.tool_latency_ms ?? "default"} ms
+                  Scenario <Mono>{scenario.id}</Mono> · {config.strategy} · RAG {config.use_rag ? "on" : "off"} · search{" "}
+                  {config.retrieval ? searchModeLabel(config.retrieval) : "server default"} · memory {config.use_memory ? "on" : "off"} ·{" "}
+                  {config.approval_mode} approval · {config.tool_latency_ms ?? "default"} ms
                 </>
               ) : (
                 "Select a scenario."

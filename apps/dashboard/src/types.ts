@@ -69,6 +69,7 @@ export interface RunBudget {
   max_elapsed_seconds: number;
   max_estimated_tokens: number;
   max_parallel_agents: number;
+  max_model_tokens?: number; // M3: tokens model servers report, reserved per request
 }
 
 export interface Incident {
@@ -143,6 +144,9 @@ export interface Hypothesis {
   details: Record<string, unknown>;
   origin: "investigation" | "memory";
   proposed_by: AgentRole | null;
+  // M3: the model's own words on how sure it is. UNTRUSTED model text: show it as such,
+  // never as a score, and never let it decide anything.
+  confidence_note?: string;
 }
 
 export interface Usage {
@@ -157,9 +161,20 @@ export interface Usage {
   model_requests?: number; // HTTP requests actually sent to a language model (0 for scripted / replay)
 }
 
+/** How an agent ended its turn (M3). "" on runs recorded before M3. */
+export type FindingOutcome =
+  | ""
+  | "hypothesis"
+  | "need_more_evidence"
+  | "stop"
+  | "step_limit"
+  | "no_usable_answer"
+  | "error";
+
 export interface AgentFinding {
   agent_role: AgentRole;
   evidence_ids: string[];
+  doc_refs?: string[]; // runbook chunk IDs this agent saw in its packs: its citations
   hypotheses: Hypothesis[];
   proposed_next_steps: string[];
   usage: Usage;
@@ -168,6 +183,9 @@ export interface AgentFinding {
   started_at: ISODateTime;
   finished_at: ISODateTime;
   round: number;
+  outcome?: FindingOutcome;
+  // Kept from a round a budget stop cut short: never verified, so never a finished view.
+  partial?: boolean;
 }
 
 export interface HypothesisCheck {
@@ -175,6 +193,24 @@ export interface HypothesisCheck {
   passed: string[];
   failed: string[];
   rule_ids: string[];
+  proposers?: AgentRole[]; // M3: every agent that made this claim
+  basis_evidence_ids?: string[]; // M3: the evidence the passing rules relied on
+  // What the merger keys the claim by: the bad release's version as the deployment evidence
+  // writes it, or the blamed dependency, resolved from evidence when the claim names none;
+  // "" otherwise. A value the claim named but no evidence shows stays as the claim wrote it.
+  detail?: string;
+}
+
+/** M3: where agents' claims conflict, and how the verifier's rules settled it (if they did). */
+export interface Disagreement {
+  kind: "detail_conflict" | "competing_root_causes" | "cross_agent_contradiction" | "missing_view";
+  claims: string[];
+  agents: AgentRole[];
+  evidence_ids: string[];
+  resolved: boolean;
+  rule_id: string; // "" while open; may list several rules, comma-separated
+  resolution: string;
+  question: string; // an open disagreement: what the next round was asked (trusted text)
 }
 
 export interface VerificationReport {
@@ -185,6 +221,9 @@ export interface VerificationReport {
   merged_evidence_ids: string[];
   focus_services: string[];
   summary: string;
+  disagreements?: Disagreement[];
+  // M3: where the next round should look although no claims conflict (RECAP's own text).
+  leads?: string[];
 }
 
 export interface ProposalCheck {
@@ -333,6 +372,7 @@ export interface ExperienceEpisode {
     proposers: AgentRole[];
     rule_ids: string[];
     failed: string[];
+    detail?: string; // the version or dependency that told this claim apart (HypothesisCheck.detail)
   }[];
   diagnosis_basis?: string[];
   fix_preconditions?: Record<string, string>;
@@ -364,6 +404,7 @@ export interface RoutingSignals {
   memory_conflict: boolean;
   prior_failed_attempts: number;
   escalation: boolean;
+  disagreement?: boolean; // M3: the last round left a conflict no evidence rule settled
   remaining_tool_calls: number;
   remaining_steps: number;
   max_parallel_agents: number;
@@ -464,6 +505,17 @@ export interface RunConfig {
   label: string;
 }
 
+/** M3: how a run searched the runbooks (RunRecord.retrieval). */
+export interface RetrievalInfo {
+  mode: "bm25" | "hybrid";
+  embedder: string | null;
+  server: Record<string, unknown> | null; // what Ollama reported: version, weights file, size
+  embedding_requests: number;
+  embedding_input_tokens: number | null; // as the server reported them
+  replayed_requests: number;
+  agent_searches: number; // search_runbooks calls answered
+}
+
 export interface StateChange {
   state: IncidentState;
   at: ISODateTime;
@@ -484,6 +536,7 @@ export interface RunRecord {
   findings: AgentFinding[];
   verification: VerificationReport | null;
   retrieved_docs: RetrievedChunk[];
+  retrieval?: RetrievalInfo | null; // M3: how this run searched the runbooks
   memory_hits: MemoryHit[];
   proposals: MitigationProposal[];
   safety_decisions: SafetyDecision[];
@@ -518,7 +571,12 @@ export interface SystemSummary {
   environment_kind: string;
   tool_transport: string;
   provider: ProviderInfo;
+  // What a run that does not choose searches with ("bm25" or "hybrid-bm25-embeddings"). Before
+  // hybrid_ready existed, it named the capability instead (see format.ts hybridReadiness).
   retriever: string;
+  retrieval_mode?: "bm25" | "hybrid"; // M3: the default for runs that do not choose
+  hybrid_ready?: boolean; // M3: stored vectors cover every runbook chunk, so hybrid can run
+  embedder?: string | null; // M3: the stored vectors' embedder, when loaded
   knowledge_chunks: number;
   router: string;
   safety_policy: string;
@@ -565,7 +623,10 @@ export interface RunDetail {
 export type RunConfigInput = Pick<
   RunConfig,
   "strategy" | "use_rag" | "use_memory" | "approval_mode" | "tool_latency_ms"
->;
+> & {
+  /** M3: bm25 or hybrid; left out, the server's configs/retrieval.yaml default applies. */
+  retrieval?: NonNullable<RunConfig["retrieval"]>;
+};
 
 export interface RunRequest {
   scenario_id: string;
@@ -774,6 +835,8 @@ export interface InvestigationRoundPayload {
   round?: number;
   focus_services?: string[];
   escalation?: boolean;
+  open_questions?: string[]; // M3: the verifier's questions for this round (RECAP's own text)
+  leads?: string[]; // M3: the verifier's leads for this round (RECAP's own text)
 }
 
 export interface OrchestrationAgent {
@@ -791,6 +854,9 @@ export interface OrchestrationPayload {
   wall_ms?: number;
   sum_ms?: number;
   overlap_ms?: number;
+  // The note a budget stop leaves instead (no mode): the agents whose findings were kept.
+  partial_findings_kept?: string[];
+  stopped_by?: string;
 }
 
 /** tool.discovery = recap/tools/registry.py::DiscoveryReport */
@@ -884,6 +950,8 @@ export interface CheckSummary {
   passed?: string[];
   failed?: string[];
   rule_ids?: string[];
+  proposers?: string[]; // M3: every agent that made this claim
+  basis_evidence_ids?: string[]; // M3: the evidence the passing rules relied on
 }
 
 export interface EvidenceCheckPayload {
@@ -895,6 +963,19 @@ export interface EvidenceCheckPayload {
   focus_services?: string[];
   proposal_check?: Partial<ProposalCheck>;
   proposal_id?: string;
+  disagreements?: Partial<Disagreement>[]; // M3
+  leads?: string[]; // M3: the report's leads for the next round (RECAP's own text)
+  enforced?: boolean; // proposal checks: false in the simulation-only "safety off" ablation
+}
+
+/** verification.merge (M3, controller._merge_payload): the agents' claims and their conflicts. */
+export interface VerificationMergePayload {
+  claims_by_agent?: Record<string, number>;
+  merged_claims?: number;
+  shared_claims?: { mechanism?: string; target?: string | null; proposers?: string[] }[];
+  disagreements?: { kind?: string; resolved?: boolean; rule_id?: string; claims?: string[] }[];
+  open_questions?: string[];
+  leads?: string[]; // RECAP's own text, like the open questions
 }
 
 export interface RecoveryPayload {
@@ -912,13 +993,28 @@ export interface DocRef {
   heading?: string;
   score?: number;
   rank?: number;
+  retriever?: string; // M3: bm25, or hybrid when the meaning ranking took part
+  signals?: Record<string, number> | null; // M3: the rankings behind this result
+}
+
+/** One embedding request (recap/knowledge/ollama_embedder.py), as the server reported it. */
+export interface EmbeddingCallPayload {
+  model?: string;
+  purpose?: string;
+  inputs?: number;
+  status?: number;
+  input_tokens?: number | null;
+  duration_ms?: number;
+  replayed?: boolean;
 }
 
 export interface RetrievalPayload {
-  stage?: string;
+  stage?: string; // M3: "agent" for an agent's own search_runbooks call
   reason?: string;
   query?: string;
-  retriever?: string;
+  mode?: "bm25" | "hybrid"; // M3
+  retriever?: string; // what this search actually ranked with ("bm25" or "hybrid-bm25-embeddings")
+  embedding?: EmbeddingCallPayload | null; // M3: the query's embedding request, in hybrid mode
   results?: DocRef[];
 }
 
@@ -929,10 +1025,15 @@ export interface MemorySearchHit {
   verified?: boolean;
   mechanism?: string | null;
   service?: string;
+  partition?: string; // M3
+  signals?: Record<string, number>; // M3: lexical always, semantic when the run embedded
 }
 
 export interface MemorySearchPayload {
   readable_partitions?: string[];
+  semantic?: string | null; // M3: the embedder behind the semantic signal; null: not embedded
+  // A replay reads memory as it was when its recording began: episodes created before this time.
+  created_before?: string | null;
   hits?: MemorySearchHit[];
 }
 
@@ -942,10 +1043,13 @@ export interface MemoryAssessHit {
   mechanism_match?: boolean | null;
   safe_to_reuse?: boolean;
   reason?: string;
+  supporting?: string[]; // M3: the reuse conditions that held
+  contradicting?: string[]; // M3: what argues against reuse
 }
 
 export interface MemoryAssessPayload {
   hits?: MemoryAssessHit[];
+  restore_points?: string[] | null; // M3: versions today's evidence names; null: none looked up
 }
 
 export interface MemoryWritePayload {
@@ -971,6 +1075,7 @@ export interface AgentStartPayload {
   round?: number;
   max_steps?: number;
   focus_services?: string[];
+  questions?: string[]; // M3: the verifier's open questions this agent was asked
   tools?: string[];
 }
 
@@ -990,6 +1095,8 @@ export interface AgentFinishPayload {
   evidence_ids?: string[];
   hypotheses?: string[];
   summary?: string;
+  outcome?: FindingOutcome; // M3: how the agent ended its turn
+  dropped_out_of_role?: string[]; // M3: mechanisms of claims its role contract may not make
 }
 
 export interface BudgetPayload {
@@ -1005,6 +1112,7 @@ export interface RunSummaryPayload {
   unsafe_attempts?: number;
   unsafe_blocked?: number;
   unsafe_executed?: number;
+  unsafe_refused_by_environment?: number;
   budget?: Record<string, unknown>;
   cost?: string;
   simulated?: boolean;

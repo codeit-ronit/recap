@@ -6,7 +6,7 @@ import { Card, KeyValues, Notice, PageHeader } from "../components/Card";
 import { ErrorState, Loading } from "../components/EmptyState";
 import { Icon } from "../components/Icon";
 import { DataTable } from "../components/Table";
-import { fmtInt } from "../format";
+import { fmtInt, hybridReadiness, searchModeLabel } from "../format";
 import type { Tone } from "../format";
 import { usePolling } from "../hooks";
 import type { PageProps } from "../hooks";
@@ -96,8 +96,11 @@ function Diagram() {
         title="Context & experience"
         trust="untrusted"
         subs={[
-          { label: "Runbook RAG", detail: "BM25 over fixtures/knowledge, cited chunks" },
-          { label: "Episodic memory", detail: "past runs; similar ≠ safe to reuse" },
+          {
+            label: "Runbook RAG",
+            detail: "BM25 keywords by default; hybrid adds meaning from a local embedder (nomic-embed-text); agents search too; cited chunks",
+          },
+          { label: "Episodic memory", detail: "past runs: DEMO partition for scripted runs, LIVE for real models; similar ≠ safe to reuse" },
           { label: "Evidence registry", detail: "immutable observations with ids" },
         ]}
       >
@@ -106,7 +109,9 @@ function Diagram() {
       <Arrow />
       <Layer n={4} title="Adaptive router" trust="trusted">
         Single generalist or parallel specialists, chosen from observable signals and the remaining budget; the rule that fired
-        is logged.
+        is logged. A disagreement no evidence rule settles sends the verifier's question to one follow-up round (the
+        disagreement signal: RT3-disagreement, unless an earlier rule such as RT2-cross-service fires first); if it stays
+        open, a person decides. The verifier's leads (where to look next, with no conflict) go to the next round too.
       </Layer>
       <Arrow label="asyncio.gather when parallel" />
       <Layer
@@ -117,15 +122,18 @@ function Diagram() {
           { label: "investigator" },
           { label: "telemetry_investigator" },
           { label: "infrastructure_investigator" },
-          { label: "evidence_verifier", detail: "no tools; checks claims" },
+          { label: "evidence_verifier", detail: "no tools; the merger pools claims, rules V1–V7 judge them, VP1–VP4 the fix" },
         ]}
       >
-        observe → reason → act. The provider sees only packed evidence; every hypothesis must cite evidence ids.
+        observe → reason → act. The provider (the scripted policy, a local or free hosted model on prompts-v4.5, or a replay)
+        sees only packed evidence; every hypothesis must cite evidence ids. In a parallel round each specialist sees the
+        evidence from before the round plus its own, never the other's. Disagreements are settled by evidence rules, never by
+        votes.
       </Layer>
       <Arrow label="tool calls" />
       <Layer n={6} title="MCP tool gateway" trust="trusted">
         A real MCP client and server over stdio. Discovery is untrusted; typed arguments, the risk policy on every call, bounded
-        outputs and an audit trail.
+        outputs and an audit trail. One read tool, search_runbooks, is answered by RECAP itself on the same path.
       </Layer>
       <Arrow />
       <Layer
@@ -163,7 +171,9 @@ function Diagram() {
       </Layer>
       <Arrow />
       <Layer n={12} title="Memory consolidation" trust="trusted">
-        Every finished run becomes an episode; <strong>success</strong> only if the oracle verified recovery.
+        A finished run becomes an episode in its own partition (DEMO for the scripted policy, LIVE for a real model; replays and
+        held-out test scenarios write none), summarized by deterministic extraction (consolidator-v2); <strong>success</strong>{" "}
+        only if the oracle verified recovery.
         <span className="arch-loop">
           <Icon name="refresh" size={13} /> feeds the next incident's context (3)
         </span>
@@ -173,7 +183,7 @@ function Diagram() {
         <div className="arch-cross-title">Cross-cutting</div>
         <div className="arch-cross-items">
           <span>Telemetry: structured trace events → SQLite, JSONL, live SSE</span>
-          <span>Budgets: steps, tool calls, estimated tokens, wall clock</span>
+          <span>Budgets: steps, tool calls, estimated tokens, model tokens the server reports, run clock (approval waits excluded)</span>
           <span>Evaluations: fixed train/test split, baselines, ablations, red team</span>
           <span>
             API + dashboard: no endpoint executes an action directly; clients start simulated runs and evaluations and approve
@@ -216,6 +226,7 @@ function Wiring({ system }: { system: SystemSummary }) {
                 <Mono>{system.provider.name}</Mono>
                 <OriginChip provider={system.provider} />
                 {system.provider.mode ? <span className="muted small">{system.provider.mode} mode</span> : null}
+                {system.provider.prompt_version ? <span className="muted small">{system.provider.prompt_version}</span> : null}
               </span>
               {system.provider.description ? <span className="muted small">{system.provider.description}</span> : null}
             </span>,
@@ -223,8 +234,22 @@ function Wiring({ system }: { system: SystemSummary }) {
           ["5 · Evidence verifier", <Mono>{system.verifier}</Mono>],
           [
             "3 · Retriever",
-            <span>
-              <Mono>{system.retriever}</Mono> · {fmtInt(system.knowledge_chunks)} chunks
+            <span className="cell-stack">
+              <span>
+                <Mono>{system.retriever}</Mono> · {fmtInt(system.knowledge_chunks)} chunks
+              </span>
+              {/* M3: the retriever is what a run that does not choose searches with; hybrid_ready says whether hybrid can run. */}
+              {system.retrieval_mode ? (
+                <span className="muted small">
+                  default search: {searchModeLabel(system.retrieval_mode, true)}
+                  {hybridReadiness(system) === "ready" ? " · hybrid can run" : " · hybrid cannot run: stored vectors missing or incomplete"}
+                  {system.embedder ? (
+                    <>
+                      {" "}· stored vectors <Mono>{system.embedder}</Mono>
+                    </>
+                  ) : null}
+                </span>
+              ) : null}
             </span>,
           ],
           ["3 · Experience memory", `${fmtInt(system.memory_episodes)} episodes`],

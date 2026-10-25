@@ -1,0 +1,152 @@
+/*
+ * Evidence & RAG page, M3: agent text shown as data, the evidence the verifier relied on,
+ * disagreements, retrieval signals and knowledge overlays. Colors and the shared pieces
+ * (.check, .chip, .trust-tag, .table, .kv, .notice) come from ../styles.css.
+ */
+
+/* Untrusted text (a claim, a confidence note, an agent's search query): data in a dashed amber
+   box, like the untrusted layers of the Architecture page. Never rendered as HTML. */
+.evid-said {
+  min-width: 0;
+  padding: 1px 7px;
+  border: 1px dashed var(--warn-line);
+  border-radius: 6px;
+  background: var(--inset);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+q.evid-said {
+  quotes: "\201C" "\201D";
+}
+.evid-said-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  min-width: 0;
+}
+
+/* A check's head wraps (status, claim, diagnosis chip), so a narrow screen never scrolls sideways. */
+.check .check-head {
+  flex-wrap: wrap;
+}
+.check .check-claim {
+  min-width: 0;
+}
+
+/* A rule line that repeats a value the claim named (model text): tagged after the line. */
+.evid-rule-tag {
+  margin-left: 8px;
+}
+
+/* The verifier's leads for the next round (RECAP's own text). */
+.evid-leads .mini-title {
+  margin: 0;
+}
+.evid-leads .plain-list {
+  margin: 6px 0 0;
+}
+
+/* A search receipt's result table inside an expanded registry row: keep its compact cells
+   (styles.css, loaded later, gives every cell of a detail row 14px 18px, also on hover). */
+.table tr.row-detail .table.compact td,
+.table tr.row-detail:hover .table.compact td {
+  padding: 6px 10px;
+}
+
+/* Citations: the document path under the chunk id may wrap, so the table fits its card. */
+.evid-path .mono {
+  overflow-wrap: anywhere;
+}
+
+/* The check that became the diagnosis, and an open disagreement (no rule settled it). */
+.check.evid-diagnosis {
+  border-color: var(--ok-line);
+}
+.check.evid-open {
+  border-color: var(--warn-line);
+}
+
+/* "cites / basis / contradicted by" rows of a check, the query line of a search. */
+.evid-use {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.evid-label {
+  min-width: 96px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.evid-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+/* A model's confidence note: quoted and labeled, never a score. */
+.evid-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font-size: 13px;
+}
+.evid-note .mini-title {
+  margin: 0;
+}
+
+/* RECAP's own verdict text (a disagreement's resolution): plain, trusted. */
+.evid-resolution {
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+/* Key/value rows inside a .check box: tighter than a card's. */
+.evid-kv .kv-row {
+  grid-template-columns: 170px minmax(0, 1fr);
+  padding: 5px 0;
+}
+
+.evid-sub {
+  margin: 6px 0 0;
+}
+
+/* One traced runbook search. */
+.evid-search {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+}
+.evid-searches > .evid-search:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+.evid-searches > .evid-search:last-child {
+  padding-bottom: 0;
+}
+.evid-search-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Evidence the diagnosis relied on, in the registry (next to its "diagnosis basis" chip). */
+.table tr.evid-row-basis td:first-child {
+  box-shadow: inset 3px 0 0 var(--ok);
+}
+
+@media (max-width: 920px) {
+  .evid-kv .kv-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+  .evid-label {
+    min-width: 0;
+  }
+}

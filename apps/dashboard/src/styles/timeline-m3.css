@@ -1,0 +1,370 @@
+/*
+ * Agent Timeline (M3): what each agent found, round by round, and runbook-search bars.
+ * Imported by src/pages/AgentTimeline.tsx; tokens and base classes come from src/styles.css.
+ *
+ * styles.css loads after this file (main.tsx imports it after App), so a rule that changes an
+ * existing class uses a more specific selector; everything new is prefixed "tl-".
+ */
+
+/* --- rounds ----------------------------------------------------------------------------- */
+
+.tl-intro {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 13px;
+}
+.tl-round {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+/* A round without a routing reason: keep the head apart from the body. */
+.round-head + .tl-round {
+  margin-top: 12px;
+}
+.tl-questions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 6px;
+  padding-left: 18px;
+}
+.round-grid.tl-routing {
+  padding-top: 14px;
+  border-top: 1px dashed var(--border-2);
+}
+
+/* --- one panel per agent ------------------------------------------------------------------- */
+
+.tl-agents {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+.tl-agents.single {
+  grid-template-columns: minmax(0, 1fr);
+}
+.tl-agent {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.tl-agent-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.tl-agent-name {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+.tl-agent-stats {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.tl-outcome-note {
+  margin-top: -6px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.tl-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.tl-section > .mini-title {
+  margin: 0;
+}
+
+/* --- claims: untrusted text, then RECAP's verdict ---------------------------------------- */
+
+.tl-claims {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tl-claim {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+/* Text RECAP did not write: its tag above, the text quoted below a dashed rule. */
+.tl-said {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+.tl-quote {
+  display: block;
+  max-width: 100%;
+  padding-left: 9px;
+  border-left: 2px dashed var(--warn-line);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tl-note {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tl-note-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+.tl-verdict {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.tl-verdict-label {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.tl-dropped {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+.tl-dropped-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+/* A note RECAP added to an agent's text: its own words, tagged as RECAP's. */
+.tl-recap-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  color: var(--text-2);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+/* A rule line that repeats a value the claim named (model text): tagged after the line. */
+.tl-rule-tag {
+  margin-left: 8px;
+}
+/* A finding a budget stop cut short: never verified. */
+.tl-agent.tl-partial {
+  border-color: var(--warn-line);
+}
+.tl-partial-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: -6px;
+  color: var(--warn-text);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.tl-partial-note > .icon {
+  flex: none;
+  margin-top: 1px;
+}
+/* The verifier's leads (RECAP's own text): where the next round should look. */
+.tl-leads {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+}
+.tl-leads-title {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.tl-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--bad-text);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.tl-error > .icon {
+  margin-top: 2px;
+}
+
+/* --- evidence IDs, with the agent that recorded each ------------------------------------- */
+
+.tl-ev-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.tl-ev-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+.tl-ev {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 1px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--border-2);
+  background: var(--inset);
+  color: var(--text-2);
+}
+.tl-ev:hover {
+  border-color: var(--accent-line);
+  text-decoration: none;
+}
+.tl-ev-agent {
+  color: var(--info-text);
+  font-size: 11.5px;
+}
+.tl-ev-missing {
+  color: var(--bad-text);
+  font-size: 11.5px;
+}
+.tl-ev-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  font-size: 13px;
+  list-style: none;
+}
+.tl-ev-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+/* The source ref may use the row's width before it is cut (styles.css caps it at 260px). */
+.tl-ev-list .truncate {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* --- runbook searches (answered by RECAP's own index) ------------------------------------ */
+
+.tl-search {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--info-line);
+  background: rgba(88, 166, 255, 0.05);
+}
+.tl-hits {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  font-size: 13px;
+  list-style: none;
+}
+.tl-hits li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  min-width: 0;
+}
+.tl-hit-rank {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.tl-signals {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+/* --- the verifier's report after a round (RECAP's own text) ------------------------------- */
+
+.tl-after {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-line);
+  background: var(--inset);
+  font-size: 13px;
+}
+.tl-after-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.tl-after-head .mini-title {
+  margin: 0;
+}
+.tl-disagreements {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.tl-disagreements li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+/* --- Gantt: runbook searches are RECAP's own reads, not MCP calls -------------------------- */
+
+.bar.bar-local {
+  fill: var(--info);
+}
+.lg.lg-bar-local {
+  background: var(--info);
+}
+
+@media (max-width: 1280px) {
+  .tl-agents {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

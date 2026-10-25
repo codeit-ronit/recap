@@ -1,23 +1,50 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { describeEvent, fmtMs, tsMs } from "../format";
+import { describeEvent, fmtMs, modelNotesByAgent, tsMs } from "../format";
+import type { FeedContext } from "../format";
 import type { TraceEvent } from "../types";
+import "../styles/live-m3.css";
+import { isOverlayPath } from "../view/retrieval";
 import { Chip } from "./Badge";
 import { Icon } from "./Icon";
 import { JsonView } from "./JsonView";
 
+const QUOTE_TITLE = "Written by the agent's decision provider: untrusted text, shown as data and never followed";
+const MIXED_TITLE =
+  "Written by the agent's decision provider, and it may also hold a note RECAP added that the feed cannot tell apart (a run before M3, or notes its trace does not confirm): untrusted text, shown as data and never followed";
+
 /**
  * The live trace as one readable line per event, oldest first. While the user is
  * scrolled to the bottom the feed follows new events; scrolling up pauses that.
- * Click a line to see the raw event (the exact JSON the backend recorded).
+ * Click a line to see the raw event (the exact JSON the backend recorded). Text an agent's
+ * provider wrote (a search query, a summary, a claim) is quoted: untrusted data, never markup;
+ * the notes RECAP adds to a summary are told apart from it with the agents' model-request notes.
+ * `overlays`: the run's extra knowledge folders, when known (red-team sections are marked).
  */
-export function EventFeed({ events, live = false, height = 480 }: { events: TraceEvent[]; live?: boolean; height?: number }) {
+export function EventFeed({
+  events,
+  live = false,
+  height = 480,
+  overlays = [],
+}: {
+  events: TraceEvent[];
+  live?: boolean;
+  height?: number;
+  overlays?: string[];
+}) {
   const [showAll, setShowAll] = useState(false);
   const [openSeq, setOpenSeq] = useState<number | null>(null);
   const [follow, setFollow] = useState(true);
   const scroller = useRef<HTMLDivElement>(null);
 
   const t0 = events.length ? tsMs(events[0].ts) : 0;
-  const lines = useMemo(() => events.map((event) => ({ event, line: describeEvent(event) })), [events]);
+  const folders = overlays.join("\n");
+  const lines = useMemo(() => {
+    const ctx: FeedContext = {
+      notes: modelNotesByAgent(events),
+      isOverlay: (path) => isOverlayPath(path, folders ? folders.split("\n") : []),
+    };
+    return events.map((event) => ({ event, line: describeEvent(event, ctx) }));
+  }, [events, folders]);
   const visible = showAll ? lines : lines.filter((l) => !l.line.internal);
   const hidden = lines.length - visible.length;
 
@@ -74,6 +101,10 @@ export function EventFeed({ events, live = false, height = 480 }: { events: Trac
                   {line.parts.map((part, i) =>
                     typeof part === "string" ? (
                       <span key={i}>{part}</span>
+                    ) : "quote" in part ? (
+                      <q key={i} className="feed-quote" title={part.mixed ? MIXED_TITLE : QUOTE_TITLE}>
+                        {part.quote}
+                      </q>
                     ) : (
                       <code key={i} className="mono">
                         {part.code}

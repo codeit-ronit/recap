@@ -17,6 +17,8 @@ import {
 } from "../format";
 import type { Tone } from "../format";
 import { useElementWidth } from "../hooks";
+import { isRunbookSearch } from "../view/findings";
+import type { TextAuthor } from "../view/findings";
 import type {
   AgentFinishPayload,
   AgentStartPayload,
@@ -64,6 +66,8 @@ export interface ToolBar {
   ruleIds: string[];
   callSeq: number;
   resultSeq: number;
+  /** search_runbooks: answered by RECAP's own runbook index, not the environment's MCP server. */
+  local: boolean;
 }
 
 export interface AgentSpan {
@@ -142,10 +146,11 @@ export function buildTimeline(events: TraceEvent[]): TimelineModel | null {
     switch (e.category) {
       case "tool.call": {
         const q = p as ToolCallPayload;
+        const tool = str(q.tool, "?");
         const bar: ToolBar = {
           id: str(q.invocation_id) || `seq-${e.seq}`,
           lane: laneOf(e.agent ?? q.caller),
-          tool: str(q.tool, "?"),
+          tool,
           start: t,
           end: t,
           status: "running",
@@ -159,6 +164,7 @@ export function buildTimeline(events: TraceEvent[]): TimelineModel | null {
           ruleIds: [],
           callSeq: e.seq,
           resultSeq: Number.POSITIVE_INFINITY,
+          local: isRunbookSearch(tool),
         };
         bars.push(bar);
         openBars.set(bar.id, bar);
@@ -250,7 +256,9 @@ export function buildTimeline(events: TraceEvent[]): TimelineModel | null {
           const ok = q.proposal_check.ok === true;
           mark(e, "controller", t, ok ? "ok" : "bad", `proposal check ${ok ? "passed" : "failed"}`, arr<string>(q.proposal_check.problems).join("; "));
         } else {
-          mark(e, "controller", t, hypothesisTone(q.status), `evidence ${str(q.status, "?")}`, str(q.best?.claim) || str(q.summary));
+          // RECAP's checked fields and its own summary: the claim sentence is the agent's text.
+          const cause = q.best?.mechanism ? `${str(q.best.mechanism)}@${str(q.best.target_service, "?")}` : "";
+          mark(e, "controller", t, hypothesisTone(q.status), `evidence ${str(q.status, "?")}`, [cause, str(q.summary)].filter(Boolean).join(" · "));
         }
         break;
       }
@@ -300,6 +308,7 @@ export function buildTimeline(events: TraceEvent[]): TimelineModel | null {
           ruleIds: [],
           callSeq: e.seq - 1,
           resultSeq: e.seq,
+          local: false,
         });
         break;
       }
@@ -458,7 +467,7 @@ interface Tip {
   content: ReactNode;
 }
 
-function BarTip({ bar }: { bar: ToolBar }) {
+function BarTip({ bar, author }: { bar: ToolBar; author: TextAuthor | undefined }) {
   return (
     <>
       <div className="tip-title mono">{bar.tool}</div>
@@ -466,10 +475,27 @@ function BarTip({ bar }: { bar: ToolBar }) {
         <span>agent</span>
         <span className="mono">{bar.lane}</span>
       </div>
-      <div className="tip-row">
-        <span>args</span>
-        <span className="mono">{fmtArgs(bar.args) || "—"}</span>
-      </div>
+      {bar.local ? (
+        <>
+          <div className="tip-row">
+            <span>answered by</span>
+            <span>RECAP's runbook index</span>
+          </div>
+          {/* The query is free text an agent wrote: shown as data, labeled untrusted. */}
+          <div className="tip-row">
+            <span>query (untrusted)</span>
+            <span className="mono">{str(bar.args.query, "—")}</span>
+          </div>
+          <div className="tip-note">
+            A local read tool, not the environment's MCP server. The query was written by {author?.label ?? "the agent"}.
+          </div>
+        </>
+      ) : (
+        <div className="tip-row">
+          <span>args</span>
+          <span className="mono">{fmtArgs(bar.args) || "—"}</span>
+        </div>
+      )}
       <div className="tip-row">
         <span>duration</span>
         <strong>{bar.status === "running" ? "in flight" : fmtMs(bar.durationMs)}</strong>
@@ -503,7 +529,8 @@ function BarTip({ bar }: { bar: ToolBar }) {
   );
 }
 
-export function AgentGantt({ model }: { model: TimelineModel }) {
+/** `author`: who wrote the agents' free text (runbook search queries), for the tooltip's label. */
+export function AgentGantt({ model, author }: { model: TimelineModel; author?: TextAuthor }) {
   const [setWrap, width] = useElementWidth<HTMLDivElement>();
   const [view, setView] = useState<"chart" | "table">("chart");
   const [compress, setCompress] = useState(true);
@@ -554,6 +581,7 @@ export function AgentGantt({ model }: { model: TimelineModel }) {
         ) : null}
         <div className="gantt-legend" aria-label="Legend">
           <span><i className="lg lg-bar" /> tool call</span>
+          {model.bars.some((b) => b.local) ? <span><i className="lg lg-bar-local" /> runbook search (RECAP's index)</span> : null}
           <span><i className="lg lg-bar-bad" /> failed or denied</span>
           <span><i className="lg lg-span" /> agent active</span>
           <span><i className="lg lg-dot" /> controller decision</span>
@@ -568,7 +596,21 @@ export function AgentGantt({ model }: { model: TimelineModel }) {
           empty="No tool calls recorded for this run."
           columns={[
             { key: "lane", header: "Agent", render: (b) => <Mono>{b.lane}</Mono> },
-            { key: "tool", header: "Tool call", render: (b) => <Mono>{`${b.tool}(${fmtArgs(b.args)})`}</Mono> },
+            {
+              key: "tool",
+              header: "Tool call",
+              render: (b) =>
+                b.local ? (
+                  <span className="cell-stack">
+                    <Mono>{b.tool}</Mono>
+                    <span className="muted small">
+                      answered by RECAP's runbook index · query (untrusted): <Mono>{str(b.args.query, "—")}</Mono>
+                    </span>
+                  </span>
+                ) : (
+                  <Mono>{`${b.tool}(${fmtArgs(b.args)})`}</Mono>
+                ),
+            },
             { key: "start", header: "Start", numeric: true, render: (b) => `+${fmtMs(b.start)}` },
             { key: "dur", header: "Duration", numeric: true, render: (b) => (b.status === "running" ? "in flight" : fmtMs(b.durationMs)) },
             {
@@ -723,13 +765,13 @@ export function AgentGantt({ model }: { model: TimelineModel }) {
                 const w = Math.max(3, X(bar.end) - x0);
                 const fits = w > bar.tool.length * MONO_CHAR + 10;
                 const denied = bar.status === "failed" || bar.verdict === "DENY";
-                const content = <BarTip bar={bar} />;
+                const content = <BarTip bar={bar} author={author} />;
                 return (
                   <g
                     key={bar.id}
                     className="gantt-hit"
                     tabIndex={0}
-                    aria-label={`${bar.lane}: ${bar.tool}, ${fmtMs(bar.durationMs)}`}
+                    aria-label={`${bar.lane}: ${bar.tool}${bar.local ? " (answered by RECAP's runbook index)" : ""}, ${fmtMs(bar.durationMs)}`}
                     onPointerEnter={() => show(x0 + w / 2, y, content)}
                     onFocus={() => show(x0 + w / 2, y, content)}
                     onBlur={hide}
@@ -743,7 +785,9 @@ export function AgentGantt({ model }: { model: TimelineModel }) {
                       width={w}
                       height={BAR_H}
                       rx={4}
-                      className={denied ? "bar bar-bad" : bar.status === "running" ? "bar bar-running" : "bar"}
+                      className={
+                        denied ? "bar bar-bad" : bar.status === "running" ? "bar bar-running" : bar.local ? "bar bar-local" : "bar"
+                      }
                     />
                     {fits ? (
                       <text x={x0 + 5} y={y + BAR_H / 2 + 4} className="bar-label">
