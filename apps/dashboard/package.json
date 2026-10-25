@@ -1,7 +1,7 @@
 {
   "name": "recap-dashboard",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "RECAP V1 dashboard: live incident runs, agent timeline, evidence, memory, safety and evaluations (SIMULATED LOCAL ENVIRONMENT).",
   "type": "module",
   "scripts": {

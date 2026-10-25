@@ -1,9 +1,9 @@
 # RECAP — Experience-Learning Autonomous Reliability Agent (Prototype)
 
-**Version 0.3.0** (milestone M2) · [Changelog](CHANGELOG.md) · [Releases](https://github.com/codeit-ronit/recap/releases)
+**Version 0.4.0** (milestone M3) · [Changelog](CHANGELOG.md) · [Releases](https://github.com/codeit-ronit/recap/releases)
 
 > **V1 prototype: runs on a simulated local environment; nothing here repairs a real cluster.**
-> Hardened in milestone M1 (October 2026) after an independent audit. Since M2 a **real model** can make the decisions at $0: `qwen3:8b` on this machine (Ollama) or `gpt-oss-120b` on Groq's free plan. One such run, approved by the owner at the terminal, is exported for anyone to check (and replay offline) in [evals/live/](evals/live/README.md). See [docs/status.md](docs/status.md) for measured results and [docs/flow.md](docs/flow.md) for one incident end to end.
+> Hardened in milestone M1 (October 2026) after an independent audit. Since M2 a **real model** can make the decisions at $0: `qwen3:8b` on this machine (Ollama) or `gpt-oss-120b` on Groq's free plan. Since M3 two independent AI specialists investigate side by side, and RECAP's evidence rules decide between their claims: the local `qwen3:8b` solved an incident RECAP had never seen, with the fix approved by the owner at the terminal. The human-approved runs are exported for anyone to check (and replay offline) in [evals/live/](evals/live/README.md). See [docs/status.md](docs/status.md) for measured results and [docs/flow.md](docs/flow.md) for one incident end to end.
 
 An incident-response agent that investigates through real MCP (Model Context Protocol) tools, asks a human to approve one exact fix, checks recovery with an independent oracle, and remembers only what was verified.
 
@@ -54,7 +54,7 @@ The oracle ([recap/verification/oracle.py](recap/verification/oracle.py)) takes 
 
 ### 5. Verified memory: similar ≠ safe to reuse
 
-A similar past episode is only a lead. `assess_reuse` in [recap/memory/store.py](recap/memory/store.py) marks it safe only if the past fix succeeded, the oracle verified it, and live evidence supports the same failure mechanism now. In the `memory-caution` demo a past episode with similarity 1.0 is marked NOT safe, and RECAP restarts `payment` instead of repeating the remembered rollback. Evaluation test runs read only training episodes and cannot write any.
+A similar past episode is only a lead. `assess_reuse` in [recap/memory/store.py](recap/memory/store.py) marks it safe only if the past fix succeeded, the oracle verified it, live evidence supports the same failure mechanism now on the same service (the past diagnosis and the fix that worked were both on the service diagnosed today), and a remembered rollback restores a version today's evidence names that is not today's bad release. In the `memory-caution` demo a past episode with similarity 1.0 is marked NOT safe, and RECAP restarts `payment` instead of repeating the remembered rollback. Evaluation test runs read only training episodes and cannot write any.
 
 ### 6. Adaptive compute: single first, parallel when needed
 
@@ -164,7 +164,7 @@ PARALLEL  agents overlapped for 595 ms (wall 998 ms)
 PROPOSAL  execute_rollback on payment {'to_version': 'v1.12.3'} · source=runbook · trusted risk=reversible_write
 ```
 
-**3. Careful memory:** `python scripts/demo.py --scenario memory-caution --approve auto`. Memory recalls a near-identical incident, but live evidence disagrees: checkout's release is 95 minutes old and all its errors blame `payment`. Round 2 escalates to parallel specialists, who find memory pressure on `payment`. (If no verified `bad-deployment` episode exists yet, the script runs that scenario first.)
+**3. Careful memory:** `python scripts/demo.py --scenario memory-caution --approve auto`. Memory recalls a near-identical incident, but live evidence disagrees: checkout's release is 95 minutes old and all its errors blame `payment`. Round 2 escalates to parallel specialists, who find memory pressure on `payment`. (If this run's memory holds no verified `bad-deployment` episode yet, the script runs that scenario first with the same provider, so the episode lands where the demo reads: DEMO for the scripted policy, LIVE for a model, which then takes a few minutes. A replay never writes memory, so it runs without one.)
 
 ```text
 MEMORY    2 similar episode(s); best ep-91d7c92327 sim=1.0 outcome=success
@@ -236,7 +236,7 @@ Status words: **implemented** (works and is tested, against the simulator), **si
 | Scripted decision provider (default) | implemented | [recap/providers/deterministic.py](recap/providers/deterministic.py) | Playbooks and heuristics, **not an LLM**; $0 |
 | Local LLM provider (Ollama) | implemented | [recap/providers/ollama_provider.py](recap/providers/ollama_provider.py), [protocol.py](recap/providers/protocol.py) | `qwen3:8b`, native tool calls, per-request schemas; real runs on one simulated scenario (M2) |
 | Free hosted LLM provider (Groq Free) | implemented | [recap/providers/openai_compatible.py](recap/providers/openai_compatible.py), [quota.py](recap/providers/quota.py) | `gpt-oss-120b`, strict JSON; fail-closed free-tier guard and tripwire; real runs on one simulated scenario (M2) |
-| Model recordings and offline replay | implemented | [recap/providers/transport.py](recap/providers/transport.py), [fixtures/recordings/](fixtures/recordings/) | CI replays a real `qwen3:8b` run; replays are labeled REPLAY |
+| Model recordings and offline replay | implemented | [recap/providers/transport.py](recap/providers/transport.py), [fixtures/recordings/](fixtures/recordings/) | CI replays a real `qwen3:8b` run; replays are labeled REPLAY; a recording also keeps where timing stopped the run, and a replay stops there ([ADR 0026](docs/decisions/0026-a-replay-stops-where-its-recording-stopped.md)) |
 | Evaluation runner | implemented | [evals/runner.py](evals/runner.py) | Baselines, ablations, red team; scripted policy only; synthetic, tiny N |
 | API | implemented | [apps/api/](apps/api/) | FastAPI; no endpoint executes an action directly |
 | Dashboard | implemented | [apps/dashboard/](apps/dashboard/) | React + TypeScript (Vite); its numbers come from the API |
@@ -390,7 +390,7 @@ CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on every push and
 | Item | Why | Depends on | Priority |
 |---|---|---|---|
 | SREGym adapter (pinned commit, Kind cluster) | First real, non-simulated incidents and results | Pinning and reading an SREGym commit; a Kubernetes-in-Docker (Kind) cluster, provisioned only with the owner's consent and after cost checks | High |
-| Real LLM evaluation (local and free models) | M2 ran real models end to end on one scenario; the evaluation numbers still describe the scripted policy | More (and unfamiliar) scenarios, a live-free evaluation mode that respects the free quotas, recorded replays for CI (M3/M4) | High |
+| Real LLM evaluation (local and free models) | M3 ran real models on 5 scenarios incl. one unfamiliar and one adversarial (`scripts/live_eval.py`, plans in `evals/plans/`); each is one sample, failures included in docs/status.md; the benchmark numbers still describe the scripted policy | Repeated runs per scenario for success rates; a larger free model; recorded multi-agent replays in CI (M4) | High |
 | Larger scenario set with confidence intervals | N = 6 supports no statistical claim | More scenarios per failure family; interval estimates in `evals/runner.py` | High |
 | Per-user approvals (chat-ops) | M1 added a single operator token; approvals should come from a verified individual person, with roles, for example in a chat tool | Single sign-on and a chat integration | High before any real cluster |
 | Learned router (contextual bandit) | Spend parallel compute only where it pays off | Many logged runs with verified outcomes; the existing `RoutingSignals` and `LearnedRouter` interface | Medium |
