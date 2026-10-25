@@ -132,7 +132,8 @@ class Runtime:
             overlays=paths.knowledge_overlays,
         )
         self.router = RulesRouter(self.settings.budget.routing, agent_specs(self.settings))
-        self.verifier = EvidenceVerifier()
+        # Leads repeat service names in trusted prompt text: only the namespace's allowlist.
+        self.verifier = EvidenceVerifier(allowed_services=self.settings.policies.allowed_services)
         self.consolidator = Consolidator()
         self.packer = ContextPacker(self.settings.budget.context.max_item_tokens)
         self.redactor = Redactor()

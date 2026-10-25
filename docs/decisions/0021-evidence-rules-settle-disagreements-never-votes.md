@@ -108,8 +108,25 @@ review of it before M3 found that it decided by accident or by volume:
    handover, and changes no claim, best or status. Why: in the first real `qwen3:8b`
    parallel runs (prompts-v4.5), both ended FAILED. In round 1 the specialists confirmed a
    failing dependency ("checkout's calls to payment fail" in one, "frontend's calls to cart
-   fail" in the other), but in round 2 they did not examine the dependency itself. Not yet
-   re-measured with prompts-v4.6.
+   fail" in the other), but in round 2 they did not examine the dependency itself.
+   Measured since (prompts-v4.6 and v4.7, M4 analysis): in all 7 recorded runs that had a
+   round-2 lead, a round-2 agent examined the lead's service; 3 of the 7 resolved.
+10. **Victim leads, V1-consistency, allowlisted leads** (M4.5, from the analysis of 11
+   recorded real-model runs; no prompt text, schema or parser changed, so both committed
+   recordings still replay):
+   - An actionable claim on S that the rules do NOT support (insufficient or contradicted),
+     while at least half of S's own fresh ERROR lines say its calls to D fail and D is not
+     observed healthy (V2's victim test, V6 included), and no supported cause lies on D or
+     below it, also gives the next round a lead to D and adds D to its focus. Before, a
+     resource-pressure claim on such a victim sent the next round back to the victim alone
+     (a bad-release claim on it already pointed at D). It decides nothing.
+   - **V1-consistency**: structured details that belong to another mechanism (a release on a
+     resource-pressure claim, a dependency on a bad deployment) are reported as a note on
+     the check and never used; a dependency failure naming its own service as the
+     dependency is malformed under V1 (insufficient) instead of judged by V4.
+   - Leads are trusted prompt text, so they now name only services in the namespace's
+     allowlist (`configs/policies.yaml`), the list the prompts' focus section already uses:
+     before, a DNS-label-shaped token from a log line could reach a lead.
 
 ## Consequences
 
@@ -142,8 +159,8 @@ review of it before M3 found that it decided by accident or by volume:
 - A contradiction is attributed to the agent that recorded the evidence first. When two
   agents recorded the same observation, whether a `cross_agent_contradiction` record
   appears depends on that order.
-- Leads add trusted text to the next round's prompt, and whether they help a real model is
-  not measured yet. A lead can also appear while another cause is supported; that is
+- Leads add trusted text to the next round's prompt. Recorded runs show agents follow them
+  (7 of 7), not that they make a model right (3 of 7 resolved). A lead can also appear while another cause is supported; that is
   harmless, because the controller starts another round only when no diagnosis is
   supported.
 

@@ -68,6 +68,17 @@ class Claim(NamedTuple):
     detail: str  # the resolved version or dependency; "" when there is none
 
 
+class Link(Protocol):
+    """A failing call: S's calls to D fail (a supported dependency-failure claim, or what an
+    unsupported claim's own service logs say). Leads are made from links."""
+
+    @property
+    def target(self) -> str: ...  # the caller S
+
+    @property
+    def detail(self) -> str: ...  # the dependency D
+
+
 class JudgedClaim(Protocol):
     """What the merger reads from one of the verifier's checks."""
 
@@ -344,7 +355,11 @@ def _missing_views(findings: Sequence[AgentFinding], diagnosed: bool) -> list[Di
 # --- leads -------------------------------------------------------------------------------------
 
 
-def leads(unexplained: Sequence[JudgedClaim], checks: Sequence[JudgedClaim]) -> list[str]:
+def leads(
+    unexplained: Sequence[Link],
+    checks: Sequence[JudgedClaim],
+    allowed: Iterable[str] | None = None,
+) -> list[str]:
     """Where the next round should look although no claims conflict (trusted text).
 
     `unexplained` are the supported dependency failures (S's calls to D fail, D being the
@@ -357,10 +372,16 @@ def leads(unexplained: Sequence[JudgedClaim], checks: Sequence[JudgedClaim]) -> 
     and changes no claim.
     """
     confirmed = {c.target for c in checks if c.status == SUPPORTED}
+    # Leads are trusted prompt text: with the namespace's allowlist, a name read from log text
+    # that the allowlist does not hold makes no lead (the shape check alone lets any
+    # DNS-label-shaped token through).
+    known = None if allowed is None else set(allowed)
     callers: dict[str, set[str]] = {}
     for claim in unexplained:
         caller, dependency = claim.target, claim.detail
         named = _SERVICE.fullmatch(caller) and _SERVICE.fullmatch(dependency)
+        if known is not None and not {caller, dependency} <= known:
+            named = None
         if named and dependency not in confirmed:
             callers.setdefault(dependency, set()).add(caller)
     found = []
@@ -388,12 +409,17 @@ def label_of(claim: JudgedClaim) -> str:
     return text + (" [remembered]" if h.origin == "memory" else "")
 
 
-def _service(value: str) -> str:
+def shown_service(value: str) -> str:
+    """A service name safe to repeat in RECAP's trusted text, else "(unnamed)"."""
     return value if _SERVICE.fullmatch(value) else UNNAMED
 
 
-def _version(value: str) -> str:
+def shown_version(value: str) -> str:
+    """A release version safe to repeat in RECAP's trusted text, else "(unnamed)"."""
     return value if _VERSION.fullmatch(value) else UNNAMED
+
+
+_service, _version = shown_service, shown_version  # the short names used in this module
 
 
 def _role(role: AgentRole) -> str:

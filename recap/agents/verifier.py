@@ -82,7 +82,15 @@ from typing import Any, Literal, NamedTuple
 
 from pydantic import BaseModel, ValidationError
 
-from recap.agents.merger import Claim, choose, disagreements, leads, merge_claims
+from recap.agents.merger import (
+    Claim,
+    choose,
+    disagreements,
+    leads,
+    merge_claims,
+    shown_service,
+    shown_version,
+)
 from recap.context.evidence import EvidenceRegistry
 from recap.core import signals
 from recap.core.models import (
@@ -147,6 +155,11 @@ class EvidenceVerifier:
 
     name = "evidence-rule-verifier-v1"
 
+    def __init__(self, allowed_services: Iterable[str] | None = None) -> None:
+        # Leads are trusted prompt text, so they name only services the namespace allowlists
+        # (the list the prompts' focus section uses); None keeps the shape check alone.
+        self.allowed_services = None if allowed_services is None else list(allowed_services)
+
     def verify(
         self,
         findings: Sequence[AgentFinding],
@@ -173,6 +186,7 @@ class EvidenceVerifier:
         depth = {c.target: _depth(c.target, observed, graph) for c in candidates}
         chosen, ranked, competition = choose(candidates, depth)
         unexplained = _resolve_dependencies(checks, ranked, observed, graph)
+        victims = _victim_links(checks, ranked, observed, graph)
         best = chosen.result().hypothesis if chosen else None
         status = _report_status(best, checks)
         open_conflict = competition if competition and not competition.resolved else None
@@ -189,7 +203,7 @@ class EvidenceVerifier:
             disagreements=disagreements(
                 checks, findings, recorded_by, competition, diagnosed=best is not None
             ),
-            leads=leads(unexplained, checks),
+            leads=leads([*unexplained, *victims], checks, self.allowed_services),
         )
 
     def check_proposal(
@@ -574,8 +588,93 @@ def _structural(check: _Check, registry: EvidenceRegistry) -> None:
     if check.unknown_ids:
         unknown = ", ".join(check.unknown_ids)
         check.lack(V1, f"the claim cites evidence that is not in this run: {unknown}", focus)
+    _consistency(check)
     if not check.missing:
         check.ok(V1, f"every cited evidence ID exists in this run ({len(cited)} checked)")
+
+
+V1_CONSISTENCY = "V1-consistency"
+
+
+def _consistency(check: _Check) -> None:
+    """V1-consistency: details that belong to another mechanism are reported, never used.
+
+    A model may name a release on a resource-pressure claim, or a dependency on a bad
+    deployment, when the mechanism it chose (or was allowed) does not fit what it meant. The
+    rules still judge the claim as filed; this note keeps what the model's own structured
+    fields said visible to people and to the evaluation. A dependency failure that names its
+    own service as the dependency is no checkable claim at all.
+    """
+    h = check.hypothesis
+    version, dependency = _detail(h, "version"), _detail(h, "dependency")
+    as_filed = f"it is judged as {_words(h.mechanism)}, as filed"
+    if version and h.mechanism != FailureMechanism.BAD_DEPLOYMENT:
+        named = shown_version(version)
+        message = f"the claim names release {named}, which only a bad deployment names; {as_filed}"
+        check.note(V1_CONSISTENCY, message, good=False)
+    if dependency and h.mechanism != FailureMechanism.DEPENDENCY_FAILURE:
+        named = shown_service(dependency)
+        message = (
+            f"the claim names a failing dependency ({named}), which only a dependency failure "
+            f"names; {as_filed}"
+        )
+        check.note(V1_CONSISTENCY, message, good=False)
+    if h.mechanism == FailureMechanism.DEPENDENCY_FAILURE and dependency == check.target:
+        message = f"the claim names {check.target} as its own failing dependency"
+        check.lack(V1, message, [check.target])
+
+
+def _dominant_blame(service: str, observed: _Observations) -> list[str]:
+    """The dependencies most of `service`'s own fresh ERROR lines blame.
+
+    The victim test of V2-upstream-dominance (at least UPSTREAM_SHARE of its ERROR lines say
+    its calls to a dependency fail), leaving out blame toward a dependency observed healthy
+    (V6). [] when the service's errors are its own.
+    """
+    fresh = observed.fresh_lines(service)
+    errors = sum(1 for _, line in fresh if line.level == "ERROR")
+    upstream = [
+        (ids, dependency)
+        for ids, dependency in observed.upstream_errors(service)
+        if not observed.healthy_evidence(dependency)
+    ]
+    if not upstream or len(upstream) < UPSTREAM_SHARE * errors:
+        return []
+    return _union([dependency for _, dependency in upstream])
+
+
+class _Link(NamedTuple):
+    """S's calls to D fail, read from S's own ERROR lines (a merger.Link for leads)."""
+
+    target: str  # the caller S
+    detail: str  # the dependency D
+
+
+def _victim_links(
+    checks: Sequence[_Check],
+    candidates: Sequence[_Check],
+    observed: _Observations,
+    graph: Mapping[str, set[str]],
+) -> list[_Link]:
+    """Where an unconfirmed claim on a VICTIM should send the next round (M4.5).
+
+    An actionable claim on S that the rules did not support, while most of S's own fresh ERROR
+    lines say its calls to D fail (and D is not observed healthy), points the next round at D,
+    as a supported dependency failure S -> D already does. Before, such a claim (say, out-of-
+    memory text in S's logs) sent the next round back to S alone. Nothing is decided here: a
+    lead changes no claim, no status and no routing rule.
+    """
+    links: list[_Link] = []
+    for check in checks:
+        if check.hypothesis.mechanism not in ACTIONABLE or check.status == SUPPORTED:
+            continue
+        for dependency in _dominant_blame(check.target, observed):
+            below = {dependency, *_reachable(dependency, graph)}
+            if any(c.target in below for c in candidates):
+                continue  # a supported cause on D or below it already explains the blame
+            check.focus = _union(check.focus, [dependency])  # and the next round's focus
+            links.append(_Link(check.target, dependency))
+    return links
 
 
 def _healthy_target(check: _Check, observed: _Observations) -> None:
