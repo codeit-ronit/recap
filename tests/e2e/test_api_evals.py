@@ -70,6 +70,23 @@ def test_an_unknown_configuration_name_is_a_400_and_starts_nothing(settings: Set
         assert client.app.state.manager.eval_task is None  # type: ignore[attr-defined]
 
 
+def test_starting_an_evaluation_names_its_report_folder_without_a_local_path(
+    settings: Settings, committed_report: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def quick_failure(
+        out_dir: Path, *, config_names: list[str] | None, progress: Callable[[str], None]
+    ) -> EvalReport:
+        raise RuntimeError("not needed here")
+
+    monkeypatch.setattr(service, "run_evaluation", quick_failure)
+    with TestClient(create_app(Runtime(settings)), headers=OPERATOR_HEADERS) as client:
+        started = client.post("/evals/run", json={}).json()
+        wait_for(lambda: finished_results(client))
+
+    # The report folder is outside the repository here, so only its name is shown.
+    assert started == {"status": "started", "report_dir": "eval"}
+
+
 def test_results_show_the_committed_report_until_this_server_runs_one(
     settings: Settings, committed_report: dict[str, Any]
 ) -> None:

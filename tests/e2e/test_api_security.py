@@ -141,6 +141,28 @@ def test_a_write_from_a_page_on_another_origin_is_refused(settings: Settings) ->
     assert read.status_code == 200  # reads are not state-changing
 
 
+def test_a_replay_or_a_provider_choice_still_needs_the_operator(settings: Settings) -> None:
+    """The per-run choices added in M4 go through the same doors as every other write."""
+    replay = {
+        "scenario_id": "m3-inventory-leak-behind-frontend",
+        "config": {"provider": "replay", "replay_fixture": "qwen3-8b-unfamiliar-parallel"},
+    }
+    model = {"scenario_id": "bad-deployment", "config": {"provider": "ollama"}}
+    with TestClient(create_app(Runtime(settings))) as client:
+        anonymous = [client.post("/incidents/run", json=body) for body in (replay, model)]
+        foreign = client.post(
+            "/incidents/run",
+            json=replay,
+            headers={**OPERATOR_HEADERS, "Origin": "https://evil.example"},
+        )
+        rebound = client.get("/runs/run-x/timeline", headers={"Host": "evil.example"})
+        started = dict(client.app.state.manager.tasks)  # type: ignore[attr-defined]
+
+    assert [r.status_code for r in anonymous] == [401, 401]
+    assert foreign.status_code == 403 and rebound.status_code == 400
+    assert started == {}  # nothing ran
+
+
 def test_without_configuration_only_loopback_host_names_are_allowed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

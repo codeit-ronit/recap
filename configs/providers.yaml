@@ -10,6 +10,11 @@
 #   free_hosted_llm  a hosted free plan, checked before every call (recap/providers/quota.py)
 #   replay           recorded answers of an earlier real LLM run (offline; used by CI)
 #   paid_llm         billed per call: the owner keeps it disabled
+#
+# api_selectable: whether the operator may pick a model provider for ONE run from the API
+# or dashboard (POST /incidents/run). Off by default. The scripted baseline is always
+# selectable, a replay only with a committed recording (fixtures/recordings/MANIFEST.json),
+# and a paid provider never.
 default: deterministic
 
 providers:
@@ -31,6 +36,7 @@ providers:
     max_output_tokens: 1024
     request_timeout_seconds: 300
     budget: {max_elapsed_seconds: 1800}  # about a minute per decision on a 16 GB laptop
+    api_selectable: true                 # local and $0: the operator may pick it per run
 
   groq:
     kind: llm

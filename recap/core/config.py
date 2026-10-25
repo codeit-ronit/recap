@@ -193,6 +193,12 @@ class ProviderSettings(Contract):
     budget: dict[str, Any] = Field(default_factory=dict)  # RunBudget overrides for this provider
     free_tier: FreeTierSettings | None = None  # required for origin free_hosted_llm
     recording: str | None = None  # replay: the recording to answer from (repo-relative)
+    # May an API client pick this model provider for one run (POST /incidents/run)? Off
+    # unless the owner turns it on here: picking a provider can start real inference or
+    # spend a free quota. Only model providers (kind llm) use it: the scripted baseline is
+    # always selectable, a replay needs a committed recording instead, and a paid provider
+    # never is (refused below, and again by the API).
+    api_selectable: bool = False
 
     @model_validator(mode="after")
     def _consistent(self) -> ProviderSettings:
@@ -200,6 +206,8 @@ class ProviderSettings(Contract):
         unknown = set(self.budget) - set(RunBudget.model_fields)
         if unknown:
             raise ValueError(f"unknown budget fields: {', '.join(sorted(unknown))}")
+        if self.api_selectable and self.origin == "paid_llm":
+            raise ValueError("a paid provider can never be selectable from the API ($0 budget)")
         if self.kind == "llm" and self.origin in ("local_llm", "free_hosted_llm"):
             if self.api is None or not self.base_url or not self.model:
                 raise ValueError("an HTTP LLM provider needs api, base_url and model")
