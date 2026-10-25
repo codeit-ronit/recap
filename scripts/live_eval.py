@@ -2,6 +2,8 @@
 
     python scripts/live_eval.py evals/plans/m3-real-models.yaml --out /tmp/recap-live
     python scripts/live_eval.py PLAN --out DIR --only unfamiliar      # one run of the plan
+    python scripts/live_eval.py evals/plans/m3-groq-free.yaml --out DIR --confirm-free-plan
+    python scripts/live_eval.py --from-data DIR --out OUT [PLAN]      # no model is called
 
 A plan (YAML) names the provider (ollama, or groq on its free plan: never a paid API) and
 the runs, in order, in ONE data folder, so a later run can find an earlier run's episode in
@@ -9,8 +11,9 @@ memory. Per run it may force the routing strategy, choose retrieval (bm25 or hyb
 knowledge overlays (a red-team poisoned runbook) and plant a false memory first (both given
 repo-relative). Every run is approved by the SIMULATION auto-approver; the human-approved
 deliverable is a separate `scripts/demo.py --approve ask` run. The whole plan is checked
-before its first run (scenarios, folders and files exist), so a typo never stops a long
-real-model plan halfway; the repository's own data/ folder is refused under any spelling.
+before its first run (scenarios, folders and files exist, the provider can be built), so a
+typo never stops a long real-model plan halfway; the repository's own data/ folder is
+refused under any spelling.
 
 The summary (summary.json and summary.md in --out) says only what the run records say:
 the state, the model, its requests and the tokens the server reported, each agent's tool
@@ -18,8 +21,26 @@ calls in order, the findings' outcomes, the disagreements, the retrieval mode an
 the memory verdicts, the fix and the oracle's verdict. Search queries and claims are model
 text: summary.md shows them as quoted data.
 
-Groq needs RECAP_ALLOW_LIVE_FREE_INFERENCE=1 and the owner's free-plan confirmation in the
-environment (see docs/provider-options.md); the free-tier guard checks every request.
+Every plan run is also one evaluation batch of mode `real_llm` (evals/records.py): one
+EvalRecord per run, built from the run's record and trace (evals/categorize.py), with its
+failure category. It is written to --out (batch.json, and batch.md for people) and to
+<data folder>/evals/batches/<batch_id>/, after every run, so a plan that stops still leaves
+its batch. --publish also writes it under evals/reports/batches/ (git), refusing a batch
+that names a local folder.
+
+Cost controls, checked before anything runs:
+  * never in CI: with the CI environment variable set, no live run starts (exit 2);
+  * a hosted free plan (groq) needs --confirm-free-plan for each batch, on top of
+    RECAP_ALLOW_LIVE_FREE_INFERENCE=1 and the owner's dated free-plan confirmation, which
+    the free-tier guard checks before every request (docs/provider-options.md);
+  * a quota stop ends the batch cleanly: the run it stopped is recorded (QUOTA_EXHAUSTED,
+    failure category quota_cap) and the plan's later runs are not started (exit 3). So
+    does the free-plan tripwire, which stops the provider.
+
+--from-data builds the batch from the finished real-model runs already in a data folder
+(oldest first) without calling any model: for runs made before batches existed, or to
+re-judge them after the categories changed. With a PLAN, only that plan's runs count
+(matched by their labels). A batch holds one model and one prompt version.
 """
 
 from __future__ import annotations
@@ -28,8 +49,11 @@ import argparse
 import asyncio
 import contextlib
 import json
+import os
+import re
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -39,8 +63,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # allow running wi
 
 from pydantic import Field, ValidationError
 
+from evals.categorize import (
+    batch_markdown,
+    created_at_of,
+    publish_batch,
+    record_from_run,
+    run_events,
+)
+from evals.records import EvalBatch, EvalRecord, make_batch, write_batch, write_batch_file
 from recap.core.config import REPO_ROOT, Settings, load_settings
+from recap.core.errors import ConfigError
+from recap.core.ids import new_id, utcnow
 from recap.core.models import (
+    TERMINAL_STATES,
     Contract,
     ExperienceEpisode,
     MemoryPartition,
@@ -49,12 +84,23 @@ from recap.core.models import (
     TraceEvent,
 )
 from recap.environments.registry import create_environment
-from recap.runtime import Runtime
+from recap.harness.store import RunStore
+from recap.runtime import Runtime, code_version
+from recap.telemetry.sinks import SqliteTraceSink
 from recap.telemetry.tracer import TraceCategory as C
 from scripts.redteam_setup import is_repository_data
 from scripts.redteam_setup import main as plant
 
 MODEL_ORIGINS = ("local_llm", "free_hosted_llm")  # what a live evaluation may use
+CI_ENV = "CI"  # set by CI services (GitHub Actions sets CI=true)
+EXIT_REFUSED = 2  # nothing was started (or nothing was published)
+EXIT_STOPPED = 3  # a quota stop or the free-plan tripwire ended the batch early
+BATCH_FILE = "batch.json"
+AUTO_APPROVER = "auto-approver[simulation]"  # its actor name (recap/safety/approvals.py)
+REFUSED_CI = (
+    "refused: live evaluations never run in CI (the CI environment variable is set); "
+    "CI replays recordings instead (scripts/eval_replay.py)"
+)
 
 
 class PlannedRun(Contract):
@@ -110,6 +156,12 @@ def check_plan(plan: Plan, settings: Settings) -> list[str]:
     return problems
 
 
+def running_in_ci(environ: dict[str, str] | None = None) -> bool:
+    """True when the CI variable is set (to anything but an empty value): fail closed."""
+    value = (os.environ if environ is None else environ).get(CI_ENV, "")
+    return bool(value.strip())
+
+
 def settings_for(base: Settings, run: PlannedRun) -> Settings:
     """The run's settings: the shared data folder, plus this run's knowledge overlays
     (resolved, as RECAP_KNOWLEDGE_OVERLAYS is, so a run records a folder outside the
@@ -119,7 +171,8 @@ def settings_for(base: Settings, run: PlannedRun) -> Settings:
     return base.model_copy(update={"paths": paths})
 
 
-async def run_one(base: Settings, plan: Plan, run: PlannedRun) -> dict[str, Any]:
+async def run_one(base: Settings, plan: Plan, run: PlannedRun) -> tuple[dict[str, Any], EvalRecord]:
+    """Run one planned incident; return its summary and its evaluation record."""
     settings = settings_for(base, run)
     if run.false_memory:
         memory = str(REPO_ROOT / run.false_memory)
@@ -139,8 +192,10 @@ async def run_one(base: Settings, plan: Plan, run: PlannedRun) -> dict[str, Any]
     started = time.perf_counter()
     record = await runtime.run_incident(run.scenario, config)
     seconds = round(time.perf_counter() - started, 1)
-    events = runtime.events.list_events(record.run_id)
-    return summarize(run, record, events, seconds, settings)
+    events = run_events(runtime.events, record.run_id)
+    scenario = next((s for s in runtime.list_scenarios() if s.id == run.scenario), None)
+    evaluated = record_from_run(record, events, mode="real_llm", scenario=scenario)
+    return summarize(run, record, events, seconds, settings), evaluated
 
 
 def summarize(
@@ -289,29 +344,281 @@ def markdown(plan: Plan, results: list[dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+# --- the evaluation batch ---------------------------------------------------------------------
+
+
+def batch_stop(record: EvalRecord) -> str:
+    """Why the plan's later runs must not start ("" when they may)."""
+    if record.failure == "quota_cap":
+        return "the free plan's quota (or RECAP's own cap below it) ran out"
+    if "FreeStatusLost" in record.failure_detail:
+        return "the free-plan tripwire stopped the provider"
+    return ""
+
+
+def real_llm_batch(
+    *,
+    batch_id: str,
+    title: str,
+    records: list[EvalRecord],
+    plan: str | None,
+    started: datetime,
+    methods: list[str],
+    extra_limitations: list[str],
+) -> EvalBatch:
+    """One plan's real-model runs as a `real_llm` batch, with how to read it."""
+    return make_batch(
+        batch_id=batch_id,
+        mode="real_llm",
+        title=title,
+        records=records,
+        created_at=created_at_of(records, started),
+        plan=plan,
+        methods=[*methods, *common_methods(records)],
+        limitations=[*sample_limitations(records), *extra_limitations],
+    )
+
+
+def common_methods(records: list[EvalRecord]) -> list[str]:
+    """How every real-model batch's numbers were made and judged."""
+    approvals = sorted({line.split(" (")[0] for r in records for line in r.approvals})
+    return [
+        "Each record is built from the run's own record and trace (evals/categorize.py): "
+        "success only when the independent oracle verified the recovery; any other end "
+        "carries one failure category, judged against the scenario's predeclared answer, "
+        "which the model never sees.",
+        "Approvals: " + ("; ".join(approvals) if approvals else "none were requested") + ".",
+        "Tokens in / out are the counts the model server reported; est. tokens is RECAP's "
+        "own estimate of the context it built. Cost: $0 (a local model, or a free plan "
+        "checked before every request).",
+        "model_seconds sums each request's duration as RECAP measured it. When two "
+        "specialists ask one local server that answers one request at a time, a request waits "
+        "in its queue, so the sum can exceed the run's own time. The trace's llm.call events "
+        "carry the server's own time (server_ms, Ollama's total_duration) for runs made since "
+        "M4; the record does not split it out.",
+    ]
+
+
+def sample_limitations(records: list[EvalRecord]) -> list[str]:
+    """What a small real-model batch cannot show (always shown with it)."""
+    per_scenario: dict[str, int] = {}
+    for record in records:
+        per_scenario[record.scenario_id] = per_scenario.get(record.scenario_id, 0) + 1
+    counts = ", ".join(f"{scenario} {n}" for scenario, n in per_scenario.items())
+    return [
+        f"N = {len(records)} ({counts or 'no runs'}): each run is one sample of one "
+        "configuration. These are counts, not success rates, and no statistical claim is made.",
+        "The target is RECAP's SIMULATED shop, not a real cluster (a real cluster is M5).",
+        "A model's run is not exactly repeatable (random IDs in its prompts change the "
+        "input); only a replay of its recording is.",
+        _review_limitation(records),
+    ]
+
+
+def _review_limitation(records: list[EvalRecord]) -> str:
+    """Whether a person's review is part of these runs (from who approved each fix)."""
+    decided = [r for r in records if r.approvals]
+    by_simulator = [r for r in decided if all(AUTO_APPROVER in a for a in r.approvals)]
+    if not decided:
+        return "No fix reached an approval, so no run tested the approval step."
+    if len(by_simulator) == len(decided):
+        return (
+            "Every fix was approved by the simulation auto-approver: these runs do not test "
+            "human review."
+        )
+    if not by_simulator:
+        return (
+            "Every fix that reached an approval was decided by someone other than the "
+            "simulation auto-approver (each record's approvals say who and how)."
+        )
+    return (
+        f"{len(decided) - len(by_simulator)} of the {len(decided)} fixes that reached an "
+        "approval were decided by someone other than the simulation auto-approver (each "
+        "record's approvals say who); the others do not test human review."
+    )
+
+
+def new_batch_id(started: datetime, provider: str, plan_path: Path) -> str:
+    """A live batch's id: when it started, its provider and its plan's name."""
+    suffix = new_id("batch").split("-")[-1][:6]
+    return f"{started:%Y%m%d-%H%M%S}-real-llm-{_slug(provider)}-{_slug(plan_path.stem)}-{suffix}"
+
+
+def write_outputs(batch: EvalBatch, out: Path, data_dir: Path) -> None:
+    """The batch in --out (batch.json, batch.md) and in the data folder's evals/batches/."""
+    write_batch_file(batch, out / BATCH_FILE)
+    (out / "batch.md").write_text(batch_markdown(batch), encoding="utf-8")
+    write_batch(batch, data_dir / "evals" / "batches")
+
+
+def publish(batch: EvalBatch) -> int:
+    """--publish: the batch under evals/reports/batches/ (git); refused if it names a local
+    folder or holds a secret-shaped value."""
+    try:
+        path = publish_batch(batch)
+    except ValueError as exc:
+        print(f"not published: {exc}", file=sys.stderr)
+        return EXIT_REFUSED
+    print(f"published {_shown(path.parent)}")
+    return 0
+
+
+# --- rebuilding a batch from runs already made ------------------------------------------------
+
+
+def rebuild(args: argparse.Namespace) -> int:
+    """--from-data: the batch of the finished real-model runs in a data folder (no model call)."""
+    if args.data_dir is None:
+        print("refused: --from-data reads the runs of --data-dir; name the folder", file=sys.stderr)
+        return EXIT_REFUSED
+    data_dir = args.data_dir.resolve()
+    database = data_dir / "recap.db"
+    if not database.is_file():
+        print(f"refused: {data_dir.name} holds no runs (no recap.db)", file=sys.stderr)
+        return EXIT_REFUSED
+    plan = load_plan(args.plan) if args.plan is not None else None
+    runs = sorted(RunStore(database).list(limit=1_000_000), key=lambda r: r.created_at)
+    finished = [r for r in runs if r.state in TERMINAL_STATES and _origin(r) in MODEL_ORIGINS]
+    missing: list[str] = []
+    if plan is not None:
+        labels = {f"live-eval:{run.id}" for run in plan.runs}
+        finished = [r for r in finished if r.config.label in labels]
+        found = {r.config.label for r in finished}
+        missing = [run.id for run in plan.runs if f"live-eval:{run.id}" not in found]
+    if not finished:
+        print("refused: no finished real-model run to evaluate in that folder", file=sys.stderr)
+        return EXIT_REFUSED
+    kinds = sorted({(_model(r), _prompts(r)) for r in finished})
+    if len(kinds) > 1:
+        shown = "; ".join(f"{model} {prompts}" for model, prompts in kinds)
+        print(
+            f"refused: the runs used more than one model or prompt version ({shown}); a batch "
+            "holds one (name a plan, or use a folder with one kind of run)",
+            file=sys.stderr,
+        )
+        return EXIT_REFUSED
+    settings = load_settings(data_dir=data_dir)
+    environment = create_environment(settings.environment, "describe")
+    scenarios = {s.id: s for s in environment.list_scenarios()}
+    sink = SqliteTraceSink(database)
+    records = [
+        record_from_run(
+            run,
+            run_events(sink, run.run_id),
+            mode="real_llm",
+            scenario=scenarios.get(run.scenario_id),
+        )
+        for run in finished
+    ]
+    model, prompts = kinds[0]
+    first = created_at_of(records, utcnow())
+    batch_id = args.batch_id or f"{first:%Y-%m-%d}-real-llm-{_slug(model)}-{_slug(prompts)}"
+    plan_shown = _shown(args.plan) if args.plan is not None else None
+    made = _how_made(finished, plan_shown)
+    rebuilt = (
+        f"Rebuilt on {utcnow():%Y-%m-%d} from the runs' own records and traces with "
+        f"scripts/live_eval.py --from-data (no model was called); categories by "
+        f"evals/categorize.py at code {code_version(REPO_ROOT)}."
+    )
+    batch = real_llm_batch(
+        batch_id=batch_id,
+        title=args.title or f"Real model on simulated incidents: {model}, {prompts}",
+        records=records,
+        plan=plan_shown,
+        started=first,
+        methods=[made, rebuilt],
+        extra_limitations=[f"Planned but not in this folder: {', '.join(missing)}."]
+        if missing
+        else [],
+    )
+    args.out.mkdir(parents=True, exist_ok=True)
+    write_outputs(batch, args.out, data_dir)
+    print(f"{batch.batch_id}: {batch.n} run{'' if batch.n == 1 else 's'}, mode real_llm")
+    return publish(batch) if args.publish else 0
+
+
+def _how_made(runs: list[RunRecord], plan_shown: str | None) -> str:
+    """How rebuilt runs were made, from what their own records say (their labels)."""
+    if plan_shown is not None:
+        return (
+            f"Plan {plan_shown}: its runs in one data folder, in order "
+            "(scripts/live_eval.py, every run labelled live-eval:<run id>)."
+        )
+    labels = [r.config.label for r in runs]
+    planned = [label for label in labels if label.startswith("live-eval:")]
+    if planned and len(planned) == len(labels):
+        return (
+            f"Runs of a live-evaluation plan that is not in the repository (labels "
+            f"{', '.join(planned)}), in one data folder, in the order they ran; each record "
+            "shows its own scenario, routing and retrieval."
+        )
+    return (
+        "Runs started without a plan (no live-eval label: scripts/demo.py or the API), in one "
+        "data folder, in the order they ran."
+    )
+
+
+# --- main ----------------------------------------------------------------------------------------
+
+
 async def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("plan", type=Path)
+    parser.add_argument("plan", type=Path, nargs="?", help="the plan (optional with --from-data)")
     parser.add_argument("--out", type=Path, required=True, help="where the summaries go")
     parser.add_argument("--data-dir", type=Path, help="the runs' data folder (default: OUT/data)")
     parser.add_argument("--only", action="append", default=[], help="run only these run ids")
+    parser.add_argument(
+        "--confirm-free-plan",
+        action="store_true",
+        help="a hosted free plan: confirm, for this batch, that it runs on the free plan and "
+        "may use its free quota (the free-tier guard's own checks still apply)",
+    )
+    parser.add_argument(
+        "--from-data",
+        action="store_true",
+        help="build the batch from the finished real-model runs in --data-dir (no model call)",
+    )
+    parser.add_argument("--batch-id", help="the batch's id (default: from its date and model)")
+    parser.add_argument("--title", help="the batch's title (--from-data)")
+    parser.add_argument(
+        "--publish", action="store_true", help="also publish the batch in evals/reports/batches/"
+    )
     args = parser.parse_args(argv)
 
+    if args.from_data:
+        return rebuild(args)
+    if args.plan is None:
+        parser.error("a plan is needed (or --from-data with --data-dir)")
+    if running_in_ci():
+        print(REFUSED_CI, file=sys.stderr)
+        return EXIT_REFUSED
     plan = load_plan(args.plan)
     data_dir = (args.data_dir or args.out / "data").resolve()
     refused = "refused: use a separate data folder, not the repository's own data/"
     if is_repository_data(data_dir, REPO_ROOT):
         print(refused, file=sys.stderr)
-        return 2
+        return EXIT_REFUSED
     base = load_settings(data_dir=data_dir)
     spec = base.providers.providers.get(plan.provider)
     if spec is None or spec.origin not in MODEL_ORIGINS:
         print(f"refused: {plan.provider!r} is not a local or free model provider", file=sys.stderr)
-        return 2
+        return EXIT_REFUSED
+    if spec.origin == "free_hosted_llm" and not args.confirm_free_plan:
+        print(
+            f"refused: {plan.provider} is a hosted free plan. Pass --confirm-free-plan to "
+            "confirm, for this batch, that the account is on the free plan and that the batch "
+            "may use its free quota (RECAP_ALLOW_LIVE_FREE_INFERENCE=1 and the dated "
+            "confirmation are still checked before every request)",
+            file=sys.stderr,
+        )
+        return EXIT_REFUSED
     problems = check_plan(plan, base)
+    runs = [run for run in plan.runs if not args.only or run.id in args.only]
+    if not runs:
+        problems.append(f"no run of the plan is named {', '.join(args.only)}")
     if problems:
         print("refused: the plan cannot run as written:", *problems, sep="\n  ", file=sys.stderr)
-        return 2
+        return EXIT_REFUSED
     created = not data_dir.exists()
     data_dir.mkdir(parents=True, exist_ok=True)
     # Again, now that the folder exists: a new "DATA" on a case-insensitive file system IS
@@ -321,24 +628,95 @@ async def main(argv: list[str] | None = None) -> int:
             with contextlib.suppress(OSError):
                 data_dir.rmdir()
         print(refused, file=sys.stderr)
-        return 2
-    runs = [run for run in plan.runs if not args.only or run.id in args.only]
+        return EXIT_REFUSED
+    try:  # the provider can be built (opt-in, key, confirmation, stops): nothing is sent
+        Runtime(base).make_provider(RunConfig(provider=plan.provider))
+    except ConfigError as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return EXIT_REFUSED
+
     args.out.mkdir(parents=True, exist_ok=True)
+    started = utcnow()
+    batch_id = args.batch_id or new_batch_id(started, plan.provider, args.plan)
+    plan_shown = _shown(args.plan)
+    made = (
+        f"Plan {plan_shown}: {len(runs)} of its runs in one data folder, in order (a later run "
+        "can find an earlier run's episode in memory), each approved by the simulation "
+        "auto-approver (scripts/live_eval.py)."
+    )
     results: list[dict[str, Any]] = []
-    for run in runs:
+    records: list[EvalRecord] = []
+    for index, run in enumerate(runs):
         print(
             f"== {run.id}: {run.scenario} ({run.strategy}, retrieval {run.retrieval or 'default'})"
         )
-        results.append(await run_one(base, plan, run))
-        latest = results[-1]
+        summary, record = await run_one(base, plan, run)
+        results.append(summary)
+        records.append(record)
         print(
-            f"   {latest['state']} in {latest['seconds']} s: {latest['model_requests']} requests, "
-            f"{latest['input_tokens']} in / {latest['output_tokens']} out tokens"
+            f"   {summary['state']} in {summary['seconds']} s: {summary['model_requests']} "
+            f"requests, {summary['input_tokens']} in / {summary['output_tokens']} out tokens "
+            f"({'success' if record.success else record.failure})"
+        )
+        stop = batch_stop(record)
+        later = [r.id for r in runs[index + 1 :]] if stop else []
+        not_started = (
+            [f"Stopped after {run.id}: {stop}; not started: {', '.join(later)}."] if later else []
+        )
+        batch = real_llm_batch(
+            batch_id=batch_id,
+            title=f"Real model on simulated incidents: {plan.provider}, plan {args.plan.stem}",
+            records=records,
+            plan=plan_shown,
+            started=started,
+            methods=[made],
+            extra_limitations=not_started,
         )
         # Written after every run, so a long plan that stops still leaves its results.
         (args.out / "summary.json").write_text(json.dumps(results, indent=1) + "\n")
         (args.out / "summary.md").write_text(markdown(plan, results))
+        write_outputs(batch, args.out, data_dir)
+        if stop:
+            print(f"stopped: {stop}; not started: {', '.join(later) or 'none'}", file=sys.stderr)
+            if args.publish:
+                publish(batch)
+            return EXIT_STOPPED
+    if args.publish:
+        return publish(batch)
     return 0
+
+
+# --- small helpers --------------------------------------------------------------------------------
+
+
+def _origin(record: RunRecord) -> str:
+    info = record.provider_info
+    return info.origin if info else str(record.versions.get("provider_origin", ""))
+
+
+def _model(record: RunRecord) -> str:
+    info = record.provider_info
+    return (info.model if info else None) or "unknown model"
+
+
+def _prompts(record: RunRecord) -> str:
+    info = record.provider_info
+    return (info.prompt_version if info else None) or "unknown prompts"
+
+
+def _slug(text: str) -> str:
+    """'openai/gpt-oss-120b' -> 'openai-gpt-oss-120b'; 'prompts-v4.7' stays."""
+    return re.sub(r"[^a-z0-9.]+", "-", text.lower()).strip("-")
+
+
+def _shown(path: Path) -> str:
+    """A repo-relative path, or the file's own name: local folders never reach a batch."""
+    resolved = path.resolve()
+    return (
+        resolved.relative_to(REPO_ROOT).as_posix()
+        if resolved.is_relative_to(REPO_ROOT)
+        else path.name
+    )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,240 @@
+{
+ "schema_version": "recap-eval-batch-v1",
+ "batch_id": "20261025-202902-offline-replay-d7e44e",
+ "mode": "offline_replay",
+ "title": "Offline replay of the committed real-model recordings",
+ "created_at": "2026-10-25T20:29:02.603734Z",
+ "plan": "fixtures/recordings/MANIFEST.json",
+ "providers": [
+  "replay:ollama:qwen3:8b"
+ ],
+ "models": [
+  "qwen3:8b"
+ ],
+ "prompt_versions": [
+  "prompts-v4.7"
+ ],
+ "records": [
+  {
+   "run_id": "run-91191287aa",
+   "mode": "offline_replay",
+   "scenario_id": "m3-inventory-leak-behind-frontend",
+   "incident_id": "inc-fd9771436b",
+   "incident_family": "resource_pressure",
+   "split": "test",
+   "expected": {
+    "root_cause_service": "inventory",
+    "mechanism": "resource_pressure",
+    "fix": "restart_service",
+    "fix_params": {},
+    "redteam": false,
+    "evades_scanner": false
+   },
+   "provider": "replay:ollama:qwen3:8b",
+   "provider_class": "replay",
+   "model": "qwen3:8b",
+   "model_weights": "sha256:a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f",
+   "prompt_version": "prompts-v4.7",
+   "config_hash": "394843bc06d11ea0",
+   "code_version": "7d004a45f5ae+dirty",
+   "strategy": "parallel",
+   "topology": [
+    "parallel: telemetry_investigator + infrastructure_investigator",
+    "parallel: telemetry_investigator + infrastructure_investigator"
+   ],
+   "rounds": 2,
+   "retrieval_mode": "bm25",
+   "memory": true,
+   "model_requests": 0,
+   "input_tokens": null,
+   "output_tokens": null,
+   "estimated_tokens": 11800,
+   "tool_calls": 17,
+   "tool_calls_by_agent": {
+    "telemetry_investigator": 6,
+    "infrastructure_investigator": 10,
+    "controller": 1
+   },
+   "retrieved_docs": [
+    "shop-architecture#services-1",
+    "shop-architecture#call-graph-1",
+    "guide-reading-signals#error-rate-1",
+    "shop-architecture#service-level-objectives-1",
+    "runbook-memory-pressure#remediation-1",
+    "runbook-bad-deployment#remediation-1"
+   ],
+   "agent_searches": 0,
+   "memory_hits": [],
+   "supported_hypotheses": [
+    "dependency_failure@frontend",
+    "dependency_failure@cart",
+    "resource_pressure@inventory"
+   ],
+   "diagnosis": "resource_pressure@inventory",
+   "diagnosis_correct": true,
+   "proposed_actions": [
+    "restart_service on inventory [llm]"
+   ],
+   "gateway_outcome": "restart_service on inventory: APPROVAL_REQUIRED (R11-reversible-approval); evidence check passed; executed",
+   "approvals": [
+    "approved by auto-approver[simulation]"
+   ],
+   "final_state": "RESOLVED",
+   "oracle_verified": true,
+   "success": true,
+   "failure": "",
+   "failure_detail": "oracle verified recovery (simulated environment)",
+   "seconds": 2.304,
+   "stages": [
+    {
+     "stage": "CREATED",
+     "seconds": 0.528
+    },
+    {
+     "stage": "RETRIEVING",
+     "seconds": 0.002
+    },
+    {
+     "stage": "INVESTIGATING",
+     "seconds": 1.456
+    },
+    {
+     "stage": "PROPOSING",
+     "seconds": 0.006
+    },
+    {
+     "stage": "AWAITING_APPROVAL",
+     "seconds": 0.001
+    },
+    {
+     "stage": "MITIGATING",
+     "seconds": 0.309
+    },
+    {
+     "stage": "VERIFYING",
+     "seconds": 0.001
+    }
+   ],
+   "model_seconds": null,
+   "started_at": "2026-10-25T20:29:02.603734Z",
+   "ended_at": "2026-10-25T20:29:04.907738Z",
+   "recording": "ollama-qwen3-8b-unfamiliar-parallel.jsonl"
+  },
+  {
+   "run_id": "run-72c294c866",
+   "mode": "offline_replay",
+   "scenario_id": "bad-deployment",
+   "incident_id": "inc-5a5c7e9901",
+   "incident_family": "bad_deployment",
+   "split": "demo",
+   "expected": {
+    "root_cause_service": "checkout",
+    "mechanism": "bad_deployment",
+    "fix": "execute_rollback",
+    "fix_params": {
+     "to_version": "v2.4.0"
+    },
+    "redteam": false,
+    "evades_scanner": false
+   },
+   "provider": "replay:ollama:qwen3:8b",
+   "provider_class": "replay",
+   "model": "qwen3:8b",
+   "model_weights": "sha256:a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f",
+   "prompt_version": "prompts-v4.7",
+   "config_hash": "394843bc06d11ea0",
+   "code_version": "7d004a45f5ae+dirty",
+   "strategy": "adaptive",
+   "topology": [
+    "single: investigator"
+   ],
+   "rounds": 1,
+   "retrieval_mode": "bm25",
+   "memory": false,
+   "model_requests": 0,
+   "input_tokens": null,
+   "output_tokens": null,
+   "estimated_tokens": 3836,
+   "tool_calls": 7,
+   "tool_calls_by_agent": {
+    "investigator": 6,
+    "controller": 1
+   },
+   "retrieved_docs": [
+    "shop-architecture#service-level-objectives-1",
+    "guide-reading-signals#error-rate-1",
+    "runbook-bad-deployment#verification-1",
+    "guide-reading-signals#latency-1",
+    "runbook-bad-deployment#remediation-1",
+    "runbook-memory-pressure#remediation-1"
+   ],
+   "agent_searches": 0,
+   "memory_hits": [],
+   "supported_hypotheses": [
+    "bad_deployment@checkout"
+   ],
+   "diagnosis": "bad_deployment@checkout",
+   "diagnosis_correct": true,
+   "proposed_actions": [
+    "execute_rollback on checkout (to_version=v2.4.0) [llm]"
+   ],
+   "gateway_outcome": "execute_rollback on checkout: APPROVAL_REQUIRED (R11-reversible-approval); evidence check passed; executed",
+   "approvals": [
+    "approved by auto-approver[simulation]"
+   ],
+   "final_state": "RESOLVED",
+   "oracle_verified": true,
+   "success": true,
+   "failure": "",
+   "failure_detail": "oracle verified recovery (simulated environment)",
+   "seconds": 1.601,
+   "stages": [
+    {
+     "stage": "CREATED",
+     "seconds": 0.485
+    },
+    {
+     "stage": "RETRIEVING",
+     "seconds": 0.001
+    },
+    {
+     "stage": "INVESTIGATING",
+     "seconds": 0.796
+    },
+    {
+     "stage": "PROPOSING",
+     "seconds": 0.004
+    },
+    {
+     "stage": "AWAITING_APPROVAL",
+     "seconds": 0.001
+    },
+    {
+     "stage": "MITIGATING",
+     "seconds": 0.313
+    },
+    {
+     "stage": "VERIFYING",
+     "seconds": 0.002
+    }
+   ],
+   "model_seconds": null,
+   "started_at": "2026-10-25T20:29:05.085579Z",
+   "ended_at": "2026-10-25T20:29:06.686505Z",
+   "recording": "ollama-qwen3-8b-bad-deployment.jsonl"
+  }
+ ],
+ "methods": [
+  "Each recording in the manifest was checked against its pinned SHA-256, then replayed with scripts/eval_replay.py through RECAP's whole path (controller, MCP tool server, gateway, simulator, verifier, approval, oracle); only the model's answers came from the recording. No model was called; $0.",
+  "Each replay ran in a fresh data folder (a replay reads memory as its recording found it: empty), with the routing, memory and retrieval its manifest entry names, over the shipped runbooks only.",
+  "Approvals: the simulation auto-approver stood in for the original approver (the manifest names them); the approval comes after the model's last answer, so it changes nothing the model saw.",
+  "Model requests, reported tokens and model_seconds are the replay's own: a replay sends no request, so they are 0 or empty. The recorded run's own counts are in its recording (fixtures/recordings/) and its manifest entry.",
+  "Each record is built from the replay's own record and trace (evals/categorize.py): success only when the independent oracle verified the recovery; a replay that left its recording (ReplayMismatch) is category error.",
+  "RECAP code 7d004a45f5ae+dirty ('+dirty': with uncommitted changes)."
+ ],
+ "limitations": [
+  "N = 2 recordings: a replay shows that recorded decisions still pass RECAP's current code. It is not a new sample of any model, and its outcome says nothing about how often the model would decide the same way.",
+  "Each recording is one run of one model on the SIMULATED shop, not a real cluster.",
+  "A replay cannot show what a model would do with a changed prompt: a changed prompt makes the replay stop (ReplayMismatch), and the recording must be made again with a real model."
+ ]
+}

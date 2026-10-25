@@ -7,6 +7,7 @@
 #        cause must reject it; a repeat of the first may reuse it after the live check
 #   7    adversarial, last (it plants a false memory and indexes a poisoned runbook)
 # Run: .venv/bin/python scripts/live_eval.py evals/plans/m3-real-models.yaml --out <folder>
+# Each run is one record of the plan's real_llm batch (<folder>/batch.json, docs/evaluation.md).
 provider: ollama
 runs:
   - {id: cross-service, scenario: ambiguous-incident, strategy: parallel}

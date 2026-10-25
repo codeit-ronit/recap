@@ -4,10 +4,13 @@
 # 200K a day, which RECAP's own caps keep it under (configs/providers.yaml).
 #   1  the unfamiliar held-out incident, two specialists in parallel
 #   2  the adversarial held-out incident with the poisoned runbook and a planted false memory
-# Run (the free-tier guard checks every request; the key stays in ~/.config/recap/groq.env):
+# Run (the free-tier guard checks every request; the key stays in ~/.config/recap/groq.env).
+# Since M4 each batch also needs --confirm-free-plan, and nothing live runs while CI is set:
 #   set -a; . ~/.config/recap/groq.env; set +a
 #   RECAP_ALLOW_LIVE_FREE_INFERENCE=1 .venv/bin/python scripts/live_eval.py \
-#       evals/plans/m3-groq-free.yaml --out <folder>
+#       evals/plans/m3-groq-free.yaml --out <folder> --confirm-free-plan
+# The batch (mode real_llm) is written to <folder>/batch.json after every run; a quota stop
+# ends the batch there and names the runs it did not start (docs/evaluation.md).
 provider: groq
 runs:
   - {id: unfamiliar, scenario: m3-inventory-leak-behind-frontend, strategy: parallel}

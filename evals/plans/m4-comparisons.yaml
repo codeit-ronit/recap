@@ -1,0 +1,31 @@
+# M4 comparison plan for a LOCAL model (Ollama, qwen3:8b), on the SIMULATED environment,
+# approved by the simulation auto-approver. NOT RUN YET: no batch in evals/reports/batches/
+# comes from this plan. Each pair below changes ONE thing, so a reader can compare two runs
+# that differ only there. Each comparison is ONE run against ONE run: a difference may be
+# chance (a model's run is not repeatable), and no rate can be read from it.
+#   1-2  single vs multi-agent: the held-out unfamiliar incident with one investigator, then
+#        with two specialists in parallel
+#   3    BM25 vs hybrid retrieval: run 2 again with hybrid search (needs nomic-embed-text in
+#        Ollama and the stored runbook vectors, scripts/build_vector_index.py)
+#   4-5  the single-service bad release and the cross-service payment release (parallel)
+#   6-8  memory on vs off: a first run writes a LIVE episode; the look-alike incident then
+#        runs with memory on (it must reject the remembered rollback) and with memory off
+#   9    adversarial, last: forged signals, the poisoned runbook and a planted false memory
+# One data folder for the whole plan, in this order. In M3, runs of these incidents took about
+# 3 to 23 minutes each on a 16 GB laptop (docs/status.md). Run:
+#   .venv/bin/python scripts/live_eval.py evals/plans/m4-comparisons.yaml --out <folder>
+provider: ollama
+runs:
+  - {id: unfamiliar-single, scenario: m3-inventory-leak-behind-frontend, strategy: single}
+  - {id: unfamiliar-parallel, scenario: m3-inventory-leak-behind-frontend, strategy: parallel}
+  - {id: unfamiliar-hybrid, scenario: m3-inventory-leak-behind-frontend, strategy: parallel, retrieval: hybrid}
+  - {id: bad-deployment, scenario: bad-deployment, use_memory: false}
+  - {id: cross-service, scenario: ambiguous-incident, strategy: parallel}
+  - {id: memory-first, scenario: bad-deployment}
+  - {id: look-alike-memory-on, scenario: memory-caution}
+  - {id: look-alike-memory-off, scenario: memory-caution, use_memory: false}
+  - id: adversarial
+    scenario: m3-payment-release-under-forged-signals
+    strategy: parallel
+    overlays: [fixtures/knowledge-overlays/poisoned]
+    false_memory: fixtures/redteam/false-memory-checkout-restart.yaml

@@ -133,6 +133,43 @@ class EvalBatch(Contract):
         return len(self.records)
 
 
+def make_batch(
+    *,
+    batch_id: str,
+    mode: EvalMode,
+    title: str,
+    records: Iterable[EvalRecord],
+    created_at: datetime,
+    plan: str | None = None,
+    methods: Iterable[str] = (),
+    limitations: Iterable[str] = (),
+) -> EvalBatch:
+    """A batch of ONE mode, with its providers, models and prompt versions read from its records.
+
+    Refuses (ValueError) a record of another mode, so two modes can never share a batch's
+    numbers, and the kubernetes_future mode, which nothing produces yet (M5).
+    """
+    if mode == "kubernetes_future":
+        raise ValueError("kubernetes_future (a real cluster) is M5 and not implemented")
+    kept = list(records)
+    other = [r.run_id for r in kept if r.mode != mode]
+    if other:
+        raise ValueError(f"a {mode} batch cannot hold runs of another mode: {', '.join(other)}")
+    return EvalBatch(
+        batch_id=batch_id,
+        mode=mode,
+        title=title,
+        created_at=created_at,
+        plan=plan,
+        providers=sorted({r.provider for r in kept if r.provider}),
+        models=sorted({r.model for r in kept if r.model}),
+        prompt_versions=sorted({r.prompt_version for r in kept if r.prompt_version}),
+        records=kept,
+        methods=list(methods),
+        limitations=list(limitations),
+    )
+
+
 def load_batch(path: Path) -> EvalBatch:
     """Read one batch.json; a wrong schema is refused, never guessed."""
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -161,8 +198,11 @@ def find_batches(roots: Iterable[Path]) -> list[EvalBatch]:
 
 def write_batch(batch: EvalBatch, root: Path) -> Path:
     """Write <root>/<batch_id>/batch.json and return its path."""
-    folder = root / batch.batch_id
-    folder.mkdir(parents=True, exist_ok=True)
-    path = folder / "batch.json"
+    return write_batch_file(batch, root / batch.batch_id / "batch.json")
+
+
+def write_batch_file(batch: EvalBatch, path: Path) -> Path:
+    """Write one batch to `path` (for example a report folder's batch.json) and return it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(batch.model_dump_json(indent=1) + "\n", encoding="utf-8")
     return path

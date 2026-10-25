@@ -13,6 +13,7 @@ import pytest
 from pydantic import ValidationError
 
 from evals import runner
+from evals.records import load_batch
 from evals.runner import (
     CaseResult,
     EvalConfig,
@@ -116,6 +117,58 @@ def test_the_report_scores_every_test_scenario_and_is_written_to_disk(
     assert "auto-approver" in (out_dir / "summary.md").read_text(encoding="utf-8")
 
 
+@pytest.mark.e2e
+def test_the_scored_runs_are_also_one_scripted_regression_batch(
+    evaluation: tuple[Path, EvalReport],
+) -> None:
+    """batch.json next to the report: one EvalRecord per scored run, in the shared format."""
+    out_dir, report = evaluation
+    batch = load_batch(out_dir / "batch.json")
+    assert (batch.batch_id, batch.mode, batch.plan) == (
+        report.report_id,
+        "scripted_regression",
+        "evals/splits/v1.yaml",
+    )
+    # The scored runs only, in the report's order: the train runs build memory, unscored.
+    assert [r.run_id for r in batch.records] == [c.run_id for c in report.cases]
+    for record, case in zip(batch.records, report.cases, strict=True):
+        assert (record.scenario_id, record.final_state) == (case.scenario_id, case.final_state)
+        assert record.success == case.recovered  # a success needs the oracle's verified recovery
+        assert (record.failure == "") == record.success
+        assert record.diagnosis == case.diagnosed
+        assert record.tool_calls == case.tool_calls and record.rounds == case.investigation_rounds
+        assert (record.strategy, record.retrieval_mode, record.memory) == ("single", "off", False)
+        assert (record.provider_class, record.model, record.input_tokens) == (
+            "scripted",
+            None,
+            None,
+        )
+        assert record.estimated_tokens == case.estimated_tokens
+        if case.mitigation_attempts and not case.recovered:  # a fix ran and did not recover
+            assert record.failure == "oracle_not_recovered"
+    assert batch.providers == ["deterministic-scripted-policy"] and batch.models == []
+    assert any(line.startswith("baseline_single (test suite)") for line in batch.methods)
+    assert any("auto-approver" in line for line in batch.methods)
+    assert any("N is tiny" in line for line in batch.limitations)
+
+
+def test_publishing_the_latest_report_publishes_its_batch_too(
+    evaluation: tuple[Path, EvalReport], tmp_path: Path
+) -> None:
+    out_dir, report = evaluation
+    latest = tmp_path / "reports" / "latest"
+    assert update_latest(report, out_dir, latest) is True
+    published = tmp_path / "reports" / "batches" / report.report_id
+    assert load_batch(published / "batch.json") == load_batch(out_dir / "batch.json")
+    readme = (published / "README.md").read_text(encoding="utf-8")
+    assert "SIMULATED target environment" in readme and f"N = {len(report.cases)}" in readme
+    # Published batches accumulate: publishing again leaves the folder as it was.
+    assert update_latest(report, out_dir, latest) is True
+    assert sorted(p.name for p in (tmp_path / "reports" / "batches").iterdir()) == [
+        report.report_id
+    ]
+
+
 def test_caveats_count_the_split_instead_of_a_fixed_number() -> None:
     split = Split(name="tiny", train=["a"], test=["b", "c"], redteam=[])
     assert any("N is tiny (2 test scenarios, 0 red-team scenarios)" in c for c in _caveats(split))
@@ -128,6 +181,7 @@ def test_an_empty_report_never_replaces_the_latest_report(
     latest = tmp_path / "latest"
     assert update_latest(report.model_copy(update={"cases": []}), out_dir, latest) is False
     assert not latest.exists()
+    assert not (tmp_path / "batches").exists()  # nor is an empty report's batch published
     assert update_latest(report, out_dir, latest) is True
     assert sorted(p.name for p in latest.iterdir()) == ["results.csv", "results.json", "summary.md"]
 

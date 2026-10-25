@@ -17,17 +17,23 @@ searches the shipped runbooks with BM25 whatever this process's switches say
 (RECAP_ENABLE_EMBEDDINGS, RECAP_KNOWLEDGE_OVERLAYS are for demo and red-team runs), and
 the report records the search mode and knowledge folders it used.
 
-Outputs: results.json, results.csv and summary.md with per-case outcomes and denominators.
+Outputs: results.json, results.csv and summary.md with per-case outcomes and denominators,
+and batch.json: the same scored runs as an EvalBatch of mode `scripted_regression` (one
+EvalRecord per run, evals/records.py and evals/categorize.py), the format every evaluation
+mode shares. `update_latest` copies the report to evals/reports/latest/ and publishes the
+batch (with its readable digest, README.md) under evals/reports/batches/<batch_id>/.
 These are synthetic, simulator-only measurements on a small N. They are NOT SREGym results,
 not production results, and not evidence about LLM agents (the provider is a scripted policy).
 """
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from statistics import mean
@@ -36,17 +42,32 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, Field
 
+from evals.categorize import (
+    PUBLISHED_DIR,
+    EventSource,
+    created_at_of,
+    publish_batch,
+    record_from_run,
+    run_events,
+)
+from evals.records import EvalBatch, load_batch, make_batch, write_batch_file
 from recap import __version__
 from recap.core.config import REPO_ROOT, Settings, load_settings
 from recap.core.errors import ConfigError
 from recap.core.ids import new_id, utcnow
 from recap.core.models import Contract, MemoryPartition, RunConfig, RunRecord, ScenarioInfo
+from recap.environments.registry import create_environment
+from recap.harness.store import RunStore
 from recap.memory.store import MemoryAccess
-from recap.runtime import Runtime
+from recap.runtime import Runtime, code_version
+from recap.telemetry.sinks import SqliteTraceSink
 from recap.telemetry.tracer import TraceCategory
 
 EVALS_DIR = REPO_ROOT / "evals"
 LATEST_DIR = EVALS_DIR / "reports" / "latest"  # the one report kept in git
+# Published evaluation batches (in git), one folder per batch: <batch_id>/batch.json.
+BATCHES_DIR = PUBLISHED_DIR
+BATCH_FILE = "batch.json"
 
 
 class EvalConfig(Contract):
@@ -392,7 +413,93 @@ async def run_evaluation(
         caveats=_caveats(split),
     )
     write_report(report, out_dir)
+    # The same runs in the record format every evaluation mode shares (out_dir/batch.json).
+    batch = scripted_batch(report, runtime.runs, runtime.events, scenarios, configs)
+    write_batch_file(batch, out_dir / BATCH_FILE)
     return report
+
+
+def scripted_batch(
+    report: EvalReport,
+    runs: RunStore,
+    events: EventSource,
+    scenarios: dict[str, ScenarioInfo],
+    configs: list[EvalConfig],
+    rebuilt: str = "",
+) -> EvalBatch:
+    """The scored runs (test and red-team suites) as one `scripted_regression` batch.
+
+    Each record is built from the run's own record and trace, read back from the evaluation's
+    data folder (`runs` and `events`). The batch id is the report's id, so the batch sits
+    next to the report (out_dir/batch.json). The train runs only build the evaluation memory:
+    they stay in results.json and are not scored here. `rebuilt` says how a batch made after
+    its report was rebuilt (shown with its methods).
+    """
+    records = []
+    for case in report.cases:
+        run = runs.get(case.run_id)
+        if run is None:  # nothing was recorded for it (a test that stubs the runs out)
+            continue
+        trace = run_events(events, case.run_id)
+        scenario = scenarios[case.scenario_id]
+        records.append(record_from_run(run, trace, mode="scripted_regression", scenario=scenario))
+    return make_batch(
+        batch_id=report.report_id,
+        mode="scripted_regression",
+        title=f"Scripted regression: V1 benchmark ({report.split.name}), scripted policy",
+        records=records,
+        created_at=created_at_of(records, utcnow()),
+        plan="evals/splits/v1.yaml",
+        methods=[*_batch_methods(report, configs), *([rebuilt] if rebuilt else [])],
+        limitations=[
+            *report.caveats,
+            "The batch lists every configuration's runs together, in configuration order. "
+            "Compare a configuration's records only with its own: routing, retrieval and memory "
+            "tell most of them apart, and the red-team runs name the red-team planner in their "
+            "provider. A count over the whole batch mixes configurations and means little.",
+            "The red-team configurations' safe outcome is BLOCKED: with the safety gateway on, "
+            "the compromised planner's action is refused (safety_blocked); with it off "
+            "(simulation only) the action runs, which is what the gateway prevents. Neither "
+            "is a recovery.",
+        ],
+    )
+
+
+def _batch_methods(report: EvalReport, configs: list[EvalConfig]) -> list[str]:
+    """How the batch's runs were made and judged (shown with the batch)."""
+    counts: dict[str, int] = {}
+    for case in report.cases:
+        counts[case.config] = counts.get(case.config, 0) + 1
+    lines = [
+        f"evals/runner.py (scripts/evaluate.py), split {report.split.name}: the "
+        f"{_plural(len(report.train), 'train scenario')} ran first and built an "
+        "evaluation-only memory (not scored here; see results.json), then each configuration "
+        "ran its suite with that memory read-only and memory writes off.",
+    ]
+    for cfg in configs:
+        switches = ", ".join(f"{key} {_switch(value)}" for key, value in cfg.config.items())
+        lines.append(
+            f"{cfg.name} ({cfg.suite} suite): {switches or 'defaults'}; "
+            f"{_plural(counts.get(cfg.name, 0), 'run')}."
+        )
+    lines += [
+        "Decisions came from RECAP's scripted policy (not an LLM); every approval came from "
+        "the simulation auto-approver.",
+        f"{_search_line(report)}; simulated tool latency: read {report.latency['read_ms']} ms, "
+        f"write {report.latency['write_ms']} ms.",
+        "Each record is built from the run's own record and trace (evals/categorize.py): "
+        "success only when the independent oracle verified the recovery; any other end "
+        "carries one failure category.",
+        f"RECAP {report.recap_version}, git {report.git_commit}, config hash "
+        f"{report.config_hash}, fixture hash {report.fixture_hash}; each record names the code "
+        "version it ran ('+dirty': with uncommitted changes).",
+    ]
+    return lines
+
+
+def _switch(value: Any) -> str:
+    """A configuration value as YAML writes it (false, not False)."""
+    return str(value).lower() if isinstance(value, bool) else str(value)
 
 
 def _caveats(split: Split) -> list[str]:
@@ -540,19 +647,83 @@ def new_report_dir(base: Path = EVALS_DIR / "reports" / "runs") -> Path:
     return base / f"{utcnow().strftime('%Y%m%d-%H%M%S')}-{new_id('eval').split('-')[-1][:6]}"
 
 
-def update_latest(report: EvalReport, out_dir: Path, latest: Path = LATEST_DIR) -> bool:
-    """Copy the report files from `out_dir` to `latest` and return True.
+def update_latest(
+    report: EvalReport, out_dir: Path, latest: Path = LATEST_DIR, batches: Path | None = None
+) -> bool:
+    """Copy the report files from `out_dir` to `latest`, publish its batch, and return True.
 
-    A report without test or red-team cases is never copied (returns False), so it cannot
-    replace the committed report.
+    The batch (out_dir/batch.json) goes to `batches` (by default the `batches` folder next to
+    `latest`, evals/reports/batches/). Published batches accumulate, one folder each: nothing
+    here deletes an older one. A report without test or red-team cases is never copied
+    (returns False), so it cannot replace the committed report.
     """
     if not report.cases:
         return False
     latest.mkdir(parents=True, exist_ok=True)
     for name in ("results.json", "results.csv", "summary.md"):
         shutil.copy2(out_dir / name, latest / name)
+    written = out_dir / BATCH_FILE
+    if written.is_file():  # a report from before batches existed has none
+        root = batches if batches is not None else latest.parent / "batches"
+        publish_batch(load_batch(written), root)
     return True
 
 
 def report_as_dict(path: Path) -> dict[str, Any]:
     return json.loads((path / "results.json").read_text(encoding="utf-8"))
+
+
+def rebuild_batch(report_dir: Path) -> EvalBatch:
+    """The batch of an earlier report, from the runs its own data folder kept (nothing runs).
+
+    For a report made before batches existed: the records come from the run records and
+    traces in <report_dir>/data, the same runs its results.json counts (git-ignored, so only
+    on the machine that ran it). The batch's methods say it was rebuilt, and when.
+    """
+    report = EvalReport.model_validate_json(
+        (report_dir / "results.json").read_text(encoding="utf-8")
+    )
+    database = report_dir / "data" / "recap.db"
+    if not database.is_file():
+        raise ConfigError(f"{report_dir.name} kept no run data (data/recap.db); rerun it")
+    settings = load_settings(data_dir=report_dir / "data")
+    environment = create_environment(settings.environment, "describe")
+    scenarios = {s.id: s for s in environment.list_scenarios()}
+    configs = load_eval_configs([summary.name for summary in report.summaries])
+    rebuilt = (
+        f"Rebuilt on {utcnow():%Y-%m-%d} from report {report.report_id}'s own data folder with "
+        "evals/runner.py --rebuild-batch (no run was repeated); categories by "
+        f"evals/categorize.py at code {code_version(REPO_ROOT)}."
+    )
+    return scripted_batch(
+        report, RunStore(database), SqliteTraceSink(database), scenarios, configs, rebuilt
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    """python -m evals.runner --rebuild-batch evals/reports/runs/<report_id> [--publish]"""
+    parser = argparse.ArgumentParser(description=rebuild_batch.__doc__.split("\n\n")[0])
+    parser.add_argument("--rebuild-batch", type=Path, required=True, metavar="REPORT_DIR")
+    parser.add_argument(
+        "--publish", action="store_true", help="also publish it in evals/reports/batches/"
+    )
+    args = parser.parse_args(argv)
+    try:
+        batch = rebuild_batch(args.rebuild_batch)
+    except (ConfigError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    write_batch_file(batch, args.rebuild_batch / BATCH_FILE)
+    print(f"{batch.batch_id}: {batch.n} scored runs, mode {batch.mode}")
+    if args.publish:
+        try:
+            path = publish_batch(batch)
+        except ValueError as exc:
+            print(f"not published: {exc}", file=sys.stderr)
+            return 2
+        print(f"published {path.parent.relative_to(REPO_ROOT).as_posix()}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

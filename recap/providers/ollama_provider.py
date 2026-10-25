@@ -9,7 +9,7 @@ and reads the answer back:
                      format: <the request's JSON schema>   (json mode and every proposal)
                      tools:  [tool definitions]            (tools mode)}
     <-  {model, message: {content, thinking, tool_calls}, done_reason,
-         prompt_eval_count, eval_count, load_duration, ...}
+         prompt_eval_count, eval_count, load_duration, total_duration, ...}
 
 Rules that keep it local, honest and safe:
   * loopback only: base_url must be 127.0.0.1, localhost or ::1;
@@ -22,21 +22,26 @@ Rules that keep it local, honest and safe:
   * a prompt that may not fit num_ctx is refused before it is sent: Ollama would quietly
     drop the START of the prompt, which is where RECAP's safety rules are. An answer whose
     prompt filled the window is rejected for the same reason;
-  * token counts are Ollama's own (prompt_eval_count, eval_count): exact, not estimated.
+  * token counts are Ollama's own (prompt_eval_count, eval_count): exact, not estimated;
+  * so is the time it spent on a request (total_duration, in nanoseconds), kept as
+    ModelCall.server_ms. RECAP's own duration_ms minus it is time the request spent
+    elsewhere: mostly queued, when two agents ask a server that answers one at a time.
 """
 
 from __future__ import annotations
 
 import asyncio
 import re
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
 from recap.core.config import ProviderSettings
 from recap.core.errors import ConfigError, ProviderError
 from recap.core.ids import canonical_json
+from recap.core.models import ModelCall
 from recap.providers.http_llm import HttpLLMProvider, ModelReply, Purpose
-from recap.providers.protocol import Message
+from recap.providers.protocol import Message, Parsed
 from recap.providers.quota import UsageLedger, ledger_scope
 from recap.providers.transport import HttpExchange, ModelTransport
 
@@ -48,6 +53,18 @@ KEEP_ALIVE = "10m"  # keep the model in memory between the steps of a run
 SAFE_CHARS_PER_TOKEN = 3
 PROBE_TIMEOUT_SECONDS = 10.0
 EMBED_FIELDS = ("model", "embeddings", "prompt_eval_count", "error")  # kept in recordings
+
+
+@dataclass(frozen=True)
+class OllamaReply(ModelReply):
+    """A ModelReply plus the server's own processing time for the request, when it said.
+
+    Ollama reports total_duration (nanoseconds from receiving the request to its answer,
+    model loading included). The shared loop does not know it, so this class carries it to
+    `_model_call`, which puts it on the trace record (ModelCall.server_ms).
+    """
+
+    server_ms: float | None = None
 
 
 def check_local_settings(settings: ProviderSettings) -> None:
@@ -215,10 +232,11 @@ class OllamaProvider(HttpLLMProvider):
             "model_reported": data.get("model"),
             "duration_ms": exchange.duration_ms,
             "replayed": exchange.replayed,
+            "server_ms": _server_ms(data),
         }
         if exchange.status != 200:
             error = data.get("error") or exchange.text or "no details"
-            return ModelReply(notes=[str(error)[:200]], **common)
+            return OllamaReply(notes=[str(error)[:200]], **common)
         notes: list[str] = []
         if data.get("done_reason") == "length":
             limit = self.settings.max_output_tokens
@@ -227,7 +245,7 @@ class OllamaProvider(HttpLLMProvider):
         if load_seconds >= 1:
             notes.append(f"Ollama first loaded the model into memory ({load_seconds:.1f}s)")
         message = data.get("message") or {}
-        return ModelReply(
+        return OllamaReply(
             content=str(message.get("content") or ""),
             tool_calls=[_tool_call(call) for call in message.get("tool_calls") or []],
             thinking=str(message.get("thinking") or ""),
@@ -235,6 +253,20 @@ class OllamaProvider(HttpLLMProvider):
             notes=notes,
             **common,
         )
+
+    def _model_call(
+        self,
+        purpose: Purpose,
+        attempt: int,
+        sent: list[Message],
+        schema: dict[str, Any] | None,
+        reply: ModelReply,
+        parsed: Parsed | None,
+    ) -> ModelCall:
+        """The shared trace record, plus the server's own time when Ollama reported it."""
+        call = super()._model_call(purpose, attempt, sent, schema, reply, parsed)
+        server_ms = reply.server_ms if isinstance(reply, OllamaReply) else None
+        return call if server_ms is None else call.model_copy(update={"server_ms": server_ms})
 
     def _count(self, status: int, data: dict[str, Any], replayed: bool) -> None:
         """Add a live request to the usage ledger (a replayed answer cost nothing now)."""
@@ -323,3 +355,9 @@ def _context_length(show: dict[str, Any]) -> int | None:
 
 def _int(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _server_ms(data: dict[str, Any]) -> float | None:
+    """Ollama's total_duration (nanoseconds) in milliseconds; None when it reported none."""
+    nanoseconds = _int(data.get("total_duration"))
+    return round(nanoseconds / 1e6, 1) if nanoseconds is not None and nanoseconds >= 0 else None
