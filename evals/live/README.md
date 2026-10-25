@@ -14,12 +14,29 @@ works, not how often a model is right.
 
 | Folder | Model | Prompts | Approved by | Outcome |
 |---|---|---|---|---|
+| [`2026-10-25-qwen3-8b-human-approved-unfamiliar-prompts-v4.7/`](2026-10-25-qwen3-8b-human-approved-unfamiliar-prompts-v4.7/README.md) | `qwen3:8b`, local (Ollama 0.34.4, weights `sha256:a3de86cd…`), **two specialists in parallel** | prompts-v4.7 | **the owner, at an interactive terminal** (the log: "interactive terminal; answered after 162.5 s") | RESOLVED, oracle verified |
 | [`2026-10-21-qwen3-8b-human-approved-prompts-v4.2/`](2026-10-21-qwen3-8b-human-approved-prompts-v4.2/README.md) | `qwen3:8b`, local (Ollama 0.34.4, weights `sha256:a3de86cd…`) | prompts-v4.2 | **the owner, at an interactive terminal** (the log: "interactive terminal; answered after 175.9 s") | RESOLVED, oracle verified |
 | [`2026-10-21-qwen3-8b-human-approved-prompts-v4.1/`](2026-10-21-qwen3-8b-human-approved-prompts-v4.1/README.md) | `qwen3:8b`, local (Ollama 0.34.4) | prompts-v4.1 | the owner, at the terminal (53.4 s after the request) | RESOLVED, oracle verified |
 | [`2026-10-21-gpt-oss-120b-groq-free-auto-approved/`](2026-10-21-gpt-oss-120b-groq-free-auto-approved/README.md) | `openai/gpt-oss-120b` on Groq's Free plan | prompts-v4 | the simulation auto-approver | RESOLVED after an escalation |
 
 ## What each run shows
 
+- **The v4.7 run is the M3 deliverable.** The incident is `m3-inventory-leak-behind-frontend`,
+  held out from everything RECAP was built or tuned on: the alert names frontend, two calls
+  away from the cause; the logs are written in another client library's style; and a
+  frontend release three hours earlier is a red herring. Two specialists (telemetry and
+  infrastructure, each with its own tools and its own view of the evidence) ran side by side
+  for 146.9 s in round 1. The verifier accepted their two dependency-failure claims as true
+  but not actionable, and rejected a "bad cart release" claim that cited none of the
+  evidence its rules use. In round 2 the infrastructure agent followed the chain to
+  inventory, read its OOMKilled events and claimed resource pressure on inventory; the
+  verifier supported it. When the agent asked again for a call it had already made, RECAP
+  said so by name and the agent finished. The model proposed restarting inventory, the
+  owner approved that exact action 162.5 s after the request, and the oracle verified the
+  recovery. 14 model requests, 52,585 input / 2,394 output tokens, $0. The run wrote no
+  memory: episodes are never built from held-out test scenarios, so the case stays unseen.
+  The same model on the same incident ended FAILED with prompts-v4.6 (twice) and v4.5; see
+  docs/status.md for every real-model run of M3, failures included.
 - **The v4.2 run is the M2 deliverable.** A real local model investigated through the MCP
   tool server, the owner approved its exact fix at the terminal, and the oracle verified the
   recovery. What the record itself proves is narrower: the answer was typed on an
@@ -51,6 +68,9 @@ works, not how often a model is right.
 
 ## The code version of each run
 
+- v4.7 run: `0e217a11d0a5+dirty`. That is commit `0e217a1` (M3 step 6) plus the uncommitted
+  rest of M3 (the dashboard, the M3 review fixes and prompts-v4.7), committed right after
+  the run without code changes for release 0.4.0 (the version number aside).
 - v4.2 run: `689b1af0e6aa+dirty`. That is the commit plus uncommitted changes at the moment
   the run started: six documentation files and `scripts/export_run_trace.py`, all last
   changed at least 9 minutes before the run. The run executes neither docs nor the export

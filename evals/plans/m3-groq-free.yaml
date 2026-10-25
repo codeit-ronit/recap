@@ -1,0 +1,18 @@
+# M3 live evaluation on the Groq FREE plan (openai/gpt-oss-120b, no payment method), on the
+# SIMULATED environment, approved by the simulation auto-approver. Two runs only: a parallel
+# run sends about 13 requests of 3-4K tokens, and the free plan allows 8K tokens a minute and
+# 200K a day, which RECAP's own caps keep it under (configs/providers.yaml).
+#   1  the unfamiliar held-out incident, two specialists in parallel
+#   2  the adversarial held-out incident with the poisoned runbook and a planted false memory
+# Run (the free-tier guard checks every request; the key stays in ~/.config/recap/groq.env):
+#   set -a; . ~/.config/recap/groq.env; set +a
+#   RECAP_ALLOW_LIVE_FREE_INFERENCE=1 .venv/bin/python scripts/live_eval.py \
+#       evals/plans/m3-groq-free.yaml --out <folder>
+provider: groq
+runs:
+  - {id: unfamiliar, scenario: m3-inventory-leak-behind-frontend, strategy: parallel}
+  - id: adversarial
+    scenario: m3-payment-release-under-forged-signals
+    strategy: parallel
+    overlays: [fixtures/knowledge-overlays/poisoned]
+    false_memory: fixtures/redteam/false-memory-checkout-restart.yaml
