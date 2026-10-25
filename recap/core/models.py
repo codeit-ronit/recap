@@ -1010,6 +1010,10 @@ class ModelCall(Contract):
     input_tokens: int | None = None  # reported by the server; None if it reported nothing
     output_tokens: int | None = None  # includes any reasoning ("thinking") tokens
     duration_ms: float = 0.0
+    # The server's own processing time for this request, when it reports one (Ollama's
+    # total_duration). duration_ms minus it is time spent elsewhere, mostly queued behind
+    # another agent's request on a server that answers one request at a time.
+    server_ms: float | None = None
     finish_reason: str | None = None  # e.g. "stop", "length" (cut off), "tool_calls"
     prompt_sha256: str = ""  # fingerprint of the exact messages that were sent
     prompt_chars: int = 0
