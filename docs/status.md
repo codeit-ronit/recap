@@ -647,7 +647,10 @@ files and every commit: run on 2026-10-21 over 34 commits and 346 files, nothing
 
 | local 11 (the CI fixture since prompts-v4.7, recording `20261025-110603-ollama-b1ae62`) | `qwen3:8b` | 7 | 19,946 / 867 | `bad-deployment`, memory off: RESOLVED in about 3.5 min; 6 reads in 5 steps, a diagnosis citing 5 items, among them all 3 its rules relied on, a rollback to `v2.4.0` |
 
-These fixture runs are single-agent. The multi-agent runs follow in step 8.
+These fixture runs are single-agent. The multi-agent runs follow in step 8; the owner-approved one is
+the second CI fixture (`fixtures/recordings/ollama-qwen3-8b-unfamiliar-parallel.jsonl`): CI replays
+a real two-specialist investigation offline in about 2.4 s, with the same leads, verdicts, fix and
+recovery as the live run.
 
 ### Step 7: the dashboard
 

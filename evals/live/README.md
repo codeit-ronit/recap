@@ -36,7 +36,9 @@ works, not how often a model is right.
   recovery. 14 model requests, 52,585 input / 2,394 output tokens, $0. The run wrote no
   memory: episodes are never built from held-out test scenarios, so the case stays unseen.
   The same model on the same incident ended FAILED with prompts-v4.6 (twice) and v4.5; see
-  docs/status.md for every real-model run of M3, failures included.
+  docs/status.md for every real-model run of M3, failures included. Its recording is also a CI
+  fixture (`fixtures/recordings/ollama-qwen3-8b-unfamiliar-parallel.jsonl`): CI replays it offline
+  in about 2.4 s with the same leads, verdicts, fix and recovery.
 - **The v4.2 run is the M2 deliverable.** A real local model investigated through the MCP
   tool server, the owner approved its exact fix at the terminal, and the oracle verified the
   recovery. What the record itself proves is narrower: the answer was typed on an

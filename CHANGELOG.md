@@ -176,6 +176,8 @@ Found by the review of M3 steps 1 to 6.
 - Real inference: 203 chat requests to the local `qwen3:8b` and 13 to `gpt-oss-120b` on Groq's
   free plan. With prompts-v4.7, `qwen3:8b` resolved the held-out unfamiliar incident in both
   runs (one approved by the owner); it still failed the cross-service incident. **Charges: $0.**
+- CI replays two real `qwen3:8b` recordings offline: the single-agent bad-deployment run and the
+  owner-approved two-specialist run on the unfamiliar incident (about 2.4 s, no model, no network).
 
 ## [0.3.0] — 2026-10-21 — M2: real models at $0
 
