@@ -749,3 +749,36 @@ ADR 0020).
 `otel` extra). `ruff check` and `ruff format --check`: clean. Dashboard: 119 tests,
 `tsc --noEmit` and `npm run build` pass. Model requests in M3: 203 chat requests to the
 local `qwen3:8b` and 13 to Groq's free plan, plus local embedding requests; **$0**.
+
+---
+
+## M4: product control center, agent evaluations and release evidence (in progress, from 2026-10-25)
+
+M4 turns recorded RECAP runs into a verifiable product demonstration and builds repeatable
+evaluation and safety-analysis tools, over the existing contracts. It does not add a real
+cluster: the live Kubernetes / Kind / SREGym integration is M5, and nothing in M4 claims it.
+
+### Step 0: baseline and audit (2026-10-25)
+
+- Baseline: `main` at `5a9e04a` (tag `v0.4.0`, CI green on both), version 0.4.0 in
+  `pyproject.toml`, `recap/__init__.py` and the dashboard's package files. Python 3.11.15,
+  Node 24.14.1. `pytest`: 1451 passed, 1 skipped; `ruff` clean; dashboard: 119 tests,
+  `tsc --noEmit` and the build pass. Matches the M3 handoff; no discrepancy found.
+- API routes at the start of M4: `GET /auth/session`, `/health`, `/system`, `/providers`,
+  `/scenarios`, `/runs`, `/runs/{id}`, `/runs/{id}/events`, `/runs/{id}/stream` (SSE),
+  `/approvals/pending`, `/approvals/events`, `/approvals/{id}/events`, `/memory`,
+  `/knowledge/search`, `/knowledge/docs`, `/evals/results`; operator-only `POST
+  /incidents/run`, `/runs/{id}/cancel`, `/approvals/{id}`, `/evals/run`. The provider is
+  chosen in server configuration, never per run from a client.
+- Dashboard routes at the start of M4 (hash routes): overview, live, timeline, evidence,
+  memory, safety, evals, architecture.
+- Recordings and exports audit (`fixtures/recordings/`, `evals/live/`,
+  `tests/fixtures/`): no key formats, no `Bearer`/`x-api-key`, no home or temporary paths,
+  no machine name, no personal name or e-mail. Nothing to redact; git history not touched.
+- Unchanged on purpose: BM25 stays the default retrieval (hybrid with `nomic-embed-text` and
+  RRF stays available); the scripted `deterministic` policy stays the offline baseline and
+  is never used as a fallback when a model or its quota fails (a quota stop defers the run).
+- Front-end dependencies: `npm audit` reported vite 5.4.10 advisories; patched to 5.4.21
+  (same major version; lockfile updated; tests and build pass). One advisory remains: the
+  esbuild development server (GHSA-67mh-4wv8-2f99), fixed only by a major vite upgrade, so
+  it is deferred; it concerns `npm run dev` only, never the built dashboard RECAP serves.
