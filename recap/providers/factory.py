@@ -137,8 +137,10 @@ def create_embedder(
         wired = transport
     else:
         live = LiveTransport(spec.base_url, mock=mock_http)
-        recording = isinstance(transport, RecordingTransport)
-        wired = RecordingTransport(live, transport.recorder) if recording else live
+        if isinstance(transport, RecordingTransport):
+            wired = RecordingTransport(live, transport.recorder)
+        else:
+            wired = live
     return OllamaEmbedder(spec, wired)
 
 

@@ -133,7 +133,7 @@ class Emitter:
             if issubclass(b, BaseModel) and b is not BaseModel and b.__name__ in self.models
         ]
         inherited = {
-            f for b in model.__bases__ if b in self.models.values() for f in b.model_fields
+            f for b in self.models.values() if b in model.__bases__ for f in b.model_fields
         }
         extends = f" extends {', '.join(bases)}" if bases else ""
         lines.append(f"export interface {model.__name__}{extends} {{")

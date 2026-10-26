@@ -710,7 +710,7 @@ def rebuild_batch(report_dir: Path) -> EvalBatch:
 
 def main(argv: list[str] | None = None) -> int:
     """python -m evals.runner --rebuild-batch evals/reports/runs/<report_id> [--publish]"""
-    parser = argparse.ArgumentParser(description=rebuild_batch.__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(description=(rebuild_batch.__doc__ or "").split("\n\n")[0])
     parser.add_argument("--rebuild-batch", type=Path, required=True, metavar="REPORT_DIR")
     parser.add_argument(
         "--publish", action="store_true", help="also publish it in evals/reports/batches/"

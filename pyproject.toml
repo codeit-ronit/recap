@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.6"]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.6", "mypy>=2.4", "types-PyYAML"]
 llm = ["anthropic>=1.13,<2"]               # optional real-LLM provider (your own API key + billing)
 embeddings = ["sentence-transformers>=3"]  # optional hybrid retrieval
 otel = ["opentelemetry-sdk>=1.25"]         # optional OpenTelemetry console spans
@@ -37,6 +37,34 @@ addopts = "-q --strict-markers"
 markers = [
     "e2e: runs a real incident through the controller, the MCP tool server subprocess, the gateway and the simulator (sometimes through the HTTP API)",
 ]
+
+[tool.mypy]
+# Type checking is scoped (M4): the core interfaces (recap/core, the provider protocol, the
+# recordings) and the modules M4 added (the typed API, the evaluation records and their
+# categorizer, the demo and type-generation scripts). Code outside this list is not retyped.
+# CI runs `mypy` with exactly this list.
+python_version = "3.11"
+plugins = ["pydantic.mypy"]
+files = [
+    "recap/core",
+    "recap/providers/protocol.py",
+    "recap/providers/recordings.py",
+    "recap/providers/transport.py",
+    "recap/providers/factory.py",
+    "recap/providers/catalog.py",
+    "apps/api",
+    "evals/records.py",
+    "evals/categorize.py",
+    "evals/runner.py",
+    "scripts/eval_replay.py",
+    "scripts/gen_dashboard_types.py",
+    "scripts/recordings_manifest.py",
+    "scripts/seed_demo.py",
+]
+follow_imports = "silent"
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
 
 [tool.ruff]
 line-length = 100

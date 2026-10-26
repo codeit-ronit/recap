@@ -20,6 +20,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Collection, Sequence
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -63,7 +64,7 @@ from evals.runner import (
 from recap.core.config import REPO_ROOT, Settings
 from recap.core.errors import ConfigError
 from recap.core.ids import new_id
-from recap.core.models import TERMINAL_STATES, RunConfig, RunRecord, TraceEvent
+from recap.core.models import TERMINAL_STATES, Evidence, RunConfig, RunRecord, TraceEvent
 from recap.providers.recordings import MANIFEST, FixtureInfo, list_fixtures, sha256_of
 from recap.runtime import Runtime
 from recap.safety.approvals import ExternalApprovalChannel
@@ -115,7 +116,7 @@ class RunManager:
                 scenario_id, config, approval_channel=self.channel, run_id=run_id
             )
         )
-        task.add_done_callback(lambda t, rid=run_id: self._remember_error(rid, t))
+        task.add_done_callback(partial(self._remember_error, run_id))
         self.tasks[run_id] = task
         return run_id
 
@@ -467,7 +468,7 @@ class RunReader:
             return None
         record, status = found
         summary = None
-        evidence = []
+        evidence: list[Evidence] = []
         if record is not None:
             summary = run_summary(record, status, fixtures=self.fixtures(), exports=self.exports())
             evidence = self.runtime.runs.evidence(run_id)

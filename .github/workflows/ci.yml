@@ -20,6 +20,8 @@ jobs:
         run: |
           ruff check .
           ruff format --check .
+      - name: Type check (mypy, scoped to the core interfaces and the M4 modules: pyproject.toml [tool.mypy])
+        run: mypy
       - name: Committed recordings match their pinned SHA-256 (fixtures/recordings/MANIFEST.json)
         run: python scripts/recordings_manifest.py --check
       - name: Tests (unit, integration, e2e, adversarial)

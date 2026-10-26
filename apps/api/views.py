@@ -1512,7 +1512,7 @@ def _model_usage(
     return ModelUsageView(
         provider=provider,
         model=model,
-        provider_class=origin,  # type: ignore[arg-type]  # checked by _origin when grouping
+        provider_class=origin,  # checked by _origin when grouping
         requests=len(payloads),
         ok_requests=sum(1 for p in payloads if p.get("ok")),
         failed_requests=sum(1 for p in payloads if not p.get("ok")),
@@ -1586,7 +1586,7 @@ def provider_view(
     origin = str(entry["origin"])
     return ProviderView(
         **{key: entry[key] for key in CATALOG_FIELDS if key in entry},
-        provider_class=origin,  # type: ignore[arg-type]  # ProviderSettings checks origins
+        provider_class=origin,  # ProviderSettings checks origins
         key_required=origin in ("free_hosted_llm", "paid_llm"),
         selectable=selectable,
         selection_rule=rule,
@@ -1709,7 +1709,7 @@ def replays_view(
 def batch_summary(batch: EvalBatch, source: BatchSource) -> BatchSummary:
     """A batch's counts. A success needs the oracle's verified recovery (EvalRecord.success)."""
     records = batch.records
-    failures = Counter(r.failure for r in records if not r.success and r.failure)
+    failures: Counter[str] = Counter(r.failure for r in records if not r.success and r.failure)
     unlabeled = sum(1 for r in records if not r.success and not r.failure)
     if unlabeled:
         failures["uncategorized"] = unlabeled

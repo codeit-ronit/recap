@@ -177,7 +177,8 @@ class LLMProvider(Protocol):
     return the same validated decision types, so the harness cannot tell them apart.
     """
 
-    info: ProviderInfo
+    @property
+    def info(self) -> ProviderInfo: ...  # read-only: a wrapper may compute it fresh
 
     async def next_action(self, request: InvestigationRequest) -> InvestigationDecision: ...
 
