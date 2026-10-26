@@ -59,6 +59,7 @@ files = [
     "scripts/eval_replay.py",
     "scripts/gen_dashboard_types.py",
     "scripts/recordings_manifest.py",
+    "scripts/secret_scan.py",
     "scripts/seed_demo.py",
 ]
 follow_imports = "silent"

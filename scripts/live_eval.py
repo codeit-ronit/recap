@@ -401,7 +401,9 @@ def common_methods(records: list[EvalRecord]) -> list[str]:
         "specialists ask one local server that answers one request at a time, a request waits "
         "in its queue, so the sum can exceed the run's own time. The trace's llm.call events "
         "carry the server's own time (server_ms, Ollama's total_duration) for runs made since "
-        "M4; the record does not split it out.",
+        "M4: model_server_seconds sums it, and model_wait_seconds sums the part of it a "
+        "request spent waiting inside the server instead of computing (server time minus "
+        "Ollama's own load, prompt and generation time).",
     ]
 
 

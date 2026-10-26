@@ -14,10 +14,10 @@
 
 ## Runs
 
-| run | scenario | rounds (agents) | retrieval | memory | state | outcome | oracle | model requests | tokens in / out (reported) | est. tokens | tool calls | run seconds (approval wait) | model seconds |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `run-e3f7f510a1` | `m3-inventory-leak-behind-frontend` | parallel (telemetry + infrastructure); parallel (telemetry + infrastructure) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 11,800 | 17 | 2.2 (0.0) | - |
-| `run-8b6e202872` | `bad-deployment` | single (investigator) | bm25 | off | RESOLVED | success | verified | 0 | not reported | 3,836 | 7 | 1.6 (0.0) | - |
+| run | scenario | rounds (agents) | retrieval | memory | state | outcome | oracle | model requests | tokens in / out (reported) | est. tokens | tool calls | run seconds (approval wait) | model seconds | server seconds (waited inside) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `run-e3f7f510a1` | `m3-inventory-leak-behind-frontend` | parallel (telemetry + infrastructure); parallel (telemetry + infrastructure) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 11,800 | 17 | 2.2 (0.0) | - | not recorded |
+| `run-8b6e202872` | `bad-deployment` | single (investigator) | bm25 | off | RESOLVED | success | verified | 0 | not reported | 3,836 | 7 | 1.6 (0.0) | - | not recorded |
 
 ## Why each run ended as it did
 

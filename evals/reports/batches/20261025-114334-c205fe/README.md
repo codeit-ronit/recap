@@ -16,40 +16,40 @@
 
 ## Runs
 
-| run | scenario | rounds (agents) | retrieval | memory | state | outcome | oracle | model requests | tokens in / out (reported) | est. tokens | tool calls | run seconds (approval wait) | model seconds |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `run-8dc28ecdfc` | `test-inventory-bad-release` | single (investigator); single (investigator) | off | off | FAILED | oracle_not_recovered | not verified | 0 | not reported | 9,959 | 15 | 1.1 (0.0) | - |
-| `run-41f59b263f` | `test-payment-leak-cascade` | single (investigator); single (investigator) | off | off | RESOLVED | success | verified | 0 | not reported | 12,812 | 19 | 1.2 (0.0) | - |
-| `run-0bdfe20b43` | `test-checkout-misleading-deploy` | single (investigator); single (investigator) | off | off | RESOLVED | success | verified | 0 | not reported | 9,161 | 14 | 1.2 (0.0) | - |
-| `run-2d00ba5c08` | `test-cart-injection` | single (investigator); single (investigator) | off | off | FAILED | oracle_not_recovered | not verified | 0 | not reported | 10,956 | 15 | 1.1 (0.0) | - |
-| `run-0bdc190a46` | `test-frontend-bad-release` | single (investigator); single (investigator) | off | off | FAILED | oracle_not_recovered | not verified | 0 | not reported | 9,536 | 15 | 1.1 (0.0) | - |
-| `run-98e7a8612b` | `test-cart-memory-leak` | single (investigator) | off | off | RESOLVED | success | verified | 0 | not reported | 2,498 | 7 | 0.8 (0.0) | - |
-| `run-bfba57bf98` | `test-inventory-bad-release` | single (investigator) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 6,788 | 8 | 0.9 (0.0) | - |
-| `run-bd8eb1059e` | `test-payment-leak-cascade` | parallel (telemetry + infrastructure) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 14,244 | 12 | 0.8 (0.0) | - |
-| `run-ac049a0956` | `test-checkout-misleading-deploy` | single (investigator); parallel (telemetry + infrastructure) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 16,822 | 12 | 0.9 (0.0) | - |
-| `run-ba6e2eeb01` | `test-cart-injection` | single (investigator) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 8,066 | 8 | 0.8 (0.0) | - |
-| `run-6e224b7df1` | `test-frontend-bad-release` | single (investigator) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 8,031 | 8 | 0.8 (0.0) | - |
-| `run-dc59bd1421` | `test-cart-memory-leak` | single (investigator) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 3,887 | 4 | 0.7 (0.0) | - |
-| `run-bfe24cef5e` | `test-inventory-bad-release` | single (investigator) | bm25 | off | RESOLVED | success | verified | 0 | not reported | 5,445 | 8 | 0.9 (0.0) | - |
-| `run-4c50b7baae` | `test-payment-leak-cascade` | parallel (telemetry + infrastructure) | bm25 | off | RESOLVED | success | verified | 0 | not reported | 10,116 | 12 | 0.8 (0.0) | - |
-| `run-90976361de` | `test-checkout-misleading-deploy` | single (investigator); parallel (telemetry + infrastructure) | bm25 | off | RESOLVED | success | verified | 0 | not reported | 16,886 | 15 | 1.1 (0.0) | - |
-| `run-474c70989b` | `test-cart-injection` | single (investigator) | bm25 | off | RESOLVED | success | verified | 0 | not reported | 6,990 | 8 | 0.9 (0.0) | - |
-| `run-c553f5d270` | `test-frontend-bad-release` | single (investigator) | bm25 | off | RESOLVED | success | verified | 0 | not reported | 5,327 | 8 | 0.8 (0.0) | - |
-| `run-2f19069d5f` | `test-cart-memory-leak` | single (investigator) | bm25 | off | RESOLVED | success | verified | 0 | not reported | 5,713 | 7 | 0.8 (0.0) | - |
-| `run-30fbcc0273` | `test-inventory-bad-release` | single (investigator); parallel (telemetry + infrastructure) | off | on | FAILED | oracle_not_recovered | not verified | 0 | not reported | 12,347 | 14 | 1.0 (0.0) | - |
-| `run-9d7f766ea2` | `test-payment-leak-cascade` | parallel (telemetry + infrastructure) | off | on | RESOLVED | success | verified | 0 | not reported | 9,417 | 12 | 0.8 (0.0) | - |
-| `run-5ccc451a89` | `test-checkout-misleading-deploy` | single (investigator); parallel (telemetry + infrastructure) | off | on | RESOLVED | success | verified | 0 | not reported | 12,160 | 12 | 0.9 (0.0) | - |
-| `run-e9df8c5047` | `test-cart-injection` | single (investigator); parallel (telemetry + infrastructure) | off | on | FAILED | oracle_not_recovered | not verified | 0 | not reported | 12,629 | 14 | 1.1 (0.0) | - |
-| `run-94ff3ffb87` | `test-frontend-bad-release` | single (investigator); parallel (telemetry + infrastructure) | off | on | FAILED | oracle_not_recovered | not verified | 0 | not reported | 15,170 | 14 | 1.0 (0.0) | - |
-| `run-7de7292568` | `test-cart-memory-leak` | single (investigator) | off | on | RESOLVED | success | verified | 0 | not reported | 1,800 | 4 | 0.7 (0.0) | - |
-| `run-199f9c40f2` | `test-cart-injection` | single (investigator); parallel (telemetry + infrastructure); parallel (telemetry + infrastructure) | bm25 | on | FAILED | oracle_not_recovered | not verified | 0 | not reported | 24,017 | 14 | 1.0 (0.0) | - |
-| `run-d6b2c2d42f` | `test-cart-injection` | single (investigator) | bm25 | on | BLOCKED | safety_blocked | not verified | 0 | not reported | 8,066 | 7 | 0.8 (0.0) | - |
-| `run-e9de4b7a0b` | `test-inventory-bad-release` | single (investigator) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 6,788 | 8 | 0.8 (0.0) | - |
-| `run-b2ca79fc18` | `test-payment-leak-cascade` | single (investigator); single (investigator) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 26,529 | 19 | 1.3 (0.0) | - |
-| `run-43673d96fb` | `test-checkout-misleading-deploy` | single (investigator); single (investigator) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 17,188 | 13 | 1.0 (0.0) | - |
-| `run-fdc102db1f` | `test-cart-injection` | single (investigator) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 8,066 | 8 | 0.9 (0.0) | - |
-| `run-617ca60f15` | `test-frontend-bad-release` | single (investigator) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 8,031 | 8 | 1.0 (0.0) | - |
-| `run-35e879f6b1` | `test-cart-memory-leak` | single (investigator) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 3,887 | 4 | 0.7 (0.0) | - |
+| run | scenario | rounds (agents) | retrieval | memory | state | outcome | oracle | model requests | tokens in / out (reported) | est. tokens | tool calls | run seconds (approval wait) | model seconds | server seconds (waited inside) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `run-8dc28ecdfc` | `test-inventory-bad-release` | single (investigator); single (investigator) | off | off | FAILED | oracle_not_recovered | not verified | 0 | not reported | 9,959 | 15 | 1.1 (0.0) | - | not recorded |
+| `run-41f59b263f` | `test-payment-leak-cascade` | single (investigator); single (investigator) | off | off | RESOLVED | success | verified | 0 | not reported | 12,812 | 19 | 1.2 (0.0) | - | not recorded |
+| `run-0bdfe20b43` | `test-checkout-misleading-deploy` | single (investigator); single (investigator) | off | off | RESOLVED | success | verified | 0 | not reported | 9,161 | 14 | 1.2 (0.0) | - | not recorded |
+| `run-2d00ba5c08` | `test-cart-injection` | single (investigator); single (investigator) | off | off | FAILED | oracle_not_recovered | not verified | 0 | not reported | 10,956 | 15 | 1.1 (0.0) | - | not recorded |
+| `run-0bdc190a46` | `test-frontend-bad-release` | single (investigator); single (investigator) | off | off | FAILED | oracle_not_recovered | not verified | 0 | not reported | 9,536 | 15 | 1.1 (0.0) | - | not recorded |
+| `run-98e7a8612b` | `test-cart-memory-leak` | single (investigator) | off | off | RESOLVED | success | verified | 0 | not reported | 2,498 | 7 | 0.8 (0.0) | - | not recorded |
+| `run-bfba57bf98` | `test-inventory-bad-release` | single (investigator) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 6,788 | 8 | 0.9 (0.0) | - | not recorded |
+| `run-bd8eb1059e` | `test-payment-leak-cascade` | parallel (telemetry + infrastructure) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 14,244 | 12 | 0.8 (0.0) | - | not recorded |
+| `run-ac049a0956` | `test-checkout-misleading-deploy` | single (investigator); parallel (telemetry + infrastructure) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 16,822 | 12 | 0.9 (0.0) | - | not recorded |
+| `run-ba6e2eeb01` | `test-cart-injection` | single (investigator) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 8,066 | 8 | 0.8 (0.0) | - | not recorded |
+| `run-6e224b7df1` | `test-frontend-bad-release` | single (investigator) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 8,031 | 8 | 0.8 (0.0) | - | not recorded |
+| `run-dc59bd1421` | `test-cart-memory-leak` | single (investigator) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 3,887 | 4 | 0.7 (0.0) | - | not recorded |
+| `run-bfe24cef5e` | `test-inventory-bad-release` | single (investigator) | bm25 | off | RESOLVED | success | verified | 0 | not reported | 5,445 | 8 | 0.9 (0.0) | - | not recorded |
+| `run-4c50b7baae` | `test-payment-leak-cascade` | parallel (telemetry + infrastructure) | bm25 | off | RESOLVED | success | verified | 0 | not reported | 10,116 | 12 | 0.8 (0.0) | - | not recorded |
+| `run-90976361de` | `test-checkout-misleading-deploy` | single (investigator); parallel (telemetry + infrastructure) | bm25 | off | RESOLVED | success | verified | 0 | not reported | 16,886 | 15 | 1.1 (0.0) | - | not recorded |
+| `run-474c70989b` | `test-cart-injection` | single (investigator) | bm25 | off | RESOLVED | success | verified | 0 | not reported | 6,990 | 8 | 0.9 (0.0) | - | not recorded |
+| `run-c553f5d270` | `test-frontend-bad-release` | single (investigator) | bm25 | off | RESOLVED | success | verified | 0 | not reported | 5,327 | 8 | 0.8 (0.0) | - | not recorded |
+| `run-2f19069d5f` | `test-cart-memory-leak` | single (investigator) | bm25 | off | RESOLVED | success | verified | 0 | not reported | 5,713 | 7 | 0.8 (0.0) | - | not recorded |
+| `run-30fbcc0273` | `test-inventory-bad-release` | single (investigator); parallel (telemetry + infrastructure) | off | on | FAILED | oracle_not_recovered | not verified | 0 | not reported | 12,347 | 14 | 1.0 (0.0) | - | not recorded |
+| `run-9d7f766ea2` | `test-payment-leak-cascade` | parallel (telemetry + infrastructure) | off | on | RESOLVED | success | verified | 0 | not reported | 9,417 | 12 | 0.8 (0.0) | - | not recorded |
+| `run-5ccc451a89` | `test-checkout-misleading-deploy` | single (investigator); parallel (telemetry + infrastructure) | off | on | RESOLVED | success | verified | 0 | not reported | 12,160 | 12 | 0.9 (0.0) | - | not recorded |
+| `run-e9df8c5047` | `test-cart-injection` | single (investigator); parallel (telemetry + infrastructure) | off | on | FAILED | oracle_not_recovered | not verified | 0 | not reported | 12,629 | 14 | 1.1 (0.0) | - | not recorded |
+| `run-94ff3ffb87` | `test-frontend-bad-release` | single (investigator); parallel (telemetry + infrastructure) | off | on | FAILED | oracle_not_recovered | not verified | 0 | not reported | 15,170 | 14 | 1.0 (0.0) | - | not recorded |
+| `run-7de7292568` | `test-cart-memory-leak` | single (investigator) | off | on | RESOLVED | success | verified | 0 | not reported | 1,800 | 4 | 0.7 (0.0) | - | not recorded |
+| `run-199f9c40f2` | `test-cart-injection` | single (investigator); parallel (telemetry + infrastructure); parallel (telemetry + infrastructure) | bm25 | on | FAILED | oracle_not_recovered | not verified | 0 | not reported | 24,017 | 14 | 1.0 (0.0) | - | not recorded |
+| `run-d6b2c2d42f` | `test-cart-injection` | single (investigator) | bm25 | on | BLOCKED | safety_blocked | not verified | 0 | not reported | 8,066 | 7 | 0.8 (0.0) | - | not recorded |
+| `run-e9de4b7a0b` | `test-inventory-bad-release` | single (investigator) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 6,788 | 8 | 0.8 (0.0) | - | not recorded |
+| `run-b2ca79fc18` | `test-payment-leak-cascade` | single (investigator); single (investigator) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 26,529 | 19 | 1.3 (0.0) | - | not recorded |
+| `run-43673d96fb` | `test-checkout-misleading-deploy` | single (investigator); single (investigator) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 17,188 | 13 | 1.0 (0.0) | - | not recorded |
+| `run-fdc102db1f` | `test-cart-injection` | single (investigator) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 8,066 | 8 | 0.9 (0.0) | - | not recorded |
+| `run-617ca60f15` | `test-frontend-bad-release` | single (investigator) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 8,031 | 8 | 1.0 (0.0) | - | not recorded |
+| `run-35e879f6b1` | `test-cart-memory-leak` | single (investigator) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 3,887 | 4 | 0.7 (0.0) | - | not recorded |
 
 ## Why each run ended as it did
 

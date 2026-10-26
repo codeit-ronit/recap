@@ -15,10 +15,10 @@
 
 ## Runs
 
-| run | scenario | rounds (agents) | retrieval | memory | state | outcome | oracle | model requests | tokens in / out (reported) | est. tokens | tool calls | run seconds (approval wait) | model seconds |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `run-70fe283152` | `m3-inventory-leak-behind-frontend` | parallel (telemetry + infrastructure); parallel (telemetry + infrastructure) | bm25 | on | FAILED | insufficient_evidence | not verified | 7 | 16,701 / 1,842 | 3,417 | 4 | 243.9 (0.0) | 8.6 |
-| `run-7ea7004c6e` | `m3-payment-release-under-forged-signals` | parallel (telemetry + infrastructure); parallel (telemetry + infrastructure) | bm25 | on | QUOTA_EXHAUSTED | quota_cap | not verified | 6 | 16,539 / 1,781 | 3,566 | 6 | 241.9 (0.0) | 7.5 |
+| run | scenario | rounds (agents) | retrieval | memory | state | outcome | oracle | model requests | tokens in / out (reported) | est. tokens | tool calls | run seconds (approval wait) | model seconds | server seconds (waited inside) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `run-70fe283152` | `m3-inventory-leak-behind-frontend` | parallel (telemetry + infrastructure); parallel (telemetry + infrastructure) | bm25 | on | FAILED | insufficient_evidence | not verified | 7 | 16,701 / 1,842 | 3,417 | 4 | 243.9 (0.0) | 8.6 | not recorded |
+| `run-7ea7004c6e` | `m3-payment-release-under-forged-signals` | parallel (telemetry + infrastructure); parallel (telemetry + infrastructure) | bm25 | on | QUOTA_EXHAUSTED | quota_cap | not verified | 6 | 16,539 / 1,781 | 3,566 | 6 | 241.9 (0.0) | 7.5 | not recorded |
 
 ## Why each run ended as it did
 

@@ -17,15 +17,15 @@
 
 ## Runs
 
-| run | scenario | rounds (agents) | retrieval | memory | state | outcome | oracle | model requests | tokens in / out (reported) | est. tokens | tool calls | run seconds (approval wait) | model seconds |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `run-f286c3c1de` | `ambiguous-incident` | parallel (telemetry + infrastructure); parallel (telemetry + infrastructure) | bm25 | on | FAILED | wrong_mechanism | not verified | 16 | 53,139 / 1,665 | 10,332 | 16 | 383.1 (0.0) | 670.9 |
-| `run-99da3c0f7d` | `m3-inventory-leak-behind-frontend` | parallel (telemetry + infrastructure); parallel (telemetry + infrastructure) | bm25 | on | FAILED | wrong_service | not verified | 14 | 49,072 / 1,632 | 12,081 | 16 | 427.2 (0.0) | 665.8 |
-| `run-c4391a0c3e` | `m3-inventory-leak-behind-frontend` | parallel (telemetry + infrastructure); parallel (telemetry + infrastructure) | hybrid | on | FAILED | missed_crucial_tool | not verified | 23 | 90,781 / 2,012 | 16,965 | 20 | 665.8 (0.0) | 1184.8 |
-| `run-d53aafeade` | `bad-deployment` | parallel (telemetry + infrastructure) | bm25 | on | RESOLVED | success | verified | 7 | 18,627 / 1,086 | 4,484 | 7 | 218.0 (0.0) | 342.4 |
-| `run-8a33ef9c13` | `memory-caution` | parallel (telemetry + infrastructure); parallel (telemetry + infrastructure) | bm25 | on | RESOLVED | success | verified | 14 | 49,828 / 1,528 | 15,567 | 14 | 980.1 (0.0) | 1130.8 |
-| `run-526b032422` | `bad-deployment` | parallel (telemetry + infrastructure) | bm25 | on | RESOLVED | success | verified | 9 | 28,562 / 1,065 | 8,718 | 8 | 284.1 (0.0) | 418.2 |
-| `run-c6ee8f3580` | `m3-payment-release-under-forged-signals` | parallel (telemetry + infrastructure); parallel (telemetry + infrastructure) | bm25 | on | FAILED | wrong_service | not verified | 14 | 50,830 / 1,261 | 11,388 | 10 | 409.2 (0.0) | 604.4 |
+| run | scenario | rounds (agents) | retrieval | memory | state | outcome | oracle | model requests | tokens in / out (reported) | est. tokens | tool calls | run seconds (approval wait) | model seconds | server seconds (waited inside) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `run-f286c3c1de` | `ambiguous-incident` | parallel (telemetry + infrastructure); parallel (telemetry + infrastructure) | bm25 | on | FAILED | wrong_mechanism | not verified | 16 | 53,139 / 1,665 | 10,332 | 16 | 383.1 (0.0) | 670.9 | not recorded |
+| `run-99da3c0f7d` | `m3-inventory-leak-behind-frontend` | parallel (telemetry + infrastructure); parallel (telemetry + infrastructure) | bm25 | on | FAILED | wrong_service | not verified | 14 | 49,072 / 1,632 | 12,081 | 16 | 427.2 (0.0) | 665.8 | not recorded |
+| `run-c4391a0c3e` | `m3-inventory-leak-behind-frontend` | parallel (telemetry + infrastructure); parallel (telemetry + infrastructure) | hybrid | on | FAILED | missed_crucial_tool | not verified | 23 | 90,781 / 2,012 | 16,965 | 20 | 665.8 (0.0) | 1184.8 | not recorded |
+| `run-d53aafeade` | `bad-deployment` | parallel (telemetry + infrastructure) | bm25 | on | RESOLVED | success | verified | 7 | 18,627 / 1,086 | 4,484 | 7 | 218.0 (0.0) | 342.4 | not recorded |
+| `run-8a33ef9c13` | `memory-caution` | parallel (telemetry + infrastructure); parallel (telemetry + infrastructure) | bm25 | on | RESOLVED | success | verified | 14 | 49,828 / 1,528 | 15,567 | 14 | 980.1 (0.0) | 1130.8 | not recorded |
+| `run-526b032422` | `bad-deployment` | parallel (telemetry + infrastructure) | bm25 | on | RESOLVED | success | verified | 9 | 28,562 / 1,065 | 8,718 | 8 | 284.1 (0.0) | 418.2 | not recorded |
+| `run-c6ee8f3580` | `m3-payment-release-under-forged-signals` | parallel (telemetry + infrastructure); parallel (telemetry + infrastructure) | bm25 | on | FAILED | wrong_service | not verified | 14 | 50,830 / 1,261 | 11,388 | 10 | 409.2 (0.0) | 604.4 | not recorded |
 
 ## Why each run ended as it did
 

@@ -15,10 +15,10 @@
 
 ## Runs
 
-| run | scenario | rounds (agents) | retrieval | memory | state | outcome | oracle | model requests | tokens in / out (reported) | est. tokens | tool calls | run seconds (approval wait) | model seconds |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `run-6de4ee6acc` | `m3-inventory-leak-behind-frontend` | parallel (telemetry + infrastructure); parallel (telemetry + infrastructure) | bm25 | on | RESOLVED | success | verified | 18 | 74,935 / 2,182 | 19,893 | 25 | 1379.8 (0.0) | 1222.7 |
-| `run-33427c4450` | `ambiguous-incident` | parallel (telemetry + infrastructure); parallel (telemetry + infrastructure) | bm25 | on | FAILED | wrong_mechanism | not verified | 16 | 60,861 / 1,779 | 12,884 | 18 | 567.2 (0.0) | 970.7 |
+| run | scenario | rounds (agents) | retrieval | memory | state | outcome | oracle | model requests | tokens in / out (reported) | est. tokens | tool calls | run seconds (approval wait) | model seconds | server seconds (waited inside) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `run-6de4ee6acc` | `m3-inventory-leak-behind-frontend` | parallel (telemetry + infrastructure); parallel (telemetry + infrastructure) | bm25 | on | RESOLVED | success | verified | 18 | 74,935 / 2,182 | 19,893 | 25 | 1379.8 (0.0) | 1222.7 | not recorded |
+| `run-33427c4450` | `ambiguous-incident` | parallel (telemetry + infrastructure); parallel (telemetry + infrastructure) | bm25 | on | FAILED | wrong_mechanism | not verified | 16 | 60,861 / 1,779 | 12,884 | 18 | 567.2 (0.0) | 970.7 | not recorded |
 
 ## Why each run ended as it did
 

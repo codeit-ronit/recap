@@ -719,8 +719,8 @@ def batch_markdown(batch: EvalBatch) -> str:
     lines += [
         "| run | scenario | rounds (agents) | retrieval | memory | state | outcome | oracle "
         "| model requests | tokens in / out (reported) | est. tokens | tool calls | run seconds "
-        "(approval wait) | model seconds |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "(approval wait) | model seconds | server seconds (waited inside) |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in records:
         tokens = (
@@ -731,12 +731,17 @@ def batch_markdown(batch: EvalBatch) -> str:
         wait = sum(s.seconds for s in r.stages if s.stage == IncidentState.AWAITING_APPROVAL.value)
         outcome = "success" if r.success else r.failure
         model = f"{r.model_seconds:.1f}" if r.model_seconds is not None else "-"
+        server = (
+            f"{r.model_server_seconds:.1f} ({_seconds(r.model_wait_seconds)})"
+            if r.model_server_seconds is not None
+            else "not recorded"
+        )
         lines.append(
             f"| `{r.run_id}` | `{r.scenario_id}` | {_cell(_short_topology(r))} | "
             f"{r.retrieval_mode or '-'} | {'on' if r.memory else 'off'} | {r.final_state} | "
             f"{outcome} | {'verified' if r.oracle_verified else 'not verified'} | "
             f"{r.model_requests} | {tokens} | {r.estimated_tokens:,} | {r.tool_calls} | "
-            f"{r.seconds:.1f} ({wait:.1f}) | {model} |"
+            f"{r.seconds:.1f} ({wait:.1f}) | {model} | {server} |"
         )
     lines += ["", "## Why each run ended as it did", ""]
     for r in records:
@@ -750,6 +755,10 @@ def batch_markdown(batch: EvalBatch) -> str:
     lines += ["", "## Limitations (what these numbers do not show)", ""]
     lines += [f"- {m}" for m in batch.limitations]
     return "\n".join(lines) + "\n"
+
+
+def _seconds(value: float | None) -> str:
+    return f"{value:.1f}" if value is not None else "not recorded"
 
 
 def _short_topology(record: EvalRecord) -> str:
