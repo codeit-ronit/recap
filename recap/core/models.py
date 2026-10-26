@@ -1138,6 +1138,11 @@ class RunConfig(Contract):
     # With provider "replay": which COMMITTED recording to replay, by its id in
     # fixtures/recordings/MANIFEST.json (never a path from a client). None -> RECAP_REPLAY.
     replay_fixture: str | None = None
+    # With provider "replay": wait this share of each recorded answer's original duration
+    # before answering (0 = at once; 0.05 plays an 11-minute run in about 35 s). For demos:
+    # it changes only timing, never what is replayed (requests are matched by what they say,
+    # and stops by their place, ADR 0026).
+    replay_pace: float = Field(0.0, ge=0.0, le=1.0)
     seed: int | None = None  # None -> scenario seed
     budget: RunBudget | None = None  # None -> scenario budget or defaults
     tool_latency_ms: int | None = None  # override simulated tool latency

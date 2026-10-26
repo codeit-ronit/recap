@@ -578,16 +578,32 @@ def test_a_client_may_pick_only_the_providers_the_owner_allows(settings: Setting
                 GOLDEN_SCENARIO, provider="replay", replay_fixture=GOLDEN, strategy="single"
             ),
             "no replay": post(provider="deterministic", replay_fixture=GOLDEN),
+            "pace without replay": post(provider="deterministic", replay_pace=0.05),
+            "pace out of range": post(
+                GOLDEN_SCENARIO, provider="replay", replay_fixture=GOLDEN, replay_pace=2
+            ),
         }
         default = start(client, approval_mode="auto")
         scripted = start(client, provider="deterministic", approval_mode="auto")
         replay = start(
-            client, GOLDEN_SCENARIO, provider="replay", replay_fixture=GOLDEN, approval_mode="auto"
+            client,
+            GOLDEN_SCENARIO,
+            provider="replay",
+            replay_fixture=GOLDEN,
+            approval_mode="auto",
+            replay_pace=0.0005,  # demo pacing: a little timing, the same replay
         )
         records = [finished(client, run_id)["record"] for run_id in (default, scripted, replay)]
 
-    details = {name: response.json()["detail"] for name, response in refused.items()}
-    assert all(response.status_code == 400 for response in refused.values()), details
+    statuses = {name: response.status_code for name, response in refused.items()}
+    assert statuses.pop("pace out of range") == 422  # the run settings' own range check
+    details = {
+        name: response.json()["detail"]
+        for name, response in refused.items()
+        if name != "pace out of range"
+    }
+    assert all(status == 400 for status in statuses.values()), details
+    assert "replay_pace is only for the replay provider" in details["pace without replay"]
     assert "never selectable" in details["paid"]
     assert "api_selectable" in details["not allowed"]
     assert "not a configured provider" in details["unknown"]

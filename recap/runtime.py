@@ -194,6 +194,7 @@ class Runtime:
             planner=config.planner,
             ledger=self.ledger,
             replay_fixture=config.replay_fixture,
+            replay_pace=config.replay_pace,
         )
 
     def make_embedder(self, provider: LLMProvider) -> Embedder:

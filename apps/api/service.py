@@ -349,6 +349,8 @@ def check_run_request(
     if spec.kind != "replay":
         if config.replay_fixture is not None:
             raise RunRefused(400, "replay_fixture is only for the replay provider")
+        if config.replay_pace:
+            raise RunRefused(400, "replay_pace is only for the replay provider")
         return config
     if config.replay_fixture is None:
         if config.provider is not None and config.provider != default:

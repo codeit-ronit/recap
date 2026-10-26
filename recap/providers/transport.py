@@ -37,6 +37,7 @@ swaps the recorded run's prefix for the current run's, so citations point at thi
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -338,8 +339,13 @@ class ReplayTransport:
 
     name = "replay"
 
-    def __init__(self, recording: Recording) -> None:
+    # A paced replay never waits longer than this for one answer (a model that once took
+    # five minutes would stall a demo).
+    MAX_PACED_WAIT_SECONDS = 15.0
+
+    def __init__(self, recording: Recording, pace: float = 0.0) -> None:
         self.recording = recording
+        self.pace = max(0.0, min(1.0, pace))  # share of each recorded answer's duration
         self._answers: dict[str, deque[dict[str, Any]]] = defaultdict(deque)
         for exchange in recording.exchanges:
             self._answers[exchange["fingerprint"]].append(exchange)
@@ -365,6 +371,11 @@ class ReplayTransport:
         if recorded.get("failed") is not None:  # the recorded request got no answer at all
             raise ProviderError(str(recorded["failed"]))
         response = dict(recorded["response"])
+        if self.pace > 0:
+            # Demo pacing: the answer comes after a share of the time it originally took. Only
+            # timing changes; the answer and the place of every recorded stop do not.
+            original = float(response.get("duration_ms") or 0.0) / 1000
+            await asyncio.sleep(min(original * self.pace, self.MAX_PACED_WAIT_SECONDS))
         current = _evidence_prefix(canonical_json(body or {}))
         old = recorded.get("evidence_prefix")
         if old and current and old != current:

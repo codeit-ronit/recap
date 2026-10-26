@@ -67,6 +67,7 @@ def create_provider(
     mock_http: httpx.MockTransport | None = None,
     ledger: UsageLedger | None = None,
     replay_fixture: str | None = None,
+    replay_pace: float = 0.0,
 ) -> LLMProvider:
     """Build the provider called `name`.
 
@@ -96,7 +97,7 @@ def create_provider(
     if spec.kind == "scripted":
         provider = _deterministic(settings)
     elif spec.kind == "replay":
-        provider = _replay(spec, settings, replay_fixture)
+        provider = _replay(spec, settings, replay_fixture, replay_pace)
     elif spec.origin == "paid_llm":
         provider = _anthropic(spec, client)
     elif spec.api == "ollama":
@@ -216,7 +217,9 @@ def _free_hosted(
     return FreeHostedProvider(name, spec, wired, guard=guard, recording=recording)
 
 
-def _replay(spec: ProviderSettings, settings: Settings, fixture: str | None) -> LLMProvider:
+def _replay(
+    spec: ProviderSettings, settings: Settings, fixture: str | None, pace: float = 0.0
+) -> LLMProvider:
     """The provider that made a recording, answering from it: same code path, no network.
 
     Which recording, the first that is set:
@@ -263,7 +266,7 @@ def _replay(spec: ProviderSettings, settings: Settings, fixture: str | None) -> 
     # Where the answers come from, as run records and the API show it: repo-relative, or
     # only the file name for a file outside the repository (never a local folder).
     shown = shown_path(path, settings.paths.root)
-    transport = ReplayTransport(recording)
+    transport = ReplayTransport(recording, pace=pace)  # pace: demo timing only (RunConfig)
     name = str(header.get("original_provider", "recorded"))
     if original.api == "ollama":
         from recap.providers.ollama_provider import OllamaProvider

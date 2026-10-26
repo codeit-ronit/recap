@@ -36,6 +36,8 @@ import type {
   SystemSummary,
   TraceEvent,
 } from "./types";
+// The M4 typed API (schema recap-api-v1): types generated from apps/api/dto.py.
+import type * as dto from "./dto";
 
 export const API_BASE: string = (
   import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? "/api" : "")
@@ -90,6 +92,37 @@ function detailMessage(body: unknown): string | null {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  return (await requestWithHeaders<T>(path, init)).body;
+}
+
+/** One page of a list endpoint: its items and the server's count of all matches. */
+export interface Page<T> {
+  items: T[];
+  /** X-Total-Count (null when the server did not send it). */
+  total: number | null;
+}
+
+async function requestPage<T>(path: string): Promise<Page<T>> {
+  const { body, headers } = await requestWithHeaders<T[]>(path);
+  const raw = headers?.get("X-Total-Count");
+  const total = raw !== null && raw !== undefined && raw !== "" ? Number(raw) : null;
+  return { items: body, total: total !== null && Number.isFinite(total) ? total : null };
+}
+
+/** A query string from the defined values only ("" when nothing is set). */
+export function queryString(params: Record<string, string | number | boolean | null | undefined>): string {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== "") query.set(key, String(value));
+  }
+  const text = query.toString();
+  return text ? `?${text}` : "";
+}
+
+async function requestWithHeaders<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<{ body: T; headers: Headers | null }> {
   const url = API_BASE + path;
   let response: Response;
   try {
@@ -126,7 +159,29 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         : (detailMessage(body) ?? `${response.status} ${response.statusText}`);
     throw new ApiError(message, response.status, path, body, offline);
   }
-  return body as T;
+  return { body: body as T, headers: response.headers ?? null };
+}
+
+/** GET /runs filters (all optional; the server matches them exactly). */
+export interface RunFilters {
+  limit?: number;
+  offset?: number;
+  provider_class?: dto.ProviderClass;
+  provider?: string;
+  scenario?: string;
+  state?: string;
+  environment?: string;
+  label?: string;
+}
+
+/** GET /runs/{id}/timeline paging and filters (resume with next_after_seq). */
+export interface TimelineQuery {
+  after_seq?: number;
+  limit?: number;
+  agent?: string;
+  round?: number;
+  kind?: dto.TimelineKind;
+  tool?: string;
 }
 
 const enc = encodeURIComponent;
@@ -165,6 +220,34 @@ export const api = {
   knowledgeSearch: (q: string, k = 5) =>
     request<KnowledgeResult[]>(`/knowledge/search?q=${enc(q)}&k=${k}`),
   knowledgeDocs: () => request<KnowledgeDocRef[]>("/knowledge/docs"),
+
+  // --- M4 typed API (apps/api/dto.py; generated types in ./dto) -----------------------------
+  /** Components, environment adapters (simulated active; Kind/SREGym planned), flags. */
+  systemView: () => request<dto.SystemView>("/system"),
+  /** Every provider with its class, limits and whether this server lets a run pick it. */
+  providerViews: () => request<dto.ProviderView[]>("/providers"),
+  /** The committed real-model recordings (fixtures/recordings/MANIFEST.json), checked. */
+  replays: () => request<dto.ReplaysView>("/replays"),
+  runsPage: (filters: RunFilters = {}) =>
+    requestPage<dto.RunSummary>(`/runs${queryString({ ...filters })}`),
+  runView: (runId: string) => request<dto.RunDetail>(`/runs/${enc(runId)}`),
+  timeline: (runId: string, opts: TimelineQuery = {}) =>
+    request<dto.TimelineView>(`/runs/${enc(runId)}/timeline${queryString({ ...opts })}`),
+  evidenceView: (runId: string) => request<dto.EvidenceView>(`/runs/${enc(runId)}/evidence`),
+  retrievalView: (runId: string) => request<dto.RetrievalView>(`/runs/${enc(runId)}/retrieval`),
+  usageView: (runId: string) => request<dto.UsageView>(`/runs/${enc(runId)}/usage`),
+  evals: () => request<dto.EvalsView>("/evals"),
+  evalBatch: (batchId: string) => request<dto.BatchView>(`/evals/${enc(batchId)}`),
+  /** Replay a committed recording: the server takes its scenario and routing from the
+   * manifest and asks for a fresh approval (operator only). */
+  startReplay: (fixture: Pick<dto.FixtureView, "id" | "scenario">) =>
+    request<dto.RunStarted>("/incidents/run", {
+      method: "POST",
+      body: JSON.stringify({
+        scenario_id: fixture.scenario,
+        config: { provider: "replay", replay_fixture: fixture.id, approval_mode: "manual" },
+      }),
+    }),
 
   startEvaluation: () =>
     request<EvalStartResponse>("/evals/run", { method: "POST", body: JSON.stringify({}) }),

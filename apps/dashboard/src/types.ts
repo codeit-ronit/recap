@@ -626,6 +626,11 @@ export type RunConfigInput = Pick<
 > & {
   /** M3: bm25 or hybrid; left out, the server's configs/retrieval.yaml default applies. */
   retrieval?: NonNullable<RunConfig["retrieval"]>;
+  /** M4: a provider the server allows per run (GET /providers `selectable`); left out, the
+   * server's default. The server refuses anything else, and never a paid provider. */
+  provider?: string;
+  /** M4: with provider "replay", the committed recording to replay, by its manifest id. */
+  replay_fixture?: string;
 };
 
 export interface RunRequest {
