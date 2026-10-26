@@ -30,7 +30,7 @@ from recap.core.ids import utcnow
 from recap.providers.factory import PAID_OPT_IN_ENV, REPLAY_ENV
 from recap.providers.ollama_provider import check_local_settings
 from recap.providers.quota import OPT_IN_ENV, UsageLedger, ledger_scope
-from recap.providers.transport import Recording
+from recap.providers.transport import Recording, shown_path
 
 PROBE_TIMEOUT_SECONDS = 1.0
 
@@ -156,16 +156,19 @@ def _hosted(
 def _replay(spec: ProviderSettings, root: Path, environ: Mapping[str, str]) -> dict[str, Any]:
     raw = environ.get(REPLAY_ENV, "").strip() or spec.recording or ""
     path = Path(raw) if Path(raw).is_absolute() else root / raw
+    # Shown repo-relative, or by name only: an absolute RECAP_REPLAY_RECORDING would name a
+    # local folder (a home folder names its user) in GET /providers.
+    shown = shown_path(path, root) if raw else ""
     try:
         header = Recording.load(path).header
     except Exception as exc:  # a missing or broken recording: say so, never guess
-        return {"recording": raw, "status": "unavailable", "detail": str(exc)[:200]}
+        return {"recording": shown, "status": "unavailable", "detail": str(exc)[:200]}
     provenance = {
         key: header.get(key)
         for key in ("original_provider", "model", "created_at", "prompt_version")
     }
     return {
-        "recording": raw,
+        "recording": shown,
         "replay_of": provenance,
         "status": "ready",
         "detail": f"replays a recorded {header.get('model')} run; no model is called",

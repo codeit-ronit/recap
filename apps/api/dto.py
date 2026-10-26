@@ -293,6 +293,11 @@ class ModelRequest(ApiModel):
     # duration_ms - server_ms: time outside the model server (connection and transfer).
     # It is NOT a wait in the server's queue: that wait is inside server_ms.
     outside_server_ms: float | None
+    # The server's compute (load + prompt evaluation + generation), when it reports it, and
+    # server_ms minus it: the time the request waited inside the server (mostly queued
+    # behind another agent's request on a server that answers one at a time).
+    server_compute_ms: float | None = None
+    server_wait_ms: float | None = None
     replayed: bool  # answered from a recording; its times are the ORIGINAL run's
     finish_reason: str | None
 
@@ -751,6 +756,10 @@ class ModelUsageView(ApiModel):
     # Request time minus server time, over requests that have both: connection and
     # transfer, not queueing.
     outside_server_ms: float | None
+    # Summed server compute, and summed waits inside the server, over the requests that
+    # report both server time and compute.
+    server_compute_ms: float | None = None
+    server_wait_ms: float | None = None
     by_purpose: dict[str, int] = Field(default_factory=dict)
     by_agent: dict[str, int] = Field(default_factory=dict)
     limits: ProviderLimitsView | None  # the CURRENT configuration of that provider

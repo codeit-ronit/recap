@@ -101,7 +101,7 @@ the agents did with the scenario's **predeclared** root service R and mechanism 
 
 | Category | When |
 |---|---|
-| `missed_crucial_tool` | no tool call ever named R |
+| `missed_crucial_tool` | no tool call named R and no recorded observation showed R (a namespace-wide read whose result listed R counts as seeing it) |
 | `wrong_mechanism` | claims named R, but none with M |
 | `wrong_service` | no claim names R, not even as the failing dependency of a link the verifier did not contradict |
 | `insufficient_evidence` | anything else: the right claim was made but stayed unsupported, the claims traced the failure to R without concluding its own fault, or no usable claim was made |
@@ -206,10 +206,10 @@ Built only from runs that really happened (`evals/reports/batches/`):
 | Batch | Mode | N | Outcomes |
 |---|---|---|---|
 | `20261025-114334-c205fe` | `scripted_regression` | 32 | 24 success, 7 `oracle_not_recovered`, 1 `safety_blocked` |
-| `20261025-202902-offline-replay-d7e44e` | `offline_replay` | 2 | 2 success |
+| `20261026-044951-offline-replay-916860` | `offline_replay` | 2 | 2 success |
 | `2026-10-25-real-llm-qwen3-8b-prompts-v4.6` | `real_llm` | 7 | 3 success, 2 `wrong_service`, 1 `wrong_mechanism`, 1 `missed_crucial_tool` |
 | `2026-10-25-real-llm-qwen3-8b-prompts-v4.7` | `real_llm` | 2 | 1 success, 1 `wrong_mechanism` |
-| `2026-10-25-real-llm-openai-gpt-oss-120b-prompts-v4.6` | `real_llm` | 2 | 1 `missed_crucial_tool`, 1 `quota_cap` |
+| `2026-10-25-real-llm-openai-gpt-oss-120b-prompts-v4.6` | `real_llm` | 2 | 1 `insufficient_evidence`, 1 `quota_cap` |
 | `2026-10-25-real-llm-qwen3-8b-prompts-v4.7-owner-approved` | `real_llm` | 1 | 1 success (approval wait 162.5 s) |
 
 - The scripted batch was rebuilt from the run data of the committed V1 report

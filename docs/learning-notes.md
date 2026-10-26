@@ -4935,7 +4935,9 @@ nothing on payment itself is confirmed yet: find out what is wrong with payment"
 to the next round with the open questions, but a lead is not a disagreement, so it never
 routes RT3-disagreement. And when every call an agent asks for repeats one already made, the
 correction names those calls and asks for another tool, another service or a finish. These
-are honest results from two runs, not yet re-measured with v4.6.
+are honest results from two runs; re-measured since (v4.6, v4.7): in all 7 recorded runs
+with a round-2 lead, a round-2 agent examined the lead's service, and 3 of the 7 resolved.
+Following a lead is not the same as getting the diagnosis right.
 
 **Inputs → outputs (the new pieces).**
 

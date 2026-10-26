@@ -500,6 +500,7 @@ def test_the_timeline_counts_retries_rounds_and_says_requests_can_queue() -> Non
     # A request whose server reported its own time also shows the time outside the server.
     call = view.entries[6].model_request
     assert call is not None and (call.server_ms, call.outside_server_ms) == (8000.0, 12000.0)
+    assert (call.server_compute_ms, call.server_wait_ms) == (None, None)  # compute not reported
     retry = view.entries[7].model_request
     assert retry is not None and retry.retry and retry.input_tokens is None
 
@@ -803,7 +804,7 @@ def test_usage_adds_up_reported_tokens_and_time_per_model_and_never_guesses() ->
     )
     trace = [
         routing(1, 1),
-        llm_call(2, "telemetry_investigator", server_ms=15000.0),
+        llm_call(2, "telemetry_investigator", server_ms=15000.0, server_compute_ms=6000.0),
         llm_call(3, "infrastructure_investigator", input_tokens=None, output_tokens=None),
         llm_call(4, "infrastructure_investigator", purpose="propose"),
         event(
@@ -839,6 +840,8 @@ def test_usage_adds_up_reported_tokens_and_time_per_model_and_never_guesses() ->
         5000.0,
     )
     assert model.requests_with_server_ms == 1
+    # 15 s inside the server, 6 s of it computing: 9 s waiting there (queued, or loading).
+    assert (model.server_compute_ms, model.server_wait_ms) == (6000.0, 9000.0)
     assert model.by_purpose == {"investigate": 2, "propose": 1}
     assert model.limits is not None and model.limits.max_output_tokens == 1024
     assert view.estimated_context_tokens.estimate is True

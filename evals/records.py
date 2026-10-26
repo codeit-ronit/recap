@@ -107,6 +107,12 @@ class EvalRecord(Contract):
     seconds: float = 0.0
     stages: list[StageTiming] = Field(default_factory=list)
     model_seconds: float | None = None  # summed request durations (requests may queue)
+    # Over live requests that report them: the model server's own time, and the part of it
+    # a request waited inside the server instead of computing (queued behind another agent's
+    # request on a server that answers one at a time, or loading). None when not reported.
+    model_server_seconds: float | None = None
+    model_wait_seconds: float | None = None
+    label: str = ""  # the run's label: an eval configuration, live-eval:<id>, eval-replay:<id>
     started_at: datetime | None = None
     ended_at: datetime | None = None
     recording: str | None = None  # the recording's id or file name, never a local path

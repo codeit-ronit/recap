@@ -122,8 +122,9 @@ CONCURRENCY_NOTE = (
     "A local Ollama server may answer one request at a time. When two agents investigate "
     "in parallel their turns overlap, but one agent's model request can wait inside the "
     "server for the other's. That wait is part of both duration_ms and server_ms "
-    "(Ollama's total_duration counts from when it received the request); the trace does "
-    "not record the server's compute time apart from it, so the wait is not shown."
+    "(Ollama's total_duration counts from when it received the request). The server also "
+    "reports its compute (model load, prompt evaluation, generation): server_wait_ms is "
+    "server_ms minus that compute, the time a request waited inside the server."
 )
 REPLAY_NOTE = (
     "Model requests were answered from a recording: their token counts, durations and "
@@ -575,10 +576,18 @@ def event_rounds(events: Sequence[TraceEvent]) -> dict[int, int | None]:
     return rounds
 
 
+def _server_wait(server: float | None, compute: float | None) -> float | None:
+    """Time a request waited inside the model server: its time there minus its compute."""
+    if server is None or compute is None:
+        return None
+    return round(max(0.0, server - compute), 1)
+
+
 def model_request(payload: Mapping[str, Any]) -> ModelRequest | None:
     """An `llm.call` payload as a typed request (None when it is not a valid one)."""
     duration = _float(payload.get("duration_ms"))
     server = _float(payload.get("server_ms"))
+    compute = _float(payload.get("server_compute_ms"))
     attempt = _int(payload.get("attempt")) or 1
     origin = _origin(payload.get("origin"))
     if origin is None or duration is None:
@@ -600,6 +609,8 @@ def model_request(payload: Mapping[str, Any]) -> ModelRequest | None:
         duration_ms=duration,
         server_ms=server,
         outside_server_ms=round(duration - server, 1) if server is not None else None,
+        server_compute_ms=compute,
+        server_wait_ms=_server_wait(server, compute),
         replayed=bool(payload.get("replayed")),
         finish_reason=_str(payload.get("finish_reason")),
     )
@@ -1490,6 +1501,13 @@ def _model_usage(
         for d, s in zip(durations, (_float(p.get("server_ms")) for p in payloads), strict=True)
         if s is not None
     ]
+    split = [
+        (s, c)
+        for s, c in (
+            (_float(p.get("server_ms")), _float(p.get("server_compute_ms"))) for p in payloads
+        )
+        if s is not None and c is not None
+    ]
     replayed = sum(1 for p in payloads if p.get("replayed"))
     return ModelUsageView(
         provider=provider,
@@ -1509,6 +1527,8 @@ def _model_usage(
         server_ms=round(sum(s for _, s in timed), 1) if timed else None,
         requests_with_server_ms=len(timed),
         outside_server_ms=round(sum(d - s for d, s in timed), 1) if timed else None,
+        server_compute_ms=round(sum(c for _, c in split), 1) if split else None,
+        server_wait_ms=round(sum(max(0.0, s - c) for s, c in split), 1) if split else None,
         by_purpose=dict(Counter(str(p.get("purpose") or "") for p in payloads)),
         by_agent=dict(Counter(e.agent or "controller" for e in calls)),
         # The current configuration describes live requests only: a replay's original

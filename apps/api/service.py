@@ -424,9 +424,14 @@ class RunReader:
         self.manifest = manifest
         self.exports_dir = root / "evals" / "live"  # exported runs (scripts/export_run_trace.py)
         # Published batches are in git; local ones stay in this machine's data folder.
-        self.batch_roots: dict[BatchSource, Path] = {
-            "published": root / "evals" / "reports" / "batches",
-            "local": settings.paths.data_dir / "evals" / "batches",
+        # A scripted evaluation started with POST /evals/run writes its batch next to its report
+        # (evals/reports/runs/<id>/, git-ignored): a local batch too.
+        self.batch_roots: dict[BatchSource, list[Path]] = {
+            "published": [root / "evals" / "reports" / "batches"],
+            "local": [
+                settings.paths.data_dir / "evals" / "batches",
+                root / "evals" / "reports" / "runs",
+            ],
         }
         self._exports = _ExportCache()
 
@@ -644,12 +649,11 @@ class RunReader:
 
     def batches(self) -> list[tuple[EvalBatch, BatchSource]]:
         """Every evaluation batch (evals/records.py), newest first, with where it is kept."""
-        found = [
-            (batch, source)
-            for source, root in self.batch_roots.items()
-            for batch in find_batches([root])
-        ]
-        return sorted(found, key=lambda pair: pair[0].created_at, reverse=True)
+        found: dict[str, tuple[EvalBatch, BatchSource]] = {}
+        for source, roots in self.batch_roots.items():  # published first: it wins a tie
+            for batch in find_batches(roots):
+                found.setdefault(batch.batch_id, (batch, source))
+        return sorted(found.values(), key=lambda pair: pair[0].created_at, reverse=True)
 
     def evals(self) -> Any:
         return self.json(evals_view(self.batches()))

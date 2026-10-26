@@ -442,7 +442,15 @@ def scripted_batch(
             continue
         trace = run_events(events, case.run_id)
         scenario = scenarios[case.scenario_id]
-        records.append(record_from_run(run, trace, mode="scripted_regression", scenario=scenario))
+        records.append(
+            record_from_run(
+                run,
+                trace,
+                mode="scripted_regression",
+                scenario=scenario,
+                evidence=runs.evidence(case.run_id),
+            )
+        )
     return make_batch(
         batch_id=report.report_id,
         mode="scripted_regression",

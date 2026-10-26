@@ -38,6 +38,7 @@ from recap.core.models import (
     AgentRole,
     Disagreement,
     EnvironmentInfo,
+    Evidence,
     FailureMechanism,
     Hypothesis,
     HypothesisCheck,
@@ -47,6 +48,7 @@ from recap.core.models import (
     RecoveryResult,
     RunConfig,
     RunRecord,
+    SourceType,
     StateChange,
     TraceEvent,
     VerificationReport,
@@ -276,7 +278,7 @@ def test_an_unsolved_investigation_is_judged_against_the_predeclared_answer() ->
     elsewhere = claim("resource_pressure", "front")
     assert categorize(unsolved(elsewhere), looked_at("front"), EXPECTED) == (
         "missed_crucial_tool",
-        "no tool call named store; the calls named front",
+        "no tool call named store and no recorded observation showed it; the calls named front",
     )
     assert categorize(unsolved(claim("bad_deployment", "store")), looked_at("store"), EXPECTED) == (
         "wrong_mechanism",
@@ -294,6 +296,29 @@ def test_an_unsolved_investigation_is_judged_against_the_predeclared_answer() ->
     assert category == "insufficient_evidence" and "found it insufficient" in detail
     # Nothing to compare with: the scenario predeclares no answer.
     assert categorize(unsolved(elsewhere), looked_at("front"), {})[0] == "insufficient_evidence"
+
+
+def test_a_namespace_wide_read_that_listed_the_root_counts_as_seeing_it() -> None:
+    """A read with no service argument (all events of the namespace) that listed the root
+    service's own events saw it: the run did not miss the crucial tool, it misread."""
+    elsewhere = claim("resource_pressure", "front")
+    listing = Evidence(
+        id="ev-a1b2c3-004",
+        incident_id="inc-1",
+        source_type=SourceType.TOOL,
+        source_ref="mcp:get_k8s_like_events(limit=20)",
+        timestamp=T0,
+        content="(events)",
+        data={"events": [{"service": "store", "reason": "OOMKilled"}, {"service": "front"}]},
+    )
+    blind = Evidence(**{**listing.model_dump(), "id": "ev-a1b2c3-005", "data": {"events": []}})
+    trace = looked_at("front")
+    assert categorize(unsolved(elsewhere), trace, EXPECTED, evidence=[listing])[0] == (
+        "wrong_service"
+    )
+    assert categorize(unsolved(elsewhere), trace, EXPECTED, evidence=[blind])[0] == (
+        "missed_crucial_tool"
+    )
 
 
 def test_a_dependency_link_to_the_root_counts_unless_the_verifier_contradicted_it() -> None:
@@ -386,18 +411,36 @@ def test_stage_times_keep_the_approval_wait_apart() -> None:
 
 
 def test_model_time_is_split_into_server_time_and_waiting() -> None:
-    def llm(seq: int, duration: float, server: float | None, replayed: bool = False) -> TraceEvent:
-        payload = {"duration_ms": duration, "server_ms": server, "replayed": replayed}
+    """The wait inside the model server is its own time minus its compute: Ollama's
+    total_duration counts from when it received the request, so a queue is inside it.
+    (Request time minus server time is transport, never queueing.)"""
+
+    def llm(
+        seq: int,
+        duration: float,
+        server: float | None,
+        compute: float | None = None,
+        replayed: bool = False,
+    ) -> TraceEvent:
+        payload = {
+            "duration_ms": duration,
+            "server_ms": server,
+            "server_compute_ms": compute,
+            "replayed": replayed,
+        }
         return event(seq, C.LLM_CALL, payload, agent="investigator")
 
-    calls = [llm(1, 30_000, 20_000), llm(2, 40_000, 15_000), llm(3, 5_000, None)]
-    timing = model_timing([*calls, llm(4, 99_000, 1_000, replayed=True)])
+    calls = [llm(1, 30_000, 29_800, 9_800), llm(2, 40_000, 39_700, 39_700), llm(3, 5_000, None)]
+    timing = model_timing([*calls, llm(4, 99_000, 1_000, 500, replayed=True)])
     assert (timing.requests, timing.seconds) == (3, 75.0)  # a replayed answer is no model time
     assert (timing.server_requests, timing.server_seconds, timing.waiting_seconds) == (
         2,
-        35.0,
-        35.0,
+        69.5,
+        20.0,  # the first request waited 20 s inside the server; the second computed throughout
     )
+    # A server that reports its time but not its compute: the wait is not known, never guessed.
+    unsplit = model_timing([llm(1, 30_000, 29_800)])
+    assert (unsplit.server_seconds, unsplit.waiting_seconds) == (29.8, None)
     assert model_timing([]).seconds is None  # the scripted policy sends no request
 
 
@@ -514,12 +557,21 @@ async def test_ollama_reports_its_own_processing_time(settings: Settings) -> Non
         }
         return httpx.Response(200, json=body)
 
-    fake = FakeOllama([answer(total_duration=2_345_600_000), answer()])
+    timed = answer(
+        total_duration=2_345_600_000,
+        load_duration=100_000_000,
+        prompt_eval_duration=900_000_000,
+        eval_duration=300_000_000,
+    )
+    fake = FakeOllama([timed, answer(total_duration=2_000_000_000), answer()])
     provider = create_provider("ollama", settings, mock_http=fake.mock())
     first = await provider.next_action(investigation_request(settings))
     second = await provider.next_action(investigation_request(settings))
-    assert [c.server_ms for c in first.model_calls] == [2345.6]
-    assert [c.server_ms for c in second.model_calls] == [None]  # never estimated
+    third = await provider.next_action(investigation_request(settings))
+    assert [(c.server_ms, c.server_compute_ms) for c in first.model_calls] == [(2345.6, 1300.0)]
+    # Compute needs all three parts; a missing part is never assumed to be zero.
+    assert [(c.server_ms, c.server_compute_ms) for c in second.model_calls] == [(2000.0, None)]
+    assert [(c.server_ms, c.server_compute_ms) for c in third.model_calls] == [(None, None)]
 
 
 @pytest.mark.e2e

@@ -23,9 +23,11 @@ Rules that keep it local, honest and safe:
     drop the START of the prompt, which is where RECAP's safety rules are. An answer whose
     prompt filled the window is rejected for the same reason;
   * token counts are Ollama's own (prompt_eval_count, eval_count): exact, not estimated;
-  * so is the time it spent on a request (total_duration, in nanoseconds), kept as
-    ModelCall.server_ms. RECAP's own duration_ms minus it is time the request spent
-    elsewhere: mostly queued, when two agents ask a server that answers one at a time.
+  * so is the time it spent on a request (total_duration, in nanoseconds, from receiving
+    the request: a wait in its own queue is part of it), kept as ModelCall.server_ms, and its
+    compute (load_duration + prompt_eval_duration + eval_duration) as server_compute_ms.
+    server_ms minus server_compute_ms is the time a request waited inside the server, mostly
+    queued behind another agent's request: a local server answers one request at a time.
 """
 
 from __future__ import annotations
@@ -65,6 +67,7 @@ class OllamaReply(ModelReply):
     """
 
     server_ms: float | None = None
+    server_compute_ms: float | None = None  # load + prompt evaluation + generation
 
 
 def check_local_settings(settings: ProviderSettings) -> None:
@@ -233,6 +236,7 @@ class OllamaProvider(HttpLLMProvider):
             "duration_ms": exchange.duration_ms,
             "replayed": exchange.replayed,
             "server_ms": _server_ms(data),
+            "server_compute_ms": _compute_ms(data),
         }
         if exchange.status != 200:
             error = data.get("error") or exchange.text or "no details"
@@ -265,8 +269,11 @@ class OllamaProvider(HttpLLMProvider):
     ) -> ModelCall:
         """The shared trace record, plus the server's own time when Ollama reported it."""
         call = super()._model_call(purpose, attempt, sent, schema, reply, parsed)
-        server_ms = reply.server_ms if isinstance(reply, OllamaReply) else None
-        return call if server_ms is None else call.model_copy(update={"server_ms": server_ms})
+        if not isinstance(reply, OllamaReply):
+            return call
+        return call.model_copy(
+            update={"server_ms": reply.server_ms, "server_compute_ms": reply.server_compute_ms}
+        )
 
     def _count(self, status: int, data: dict[str, Any], replayed: bool) -> None:
         """Add a live request to the usage ledger (a replayed answer cost nothing now)."""
@@ -355,6 +362,17 @@ def _context_length(show: dict[str, Any]) -> int | None:
 
 def _int(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _compute_ms(data: dict[str, Any]) -> float | None:
+    """Ollama's compute for one request (load + prompt evaluation + generation), in
+    milliseconds; None unless it reported all three (a missing part is never assumed 0)."""
+    parts = [
+        _int(data.get(key)) for key in ("load_duration", "prompt_eval_duration", "eval_duration")
+    ]
+    if any(part is None or part < 0 for part in parts):
+        return None
+    return round(sum(p for p in parts if p is not None) / 1e6, 1)
 
 
 def _server_ms(data: dict[str, Any]) -> float | None:

@@ -20,6 +20,8 @@ jobs:
         run: |
           ruff check .
           ruff format --check .
+      - name: Committed recordings match their pinned SHA-256 (fixtures/recordings/MANIFEST.json)
+        run: python scripts/recordings_manifest.py --check
       - name: Tests (unit, integration, e2e, adversarial)
         run: python -m pytest -q
       - name: End-to-end smoke test (API -> controller -> MCP -> simulator)

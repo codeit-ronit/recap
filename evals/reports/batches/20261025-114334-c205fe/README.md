@@ -100,7 +100,7 @@
 - Runbook search: BM25 over the shipped runbooks, no knowledge overlays; simulated tool latency: read 30 ms, write 50 ms.
 - Each record is built from the run's own record and trace (evals/categorize.py): success only when the independent oracle verified the recovery; any other end carries one failure category.
 - RECAP 0.3.0, git 0e217a1, config hash f876fe0250c93ac1, fixture hash 4d13eeb1348649e0; each record names the code version it ran ('+dirty': with uncommitted changes).
-- Rebuilt on 2026-10-25 from report 20261025-114334-c205fe's own data folder with evals/runner.py --rebuild-batch (no run was repeated); categories by evals/categorize.py at code 7d004a45f5ae+dirty.
+- Rebuilt on 2026-10-26 from report 20261025-114334-c205fe's own data folder with evals/runner.py --rebuild-batch (no run was repeated); categories by evals/categorize.py at code 78b7877692b7+dirty.
 
 ## Limitations (what these numbers do not show)
 

@@ -28,7 +28,7 @@
 ## Methods
 
 - Runs of a live-evaluation plan that is not in the repository (labels live-eval:unfamiliar-v47, live-eval:cross-service-v47), in one data folder, in the order they ran; each record shows its own scenario, routing and retrieval.
-- Rebuilt on 2026-10-25 from the runs' own records and traces with scripts/live_eval.py --from-data (no model was called); categories by evals/categorize.py at code 7d004a45f5ae+dirty.
+- Rebuilt on 2026-10-26 from the runs' own records and traces with scripts/live_eval.py --from-data (no model was called); categories by evals/categorize.py at code 78b7877692b7+dirty.
 - Each record is built from the run's own record and trace (evals/categorize.py): success only when the independent oracle verified the recovery; any other end carries one failure category, judged against the scenario's predeclared answer, which the model never sees.
 - Approvals: approved by auto-approver[simulation].
 - Tokens in / out are the counts the model server reported; est. tokens is RECAP's own estimate of the context it built. Cost: $0 (a local model, or a free plan checked before every request).

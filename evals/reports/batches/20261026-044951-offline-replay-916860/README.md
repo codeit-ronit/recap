@@ -2,7 +2,7 @@
 
 > **Offline replay of recorded real-model runs (no model is called). SIMULATED target environment.** N = 2: counts, not rates; no statistical claim.
 
-- Batch `20261025-202902-offline-replay-d7e44e` (mode `offline_replay`), created 2026-10-25T20:29:02.603734+00:00
+- Batch `20261026-044951-offline-replay-916860` (mode `offline_replay`), created 2026-10-26T04:49:51.313492+00:00
 - Plan: `fixtures/recordings/MANIFEST.json`
 - Providers: `replay:ollama:qwen3:8b`; models: `qwen3:8b`; prompts: `prompts-v4.7`
 
@@ -16,13 +16,13 @@
 
 | run | scenario | rounds (agents) | retrieval | memory | state | outcome | oracle | model requests | tokens in / out (reported) | est. tokens | tool calls | run seconds (approval wait) | model seconds |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| `run-91191287aa` | `m3-inventory-leak-behind-frontend` | parallel (telemetry + infrastructure); parallel (telemetry + infrastructure) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 11,800 | 17 | 2.3 (0.0) | - |
-| `run-72c294c866` | `bad-deployment` | single (investigator) | bm25 | off | RESOLVED | success | verified | 0 | not reported | 3,836 | 7 | 1.6 (0.0) | - |
+| `run-e3f7f510a1` | `m3-inventory-leak-behind-frontend` | parallel (telemetry + infrastructure); parallel (telemetry + infrastructure) | bm25 | on | RESOLVED | success | verified | 0 | not reported | 11,800 | 17 | 2.2 (0.0) | - |
+| `run-8b6e202872` | `bad-deployment` | single (investigator) | bm25 | off | RESOLVED | success | verified | 0 | not reported | 3,836 | 7 | 1.6 (0.0) | - |
 
 ## Why each run ended as it did
 
-- `run-91191287aa` (m3-inventory-leak-behind-frontend): **success**: oracle verified recovery (simulated environment). Diagnosis `resource_pressure@inventory`; fix: restart_service on inventory: APPROVAL_REQUIRED (R11-reversible-approval); evidence check passed; executed.
-- `run-72c294c866` (bad-deployment): **success**: oracle verified recovery (simulated environment). Diagnosis `bad_deployment@checkout`; fix: execute_rollback on checkout: APPROVAL_REQUIRED (R11-reversible-approval); evidence check passed; executed.
+- `run-e3f7f510a1` (m3-inventory-leak-behind-frontend): **success**: oracle verified recovery (simulated environment). Diagnosis `resource_pressure@inventory`; fix: restart_service on inventory: APPROVAL_REQUIRED (R11-reversible-approval); evidence check passed; executed.
+- `run-8b6e202872` (bad-deployment): **success**: oracle verified recovery (simulated environment). Diagnosis `bad_deployment@checkout`; fix: execute_rollback on checkout: APPROVAL_REQUIRED (R11-reversible-approval); evidence check passed; executed.
 
 ## Methods
 
@@ -31,7 +31,7 @@
 - Approvals: the simulation auto-approver stood in for the original approver (the manifest names them); the approval comes after the model's last answer, so it changes nothing the model saw.
 - Model requests, reported tokens and model_seconds are the replay's own: a replay sends no request, so they are 0 or empty. The recorded run's own counts are in its recording (fixtures/recordings/) and its manifest entry.
 - Each record is built from the replay's own record and trace (evals/categorize.py): success only when the independent oracle verified the recovery; a replay that left its recording (ReplayMismatch) is category error.
-- RECAP code 7d004a45f5ae+dirty ('+dirty': with uncommitted changes).
+- RECAP code 78b7877692b7+dirty ('+dirty': with uncommitted changes).
 
 ## Limitations (what these numbers do not show)
 

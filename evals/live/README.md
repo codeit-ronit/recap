@@ -27,8 +27,9 @@ works, not how often a model is right.
   frontend release three hours earlier is a red herring. Two specialists (telemetry and
   infrastructure, each with its own tools and its own view of the evidence) ran side by side
   for 146.9 s in round 1. The verifier accepted their two dependency-failure claims as true
-  but not actionable, and rejected a "bad cart release" claim that cited none of the
-  evidence its rules use. In round 2 the infrastructure agent followed the chain to
+  but not actionable, and did not accept a claim whose text blamed the cart release
+  (filed as a dependency failure, it cited none of the evidence its rule uses; corrected
+  in M4: no claim was contradicted in this run). In round 2 the infrastructure agent followed the chain to
   inventory, read its OOMKilled events and claimed resource pressure on inventory; the
   verifier supported it. When the agent asked again for a call it had already made, RECAP
   said so by name and the agent finished. The model proposed restarting inventory, the

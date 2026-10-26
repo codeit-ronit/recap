@@ -104,7 +104,12 @@ async def replay_one(info: FixtureInfo, data_dir: Path) -> EvalRecord:
     events = run_events(runtime.events, record.run_id)
     scenario = next((s for s in runtime.list_scenarios() if s.id == info.scenario), None)
     return record_from_run(
-        record, events, mode="offline_replay", scenario=scenario, recording=info.file
+        record,
+        events,
+        mode="offline_replay",
+        scenario=scenario,
+        recording=info.file,
+        evidence=runtime.runs.evidence(record.run_id),
     )
 
 

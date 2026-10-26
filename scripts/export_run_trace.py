@@ -567,9 +567,10 @@ def _scope(
         )
         if _had_parallel_round(events):
             replay += (
-                " This run had a parallel round: its specialists' prompts include what every "
-                "agent had already observed, so a replay depends on the order they ran in and "
-                "may stop with ReplayMismatch."
+                " This run had a parallel round: each specialist's prompts hold only its own "
+                "view of the round, and requests are matched by what they say, not by order, "
+                "so the replay does not depend on which specialist finished first (ADR 0020); "
+                "a stop that timing caused replays at the place it happened (ADR 0026)."
             )
         lines.append(replay)
     waits = [

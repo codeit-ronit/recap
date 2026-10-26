@@ -38,7 +38,8 @@ The categories, checked in this order (the first that matches wins):
                            supported diagnosis
   and, when the investigation ended without a supported root cause, judged against the
   predeclared root service R and mechanism M:
-    missed_crucial_tool    no tool call ever named R
+    missed_crucial_tool    no tool call named R and no recorded observation showed R (a
+                           namespace-wide read whose result listed R counts as seeing it)
     wrong_mechanism        claims named R, but none with M
     wrong_service          the claims put the fault elsewhere (none names R, even as the
                            failing dependency of a link the verifier did not contradict)
@@ -67,6 +68,7 @@ from evals.records import (
 from recap.core.config import REPO_ROOT
 from recap.core.models import (
     TERMINAL_STATES,
+    Evidence,
     IncidentState,
     RunRecord,
     ScenarioInfo,
@@ -133,6 +135,7 @@ def record_from_run(
     expected: Mapping[str, Any] | None = None,
     recording: str | None = None,
     service_args: Collection[str] = ("service",),
+    evidence: Sequence[Evidence] = (),
 ) -> EvalRecord:
     """The evaluation record of one finished run, from its record and its trace only.
 
@@ -140,7 +143,9 @@ def record_from_run(
     replaces that answer when given). `recording` names the run's recording by its id or
     file name; by default it is the file name of the recording the run itself names (a
     local path is never kept). `service_args` are the tool arguments that name a service
-    (configs/policies.yaml names every one "service").
+    (configs/policies.yaml names every one "service"). `evidence` is the run's evidence
+    registry (RunStore.evidence): with it, a namespace-wide read whose result listed the root
+    service counts as having seen it.
 
     Raises ValueError for a run of another origin than `mode` allows (a scripted run is never
     a real-model record, a replay never a live one), for the kubernetes_future mode, which
@@ -156,11 +161,14 @@ def record_from_run(
         )
     trace = _ordered(events, record.run_id)
     answer = dict(expected if expected is not None else (scenario.expected if scenario else {}))
-    failure, detail = categorize(record, trace, answer, service_args=service_args)
+    failure, detail = categorize(
+        record, trace, answer, service_args=service_args, evidence=evidence
+    )
     history = _history(record, trace)
     verified = bool(record.recovery and record.recovery.verified)
     by_agent = tool_calls_by_agent(trace)
     diagnosis = _diagnosis(record)
+    timing = model_timing(trace)
     return EvalRecord(
         run_id=record.run_id,
         mode=mode,
@@ -203,7 +211,10 @@ def record_from_run(
         failure_detail=detail,
         seconds=_total_seconds(history, record),
         stages=stage_timings(history),
-        model_seconds=model_timing(trace).seconds,
+        model_seconds=timing.seconds,
+        model_server_seconds=timing.server_seconds,
+        model_wait_seconds=timing.waiting_seconds,
+        label=record.config.label,
         started_at=history[0].at if history else record.created_at,
         ended_at=history[-1].at if history and record.state in TERMINAL_STATES else None,
         recording=recording if recording is not None else recording_name(record),
@@ -236,6 +247,7 @@ def categorize(
     expected: Mapping[str, Any],
     *,
     service_args: Collection[str] = ("service",),
+    evidence: Sequence[Evidence] = (),
 ) -> tuple[FailureCategory, str]:
     """The failure category of one run and a short reason ("" and a note for a success).
 
@@ -295,7 +307,7 @@ def categorize(
         return "provider_failure", clean_text(
             "no usable fix was proposed for the supported diagnosis" + (f" ({why})" if why else "")
         )
-    return _unsolved(record, trace, expected, service_args)
+    return _unsolved(record, trace, expected, service_args, evidence)
 
 
 def _unusable_proposal(trace: Sequence[TraceEvent]) -> str:
@@ -348,11 +360,30 @@ def _error(error: str) -> tuple[FailureCategory, str]:
     return "error", clean_text(error)
 
 
+def _observed(evidence: Sequence[Evidence], service: str) -> bool:
+    """True when a tool observation in the run's evidence lists `service` (a namespace-wide
+    event or deployment list, a health snapshot), whatever the call's own arguments said.
+
+    It reads the structured data RECAP's rules read (Evidence.data), never the text: an
+    entry counts when it is a mapping whose "service" is exactly `service`.
+    """
+
+    def mentions(value: Any) -> bool:
+        if isinstance(value, Mapping):
+            return value.get("service") == service or any(mentions(v) for v in value.values())
+        if isinstance(value, list):
+            return any(mentions(v) for v in value)
+        return False
+
+    return any(item.source_type.value == "tool" and mentions(item.data) for item in evidence)
+
+
 def _unsolved(
     record: RunRecord,
     trace: Sequence[TraceEvent],
     expected: Mapping[str, Any],
     service_args: Collection[str],
+    evidence: Sequence[Evidence] = (),
 ) -> tuple[FailureCategory, str]:
     """No supported root cause: compare what the agents did with the predeclared answer."""
     root = str(expected.get("root_cause_service") or "")
@@ -366,9 +397,12 @@ def _unsolved(
         for key, value in (event.payload.get("args") or {}).items()
         if key in service_args
     }
-    if root not in looked:
+    if root not in looked and not _observed(evidence, root):
         named = ", ".join(sorted(looked)) or "no service"
-        return "missed_crucial_tool", f"no tool call named {root}; the calls named {named}"
+        return "missed_crucial_tool", (
+            f"no tool call named {root} and no recorded observation showed it; the calls "
+            f"named {named}"
+        )
     claims = [h for f in record.findings for h in f.hypotheses]
     on_root = [h for h in claims if h.target_service == root]
     if on_root and not any(h.mechanism.value == mechanism for h in on_root):
@@ -461,9 +495,11 @@ class ModelTiming:
     `seconds` sums every request's duration as RECAP saw it (sending to answer). When two
     agents ask one local server that answers one request at a time, the second request waits
     in its queue, so the sum counts that wait too. `server_seconds` sums the server's own
-    processing time where it reported one (Ollama's total_duration, ModelCall.server_ms);
-    `waiting_seconds` is the difference over those requests: time spent elsewhere, mostly
-    queued. Replayed answers are left out: no model ran for them.
+    time where it reported one (Ollama's total_duration, ModelCall.server_ms: it counts from
+    when the server received the request, so a wait in its queue is inside it).
+    `waiting_seconds` is that server time minus the server's compute (load, prompt
+    evaluation, generation: ModelCall.server_compute_ms), over requests that report both:
+    the time requests waited inside the server. Replayed answers are left out: no model ran.
     """
 
     requests: int
@@ -480,13 +516,14 @@ def model_timing(events: Iterable[TraceEvent]) -> ModelTiming:
     durations = [float(c.get("duration_ms") or 0.0) for c in calls]
     timed = [c for c in calls if isinstance(c.get("server_ms"), int | float)]
     server = sum(float(c["server_ms"]) for c in timed)
-    client = sum(float(c.get("duration_ms") or 0.0) for c in timed)
+    split = [c for c in timed if isinstance(c.get("server_compute_ms"), int | float)]
+    waiting = sum(max(0.0, float(c["server_ms"]) - float(c["server_compute_ms"])) for c in split)
     return ModelTiming(
         requests=len(calls),
         seconds=round(sum(durations) / 1000, 3) if calls else None,
         server_requests=len(timed),
         server_seconds=round(server / 1000, 3) if timed else None,
-        waiting_seconds=round(max(0.0, client - server) / 1000, 3) if timed else None,
+        waiting_seconds=round(waiting / 1000, 3) if split else None,
     )
 
 

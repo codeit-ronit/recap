@@ -106,8 +106,10 @@ all listed as its proposers. Two different versions of one release are judged ap
   them (`leads` in `investigation.round`, `verification.evidence` and `verification.merge`),
   but only open questions set the signal that routes RT3-disagreement. Leads were added after
   the first real `qwen3:8b` parallel runs (prompts-v4.5) confirmed such a failing call in
-  round 1 and did not examine the dependency itself in round 2 (not yet re-measured with
-  prompts-v4.6).
+  round 1 and did not examine the dependency itself in round 2 (re-measured with v4.6 and
+  v4.7: agents examined the lead's service in all 7 runs that had a lead; 3 of 7 resolved).
+  Since M4.5 an unsupported claim on a victim also gives a lead to the dependency its own
+  ERROR lines blame, and leads name only allowlisted services (ADR 0021, decision 10).
 * `focus_services`: where the next round should look (the services of an open conflict,
   services with missing evidence, the dependency an unresolved dependency failure points at,
   or the dependency that a victim's errors come from). The controller passes them to the

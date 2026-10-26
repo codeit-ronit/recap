@@ -306,7 +306,10 @@ free-plan header checked. Details in [status.md](status.md).
   Leads came from the first real `qwen3:8b` parallel runs (prompts-v4.5). Both ended
   FAILED: the specialists confirmed in round 1 that checkout's calls to payment (in one
   run) and frontend's calls to cart (in the other) fail, but in round 2 did not examine the
-  dependency itself. Not yet re-measured with prompts-v4.6.
+  dependency itself. Measured since (prompts-v4.6 and v4.7): in all 7 recorded runs with a
+  round-2 lead, a round-2 agent examined the lead's service; 3 of the 7 resolved. Since M4.5
+  an unsupported claim on a victim service also gives a lead to the dependency its own errors
+  blame (ADR 0021, decision 10), and leads name only allowlisted services.
 - **Next:** a supported best hypothesis goes to stage 6; otherwise another round of stage 4
   (bounded by `max_investigation_rounds`). The open questions and the leads go to that
   round's agents. Only an open question can route it by `RT3-disagreement` (level

@@ -22,6 +22,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 RECORDINGS = ROOT / "fixtures" / "recordings"
 EXPORTS = ROOT / "evals" / "live"
+BATCHES = ROOT / "evals" / "reports" / "batches"
 
 _START = r"(?<![A-Za-z0-9])"
 SECRET_SHAPES = {
@@ -44,7 +45,7 @@ LINKING_KEYS = frozenset({"x-request-id", "x_groq", "system_fingerprint", "reque
 
 
 def published_files() -> list[Path]:
-    return sorted(p for d in (RECORDINGS, EXPORTS) for p in d.rglob("*") if p.is_file())
+    return sorted(p for d in (RECORDINGS, EXPORTS, BATCHES) for p in d.rglob("*") if p.is_file())
 
 
 def strings(value: Any) -> Iterator[str]:

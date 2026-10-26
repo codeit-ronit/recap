@@ -31,7 +31,7 @@
 
 - `run-f286c3c1de` (ambiguous-incident): **wrong_mechanism**: the claims on payment named dependency_failure, not bad_deployment. Diagnosis none; fix: none proposed.
 - `run-99da3c0f7d` (m3-inventory-leak-behind-frontend): **wrong_service**: the claims named cart, frontend; none named inventory. Diagnosis none; fix: none proposed.
-- `run-c4391a0c3e` (m3-inventory-leak-behind-frontend): **missed_crucial_tool**: no tool call named inventory; the calls named cart, checkout, frontend. Diagnosis none; fix: none proposed.
+- `run-c4391a0c3e` (m3-inventory-leak-behind-frontend): **missed_crucial_tool**: no tool call named inventory and no recorded observation showed it; the calls named cart, checkout, frontend. Diagnosis none; fix: none proposed.
 - `run-d53aafeade` (bad-deployment): **success**: oracle verified recovery (simulated environment). Diagnosis `bad_deployment@checkout`; fix: execute_rollback on checkout: APPROVAL_REQUIRED (R11-reversible-approval); evidence check passed; executed.
 - `run-8a33ef9c13` (memory-caution): **success**: oracle verified recovery (simulated environment). Diagnosis `resource_pressure@payment`; fix: restart_service on payment: APPROVAL_REQUIRED (R11-reversible-approval); evidence check passed; executed.
 - `run-526b032422` (bad-deployment): **success**: oracle verified recovery (simulated environment). Diagnosis `bad_deployment@checkout`; fix: execute_rollback on checkout: APPROVAL_REQUIRED (R11-reversible-approval); evidence check passed; executed.
@@ -40,7 +40,7 @@
 ## Methods
 
 - Plan evals/plans/m3-real-models.yaml: its runs in one data folder, in order (scripts/live_eval.py, every run labelled live-eval:<run id>).
-- Rebuilt on 2026-10-25 from the runs' own records and traces with scripts/live_eval.py --from-data (no model was called); categories by evals/categorize.py at code 7d004a45f5ae+dirty.
+- Rebuilt on 2026-10-26 from the runs' own records and traces with scripts/live_eval.py --from-data (no model was called); categories by evals/categorize.py at code 78b7877692b7+dirty.
 - Each record is built from the run's own record and trace (evals/categorize.py): success only when the independent oracle verified the recovery; any other end carries one failure category, judged against the scenario's predeclared answer, which the model never sees.
 - Approvals: approved by auto-approver[simulation].
 - Tokens in / out are the counts the model server reported; est. tokens is RECAP's own estimate of the context it built. Cost: $0 (a local model, or a free plan checked before every request).

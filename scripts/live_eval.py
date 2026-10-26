@@ -194,7 +194,13 @@ async def run_one(base: Settings, plan: Plan, run: PlannedRun) -> tuple[dict[str
     seconds = round(time.perf_counter() - started, 1)
     events = run_events(runtime.events, record.run_id)
     scenario = next((s for s in runtime.list_scenarios() if s.id == run.scenario), None)
-    evaluated = record_from_run(record, events, mode="real_llm", scenario=scenario)
+    evaluated = record_from_run(
+        record,
+        events,
+        mode="real_llm",
+        scenario=scenario,
+        evidence=runtime.runs.evidence(record.run_id),
+    )
     return summarize(run, record, events, seconds, settings), evaluated
 
 
@@ -477,7 +483,8 @@ def rebuild(args: argparse.Namespace) -> int:
         print(f"refused: {data_dir.name} holds no runs (no recap.db)", file=sys.stderr)
         return EXIT_REFUSED
     plan = load_plan(args.plan) if args.plan is not None else None
-    runs = sorted(RunStore(database).list(limit=1_000_000), key=lambda r: r.created_at)
+    store = RunStore(database)
+    runs = sorted(store.list(limit=1_000_000), key=lambda r: r.created_at)
     finished = [r for r in runs if r.state in TERMINAL_STATES and _origin(r) in MODEL_ORIGINS]
     missing: list[str] = []
     if plan is not None:
@@ -507,6 +514,7 @@ def rebuild(args: argparse.Namespace) -> int:
             run_events(sink, run.run_id),
             mode="real_llm",
             scenario=scenarios.get(run.scenario_id),
+            evidence=store.evidence(run.run_id),
         )
         for run in finished
     ]
