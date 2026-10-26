@@ -4970,3 +4970,136 @@ The real-model runs taught me something different: a small model confirmed that 
 service's calls to another were failing, and in the next round didn't examine the failing
 service itself. So the verifier now leaves a lead for the next round, and it's deliberately
 not a 'disagreement', because it shouldn't change how the next round is routed."
+
+### M4, steps 1 and 2 — An API that never guesses, and a replay you can trust
+
+**What changed, in one paragraph.** Every screen and every reviewer now reads a run through
+typed views (`GET /runs/{id}/timeline`, `/evidence`, `/retrieval`, `/usage`, plus `/system`,
+`/providers`, `/evals`, `/replays`), each a Pydantic response model with a version
+(`recap-api-v1`). A view is built only from what the run stored; anything the record does not
+hold is listed under `not_recorded` instead of being worked out. The dashboard's TypeScript
+types are generated from those same models, so a renamed field breaks the build, not a demo.
+The owner-approved real two-agent run of M3 became the "golden" replay: its recording is
+pinned by SHA-256 in `fixtures/recordings/MANIFEST.json`, can be replayed by its id from the
+dashboard, is refused if one byte changed, is refused against anything but the simulator,
+and needs a fresh human approval.
+
+**The idea most worth understanding: content addressing.** A file's SHA-256 is a fingerprint
+of its exact bytes. Naming a recording by "id plus fingerprint" instead of by path means two
+things at once: a client can never point RECAP at a file of its choosing, and a recording
+that someone edited (to make the model look smarter, say) is simply not the recording any
+more. Git uses the same idea for every object it stores.
+
+**Why replay speed is a setting.** A replay answers from the recording instantly, so the
+11-minute original run would flash by in two seconds. `replay_pace` makes each recorded
+answer wait a share of its original time (at most 15 s), so a person can watch the two
+specialists work in about half a minute. It changes timing only: requests are still matched
+by what they say, and stops by their place (ADR 0026), so the result cannot change.
+
+**Inputs → outputs (the new pieces).**
+
+- `views.timeline_view(record, events, after_seq, limit, filters)` → `TimelineView` (lanes,
+  rounds with overlap, model requests with server and wait time, `next_after_seq`).
+- `recordings.fixture_path(fixture_id)` → the checked path, or an error naming the problem
+  (unknown id, missing file, altered bytes).
+- `RunManager.check_run_request(scenario, config)` → `None`, or the reason a client may not
+  choose that provider.
+- `scripts/gen_dashboard_types.py` → `apps/dashboard/src/dto.ts` (60 interfaces).
+
+**Reproduce.**
+
+```bash
+.venv/bin/python -m pytest tests/e2e/test_api_contracts.py tests/e2e/test_golden_replay.py \
+  tests/unit/test_api_views.py tests/unit/test_dashboard_types.py tests/unit/test_replay_pace.py
+```
+
+**Interview version.** "I put a typed contract between the backend and the UI: every view is
+built from stored records only, and a fact we didn't record is reported as 'not recorded'
+rather than inferred in the browser. The UI's types are generated from the backend models.
+The demo is a replay of a real two-agent run, pinned by SHA-256, so nobody can swap in an
+edited recording, and a replay can never touch anything but the simulator or reuse the
+original human approval."
+
+### M4, step 4 — One evaluation record per run, and numbers that never mix
+
+**What changed, in one paragraph.** Each evaluated run now becomes one `EvalRecord`, built
+from that run's own record and trace: its stages and their time (with the wait for a human
+apart), model requests and the server's own token counts, tool calls per agent, the topology
+of each round, the claims the verifier supported, the fix and what the policy said, who
+approved, and the oracle's verdict. Records come in batches of exactly one mode: scripted
+regression (the scripted policy), offline replay (committed recordings) or real model. A run
+is a success only if the oracle verified the recovery; any other run gets one failure
+category (wrong service, wrong mechanism, missed crucial tool, insufficient evidence,
+budget, quota, safety block, ...) chosen by fixed rules from the scenario's predeclared
+answer, which the model never sees.
+
+**The idea most worth understanding: a number belongs to a population.** "24 of 32 succeeded"
+means something only together with what decided (a script, a recording, a model), on what
+(a simulator), and how many runs. Adding scripted runs to real-model runs would produce a
+number that describes nothing. So the code makes a mixed batch impossible, and every report
+says "k of N", never a percentage of a tiny N.
+
+**Why time needed a second look.** Two specialists share one local model server that answers
+one request at a time. Ollama's own timer starts when a request arrives, so a request that
+queued behind the other agent's counts its waiting as server time. RECAP now also records
+what the server spent computing (loading, reading the prompt, generating) and reports the
+difference as waiting. In the M4 live run: 837 s of server time, of which 362 s was waiting.
+
+**Reproduce.**
+
+```bash
+.venv/bin/python -m pytest tests/integration/test_eval_records.py
+.venv/bin/python scripts/eval_replay.py --out /tmp/recap-replay-eval   # offline, $0
+```
+
+**Interview version.** "Every run becomes one evaluation record built from its own trace,
+with a named failure reason when it didn't recover, and the oracle, not the agent, decides
+success. I keep scripted, replayed and real-model results in separate batches and never
+blend them into one success rate, because they measure different things. I also found that
+my 'model time' was misleading when two agents queue on one local server, so I split it into
+compute and waiting."
+
+### M4, step 5 — Learning from the recorded failures without overfitting
+
+**What changed, in one paragraph.** The 11 recorded real-model runs of M3 were analysed run
+by run: what each agent read, what it claimed, what the verifier said, and what would have
+happened had the agent filed what its own text said (a counterfactual, re-verified by the
+real rules). The verifier was right every time; the failures were the model's (credulous
+reading of planted text, a mechanism its own metric contradicted, the cause described in
+words but never filed) plus three generic RECAP gaps, fixed without changing any prompt:
+victim leads (an unsupported claim on a service whose own errors blame a dependency now also
+points the next round at that dependency), consistency notes, and leads that name only
+allowlisted services.
+
+**The idea most worth understanding: fix the system, not the test case.** Every change had to
+be generic (it fires on held-out services and phrasings, and must not fire where it should
+not), leave the scripted baselines identical (0 of 51 runs differ) and leave both committed
+recordings replayable. The changes most likely to help on the failed incident change the
+prompts; they would invalidate the owner-approved recording, so they wait for a new prompt
+version instead of being slipped in. A live run under M4 then failed the same way as in M3,
+which is the honest, expected outcome of not changing the prompts.
+
+**Interview version.** "I did a failure analysis of every real-model run, with
+counterfactuals: if the agent had filed the claim its own text described, would the verifier
+have accepted it? That separated model mistakes from system gaps. I fixed only generic system
+gaps, proved they didn't change any baseline, and deliberately didn't tune prompts to the
+failed case, because that would just overfit one scenario."
+
+### M4, step 7 — Checking the types and the whole history
+
+**What changed, in one paragraph.** `mypy` (with the pydantic plugin) now checks the core
+interfaces and every module M4 added (28 files, listed in `pyproject.toml`), in CI. It found
+real issues: the provider protocol declared `info` as a settable attribute while the
+red-team wrapper computes it, and a transport was used before Python could know it was the
+recording kind. `scripts/secret_scan.py` checks every tracked file and every blob in the git
+history (not just the current files: a key deleted in a later commit is still in history)
+for the key shapes the recorder redacts, and that the owner's own key appears nowhere. It
+prints where and what kind, never the value; the few fake keys in tests are allowed by the
+SHA-256 of their exact value, so a real key next to them is still found.
+
+**Reproduce.**
+
+```bash
+.venv/bin/python -m mypy
+.venv/bin/python scripts/secret_scan.py
+```

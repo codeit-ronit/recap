@@ -1,0 +1,140 @@
+{
+ "schema_version": "recap-eval-batch-v1",
+ "batch_id": "2026-10-26-real-llm-qwen3-8b-m4-unfamiliar-single",
+ "mode": "real_llm",
+ "title": "Real model under M4: qwen3:8b on the held-out unfamiliar incident (one agent)",
+ "created_at": "2026-10-26T05:20:58.692465Z",
+ "plan": "evals/plans/m4-comparisons.yaml",
+ "providers": [
+  "ollama:qwen3:8b"
+ ],
+ "models": [
+  "qwen3:8b"
+ ],
+ "prompt_versions": [
+  "prompts-v4.7"
+ ],
+ "records": [
+  {
+   "run_id": "run-fd18436dfe",
+   "mode": "real_llm",
+   "scenario_id": "m3-inventory-leak-behind-frontend",
+   "incident_id": "inc-814da964c8",
+   "incident_family": "resource_pressure",
+   "split": "test",
+   "expected": {
+    "root_cause_service": "inventory",
+    "mechanism": "resource_pressure",
+    "fix": "restart_service",
+    "fix_params": {},
+    "redteam": false,
+    "evades_scanner": false
+   },
+   "provider": "ollama:qwen3:8b",
+   "provider_class": "local_llm",
+   "model": "qwen3:8b",
+   "model_weights": "sha256:a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f",
+   "prompt_version": "prompts-v4.7",
+   "config_hash": "394843bc06d11ea0",
+   "code_version": "e03327a9db61+dirty",
+   "strategy": "single",
+   "topology": [
+    "single: investigator",
+    "single: investigator"
+   ],
+   "rounds": 2,
+   "retrieval_mode": "bm25",
+   "memory": true,
+   "model_requests": 11,
+   "input_tokens": 40571,
+   "output_tokens": 1216,
+   "estimated_tokens": 9083,
+   "tool_calls": 14,
+   "tool_calls_by_agent": {
+    "investigator": 13,
+    "controller": 1
+   },
+   "retrieved_docs": [
+    "shop-architecture#services-1",
+    "shop-architecture#call-graph-1",
+    "guide-reading-signals#error-rate-1",
+    "shop-architecture#service-level-objectives-1",
+    "runbook-memory-pressure#remediation-1",
+    "runbook-bad-deployment#remediation-1"
+   ],
+   "agent_searches": 0,
+   "memory_hits": [],
+   "supported_hypotheses": [
+    "dependency_failure@cart",
+    "resource_pressure@inventory"
+   ],
+   "diagnosis": "resource_pressure@inventory",
+   "diagnosis_correct": true,
+   "proposed_actions": [
+    "restart_service on inventory [llm]"
+   ],
+   "gateway_outcome": "restart_service on inventory: APPROVAL_REQUIRED (R11-reversible-approval); evidence check passed; executed",
+   "approvals": [
+    "approved by auto-approver[simulation]"
+   ],
+   "final_state": "RESOLVED",
+   "oracle_verified": true,
+   "success": true,
+   "failure": "",
+   "failure_detail": "oracle verified recovery (simulated environment)",
+   "seconds": 303.799,
+   "stages": [
+    {
+     "stage": "CREATED",
+     "seconds": 0.477
+    },
+    {
+     "stage": "RETRIEVING",
+     "seconds": 0.002
+    },
+    {
+     "stage": "INVESTIGATING",
+     "seconds": 248.273
+    },
+    {
+     "stage": "PROPOSING",
+     "seconds": 54.386
+    },
+    {
+     "stage": "AWAITING_APPROVAL",
+     "seconds": 0.017
+    },
+    {
+     "stage": "MITIGATING",
+     "seconds": 0.641
+    },
+    {
+     "stage": "VERIFYING",
+     "seconds": 0.003
+    }
+   ],
+   "model_seconds": 300.225,
+   "model_server_seconds": 299.812,
+   "model_wait_seconds": 2.898,
+   "label": "live-eval:unfamiliar-single",
+   "started_at": "2026-10-26T05:20:58.692465Z",
+   "ended_at": "2026-10-26T05:26:02.491896Z",
+   "recording": "20261026-052058-ollama-594a85.jsonl"
+  }
+ ],
+ "methods": [
+  "Plan evals/plans/m4-comparisons.yaml: its runs in one data folder, in order (scripts/live_eval.py, every run labelled live-eval:<run id>).",
+  "Rebuilt on 2026-10-26 from the runs' own records and traces with scripts/live_eval.py --from-data (no model was called); categories by evals/categorize.py at code e03327a9db61+dirty.",
+  "Each record is built from the run's own record and trace (evals/categorize.py): success only when the independent oracle verified the recovery; any other end carries one failure category, judged against the scenario's predeclared answer, which the model never sees.",
+  "Approvals: approved by auto-approver[simulation].",
+  "Tokens in / out are the counts the model server reported; est. tokens is RECAP's own estimate of the context it built. Cost: $0 (a local model, or a free plan checked before every request).",
+  "model_seconds sums each request's duration as RECAP measured it. When two specialists ask one local server that answers one request at a time, a request waits in its queue, so the sum can exceed the run's own time. The trace's llm.call events carry the server's own time (server_ms, Ollama's total_duration) for runs made since M4: model_server_seconds sums it, and model_wait_seconds sums the part of it a request spent waiting inside the server instead of computing (server time minus Ollama's own load, prompt and generation time)."
+ ],
+ "limitations": [
+  "N = 1 (m3-inventory-leak-behind-frontend 1): each run is one sample of one configuration. These are counts, not success rates, and no statistical claim is made.",
+  "The target is RECAP's SIMULATED shop, not a real cluster (a real cluster is M5).",
+  "A model's run is not exactly repeatable (random IDs in its prompts change the input); only a replay of its recording is.",
+  "Every fix was approved by the simulation auto-approver: these runs do not test human review.",
+  "Planned but not in this folder: unfamiliar-parallel, unfamiliar-hybrid, bad-deployment, cross-service, memory-first, look-alike-memory-on, look-alike-memory-off, adversarial."
+ ]
+}

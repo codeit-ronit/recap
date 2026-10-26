@@ -171,6 +171,8 @@ the Groq free-plan setup in [provider-options.md](provider-options.md)):
 .venv/bin/python scripts/live_eval.py evals/plans/m3-real-models.yaml --out /tmp/recap-live
 .venv/bin/python scripts/live_eval.py evals/plans/m3-groq-free.yaml --out /tmp/recap-groq \
     --confirm-free-plan
+.venv/bin/python scripts/live_eval.py evals/plans/m4-comparisons.yaml --out /tmp/recap-m4 \
+    --only unfamiliar-single          # one run of a plan
 ```
 
 Each plan run writes `summary.json`, `summary.md`, `batch.json` and `batch.md` to `--out`,
@@ -211,6 +213,8 @@ Built only from runs that really happened (`evals/reports/batches/`):
 | `2026-10-25-real-llm-qwen3-8b-prompts-v4.7` | `real_llm` | 2 | 1 success, 1 `wrong_mechanism` |
 | `2026-10-25-real-llm-openai-gpt-oss-120b-prompts-v4.6` | `real_llm` | 2 | 1 `insufficient_evidence`, 1 `quota_cap` |
 | `2026-10-25-real-llm-qwen3-8b-prompts-v4.7-owner-approved` | `real_llm` | 1 | 1 success (approval wait 162.5 s) |
+| `2026-10-26-real-llm-qwen3-8b-m4-cross-service` | `real_llm` | 1 | 1 `wrong_mechanism` (M4 code, parallel) |
+| `2026-10-26-real-llm-qwen3-8b-m4-unfamiliar-single` | `real_llm` | 1 | 1 success (M4 code, single agent) |
 
 - The scripted batch was rebuilt from the run data of the committed V1 report
   (`evals/reports/latest/`, git `0e217a1`): same runs, same ids, and its records agree with
@@ -223,8 +227,17 @@ Built only from runs that really happened (`evals/reports/batches/`):
   2026-10-25 with code `0e217a11d0a5+dirty`; each batch's methods say so.
 - In several parallel real-model runs, `model_seconds` is larger than the run's own time
   (for example 970.7 s of requests in a 567.2 s run): the two specialists' requests
-  overlapped in time. These runs predate `server_ms`, so whether the server worked on them at
-  once or one after another cannot be read from their traces.
+  overlapped in time. The M3 runs predate `server_ms`, so whether the server worked on them
+  at once or one after another cannot be read from their traces.
+- The two M4 batches come from runs of `evals/plans/m4-comparisons.yaml` (`--only
+  cross-service` and `--only unfamiliar-single`, each in its own data folder) on 2026-10-26.
+  They record the server's time and its compute, so the wait is measured: 361.8 s of 837.1 s
+  of server time in the parallel run (one local server answers one request at a time), 2.9 s
+  of 299.8 s with one agent. The cross-service run recorded code `673bb8ad878a`; the single
+  run `e03327a9db61+dirty`, where the only uncommitted changes were the dashboard's
+  TypeScript sources being written at the same time (no Python file). One run each: the
+  single run's success next to the owner-approved parallel run's says nothing about which
+  topology is better.
 
 ## 9. Safety and robustness, as evaluations
 

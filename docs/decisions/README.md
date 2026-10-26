@@ -33,6 +33,9 @@ these notes explain why RECAP looks the way it does.
 | [0023](0023-memory-partitions-by-origin-and-evidence-checked-reuse.md) | Memory keeps each kind of run apart, and reuse is decided by live evidence alone | accepted | DEMO for scripted runs, LIVE for real models, no writes from replays; consolidator-v2 trajectories; reuse needs the same mechanism, the same service and a fix that still fits; similarity never decides (measured) (M3). |
 | [0022](0022-hybrid-retrieval-with-a-local-embedder-and-agent-search.md) | Hybrid retrieval with a local embedding model, and agents that search the runbooks themselves | accepted | nomic-embed-text on loopback, recorded and replayed; stored chunk vectors; BM25 stays the default (measured); a budgeted `search_runbooks` tool answered by RECAP; free text a model wrote stays data (M3). |
 | [0021](0021-evidence-rules-settle-disagreements-never-votes.md) | Evidence rules settle the agents' disagreements, never votes | accepted | Claims merged by version and dependency; V1-grounding, V6 on the target, V7 without tie-breaks; typed disagreement records; an open conflict gets one follow-up question, then a person; leads point the next round at a failing dependency nothing explains yet; VP4 restore points (M3). |
+| [0027](0027-a-typed-read-only-api-over-the-run-records.md) | A typed, read-only API over the persisted run records, and a safe per-run provider choice | accepted | Versioned views (schema `recap-api-v1`) built only from what a run persisted, naming every gap; a client picks a run's provider only among the owner's allowed choices, never a paid one (M4). |
+| [0028](0028-content-addressed-recordings-and-replay-by-manifest-id.md) | Committed recordings are content-addressed and replayed by manifest id, never against a real system | accepted | `fixtures/recordings/MANIFEST.json` pins each recording's SHA-256; an altered or unknown file is refused; a replay needs a simulated target and a fresh approval (M4). |
+| [0029](0029-one-evaluation-record-per-run-and-modes-that-never-share-a-number.md) | One evaluation record per run, modes that never share a number, and a named reason for every run that did not recover | accepted | `EvalRecord` from the run's own record and trace; batches of one mode (scripted, replay, real model; Kubernetes is M5); success only with the oracle's verified recovery; generic failure categories (M4). |
 
 ## How the decisions fit together
 
@@ -68,6 +71,11 @@ these notes explain why RECAP looks the way it does.
 - **0026** came from the M3 review: a recording also keeps where timing stopped the run (a
   shared budget, a time share, the deadline, a request with no answer), so a replay of a
   parallel run stops in the same place. It corrects a claim of 0020 and one of 0024.
+- **0027 to 0029** make the runs reviewable (M4). 0027 gives every screen and reviewer one
+  typed view of a run, built from what it persisted; 0028 makes the committed real-model
+  recordings tamper-evident and replayable from the dashboard, only against the simulator;
+  0029 turns each run into one evaluation record, keeps scripted, replayed and real-model
+  numbers apart, and names why every failed run failed.
 
 The [threat model](../threat-model.md) builds on 0004, 0005, 0007, 0014 and 0015. It lists
 every threat RECAP defends against, where the defense lives in the code, and the test that

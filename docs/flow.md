@@ -2,8 +2,9 @@
 
 This page follows one incident from the moment it starts to the moment it is remembered.
 For every step it says **what comes in**, **which code handles it**, **what comes out**, and
-**where that output goes next**. It describes the code as of milestone M3, still in
-progress (M2 brought real model providers at $0). The decisions can come from the scripted
+**where that output goes next**. It describes the code as of milestone M4 (M2 brought
+real model providers at $0, M3 two independent specialists, M4 the typed API, the Mission
+Control dashboard and the evaluation records; section 8 covers what M4 added after a run). The decisions can come from the scripted
 policy (the default), a local model (Ollama), a free hosted model (Groq Free), or a replay
 of a recorded model run; section 3b follows one model decision in detail. The numbers in the example (section 6) come from a
 real run of the `bad-deployment` scenario with the scripted policy (an operator approved the
@@ -108,7 +109,13 @@ and streamed live to the dashboard.
 
 - **Input:** a scenario ID and a `RunConfig` (strategy, RAG/memory switches, approval mode,
   budget), from `scripts/demo.py`, `POST /incidents/run` (operator token required) or the
-  evaluation runner.
+  evaluation runner. Since M4 a client may also name the run's provider, but only from an
+  allowlist (`RunManager.check_run_request`): the server's default, the scripted baseline, a
+  provider the owner marked `api_selectable`, or `replay` with `replay_fixture`, the id of a
+  committed recording in `fixtures/recordings/MANIFEST.json` (the dashboard's **Replay**
+  button). For a replay the scenario, routing, memory and retrieval come from the manifest,
+  `recordings.fixture_path` checks the file's SHA-256 before any answer is given, and
+  `replay_pace` (0 to 1) only slows the answers down so people can watch.
 - **Code:** `Runtime.run_incident` ([recap/runtime.py](../recap/runtime.py)) builds the
   per-run `IncidentController` from long-lived dependencies (`ControllerDeps`).
 - **Output:** a run ID (`run-…`). The API returns it at once (202) and runs the incident as
@@ -452,16 +459,20 @@ flowchart LR
 
 | Output | Stored in | Served at | Shown on the dashboard |
 |---|---|---|---|
-| Run checkpoint (`RunRecord`, with `versions.code_version` and, for a model run, `provider_info.server`: the server's version and the weights digest) | `data/recap.db` → `runs` | `GET /runs`, `GET /runs/{id}` | Overview, Live Incident Run, every run page |
-| Trace events | `data/recap.db` → `events`; `data/traces/<run_id>.jsonl` | `GET /runs/{id}/events`, `GET /runs/{id}/stream` (SSE) | Live event feed, Agent Timeline |
-| Evidence (raw record + structured data) | `data/recap.db` → `evidence` | inside `GET /runs/{id}` | Evidence & RAG |
-| Approval requests, decisions, decision log | `data/recap.db` → `approval_requests`, `approvals`, `approval_events` (append-only) | `GET /approvals/pending`, `GET /approvals/{id}/events`, `GET /approvals/events` | Safety & Approvals, Live Incident Run |
+| Run checkpoint (`RunRecord`, with `versions.code_version` and, for a model run, `provider_info.server`: the server's version and the weights digest) | `data/recap.db` → `runs` | `GET /runs` (filters, paging), `GET /runs/{id}` (with a typed summary) | Overview, Incident Lab, every run page |
+| Trace events | `data/recap.db` → `events`; `data/traces/<run_id>.jsonl` | `GET /runs/{id}/events`, `GET /runs/{id}/stream` (SSE, resumable), `GET /runs/{id}/timeline` (typed, cursor-paged) | Incident Lab's live feed, Trace Explorer |
+| Evidence (raw record + structured data) | `data/recap.db` → `evidence` | `GET /runs/{id}/evidence` (typed: trust classes, verdicts, disagreements, leads) | Evidence & Decisions |
+| Runbook and memory searches of one run | trace events (`retrieval.docs`, `knowledge.search`, `memory.search`) | `GET /runs/{id}/retrieval` | Knowledge, Experience Memory |
+| Model requests and the servers' token counts | `llm.call` trace events | `GET /runs/{id}/usage` | Trace Explorer |
+| Approval requests, decisions, decision log | `data/recap.db` → `approval_requests`, `approvals`, `approval_events` (append-only) | `GET /approvals/pending`, `GET /approvals/{id}/events`, `GET /approvals/events` | Safety & Approvals, Incident Lab |
 | The simulated world, its action log and used capability nonces | `data/sandbox/<run_id>.db` | not served (oracle and MCP server only) | indirectly, through tool results |
 | Experience episodes | `data/memory.db` → `episodes` | `GET /memory` | Experience Memory |
 | Model exchanges (prompts and answers, no keys) | `data/recordings/<id>.jsonl`; committed replay fixtures in `fixtures/recordings/` | not served; path in the run's `versions.recording` | the `llm.call` events show each request (excerpts) |
 | LLM usage ledger and provider stops | per user, outside every data folder: `~/.local/state/recap/llm-usage.db` (or `RECAP_USAGE_LEDGER`) → `llm_requests`, `llm_stops`, keyed by host | `GET /providers`, `scripts/providers.py usage` | Architecture → Decision providers |
 | Operator token | `data/operator-token` (mode 0600) or `RECAP_OPERATOR_TOKEN` | never | typed once into the sign-in box (kept in the tab's sessionStorage) |
-| Evaluation reports | `evals/reports/<id>/` and `evals/reports/latest/` | `GET /evals/results` | Evaluations |
+| Evaluation reports (the scripted protocol) | `evals/reports/<id>/` and `evals/reports/latest/` | `GET /evals/results` | Evaluations |
+| Evaluation batches (one `EvalRecord` per run, one mode per batch) | published: `evals/reports/batches/<id>/`; local: `<data>/evals/batches/` | `GET /evals`, `GET /evals/{batch_id}` | Evaluations |
+| Committed recordings and their SHA-256 | `fixtures/recordings/` and `MANIFEST.json` | `GET /replays` (with an integrity check) | Incident Lab's replay panel |
 | A shareable copy of one run (trace, run record, model recording, README) | `evals/live/<name>/`, written by `scripts/export_run_trace.py RUN_ID evals/live/<name>`; it refuses to write secrets, key shapes, the login name or local paths | not served (committed to git) | not shown; the README is the readable account |
 
 ---
@@ -512,4 +523,48 @@ Reproduce it:
 | Target environment | [recap/core/interfaces.py](../recap/core/interfaces.py), [recap/environments/simulated/](../recap/environments/simulated/) |
 | Recovery oracle | [recap/verification/oracle.py](../recap/verification/oracle.py) |
 | Memory | [recap/memory/](../recap/memory/) |
-| API and dashboard | [apps/api/](../apps/api/), [apps/dashboard/src/](../apps/dashboard/src/) |
+| API and dashboard | [apps/api/](../apps/api/) (routes in `main.py`, typed views in `views.py` and `dto.py`), [apps/dashboard/src/](../apps/dashboard/src/) (types generated into `dto.ts` by [scripts/gen_dashboard_types.py](../scripts/gen_dashboard_types.py)) |
+| Recordings manifest and replay by id | [recap/providers/recordings.py](../recap/providers/recordings.py), [fixtures/recordings/MANIFEST.json](../fixtures/recordings/MANIFEST.json), [scripts/recordings_manifest.py](../scripts/recordings_manifest.py) |
+| Evaluation records and failure categories | [evals/records.py](../evals/records.py), [evals/categorize.py](../evals/categorize.py), [scripts/eval_replay.py](../scripts/eval_replay.py), [scripts/live_eval.py](../scripts/live_eval.py) |
+
+---
+
+## 8. After the run: reading it back, replaying it, scoring it (M4)
+
+Nothing below changes a run; it reads what the stages above stored.
+
+**A typed view of one run.**
+- **Input:** `GET /runs/{id}/timeline?after_seq=…&limit=…` (or `/evidence`, `/retrieval`,
+  `/usage`).
+- **Code:** `RunManager` loads the checkpoint, the stored trace and the evidence
+  ([apps/api/service.py](../apps/api/service.py)); a builder in
+  [apps/api/views.py](../apps/api/views.py) turns them into the response model of
+  [apps/api/dto.py](../apps/api/dto.py) (schema `recap-api-v1`). A fact the record does not
+  hold goes into `not_recorded`; it is never computed in its place.
+- **Output:** JSON with lanes per agent, rounds with their routing decision and measured
+  overlap, model requests with the server's own time and how long a request waited inside
+  it, and evidence links; a page of events with `next_after_seq` when there are more.
+- **Next:** the dashboard renders it; its TypeScript types are generated from the same
+  models (`src/dto.ts`), so a renamed field breaks the build, not the screen.
+
+**A replay of the golden run.**
+- **Input:** the operator clicks **Replay** in the Incident Lab:
+  `POST /incidents/run {provider: "replay", replay_fixture: "qwen3-8b-unfamiliar-parallel",
+  replay_pace: 0.05}`.
+- **Code:** stage 0's allowlist; `recordings.fixture_path` (SHA-256 check); the replay is
+  refused unless the environment is the simulator; `ReplayTransport` answers each request
+  from the recording and waits `replay_pace` of the original time (at most 15 s); stages 1 to
+  10 run unchanged (real MCP server, gateway, verifier, simulator, oracle).
+- **Output:** a new run labelled REPLAY whose fix needs a fresh approval in the dashboard's
+  modal; RESOLVED only if the oracle verifies the recovery again.
+
+**An evaluation record.**
+- **Input:** a finished run's record and trace, and the scenario's predeclared answer (never
+  shown to a model).
+- **Code:** `record_from_run` and `categorize` in
+  [evals/categorize.py](../evals/categorize.py).
+- **Output:** one `EvalRecord` (stages, model time, tool calls per agent, topology per round,
+  supported claims, the fix and its gateway outcome, approvals, the oracle's verdict, and a
+  failure category with a detail line), in a batch of exactly one mode (scripted regression,
+  offline replay or real model), under `evals/reports/batches/` when published.
+- **Next:** `GET /evals` and the Evaluations page show it as counts ("k of N"), never a rate.

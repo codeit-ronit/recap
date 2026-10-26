@@ -1,6 +1,8 @@
 # M4 comparison plan for a LOCAL model (Ollama, qwen3:8b), on the SIMULATED environment,
-# approved by the simulation auto-approver. NOT RUN YET: no batch in evals/reports/batches/
-# comes from this plan. Each pair below changes ONE thing, so a reader can compare two runs
+# approved by the simulation auto-approver. Run so far (2026-10-26, each alone with --only, in
+# its own data folder): cross-service (FAILED, wrong_mechanism) and unfamiliar-single
+# (RESOLVED), published as evals/reports/batches/2026-10-26-real-llm-qwen3-8b-m4-*; the other
+# runs are NOT run yet. Each pair below changes ONE thing, so a reader can compare two runs
 # that differ only there. Each comparison is ONE run against ONE run: a difference may be
 # chance (a model's run is not repeatable), and no rate can be read from it.
 #   1-2  single vs multi-agent: the held-out unfamiliar incident with one investigator, then
