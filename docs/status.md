@@ -864,7 +864,7 @@ cluster: the live Kubernetes / Kind / SREGym integration is M5, and nothing in M
 | Batch | Mode | N | Outcomes |
 |---|---|---|---|
 | `20261025-114334-c205fe` | scripted regression (scripted policy, not a model) | 32 | 24 success, 7 oracle_not_recovered, 1 safety_blocked |
-| `20261026-044951-offline-replay-916860` | offline replay of both committed recordings | 2 | 2 success |
+| `20261101-201055-offline-replay-91203b` | offline replay of both committed recordings | 2 | 2 success |
 | `2026-10-25-real-llm-qwen3-8b-prompts-v4.6` | real model, local `qwen3:8b` (M3) | 7 | 3 success, 2 wrong_service, 1 wrong_mechanism, 1 missed_crucial_tool |
 | `2026-10-25-real-llm-qwen3-8b-prompts-v4.7` | real model, local `qwen3:8b` (M3) | 2 | 1 success, 1 wrong_mechanism |
 | `2026-10-25-real-llm-qwen3-8b-prompts-v4.7-owner-approved` | real model, owner-approved (M3) | 1 | 1 success |
