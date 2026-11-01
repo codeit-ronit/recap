@@ -1,12 +1,212 @@
 /*
- * Agent Timeline (M3): what each agent found, round by round, and runbook-search bars.
+ * Trace Explorer (#/timeline): the run header, the whole-run chart's extra marks, each round as a
+ * band with the agents side by side, their steps, the fix and recovery flow, and the event log.
  * Imported by src/pages/AgentTimeline.tsx; tokens and base classes come from src/styles.css.
  *
  * styles.css loads after this file (main.tsx imports it after App), so a rule that changes an
- * existing class uses a more specific selector; everything new is prefixed "tl-".
+ * existing class uses a more specific selector; everything new is prefixed "tl-" (or is an SVG
+ * class of the chart that styles.css does not define).
  */
 
-/* --- rounds ----------------------------------------------------------------------------- */
+/* --- page ------------------------------------------------------------------------------------ */
+
+.tl-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+.tl-anchor {
+  min-width: 0;
+}
+.tl-anchor:focus:not(:focus-visible) {
+  outline: none;
+}
+.tl-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.tl-nav-btn {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-2);
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.tl-nav-btn:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+.tl-help {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+.tl-help > .icon {
+  margin-top: 3px;
+  color: var(--muted);
+}
+
+/* Lane colours: telemetry teal, infrastructure blue, the single investigator teal, the controller
+   grey. The name is always printed next to the colour. */
+.lane-telemetry,
+.lane-investigator {
+  --lane: var(--accent);
+}
+.lane-infrastructure {
+  --lane: var(--info);
+}
+.lane-controller {
+  --lane: var(--muted);
+}
+.lane-other {
+  --lane: var(--text-2);
+}
+.tl-lane-key {
+  display: inline-block;
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: var(--lane, var(--muted));
+}
+.tl-lane-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* --- this run --------------------------------------------------------------------------------- */
+
+.tl-run-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+.tl-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-3) var(--space-5);
+  margin: 0;
+}
+.tl-facts dt,
+.tl-lane-facts dt {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.tl-facts dd {
+  margin: 2px 0 0;
+  font-size: var(--fs-md);
+  overflow-wrap: anywhere;
+}
+.tl-provenance {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: 8px;
+  border: 1px solid var(--warn-line);
+  background: var(--warn-soft);
+  color: var(--text-2);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.tl-provenance > .icon {
+  margin-top: 3px;
+  color: var(--warn-text);
+}
+.tl-server-notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.tl-note-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+/* --- the whole-run chart: rounds, model answers, lane keys (SVG) ------------------------------- */
+
+.round-band {
+  fill: rgba(230, 237, 243, 0.022);
+  stroke: var(--border-2);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+.round-band.alt {
+  fill: rgba(230, 237, 243, 0.045);
+}
+.round-band-label {
+  fill: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 600;
+  pointer-events: none;
+}
+.req-mark {
+  fill: var(--text);
+  stroke: var(--panel);
+  stroke-width: 1.5;
+}
+.req-mark.replayed {
+  fill: var(--panel);
+  stroke: var(--warn-text);
+}
+.req-mark.failed {
+  fill: var(--bad);
+}
+.gantt-hit:hover .req-mark,
+.gantt-hit:focus-visible .req-mark {
+  stroke: var(--accent-text);
+  stroke-width: 2;
+}
+.lane-key {
+  fill: var(--lane, var(--muted));
+}
+.lg.lg-req {
+  width: 9px;
+  height: 9px;
+  border-radius: 1px;
+  background: var(--text);
+  transform: rotate(45deg);
+}
+.lg.lg-req.replayed {
+  border: 1.5px solid var(--warn-text);
+  background: transparent;
+}
+.lg.lg-round {
+  border: 1px dashed var(--border-2);
+  background: rgba(230, 237, 243, 0.05);
+}
+/* Runbook searches are RECAP's own reads, not MCP calls. */
+.bar.bar-local {
+  fill: var(--info);
+}
+.lg.lg-bar-local {
+  background: var(--info);
+}
+
+/* --- the story: segments and round bands ------------------------------------------------------- */
 
 .tl-intro {
   display: flex;
@@ -17,15 +217,99 @@
   color: var(--text-2);
   font-size: 13px;
 }
-.tl-round {
+.tl-band {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--space-3);
   min-width: 0;
+  padding: var(--space-4);
+  border-radius: 12px;
+  border: 1px solid var(--border-2);
+  background: rgba(230, 237, 243, 0.012);
 }
-/* A round without a routing reason: keep the head apart from the body. */
-.round-head + .tl-round {
-  margin-top: 12px;
+.tl-band-after {
+  border-left: 3px solid var(--accent-line);
+}
+.tl-band-setup {
+  padding: var(--space-3) var(--space-4);
+}
+.tl-band-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+.tl-band-head > .icon {
+  color: var(--accent-text);
+}
+.tl-band-title {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 650;
+}
+.tl-band-verdict {
+  margin-left: auto;
+}
+.tl-band-reason {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-md);
+}
+.tl-band-label {
+  margin-right: 6px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.tl-band-summary,
+.tl-more > summary,
+.tl-steps > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px var(--space-2);
+  cursor: pointer;
+  list-style: none;
+}
+.tl-band-summary::-webkit-details-marker,
+.tl-more > summary::-webkit-details-marker,
+.tl-steps > summary::-webkit-details-marker {
+  display: none;
+}
+.tl-band-summary > .icon,
+.tl-more > summary > .icon,
+.tl-steps > summary > .icon {
+  color: var(--muted);
+  transition: transform 0.12s ease;
+}
+details[open] > .tl-band-summary > .icon,
+.tl-more[open] > summary > .icon,
+.tl-steps[open] > summary > .icon {
+  transform: rotate(90deg);
+}
+.tl-band-setup details[open] > .tl-band-summary {
+  margin-bottom: var(--space-3);
+}
+.tl-more {
+  padding-top: var(--space-3);
+  border-top: 1px dashed var(--border-2);
+}
+.tl-more > summary {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+.tl-more[open] > summary {
+  margin-bottom: var(--space-3);
+}
+.round-grid.tl-routing {
+  padding-top: 0;
+}
+.tl-concurrency > .icon {
+  color: var(--warn-text);
 }
 .tl-questions {
   display: flex;
@@ -34,12 +318,72 @@
   margin: 4px 0 6px;
   padding-left: 18px;
 }
-.round-grid.tl-routing {
-  padding-top: 14px;
-  border-top: 1px dashed var(--border-2);
+
+/* One round's agent turns on the round's own axis (RoundLanes). */
+.tl-lanes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--inset);
+}
+.tl-lanes-row {
+  display: grid;
+  grid-template-columns: 128px minmax(0, 1fr) 76px;
+  align-items: center;
+  gap: 10px;
+}
+.tl-lanes-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.tl-lanes-track {
+  position: relative;
+  height: 14px;
+  border-radius: 4px;
+  background: var(--panel-3);
+}
+.tl-lanes-bar {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  border-radius: 3px;
+  background: var(--lane, var(--accent));
+}
+.tl-lanes-bar.open {
+  border: 1px dashed var(--lane, var(--accent));
+  background: transparent;
+}
+.tl-lanes-overlap {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  border-radius: 4px;
+  border: 1px dashed var(--text-2);
+  background: rgba(230, 237, 243, 0.07);
+}
+.tl-lanes-time {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.tl-lanes-foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px var(--space-3);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
 }
 
-/* --- one panel per agent ------------------------------------------------------------------- */
+/* --- one panel per agent ------------------------------------------------------------------------ */
 
 .tl-agents {
   display: grid;
@@ -58,6 +402,7 @@
   padding: 14px;
   border-radius: 10px;
   border: 1px solid var(--border);
+  border-top: 3px solid var(--lane, var(--border));
   background: var(--panel-2);
 }
 .tl-agent-head {
@@ -77,6 +422,25 @@
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
+.tl-lane-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 6px 14px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--inset);
+}
+.tl-lane-facts dd {
+  margin: 0;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.tl-wait {
+  color: var(--warn-text);
+}
 .tl-outcome-note {
   margin-top: -6px;
   color: var(--muted);
@@ -92,7 +456,168 @@
   margin: 0;
 }
 
-/* --- claims: untrusted text, then RECAP's verdict ---------------------------------------- */
+/* --- steps: context pack -> model request -> decision -> tool calls ---------------------------- */
+
+.tl-steps > summary {
+  padding: 2px 0;
+}
+.tl-steps-title {
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+}
+.tl-step-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.tl-step {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+.tl-step-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+.tl-step-no {
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.tl-step-time {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.tl-sline {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--fs-sm);
+}
+.tl-sline-icon {
+  padding-top: 3px;
+  color: var(--muted);
+}
+.tl-sline-bad .tl-sline-icon {
+  color: var(--bad-text);
+}
+.tl-sline-warn .tl-sline-icon {
+  color: var(--warn-text);
+}
+.tl-sline-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.tl-sline-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px var(--space-2);
+  min-width: 0;
+}
+.tl-sline-what {
+  color: var(--text);
+  font-weight: 600;
+}
+.tl-sline-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--space-3);
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+.tl-call {
+  min-width: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.tl-num {
+  font-variant-numeric: tabular-nums;
+}
+.tl-result {
+  color: var(--text-2);
+}
+.tl-result > .icon {
+  color: var(--ok-text);
+  vertical-align: -1px;
+}
+.tl-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-text);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.tl-items {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  padding-top: 2px;
+}
+.tl-line {
+  display: inline;
+  overflow-wrap: anywhere;
+}
+.tl-line .chip {
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+/* A model request's time: model compute, waiting inside the server, outside it. */
+.tl-reqbar {
+  display: inline-flex;
+  flex: none;
+  width: 110px;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--panel-3);
+}
+.tl-reqbar-part {
+  height: 100%;
+}
+.tl-reqbar .part-compute {
+  background: var(--accent);
+}
+.tl-reqbar .part-wait {
+  background: var(--warn);
+}
+.tl-reqbar .part-server {
+  background: var(--info);
+}
+.tl-reqbar .part-outside {
+  background: var(--muted);
+}
+.tl-reqbar .part-total {
+  background: var(--text-2);
+  opacity: 0.6;
+}
+
+/* --- claims: untrusted text, then RECAP's verdict ----------------------------------------------- */
 
 .tl-claims {
   display: flex;
@@ -126,7 +651,8 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.tl-note {
+.tl-note,
+.tl-quote-block {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -219,7 +745,7 @@
   margin-top: 2px;
 }
 
-/* --- evidence IDs, with the agent that recorded each ------------------------------------- */
+/* --- evidence IDs, with the agent that recorded each -------------------------------------------- */
 
 .tl-ev-row {
   display: flex;
@@ -278,7 +804,7 @@
   max-width: 100%;
 }
 
-/* --- runbook searches (answered by RECAP's own index) ------------------------------------ */
+/* --- runbook searches (answered by RECAP's own index) ------------------------------------------- */
 
 .tl-search {
   display: flex;
@@ -317,7 +843,7 @@
   font-size: 11.5px;
 }
 
-/* --- the verifier's report after a round (RECAP's own text) ------------------------------- */
+/* --- the verifier's report after a round (RECAP's own text) -------------------------------------- */
 
 .tl-after {
   display: flex;
@@ -339,6 +865,10 @@
 .tl-after-head .mini-title {
   margin: 0;
 }
+.tl-merge {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
 .tl-disagreements {
   display: flex;
   flex-direction: column;
@@ -354,17 +884,218 @@
   gap: 4px 8px;
 }
 
-/* --- Gantt: runbook searches are RECAP's own reads, not MCP calls -------------------------- */
+/* --- before the first round, and the fix after a round: an ordered flow -------------------------- */
 
-.bar.bar-local {
-  fill: var(--info);
+.tl-flow {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
-.lg.lg-bar-local {
-  background: var(--info);
+.tl-flow-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 10px;
+  padding-bottom: 12px;
+}
+.tl-flow-item::before {
+  content: "";
+  position: absolute;
+  top: 28px;
+  bottom: 2px;
+  left: 12px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--border);
+}
+.tl-flow-item:last-child {
+  padding-bottom: 0;
+}
+.tl-flow-item:last-child::before {
+  display: none;
+}
+.tl-flow-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid var(--tone-line);
+  background: var(--tone-soft);
+  color: var(--tone-text);
+}
+.tl-flow-body {
+  min-width: 0;
+}
+.tl-flow-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  padding-top: 3px;
+  overflow-wrap: anywhere;
+}
+.tl-flow-time {
+  min-width: 64px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.tl-flow-more {
+  margin-top: 4px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.tl-flow-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.tl-flow-more .tl-sline {
+  margin-top: 2px;
+}
+.tl-budget {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
 }
 
-@media (max-width: 1280px) {
+/* --- the event log ------------------------------------------------------------------------------- */
+
+.tl-log {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  list-style: none;
+}
+.tl-log-row {
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid var(--lane, var(--border));
+}
+.tl-log-row:last-child {
+  border-bottom: 0;
+}
+.tl-log-line {
+  display: grid;
+  grid-template-columns: 52px 74px 124px 176px minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--space-3);
+  width: 100%;
+  padding: 7px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.tl-log-line:hover,
+.tl-log-line[aria-expanded="true"] {
+  background: var(--panel-2);
+}
+.tl-log-seq {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+.tl-log-time {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.tl-log-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--tone-text, var(--text-2));
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+.tl-log-round {
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--panel-3);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+}
+.tl-log-text {
+  min-width: 0;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.tl-log-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border-top: 1px solid var(--border);
+  background: var(--inset);
+}
+.tl-raw {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.tl-raw-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-xs);
+}
+.tl-log-more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+
+/* --- widths ------------------------------------------------------------------------------------------- */
+
+@media (max-width: 1100px) {
   .tl-agents {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  .tl-log-line {
+    grid-template-columns: auto auto minmax(0, 1fr);
+    gap: 4px var(--space-2);
+  }
+  .tl-log-kind,
+  .tl-log-text {
+    grid-column: 1 / -1;
+  }
+  .tl-band-verdict {
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 560px) {
+  .tl-band {
+    padding: var(--space-3);
+  }
+  .tl-agent {
+    padding: 10px;
+  }
+  .tl-lanes-row {
+    grid-template-columns: 96px minmax(0, 1fr) 58px;
+    gap: 6px;
+  }
+  .tl-flow-time {
+    min-width: 0;
+  }
+  .tl-reqbar {
+    width: 80px;
   }
 }

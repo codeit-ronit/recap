@@ -1,0 +1,848 @@
+/*
+ * Evaluations (M4): mode tabs, batch picker, outcomes, the configuration matrix, failure
+ * categories, the records table, the record drawer and the launch / command cards.
+ * Imported by src/pages/Evals.tsx; tokens and base classes come from src/styles.css.
+ *
+ * styles.css loads after this file (main.tsx imports it after App), so a rule that changes an
+ * existing class uses a more specific selector; everything new is prefixed "evl-".
+ */
+
+.evl-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+/* Wide tables scroll inside their box. Their visually hidden labels (.sr-only, absolutely
+   positioned) must stay inside that box too, or a phone's page grows sideways. */
+.evl-page .table-wrap {
+  position: relative;
+}
+
+.honesty-banner.evl-honesty {
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.evl-help {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.evl-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.evl-plain {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+/* --- tabs ------------------------------------------------------------------------------------ */
+
+.evl-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-2);
+  padding: var(--space-1);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+.evl-tab {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: 9px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.evl-tab:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+.evl-tab > .icon {
+  color: var(--muted);
+}
+.evl-tab.selected {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.evl-tab.selected > .icon {
+  color: var(--accent-text);
+}
+.evl-tab.planned:not(.selected) .evl-tab-label {
+  color: var(--muted);
+}
+.evl-tab-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.evl-tab-label {
+  font-size: var(--fs-base);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.evl-tab-note {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+.evl-tab.selected .evl-tab-note {
+  color: var(--accent-text);
+}
+
+.evl-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+.evl-anchor {
+  scroll-margin-top: calc(var(--sticky-top) + 12px);
+}
+
+/* --- mode card ---------------------------------------------------------------------------------- */
+
+.evl-guide {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+}
+.evl-guide > div {
+  min-width: 0;
+  padding: var(--space-3);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.evl-guide dt {
+  margin-bottom: var(--space-1);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.evl-guide dd {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-md);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.evl-guide-made {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.evl-launch {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1);
+}
+.evl-launch-hint {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+/* --- batch picker -------------------------------------------------------------------------------- */
+
+.evl-batches .mini-title {
+  margin-bottom: var(--space-2);
+}
+.evl-batch-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.evl-batch-list > li {
+  display: flex;
+  min-width: 0;
+}
+.evl-batch {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.evl-batch:hover {
+  border-color: var(--border-2);
+  background: var(--panel-3);
+}
+.evl-batch.selected {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.evl-batch-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.evl-batch-title {
+  min-width: 0;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.evl-batch-shown {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--accent-line);
+  color: var(--accent-text);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+.evl-batch-meta {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+.evl-batch-count {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+.evl-batch-count strong {
+  color: var(--text);
+  font-size: var(--fs-lg);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- batch header ---------------------------------------------------------------------------------- */
+
+.evl-batch-id {
+  overflow-wrap: anywhere;
+}
+.evl-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* --- outcomes --------------------------------------------------------------------------------------- */
+
+.stat-grid.evl-tiles {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.evl-tiles .stat-value {
+  font-variant-numeric: tabular-nums;
+}
+.evl-states .stat-label {
+  margin-bottom: var(--space-2);
+}
+.evl-state-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.evl-state-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.evl-strip-block,
+.evl-matrix-block,
+.evl-scenarios {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.evl-strip-block .mini-title,
+.evl-matrix-block .mini-title,
+.evl-scenarios .mini-title {
+  margin: 0;
+}
+.evl-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.evl-mark,
+.evl-mark-static {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: 1px solid var(--tone-line);
+  background: var(--tone-soft);
+  color: var(--tone-text);
+}
+.evl-mark {
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+.evl-mark:hover {
+  filter: brightness(1.25);
+}
+.evl-mark-static {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+}
+.evl-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+.evl-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.table.evl-matrix th {
+  vertical-align: bottom;
+}
+.table.evl-matrix th.evl-matrix-scenario {
+  min-width: 112px;
+  max-width: 160px;
+  white-space: normal;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.table.evl-matrix th.evl-matrix-config {
+  color: var(--text);
+  font-weight: 500;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.table.evl-matrix td {
+  vertical-align: middle;
+}
+.table.evl-matrix td.evl-matrix-cell {
+  text-align: center;
+}
+.evl-matrix-cell .evl-mark + .evl-mark {
+  margin-left: 4px;
+}
+
+.evl-outcome-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* --- failures ------------------------------------------------------------------------------------- */
+
+.evl-allgood {
+  display: flex;
+}
+.evl-failures {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.evl-failure {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.evl-failure-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+.evl-failure-head .mono {
+  color: var(--muted);
+}
+.evl-failure-count {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.evl-failure-meaning {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-md);
+}
+.evl-failure-runs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: var(--space-2) 0 0;
+  border-top: 1px dashed var(--border-2);
+  list-style: none;
+}
+.evl-failure-runs li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px var(--space-3);
+  font-size: var(--fs-md);
+}
+.evl-failure-detail {
+  flex: 1 1 280px;
+  min-width: 0;
+  color: var(--text-2);
+}
+
+.evl-linkbtn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.evl-linkbtn.mono {
+  font-family: var(--mono);
+  font-size: 0.93em;
+}
+.evl-linkbtn:hover {
+  text-decoration: underline;
+}
+
+/* --- records table ---------------------------------------------------------------------------------- */
+
+.evl-records-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+.table.evl-records {
+  min-width: 940px;
+}
+.evl-result {
+  align-items: flex-start;
+}
+.evl-result .status-token,
+.evl-records .evl-linkbtn {
+  white-space: nowrap;
+}
+.table.evl-records td {
+  font-size: var(--fs-sm);
+}
+.evl-th-note {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.evl-rounds {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 170px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.evl-rounds li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 6px;
+  line-height: 1.35;
+}
+.evl-round-no {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--panel-3);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.evl-round-mode {
+  font-weight: 600;
+}
+.evl-pager {
+  border-top: 1px solid var(--border);
+}
+
+/* --- methods and limitations ---------------------------------------------------------------------------- */
+
+.evl-methods .caveats {
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+
+/* --- record drawer ------------------------------------------------------------------------------------- */
+
+.evl-drawer-title {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  overflow-wrap: anywhere;
+}
+.evl-drawer-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+/* Receives the dialog's initial focus (a static element, so no focus ring). */
+.evl-drawer-badges:focus {
+  outline: none;
+}
+.evl-trace {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: 10px;
+  border: 1px solid var(--border-2);
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-size: var(--fs-md);
+}
+.evl-trace > .icon {
+  color: var(--muted);
+}
+.evl-trace.ok {
+  border-color: var(--ok-line);
+  background: var(--ok-soft);
+}
+.evl-trace.ok > .icon {
+  color: var(--ok-text);
+}
+.evl-trace-text {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+.evl-trace-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.evl-trace-links a:hover {
+  text-decoration: none;
+}
+
+.evl-drawer-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+.evl-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.evl-section.evl-wide {
+  grid-column: 1 / -1;
+}
+.evl-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.evl-section .kv-row {
+  padding: 6px 0;
+}
+.evl-section .kv dd {
+  font-size: var(--fs-md);
+}
+.evl-section.evl-hidden-answer {
+  border-style: dashed;
+  border-color: var(--warn-line);
+}
+.evl-section.evl-hidden-answer .evl-section-title {
+  color: var(--warn-text);
+}
+.evl-section.evl-hidden-answer .kv-row {
+  grid-template-columns: 168px minmax(0, 1fr);
+}
+.evl-hits {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.evl-hits > li {
+  padding: 2px var(--space-3);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--inset);
+}
+.table.evl-stages {
+  margin-top: var(--space-2);
+}
+.table.evl-stages caption {
+  padding-bottom: var(--space-1);
+  text-align: left;
+}
+.table.evl-stages th.num {
+  text-align: right;
+}
+.evl-raw summary,
+.evl-report-more summary {
+  color: var(--text-2);
+  font-size: var(--fs-md);
+  font-weight: 500;
+  cursor: pointer;
+}
+.evl-raw .json {
+  margin-top: var(--space-2);
+}
+
+/* --- launch, status and commands ------------------------------------------------------------------------- */
+
+.evl-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.evl-confirm li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  color: var(--text-2);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+.evl-confirm li > .icon {
+  margin-top: 2px;
+  color: var(--accent-text);
+}
+.evl-confirm strong {
+  color: var(--text);
+}
+
+.evl-guards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: 10px;
+  border: 1px solid var(--warn-line);
+  background: rgba(210, 153, 34, 0.06);
+  list-style: none;
+}
+.evl-guards li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  color: var(--text-2);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+.evl-guards li > .icon {
+  margin-top: 3px;
+  color: var(--warn-text);
+}
+.evl-guards strong {
+  color: var(--text);
+}
+
+.evl-commands {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.evl-command {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.evl-command-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.evl-command-title {
+  font-weight: 600;
+}
+.evl-command-text {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--inset);
+  color: var(--accent-text);
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.evl-command-text code {
+  font-size: inherit;
+}
+.btn.evl-copy {
+  flex: none;
+}
+
+.evl-report-more {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+.evl-report-more details > :not(summary) {
+  margin-top: var(--space-2);
+}
+.evl-train {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.evl-train li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+
+/* --- Kubernetes (planned) ------------------------------------------------------------------------------- */
+
+.evl-m5 {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding-left: 20px;
+  color: var(--text-2);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+.evl-m5 strong {
+  color: var(--text);
+}
+.evl-adapter-detail {
+  color: var(--text-2);
+}
+
+/* --- narrower screens ----------------------------------------------------------------------------------- */
+
+@media (max-width: 1180px) {
+  .evl-guide {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 920px) {
+  .evl-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .stat-grid.evl-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .evl-drawer-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 560px) {
+  .evl-tab {
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+  }
+  .evl-tab-label {
+    font-size: var(--fs-md);
+  }
+  .evl-guide {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .stat-grid.evl-tiles {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .evl-launch {
+    align-items: flex-start;
+  }
+  .evl-command-head {
+    flex-wrap: wrap;
+  }
+  .evl-section {
+    padding: var(--space-3);
+  }
+  .evl-section.evl-hidden-answer .kv-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+}

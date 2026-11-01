@@ -36,6 +36,7 @@ these notes explain why RECAP looks the way it does.
 | [0027](0027-a-typed-read-only-api-over-the-run-records.md) | A typed, read-only API over the persisted run records, and a safe per-run provider choice | accepted | Versioned views (schema `recap-api-v1`) built only from what a run persisted, naming every gap; a client picks a run's provider only among the owner's allowed choices, never a paid one (M4). |
 | [0028](0028-content-addressed-recordings-and-replay-by-manifest-id.md) | Committed recordings are content-addressed and replayed by manifest id, never against a real system | accepted | `fixtures/recordings/MANIFEST.json` pins each recording's SHA-256; an altered or unknown file is refused; a replay needs a simulated target and a fresh approval (M4). |
 | [0029](0029-one-evaluation-record-per-run-and-modes-that-never-share-a-number.md) | One evaluation record per run, modes that never share a number, and a named reason for every run that did not recover | accepted | `EvalRecord` from the run's own record and trace; batches of one mode (scripted, replay, real model; Kubernetes is M5); success only with the oracle's verified recovery; generic failure categories (M4). |
+| [0030](0030-mission-control-reads-only-typed-server-facts.md) | Mission Control shows only typed server facts, one screen per question, and makes the replay watchable without changing it | accepted | Types generated from the API's models; provenance on every run (scripted, replay of a recorded real-LLM run, live model; simulated target); untrusted text escaped and labelled; an approval dialog that cannot be dismissed; `replay_pace` (M4). |
 
 ## How the decisions fit together
 
@@ -76,6 +77,8 @@ these notes explain why RECAP looks the way it does.
   recordings tamper-evident and replayable from the dashboard, only against the simulator;
   0029 turns each run into one evaluation record, keeps scripted, replayed and real-model
   numbers apart, and names why every failed run failed.
+- **0030** is the dashboard on top of them: it shows only what the typed API says, where each
+  fact came from, model and tool text as harmless data, and a replay slow enough to watch.
 
 The [threat model](../threat-model.md) builds on 0004, 0005, 0007, 0014 and 0015. It lists
 every threat RECAP defends against, where the defense lives in the code, and the test that

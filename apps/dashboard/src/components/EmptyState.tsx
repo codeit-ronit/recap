@@ -46,15 +46,19 @@ export function NoRuns() {
 }
 
 /** The backend start command, shown whenever the API cannot be reached. */
+/** Where this page expects the API: the dev server's proxy, the server that served the page, or VITE_API_URL. */
+export function apiWhere(base: string = API_BASE, origin: string | null = typeof window === "undefined" ? null : window.location.origin): string {
+  if (base === "/api") return "It listens on http://127.0.0.1:8000 (the dev server proxies /api to it).";
+  if (base === "") return origin ? `It served this page, so it is expected back at ${origin}.` : "It serves this page.";
+  return `This page expects it at ${base} (VITE_API_URL).`;
+}
+
 export function BackendHint() {
   return (
     <div className="backend-hint">
       <span>Start the API from the repository root:</span>
       <code className="mono cmd">{BACKEND_COMMAND}</code>
-      <span className="muted">
-        It listens on http://127.0.0.1:8000
-        {API_BASE === "/api" ? " (the dev server proxies /api to it)." : "."}
-      </span>
+      <span className="muted">{apiWhere()}</span>
     </div>
   );
 }

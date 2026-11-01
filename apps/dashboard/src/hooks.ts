@@ -47,7 +47,7 @@ export const PAGE_LABELS: Readonly<Record<PageId, string>> = {
  * run.) A page that becomes run-scoped (e.g. Knowledge with agent-initiated searches) is
  * added here.
  */
-export const RUN_SCOPED_PAGES: ReadonlySet<PageId> = new Set<PageId>(["timeline", "evidence", "memory", "safety"]);
+export const RUN_SCOPED_PAGES: ReadonlySet<PageId> = new Set<PageId>(["timeline", "evidence", "knowledge", "memory", "safety"]);
 
 export interface Route {
   page: PageId;
@@ -416,6 +416,16 @@ export function useRunSelection(route: Route): RunSelection {
   }, []);
 
   return { runId, runs, select };
+}
+
+/**
+ * A window event sent after an approval decision (approved, rejected or refused), so the
+ * shell's "approvals waiting" count refreshes at once instead of at its next poll.
+ */
+export const APPROVALS_CHANGED = "recap:approvals-changed";
+
+export function announceApprovalsChanged(): void {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(APPROVALS_CHANGED));
 }
 
 /** The operator token of this tab (null when signed out); re-renders on sign-in and sign-out. */

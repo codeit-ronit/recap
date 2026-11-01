@@ -1,7 +1,8 @@
 /**
- * View helpers for the retrieval panels of the Evidence & RAG page: how a run searched the
- * runbooks (RunRecord.retrieval), every search it traced (retrieval.docs / retrieval.skip) with
- * its ranking signals, knowledge overlays, and the receipts of search_runbooks calls.
+ * View helpers for the retrieval panels (Knowledge, Trace Explorer, Live Run): how a run searched
+ * the runbooks (RunRecord.retrieval), every search it traced (retrieval.docs / retrieval.skip)
+ * with its ranking signals, knowledge overlays, and the receipts of search_runbooks calls. The
+ * M4 section at the end reads GET /runs/{id}/retrieval (the typed RetrievalView).
  *
  * Pure functions with type-only imports, so the Node tests in ../../tests load this file
  * directly. Runs recorded before M3 lack most of these keys: a missing value reads MISSING.
@@ -351,4 +352,228 @@ function packedChunks(events: readonly TraceEvent[]): Map<string, string[]> {
     packed.set(key, ids);
   }
   return packed;
+}
+
+// =================================================================================================
+// M4: GET /runs/{id}/retrieval (RetrievalView, generated in ../dto). Pure helpers for the run
+// scope of the Knowledge page: each search's stage and query author, the embedding server line,
+// what used a result, and memory reuse decisions per episode. A field the server did not record
+// reads NOT_RECORDED, never a default.
+// =================================================================================================
+
+/** What a field the server did not record reads as. */
+export const NOT_RECORDED = "Not recorded";
+
+/** "Alert search", "Proposal search", "Agent search": a search's stage as a title. */
+export function stageTitle(stage: string | null | undefined): string {
+  switch (stage) {
+    case "initial":
+      return "Alert search";
+    case "proposal":
+      return "Proposal search";
+    case "agent":
+      return "Agent search";
+    default:
+      return stage ? `${stage} search` : "Search (stage not recorded)";
+  }
+}
+
+/** One plain sentence on what a stage's search is for. */
+export function stageHelp(stage: string | null | undefined): string {
+  switch (stage) {
+    case "initial":
+      return "RECAP searched with the alert's service and symptoms before any agent ran; the results went into every agent's context.";
+    case "proposal":
+      return "RECAP looked for a runbook for the diagnosed mechanism before drafting the fix.";
+    case "agent":
+      return "An agent called search_runbooks with its own query; the results went into that agent's context only.";
+    default:
+      return "The trace did not record which stage made this search.";
+  }
+}
+
+/** Who wrote a search's query, in words: RECAP, or the provider behind an agent. */
+export function queryAuthorText(author: string | null | undefined): string {
+  switch (author) {
+    case "recap":
+      return "RECAP";
+    case "model":
+      return "the model";
+    case "replayed_model":
+      return "the replayed model";
+    case "scripted_policy":
+      return "the scripted policy";
+    default:
+      return "an agent";
+  }
+}
+
+/** True when the query is a provider's own text (untrusted); RECAP's queries are RECAP's. */
+export function isAgentQuery(search: { query_author: string; stage: string }): boolean {
+  return search.query_author !== "recap";
+}
+
+/** The embedding server line ("Ollama 0.34.4 · 137M parameters · F16 · weights sha256:970a…"), or null. */
+export function embeddingServerText(server: Record<string, unknown> | null | undefined): string | null {
+  if (!server) return null;
+  const s = record(server);
+  const weights = text(s.weights);
+  const parts = [
+    text(s.ollama_version) ? `Ollama ${text(s.ollama_version)}` : "",
+    text(s.parameter_size) ? `${text(s.parameter_size)} parameters` : "",
+    text(s.quantization),
+    weights ? `weights ${shortDigest(weights)}` : "",
+  ].filter(Boolean);
+  return parts.length ? parts.join(" · ") : null;
+}
+
+/** The run's query embedder: its name, "none (BM25 only)" for a BM25 run, else null (not recorded). */
+export function runEmbedderText(view: { embedder: string | null; mode: string | null }): string | null {
+  if (view.embedder) return view.embedder;
+  return view.mode === "bm25" ? "none (BM25 only)" : null;
+}
+
+/** Embedding input tokens as the server reported them; null when no count exists. */
+export function embeddingTokensText(view: { embedding_input_tokens: number | null; embedding_requests: number | null }): string | null {
+  if (typeof view.embedding_input_tokens === "number") return `${fmtCount(view.embedding_input_tokens)} (as the server reported them)`;
+  if (view.embedding_requests) return "not reported by the server";
+  return view.embedding_requests === 0 ? "none (no embedding request)" : null;
+}
+
+/** What used a search result: the agents whose context held it, and the proposed fix. */
+export function resultUses(result: { cited_by_agents: readonly string[]; cited_by_proposal: boolean }): string[] {
+  const uses: string[] = [];
+  if (result.cited_by_agents.length) uses.push(`in the context of ${result.cited_by_agents.join(", ")}`);
+  if (result.cited_by_proposal) uses.push("cited by the proposed fix");
+  return uses;
+}
+
+export interface SearchCounts {
+  searches: number;
+  byStage: { stage: string; count: number }[];
+  agentQueries: number;
+  results: number;
+}
+
+/** How many searches each stage made, how many queries an agent wrote, and the results returned. */
+export function searchCounts(searches: readonly { stage: string; query_author: string; results: readonly unknown[] }[]): SearchCounts {
+  const byStage = new Map<string, number>();
+  for (const s of searches) byStage.set(s.stage, (byStage.get(s.stage) ?? 0) + 1);
+  return {
+    searches: searches.length,
+    byStage: [...byStage.entries()].map(([stage, count]) => ({ stage, count })),
+    agentQueries: searches.filter((s) => s.query_author !== "recap").length,
+    results: searches.reduce((n, s) => n + s.results.length, 0),
+  };
+}
+
+// --- memory: searches and reuse decisions ----------------------------------------------------------
+
+/** The fields of a memory hit these helpers read (MemoryHitView). */
+export interface MemoryHitFields {
+  episode_id: string;
+  similarity: number | null;
+  signals: Record<string, number>;
+  outcome: string | null;
+  verified: boolean | null;
+  mechanism: string | null;
+  service: string | null;
+  partition: string | null;
+  safe_to_reuse: boolean | null;
+  mechanism_match: boolean | null;
+  reason: string | null;
+  supporting: string[];
+  contradicting: string[];
+}
+
+export interface MemoryDecision {
+  episodeId: string;
+  similarity: number | null;
+  signals: Record<string, number>;
+  /** The past episode's outcome and whether the oracle verified it (from the search or the record). */
+  pastOutcome: string | null;
+  verified: boolean | null;
+  mechanism: string | null;
+  service: string | null;
+  partition: string | null;
+  /** RECAP's reuse verdict: null when the hit was never assessed against live evidence. */
+  safeToReuse: boolean | null;
+  mechanismMatch: boolean | null;
+  /** RECAP's own words. */
+  reason: string | null;
+  supporting: string[];
+  contradicting: string[];
+  /** The round of the assessment the verdict comes from (null: the run record's, or none). */
+  round: number | null;
+}
+
+/**
+ * One row per remembered episode the run found: what the memory search returned about it and
+ * RECAP's latest reuse verdict (the run record's final hits, else the last assessment).
+ */
+export function memoryDecisions(memory: {
+  searches: readonly { hits: readonly MemoryHitFields[] }[];
+  assessments: readonly { round: number | null; hits: readonly MemoryHitFields[] }[];
+  final_hits: readonly MemoryHitFields[];
+}): MemoryDecision[] {
+  const rows = new Map<string, MemoryDecision>();
+  const row = (hit: MemoryHitFields): MemoryDecision => {
+    let found = rows.get(hit.episode_id);
+    if (!found) {
+      found = {
+        episodeId: hit.episode_id,
+        similarity: null,
+        signals: {},
+        pastOutcome: null,
+        verified: null,
+        mechanism: null,
+        service: null,
+        partition: null,
+        safeToReuse: null,
+        mechanismMatch: null,
+        reason: null,
+        supporting: [],
+        contradicting: [],
+        round: null,
+      };
+      rows.set(hit.episode_id, found);
+    }
+    return found;
+  };
+  const describe = (target: MemoryDecision, hit: MemoryHitFields) => {
+    target.similarity = hit.similarity ?? target.similarity;
+    if (Object.keys(hit.signals).length) target.signals = { ...hit.signals };
+    target.pastOutcome = hit.outcome ?? target.pastOutcome;
+    target.verified = hit.verified ?? target.verified;
+    target.mechanism = hit.mechanism ?? target.mechanism;
+    target.service = hit.service ?? target.service;
+    target.partition = hit.partition ?? target.partition;
+  };
+  const judge = (target: MemoryDecision, hit: MemoryHitFields, round: number | null) => {
+    if (hit.safe_to_reuse === null && hit.mechanism_match === null && !hit.reason) return;
+    target.safeToReuse = hit.safe_to_reuse;
+    target.mechanismMatch = hit.mechanism_match;
+    target.reason = hit.reason;
+    target.supporting = [...hit.supporting];
+    target.contradicting = [...hit.contradicting];
+    target.round = round;
+  };
+  for (const search of memory.searches) for (const hit of search.hits) describe(row(hit), hit);
+  for (const assessment of memory.assessments) for (const hit of assessment.hits) judge(row(hit), hit, assessment.round);
+  for (const hit of memory.final_hits) {
+    const target = row(hit);
+    describe(target, hit);
+    // The run record keeps the last verdict; it names the round when an assessment said the same.
+    const sameAsAssessed = hit.reason !== null && hit.reason === target.reason;
+    judge(target, hit, sameAsAssessed ? target.round : null);
+  }
+  return [...rows.values()];
+}
+
+/** "lexical 1 · semantic 0.82": a memory hit's similarity signals. */
+export function memorySignalText(signals: Readonly<Record<string, number>>): string {
+  const parts = Object.entries(signals)
+    .filter(([, value]) => typeof value === "number" && Number.isFinite(value))
+    .map(([key, value]) => `${key} ${fmtMeasure(value)}`);
+  return parts.join(" · ");
 }

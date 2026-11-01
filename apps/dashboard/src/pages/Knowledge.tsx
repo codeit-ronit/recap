@@ -1,28 +1,64 @@
 import { useEffect, useId, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { api } from "../api";
-import { Chip, FlagChip, Mono } from "../components/Badge";
+import { Chip, FlagChip, Mono, YesNoChip } from "../components/Badge";
 import { Card, KeyValues, Notice, PageHeader } from "../components/Card";
+import { DataSourceBadge, summarySource } from "../components/DataSourceBadge";
+import type { SummarySourceFields } from "../components/DataSourceBadge";
 import { Icon } from "../components/Icon";
 import { LogView } from "../components/LogView";
+import { RunScope } from "../components/RunPicker";
 import { EmptyView, PolledView } from "../components/StateViews";
-import { StatusToken } from "../components/StatusToken";
-import { fmtInt, hybridReadiness, searchModeLabel } from "../format";
-import { PAGE_LABELS, hrefFor, navigate, paramsOf, usePolling } from "../hooks";
+import { StateToken, StatusToken } from "../components/StatusToken";
+import { DataTable } from "../components/Table";
+import { UntrustedText } from "../components/Untrusted";
+import type { MemoryRetrievalView, RetrievalView, SearchResultView, SearchView } from "../dto";
+import { fmtDateTime, fmtInt, fmtMs, fmtTime, hybridReadiness, isTerminal, outcomeTone, searchModeLabel } from "../format";
+import { PAGE_LABELS, hrefFor, navigate, paramsOf, usePolling, useRunSelection } from "../hooks";
 import type { PageProps, Route } from "../hooks";
-import type { KnowledgeDocRef, KnowledgeResult, SystemSummary } from "../types";
-import { fmtMeasure, fmtRank, isOverlayPath, modeNote, shortDigest, signalSummary } from "../view/retrieval";
+import type { KnowledgeDocRef, KnowledgeResult, RunSummary, SystemSummary } from "../types";
+import {
+  NOT_RECORDED,
+  embeddingServerText,
+  embeddingTokensText,
+  fmtMeasure,
+  fmtRank,
+  isAgentQuery,
+  isOverlayPath,
+  memoryDecisions,
+  memorySignalText,
+  modeNote,
+  queryAuthorText,
+  recapQueryNote,
+  runEmbedderText,
+  searchCounts,
+  shortDigest,
+  signalParts,
+  signalSummary,
+  stageHelp,
+  stageTitle,
+} from "../view/retrieval";
+import type { MemoryDecision } from "../view/retrieval";
+import "../styles/evidence-m3.css";
+import "../styles/evidence-knowledge.css";
 
 /**
- * Knowledge / agentic RAG: the runbook index the retriever searches (GET /knowledge/docs),
- * how a run searches it by default (GET /system), and the same search for a person to try
- * (GET /knowledge/search). A field the server does not report reads NOT_RECORDED.
+ * Knowledge / agentic RAG.
  *
- * Runbook text is untrusted data (the "Context & experience" layer): it is shown as text in a
- * bounded box, with the injection flags the server found, and never followed.
+ *   This run (run scope, ?run=): GET /runs/{id}/retrieval, how the selected run searched the
+ *   runbooks (each query, who wrote it, BM25 or hybrid, ranks, scores and signals, what used each
+ *   result), its embedding model, agent-initiated and refused searches, the runbook sections in
+ *   context, and its memory searches with RECAP's reuse verdicts.
+ *
+ *   The knowledge base: the runbook index the retriever searches (GET /knowledge/docs), how a
+ *   run searches it by default (GET /system), and the same search for a person to try
+ *   (GET /knowledge/search).
+ *
+ * A field the server does not report reads NOT_RECORDED. Runbook text, a query an agent wrote
+ * and the alert's words are untrusted data: shown as escaped text and never followed.
  */
 
-export const NOT_RECORDED = "Not recorded";
+export { NOT_RECORDED };
 
 /** How many results a search asks for (GET /knowledge/search `k`). */
 export const RESULT_COUNTS = [3, 5, 10] as const;
@@ -389,50 +425,640 @@ function KnowledgeSearch({ route }: { route: Route }) {
   );
 }
 
+
+// =================================================================================================
+// This run: GET /runs/{id}/retrieval
+// =================================================================================================
+
+/** Poll while the run is live; retry slowly while nothing loaded (the API may be restarting). */
+export function retrievalInterval(view: RetrievalView | undefined): number | null {
+  if (!view) return 10_000;
+  if (view.status === "running") return 2500;
+  return view.status === "external" && !isTerminal(view.state) ? 5000 : null;
+}
+
+const SERVICE_NAME = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/** Text a provider (or an alert) wrote: an escaped quote with a tag naming who wrote it. */
+function QuotedText({ text, tag, author }: { text: string; tag: string; author: string }) {
+  return (
+    <span className="ed-quote">
+      <UntrustedText text={text} author={author} />
+      <span className="untrusted-tag" title={`Written by ${author}: untrusted data, shown as text and never followed`}>
+        {tag}
+      </span>
+    </span>
+  );
+}
+
+function Line({ label, children, title }: { label: string; children: ReactNode; title?: string }) {
+  return (
+    <div className="ed-line">
+      <span className="ed-label" title={title}>
+        {label}
+      </span>
+      <span className="ed-line-value">{children}</span>
+    </div>
+  );
+}
+
+function NotRecordedText({ children = NOT_RECORDED }: { children?: ReactNode }) {
+  return <span className="not-recorded">{children}</span>;
+}
+
+/** A service name from a past episode or a search: a checked value, else quoted data. */
+function Service({ value }: { value: string | null }) {
+  if (!value) return <NotRecordedText />;
+  return SERVICE_NAME.test(value) ? <Mono>{value}</Mono> : <UntrustedText text={value} author="a recorded run" />;
+}
+
+/** Who wrote a search's query, and how to read it. */
+function SearchQuery({ search }: { search: SearchView }) {
+  if (!search.query) return <NotRecordedText />;
+  if (isAgentQuery(search)) {
+    const who = queryAuthorText(search.query_author);
+    return <QuotedText text={search.query} tag={`untrusted · written by ${who}`} author={`${who}${search.agent ? ` (${search.agent})` : ""}`} />;
+  }
+  // RECAP joins its own query from the alert's words (initial) or the diagnosed mechanism (proposal).
+  return search.stage === "initial" ? (
+    <QuotedText text={search.query} tag="RECAP's query · the alert's words" author="RECAP, from the alert's words" />
+  ) : (
+    <span className="ed-quote">
+      <span className="kn-query">{search.query}</span>
+      <span className="trust-tag trust-trusted ed-recap-tag" title={recapQueryNote(search.stage)}>
+        RECAP's query
+      </span>
+    </span>
+  );
+}
+
+function UsedBy({ result }: { result: Pick<SearchResultView, "cited_by_agents" | "cited_by_proposal"> }) {
+  if (!result.cited_by_agents.length && !result.cited_by_proposal) return <span className="muted small">not used</span>;
+  return (
+    <span className="chip-row">
+      {result.cited_by_agents.map((agent, i) => (
+        <Chip key={`${agent}-${i}`} mono title="This section was in the agent's context pack">
+          {agent}
+        </Chip>
+      ))}
+      {result.cited_by_proposal ? (
+        <Chip tone="accent" title="The proposed fix cites this section">
+          cited by the fix
+        </Chip>
+      ) : null}
+    </span>
+  );
+}
+
+function OverlayChip() {
+  return (
+    <Chip tone="warn" title="From an extra knowledge folder indexed for a red-team run: it may be deliberately wrong">
+      <Icon name="alert" size={12} /> red-team overlay
+    </Chip>
+  );
+}
+
+function SignalCell({ signals }: { signals: Readonly<Record<string, number>> }) {
+  const parts = signalParts(signals);
+  if (!parts.length) return <NotRecordedText />;
+  return (
+    <span className="cell-stack small">
+      {parts.map((part, i) => (
+        <span key={i} className="nowrap">
+          {part}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/** A table of ranked runbook sections (a search's results, or the sections in context at the end). */
+export function ResultTable({
+  results,
+  overlays,
+  showRetriever = false,
+  empty,
+}: {
+  results: readonly SearchResultView[];
+  overlays: readonly string[];
+  showRetriever?: boolean;
+  empty: string;
+}) {
+  return (
+    <DataTable
+      className="compact kn-results-table"
+      rows={[...results]}
+      rowKey={(r, i) => `${r.chunk_id}-${i}`}
+      rowClassName={(r) => (isOverlayPath(r.doc_path, overlays) ? "row-warn" : undefined)}
+      empty={empty}
+      columns={[
+        {
+          key: "rank",
+          header: <span title="The rank in the search that retrieved the section">Rank</span>,
+          numeric: true,
+          render: (r) => (r.rank === null ? <NotRecordedText /> : fmtRank(r.rank)),
+        },
+        {
+          key: "section",
+          header: "Runbook section",
+          render: (r) => (
+            <span className="cell-stack">
+              <span className="kn-heading">{r.heading || <NotRecordedText>heading not recorded</NotRecordedText>}</span>
+              <span className="chip-row">
+                <Mono>{r.chunk_id || NOT_RECORDED}</Mono>
+                {isOverlayPath(r.doc_path, overlays) ? <OverlayChip /> : null}
+              </span>
+              {r.doc_path ? (
+                <span className="muted small kn-path">
+                  <Mono>{r.doc_path}</Mono>
+                </span>
+              ) : null}
+            </span>
+          ),
+        },
+        { key: "score", header: "Score", numeric: true, render: (r) => (r.score === null ? <NotRecordedText /> : fmtMeasure(r.score)) },
+        ...(showRetriever
+          ? [{ key: "retriever", header: "Ranked by", render: (r: SearchResultView) => (r.retriever ? <Mono>{r.retriever}</Mono> : <NotRecordedText />) }]
+          : []),
+        { key: "signals", header: <span title="The ranking signals the search recorded (BM25 rank and score; dense rank and cosine; RRF)">Signals</span>, render: (r) => <SignalCell signals={r.signals} /> },
+        { key: "used", header: <span title="Agents whose context held the section, and whether the proposed fix cites it">Used by</span>, render: (r) => <UsedBy result={r} /> },
+      ]}
+    />
+  );
+}
+
+function EmbeddingLine({ search }: { search: SearchView }) {
+  const e = search.embedding;
+  if (!e) return null;
+  const parts = [
+    e.model ? `model ${e.model}` : "model not recorded",
+    e.inputs !== null ? `${fmtInt(e.inputs)} input${e.inputs === 1 ? "" : "s"}` : null,
+    e.input_tokens !== null ? `${fmtInt(e.input_tokens)} tokens (as the server reported them)` : "tokens not reported",
+    e.duration_ms !== null ? fmtMs(e.duration_ms) : null,
+    e.replayed ? "answered from a recording" : null,
+  ].filter(Boolean);
+  return (
+    <Line label="Embedding" title="The embedding request behind this hybrid search, as the embedder recorded it">
+      <span className="muted">{parts.join(" · ")}</span>
+    </Line>
+  );
+}
+
+function SearchBlock({ search, index, overlays }: { search: SearchView; index: number; overlays: readonly string[] }) {
+  return (
+    <article className="kn-search" aria-label={`Search ${index + 1}: ${stageTitle(search.stage)}`}>
+      <header className="kn-search-head">
+        <span className="kn-search-num" aria-hidden="true">
+          {index + 1}
+        </span>
+        <span className="kn-search-title">{stageTitle(search.stage)}</span>
+        {search.agent ? (
+          <Chip mono tone="accent">
+            {search.agent}
+          </Chip>
+        ) : null}
+        {search.mode ? (
+          <Chip mono title={modeNote(search.mode)}>
+            {search.mode}
+          </Chip>
+        ) : (
+          <NotRecordedText>mode not recorded</NotRecordedText>
+        )}
+        {search.retriever ? (
+          <span className="muted small">
+            ranked by <Mono>{search.retriever}</Mono>
+          </span>
+        ) : null}
+        <span className="muted small kn-search-time">{fmtTime(search.ts)}</span>
+      </header>
+      <p className="ed-help">{stageHelp(search.stage)}</p>
+      <Line label="Query">
+        <SearchQuery search={search} />
+      </Line>
+      {search.reason ? (
+        <Line label="Why" title="RECAP's reason for this search">
+          <span className="kn-reason">{search.reason}</span>
+        </Line>
+      ) : null}
+      <EmbeddingLine search={search} />
+      <ResultTable results={search.results} overlays={overlays} empty="No runbook section matched this query." />
+    </article>
+  );
+}
+
+/** How the run searched: mode, embedder, embedding server and requests, agent searches. */
+export function RunRetrievalSummary({ view }: { view: RetrievalView }) {
+  const embedder = runEmbedderText(view);
+  const server = embeddingServerText(view.embedding_server);
+  const tokens = embeddingTokensText(view);
+  const bm25 = view.mode === "bm25";
+  const counts = searchCounts(view.searches);
+  const rows: [ReactNode, ReactNode][] = [
+    [
+      "Runbook search",
+      view.use_rag ? (
+        <StatusToken tone="ok" size="sm" label="On" />
+      ) : (
+        <span className="cell-stack">
+          <StatusToken tone="neutral" size="sm" label="Off" />
+          <span className="muted small">the run's configuration switched retrieval off</span>
+        </span>
+      ),
+    ],
+    [
+      "Search mode",
+      view.mode ? (
+        <span className="cell-stack">
+          <span>{searchModeLabel(view.mode, true)}</span>
+          <span className="muted small">{modeNote(view.mode)}</span>
+        </span>
+      ) : (
+        <NotRecordedText />
+      ),
+    ],
+    ["Query embedder", view.embedder ? <Mono>{view.embedder}</Mono> : embedder ? <span className="muted">{embedder}</span> : <NotRecordedText />],
+    [
+      "Embedding server",
+      server ? (
+        <span className="muted" title={typeof view.embedding_server?.weights === "string" ? view.embedding_server.weights : undefined}>
+          {server}
+        </span>
+      ) : bm25 ? (
+        <span className="muted">not used (BM25 only)</span>
+      ) : (
+        <NotRecordedText />
+      ),
+    ],
+    [
+      "Vector index",
+      bm25 ? (
+        <span className="muted">not used (BM25 only)</span>
+      ) : (
+        <span className="cell-stack">
+          <NotRecordedText />
+          <span className="muted small">a run records its embedder, not which stored vectors it searched; the knowledge base below shows the index loaded now</span>
+        </span>
+      ),
+    ],
+    [
+      "Embedding requests",
+      view.embedding_requests === null ? (
+        <NotRecordedText />
+      ) : (
+        <span>
+          {fmtInt(view.embedding_requests)}
+          {view.embedding_requests && view.replayed_embedding_requests !== null ? (
+            <span className="muted small"> · {fmtInt(view.replayed_embedding_requests)} answered from a recording</span>
+          ) : null}
+        </span>
+      ),
+    ],
+    ["Embedding input tokens", tokens ? <span>{tokens}</span> : <NotRecordedText />],
+    [
+      "Searches",
+      <span className="cell-stack">
+        <span>
+          {fmtInt(counts.searches)} search{counts.searches === 1 ? "" : "es"}
+          {counts.byStage.length ? <span className="muted small"> · {counts.byStage.map((s) => `${fmtInt(s.count)} ${stageTitle(s.stage).toLowerCase()}`).join(", ")}</span> : null}
+        </span>
+        <span className="muted small">{fmtInt(counts.results)} results returned</span>
+      </span>,
+    ],
+    [
+      "Agent searches",
+      view.agent_searches === null ? (
+        <NotRecordedText />
+      ) : (
+        <span className="cell-stack">
+          <span>
+            {fmtInt(view.agent_searches)} answered
+            {view.agent_search_refusals.length ? <span className="muted"> · {fmtInt(view.agent_search_refusals.length)} refused</span> : null}
+          </span>
+          <span className="muted small">search_runbooks calls an agent made with its own query</span>
+        </span>
+      ),
+    ],
+  ];
+  return <KeyValues className="kv-wide kn-summary" rows={rows} />;
+}
+
+function MemoryVerdict({ decision }: { decision: MemoryDecision }) {
+  if (decision.safeToReuse === null) {
+    return <StatusToken tone="neutral" size="sm" icon="minus" label="Not assessed" title="RECAP did not judge this episode against live evidence" />;
+  }
+  return decision.safeToReuse ? (
+    <StatusToken tone="ok" size="sm" label="Safe to reuse: YES" />
+  ) : (
+    <StatusToken tone="bad" size="sm" label="Safe to reuse: NO" />
+  );
+}
+
+/** Memory searches and RECAP's reuse verdict for every past episode the run found. */
+export function MemoryRetrieval({ memory, runId }: { memory: MemoryRetrievalView; runId: string }) {
+  const decisions = memoryDecisions(memory);
+  const rows: [ReactNode, ReactNode][] = [
+    ["Memory", memory.enabled ? <StatusToken tone="ok" size="sm" label="On" /> : <StatusToken tone="neutral" size="sm" label="Off" />],
+    [
+      "Reads",
+      memory.read_partitions.length ? (
+        <span className="chip-row">
+          {memory.read_partitions.map((p, i) => (
+            <Chip key={`${p}-${i}`} mono>
+              {p}
+            </Chip>
+          ))}
+        </span>
+      ) : (
+        <span className="muted">no partition</span>
+      ),
+    ],
+    [
+      "Writes",
+      memory.write_enabled && memory.write_partition ? <Mono>{memory.write_partition}</Mono> : <span className="muted">nothing (writing is off)</span>,
+    ],
+    [
+      "Searches",
+      memory.searches.length ? (
+        <span className="cell-stack">
+          {memory.searches.map((s) => (
+            <span key={s.seq}>
+              {fmtInt(s.hits.length)} match{s.hits.length === 1 ? "" : "es"} ·{" "}
+              {s.semantic ? `semantic (${s.semantic}) and lexical` : "lexical"}
+              {s.created_before ? <span className="muted small"> · memory as of {fmtDateTime(s.created_before)} (the recording's start)</span> : null}
+            </span>
+          ))}
+        </span>
+      ) : (
+        <span className="muted">none</span>
+      ),
+    ],
+    [
+      "Episode written",
+      memory.written ? (
+        <span className="chip-row">
+          <Mono>{memory.written.episode_id}</Mono>
+          {memory.written.partition ? <Chip mono>{memory.written.partition}</Chip> : null}
+          {memory.written.outcome ? <Chip tone={outcomeTone(memory.written.outcome)}>{memory.written.outcome.replace(/_/g, " ")}</Chip> : null}
+          <YesNoChip value={memory.written.verified} yes="oracle-verified" no="not verified" />
+        </span>
+      ) : memory.skipped.length ? (
+        <span className="cell-stack">
+          <span className="muted">none, because:</span>
+          {memory.skipped.map((reason, i) => (
+            <span key={i}>{reason}</span>
+          ))}
+        </span>
+      ) : (
+        <span className="muted">none recorded</span>
+      ),
+    ],
+  ];
+  return (
+    <div className="kn-memory">
+      <KeyValues className="kv-wide" rows={rows} />
+      {decisions.length ? (
+        <DataTable
+          className="compact kn-memory-table"
+          rows={decisions}
+          rowKey={(d) => d.episodeId}
+          columns={[
+            {
+              key: "episode",
+              header: "Past episode",
+              render: (d) => (
+                <span className="cell-stack">
+                  <Mono nowrap>{d.episodeId}</Mono>
+                  {d.partition ? <span className="muted small">partition {d.partition}</span> : null}
+                </span>
+              ),
+            },
+            {
+              key: "similarity",
+              header: "Similarity",
+              numeric: true,
+              render: (d) => (
+                <span className="cell-stack">
+                  <span>{d.similarity === null ? <NotRecordedText /> : fmtMeasure(d.similarity)}</span>
+                  {memorySignalText(d.signals) ? <span className="muted small">{memorySignalText(d.signals)}</span> : null}
+                </span>
+              ),
+            },
+            {
+              key: "past",
+              header: "What it remembers",
+              render: (d) => (
+                <span className="cell-stack">
+                  <span className="chip-row">
+                    {d.mechanism ? <Mono>{d.mechanism}</Mono> : <NotRecordedText />}
+                    <span className="muted">on</span>
+                    <Service value={d.service} />
+                  </span>
+                  <span className="chip-row">
+                    {d.pastOutcome ? <Chip tone={outcomeTone(d.pastOutcome)}>{d.pastOutcome.replace(/_/g, " ")}</Chip> : null}
+                    <YesNoChip value={d.verified} yes="oracle-verified" no="not verified" />
+                  </span>
+                </span>
+              ),
+            },
+            {
+              key: "verdict",
+              header: "RECAP's verdict",
+              render: (d) => (
+                <span className="cell-stack">
+                  <MemoryVerdict decision={d} />
+                  {d.reason ? <span className="kn-reason">{d.reason}</span> : null}
+                  {d.round !== null ? <span className="muted small">assessed in round {d.round}</span> : null}
+                </span>
+              ),
+            },
+          ]}
+        />
+      ) : (
+        <p className="ed-none">{memory.enabled ? "The memory search matched no past episode." : "Memory was off for this run, so it searched no past episode."}</p>
+      )}
+      <p className="ed-help">
+        Similar is not the same as safe to reuse: RECAP reuses a past fix only when live evidence confirms the same mechanism.{" "}
+        <a href={hrefFor("memory", { run: runId })}>Open {PAGE_LABELS.memory} for this run</a>
+      </p>
+    </div>
+  );
+}
+
+/** One run's retrieval (exported for the component tests). */
+export function RunRetrievalBody({ view, runId, summary }: { view: RetrievalView; runId: string; summary?: RunSummary }) {
+  const source = summary ? summarySource(summary as unknown as SummarySourceFields) : null;
+  const overlays = view.knowledge_overlays;
+  const agentSearches = view.searches.filter((s) => s.stage === "agent");
+  return (
+    <>
+      <div className="kn-runbar">
+        {source ? <DataSourceBadge provider={source.provider} environment={source.environment} label="Where this run's decisions came from" /> : null}
+        <StateToken state={view.state} />
+        {view.status === "running" ? <StatusToken tone="accent" icon="clock" label="Running · refreshing" /> : null}
+      </div>
+      {overlays.length ? (
+        <Notice tone="warn" icon="alert" title={`This run indexed extra knowledge folders (red-team): ${overlays.join(", ")}`}>
+          Their runbooks may be deliberately wrong, and every section from them is marked on this page. A runbook never proves a
+          claim: RECAP's evidence rules read only live tool results.
+        </Notice>
+      ) : null}
+      <div className="kn-grid">
+        <Card title="How this run searched" subtitle="The search mode and embedding model this run recorded (they may differ from today's defaults below).">
+          <RunRetrievalSummary view={view} />
+        </Card>
+        <Card
+          title="Experience memory"
+          subtitle="Past episodes the run's memory search found, and RECAP's verdict on reusing each one's fix."
+        >
+          <MemoryRetrieval memory={view.memory} runId={runId} />
+        </Card>
+      </div>
+      {/* What the run's records lack: after the summary it qualifies, so the run's facts lead. */}
+      {view.not_recorded.length ? (
+        <Notice tone="info" icon="info" title="Not recorded for this run">
+          <ul className="plain-list ed-plain">
+            {view.not_recorded.map((item, i) => (
+              <li key={i}>{item}</li>
+            ))}
+          </ul>
+        </Notice>
+      ) : null}
+      <Card
+        title={`Runbook searches (${fmtInt(view.searches.length)})`}
+        subtitle="Every search in order: who wrote the query, how the results ranked, and which agents or which fix used each section."
+      >
+        {view.searches.length ? (
+          <div className="kn-searches">
+            {view.searches.map((search, index) => (
+              <SearchBlock key={search.seq} search={search} index={index} overlays={overlays} />
+            ))}
+          </div>
+        ) : (
+          <EmptyView
+            title="No runbook search recorded"
+            icon="search"
+            reason={
+              !view.use_rag
+                ? "Retrieval was off for this run."
+                : view.status === "running"
+                  ? "RECAP searches the runbooks first, when the run starts; the search appears here once it is traced."
+                  : view.trace_available
+                    ? "The run's trace has no runbook search."
+                    : "This run has no trace, so its searches were not recorded."
+            }
+          />
+        )}
+        {view.agent_searches === 0 && !agentSearches.length ? (
+          <p className="ed-help">No agent called search_runbooks with its own query in this run.</p>
+        ) : null}
+        {view.skipped.length ? (
+          <div className="kn-aside">
+            <h3 className="mini-title">Skipped searches</h3>
+            <ul className="ed-list">
+              {view.skipped.map((skip) => (
+                <li key={skip.seq}>
+                  <span className="kn-aside-key">{stageTitle(skip.stage)}</span> {skip.reason || NOT_RECORDED}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {view.agent_search_refusals.length ? (
+          <div className="kn-aside">
+            <h3 className="mini-title">Refused agent searches</h3>
+            <ul className="ed-list">
+              {view.agent_search_refusals.map((refusal) => (
+                <li key={refusal.seq}>
+                  {refusal.agent ? <Mono>{refusal.agent}</Mono> : <NotRecordedText>agent not recorded</NotRecordedText>}{" "}
+                  <span className="muted">· error as recorded:</span> {refusal.error || NOT_RECORDED}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </Card>
+      <Card
+        title={`Runbook sections in context (${fmtInt(view.context_docs.length)})`}
+        subtitle="The sections in the agents' context packs when the run ended, with the ranking that put them there and what used them."
+        flush
+      >
+        <ResultTable
+          results={view.context_docs}
+          overlays={overlays}
+          showRetriever
+          empty={view.use_rag ? "No runbook section was in the agents' context." : "Retrieval was off for this run."}
+        />
+      </Card>
+    </>
+  );
+}
+
+function RunRetrieval({ runId, summary }: { runId: string; summary: RunSummary | undefined }) {
+  const polled = usePolling(() => api.retrievalView(runId), retrievalInterval, [runId]);
+  return (
+    <PolledView polled={polled} loadingLabel="Loading this run's searches…" errorTitle="Could not load the run's retrieval (GET /runs/{id}/retrieval)">
+      {(view) => <RunRetrievalBody view={view} runId={runId} summary={summary} />}
+    </PolledView>
+  );
+}
+
+// =================================================================================================
+// The page
+// =================================================================================================
+
 export function KnowledgePage({ route, system }: PageProps) {
   const docs = usePolling(() => api.knowledgeDocs(), null, []);
+  const selection = useRunSelection(route);
   return (
     <>
       <PageHeader
         title="Knowledge"
-        description="The runbooks RECAP retrieves from, how runs search them, and the same search for you to try. Every value comes from the API; runbook text is untrusted data, shown and never followed."
+        description="How a run searched the runbooks and its experience memory, then the knowledge base itself: the runbooks RECAP retrieves from and the same search for you to try. Runbook text and agents' queries are untrusted data, shown and never followed."
       />
 
-      <div className="grid-2">
-        <Card title="Retrieval configuration" subtitle="GET /system: the default for runs that do not choose a search mode">
-          <PolledView polled={system} loadingLabel="Loading the retrieval configuration…" errorTitle="Could not load GET /system">
-            {(summary) => <RetrievalConfig system={summary} />}
+      <section className="kn-section" aria-labelledby="kn-run-title">
+        <div className="section-head">
+          <h2 className="section-title" id="kn-run-title">
+            This run's retrieval
+          </h2>
+          <p className="section-lead">Every runbook search the selected run made and what it found in memory, as its trace and record have them.</p>
+        </div>
+        <RunScope selection={selection} page="knowledge">
+          {(runId, summary) => <RunRetrieval key={runId} runId={runId} summary={summary} />}
+        </RunScope>
+      </section>
+
+      <section className="kn-section" aria-labelledby="kn-base-title">
+        <div className="section-head">
+          <h2 className="section-title" id="kn-base-title">
+            Knowledge base
+          </h2>
+          <p className="section-lead">The runbooks every run searches, how runs search them by default, and a search box that uses the same index.</p>
+        </div>
+        <div className="grid-2">
+          <Card title="Retrieval configuration" subtitle="GET /system: the default for runs that do not choose a search mode">
+            <PolledView polled={system} loadingLabel="Loading the retrieval configuration…" errorTitle="Could not load GET /system">
+              {(summary) => <RetrievalConfig system={summary} />}
+            </PolledView>
+          </Card>
+          <Card title="Search the runbooks" subtitle="GET /knowledge/search: each result names the retriever that ranked it">
+            <KnowledgeSearch route={route} />
+          </Card>
+        </div>
+
+        <Card title="Runbook index" subtitle="GET /knowledge/docs: the documents and sections the retriever indexed">
+          <PolledView
+            polled={docs}
+            loadingLabel="Loading the runbook index…"
+            errorTitle="Could not load GET /knowledge/docs"
+            emptyTitle="No runbooks indexed"
+            emptyIcon="book"
+            empty={(list) => (list.length ? null : "The server reports no indexed runbook sections.")}
+          >
+            {(list) => <RunbookIndex docs={list} />}
           </PolledView>
         </Card>
-        <Card title="Search the runbooks" subtitle="GET /knowledge/search: each result names the retriever that ranked it">
-          <KnowledgeSearch route={route} />
-        </Card>
-      </div>
-
-      <Card title="Runbook index" subtitle="GET /knowledge/docs: the documents and sections the retriever indexed">
-        <PolledView
-          polled={docs}
-          loadingLabel="Loading the runbook index…"
-          errorTitle="Could not load GET /knowledge/docs"
-          emptyTitle="No runbooks indexed"
-          emptyIcon="book"
-          empty={(list) => (list.length ? null : "The server reports no indexed runbook sections.")}
-        >
-          {(list) => <RunbookIndex docs={list} />}
-        </PolledView>
-      </Card>
-
-      <Notice tone="info" icon="search" title="Agent-initiated searches">
-        The searches made during a run (RECAP's and the agents' own queries, their results and citations) are on{" "}
-        <a href={hrefFor("evidence")}>{PAGE_LABELS.evidence}</a> for that run.
-      </Notice>
-      {/*
-        Seam for run-level retrieval: a run's searches (RECAP's and the agents' own search_runbooks
-        calls) belong here. Select the run with useRunSelection(route) inside a RunScope, add
-        "knowledge" to RUN_SCOPED_PAGES (src/hooks.ts) so the selected run follows the user here,
-        read GET /runs/{id}/retrieval, and reuse SearchResults / NOT_RECORDED. An agent's query is
-        its model's text: show it with UntrustedText.
-      */}
+      </section>
     </>
   );
 }

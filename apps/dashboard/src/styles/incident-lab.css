@@ -1,0 +1,656 @@
+/*
+ * The Incident Lab (pages/LiveRun.tsx) and its components: the replay launcher, the backend
+ * choice, the safety notes, the run's data-source banner, the outcome, the approval dialog, the
+ * bounded live feed and the stage stepper's timings. Built on the tokens in styles.css; no
+ * decoration, every status carries text and an icon besides its color.
+ */
+
+/* --- shared pieces -------------------------------------------------------------------------- */
+
+.lab-intro {
+  margin: 0;
+  max-width: 880px;
+  color: var(--text-2);
+  font-size: var(--fs-md);
+  line-height: 1.55;
+}
+.lab-subtitle {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-base);
+  font-weight: 650;
+}
+.lab-help {
+  margin: 2px 0 var(--space-3);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+/* Signed out: what needs the operator sign-in, and a way to open it. */
+.lab-signin {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--warn-line);
+  border-radius: 10px;
+  background: var(--warn-soft);
+  color: var(--text-2);
+  font-size: var(--fs-md);
+}
+.lab-signin > .icon {
+  color: var(--warn-text);
+}
+.lab-signin-text {
+  flex: 1;
+  min-width: 0;
+}
+.lab-signin-text strong {
+  color: var(--text);
+}
+.lab-signin .btn {
+  flex: none;
+}
+
+/* --- replay launcher ------------------------------------------------------------------------ */
+
+.lab-pace .segmented {
+  max-width: 100%;
+}
+.lab-replays {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+  gap: var(--space-4);
+  align-items: stretch;
+}
+.lab-replay {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+.lab-replay.blocked {
+  border-style: dashed;
+}
+.lab-replay-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+.lab-replay-title {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 650;
+  line-height: 1.35;
+}
+.lab-replay-desc {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+.lab-facts .kv-row {
+  grid-template-columns: 128px minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: 6px 0;
+  font-size: 13px;
+}
+/* The replay button and the recording's check, right under the description. */
+.lab-replay-action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+.lab-replay .lab-facts {
+  padding-top: var(--space-1);
+  border-top: 1px solid var(--border);
+}
+.lab-blocked {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.lab-reasons {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+/* --- scenario run: backend, settings, safety -------------------------------------------------- */
+
+.lab-setup {
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(280px, 1fr);
+  gap: var(--space-6);
+  align-items: start;
+}
+.lab-setup-main,
+.lab-setup-side {
+  min-width: 0;
+}
+.lab-setup-main .lab-subtitle:not(:first-child) {
+  margin-top: var(--space-6);
+}
+.lab-setup-main .lab-subtitle + .config-grid {
+  margin-top: var(--space-3);
+}
+
+.lab-backends {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.lab-provider-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 270px), 1fr));
+  gap: var(--space-3);
+}
+.lab-provider {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.lab-provider:hover {
+  border-color: var(--border-2);
+  background: var(--panel-3);
+}
+.lab-provider.selected {
+  border-color: var(--accent);
+  background: rgba(43, 196, 207, 0.06);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.lab-provider input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 3px 0 0;
+  accent-color: var(--accent);
+}
+.lab-provider:focus-within {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+.lab-provider-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.lab-provider-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.lab-provider-about {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.lab-provider-desc {
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.lab-provider-notes {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+.lab-unavailable ul {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.lab-unavailable li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--space-2) 0;
+  border-top: 1px dashed var(--border);
+}
+
+.lab-safety {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lab-safety li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.lab-safety li.tone-warn,
+.lab-safety li.tone-bad {
+  border-color: var(--tone-line);
+  background: var(--tone-soft);
+}
+.lab-safety li > .icon {
+  margin-top: 1px;
+  color: var(--tone-text);
+}
+.lab-safety strong {
+  color: var(--text);
+}
+
+/* --- the run: banner, outcome, links ---------------------------------------------------------- */
+
+/* The run's data source, impossible to miss: e.g. RECORDED REAL-LLM RUN · SIMULATED TARGET. */
+.lab-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--tone-line);
+  border-left-width: 4px;
+  border-radius: 10px;
+  background: var(--tone-soft);
+}
+.lab-banner > .icon {
+  margin-top: 2px;
+  color: var(--tone-text);
+}
+.lab-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.lab-banner-label {
+  color: var(--tone-text);
+  font-size: var(--fs-xl);
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.lab-banner-why {
+  color: var(--text-2);
+  font-size: var(--fs-md);
+}
+
+.lab-outcome {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-3) var(--space-4);
+}
+.status-token.lab-outcome-token {
+  min-height: 34px;
+  padding: 5px 12px;
+  font-size: var(--fs-lg);
+}
+.lab-outcome-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.lab-outcome-source {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: 4px;
+}
+.lab-outcome-sentence {
+  margin: 4px 0 2px;
+  color: var(--text);
+  font-size: var(--fs-lg);
+}
+.lab-outcome p {
+  margin-top: 4px;
+  margin-bottom: 0;
+}
+.lab-outcome-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr));
+  gap: var(--space-3);
+}
+.lab-fact {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+.lab-fact-label {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.lab-links {
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+.lab-links-title {
+  margin: 0 0 var(--space-3);
+  font-size: var(--fs-base);
+  font-weight: 650;
+}
+.lab-links ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lab-links a {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  height: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--text);
+}
+.lab-links a:hover {
+  border-color: var(--accent-line);
+  background: var(--panel-3);
+  text-decoration: none;
+}
+.lab-link-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.lab-link-hint {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+
+/* --- the approval dialog ---------------------------------------------------------------------- */
+
+.lab-approval-action {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--warn-line);
+  border-radius: 10px;
+  background: var(--inset);
+}
+.lab-approval-action:focus {
+  outline: 2px solid var(--warn-line);
+  outline-offset: 2px;
+}
+.lab-approval-command {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: var(--fs-xl);
+}
+.lab-approval-command code {
+  color: var(--text);
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.lab-approval-command code.muted {
+  color: var(--text-2);
+  font-weight: 500;
+}
+.lab-approval-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.lab-approval-meta .mono {
+  color: var(--text-2);
+}
+.lab-approval-binding {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.lab-approval-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+.lab-approval-title {
+  margin: 0;
+  font-size: var(--fs-base);
+  font-weight: 650;
+}
+.lab-approval-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.lab-checks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lab-checks li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 6px 10px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+.lab-checks li > .status-token {
+  justify-self: start;
+}
+.lab-rationale {
+  margin: 0;
+  font-size: var(--fs-md);
+  line-height: 1.6;
+}
+.lab-cited-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lab-cited {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.lab-cited-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font-size: 13px;
+}
+.lab-cited-head .mono {
+  overflow-wrap: anywhere;
+}
+/* The binding test sits apart from the decision, at the start of the footer. */
+.modal-foot .lab-tamper {
+  margin-right: auto;
+}
+/* The server's answer to a decision, on its own line in the decision bar. */
+.lab-foot-answer {
+  flex-basis: 100%;
+  min-width: 0;
+}
+/*
+ * The decision stays in view while the dialog's evidence scrolls past (the backdrop scrolls).
+ * A sticky box stops short of the backdrop's bottom padding (var(--space-4)), which would let
+ * the evidence show through below the bar; the negative offset puts the bar on the window's edge.
+ */
+.modal-foot:has(.lab-foot-btn) {
+  position: sticky;
+  bottom: calc(-1 * var(--space-4));
+  z-index: 1;
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: var(--panel);
+  box-shadow: 0 -10px 18px rgba(4, 7, 10, 0.35);
+}
+
+/* --- live feed and stepper ------------------------------------------------------------------- */
+
+.lab-feed-scroll {
+  overscroll-behavior: contain;
+}
+.feed-earlier {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px var(--space-3);
+  border-bottom: 1px dashed var(--border);
+}
+.step-time {
+  margin-top: -4px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.stepper-now {
+  margin: var(--space-4) 0 0;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-size: var(--fs-md);
+}
+.stepper-now strong {
+  color: var(--text);
+}
+
+/* --- narrow screens --------------------------------------------------------------------------- */
+
+@media (max-width: 1100px) {
+  .lab-setup {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 560px) {
+  /* The text keeps the width; the button moves under it, lined up with the text. */
+  .lab-signin {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+  .lab-signin > .icon {
+    margin-top: 2px;
+  }
+  .lab-signin-text {
+    flex: 1 1 calc(100% - 28px);
+  }
+  .lab-signin .btn {
+    margin-left: 28px;
+  }
+  /* The scenario goes on its own line under the run id, without a leading separator. */
+  .run-title-scenario {
+    flex-basis: 100%;
+  }
+  .run-title-sep {
+    display: none;
+  }
+  .lab-replay {
+    padding: var(--space-3);
+  }
+  .lab-facts .kv-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+  .lab-replay-action .btn {
+    width: 100%;
+    justify-content: center;
+  }
+  .lab-banner {
+    padding: var(--space-3);
+  }
+  .lab-banner-label {
+    font-size: var(--fs-lg);
+    letter-spacing: 0.04em;
+  }
+  .lab-approval-command,
+  .lab-approval-command code {
+    font-size: var(--fs-lg);
+  }
+  /* The dialog's buttons share the width; the long binding test wraps on its own line. */
+  .modal-foot .lab-foot-btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+  .modal-foot .lab-tamper {
+    flex-basis: 100%;
+    order: 10;
+    height: auto;
+    min-height: 28px;
+    margin-right: 0;
+    padding-top: 4px;
+    padding-bottom: 4px;
+    white-space: normal;
+  }
+  .lab-checks li {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .lab-feed-scroll .feed-line {
+    grid-template-columns: 52px 16px minmax(0, 1fr);
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  .lab-feed-scroll .feed-tag {
+    display: none;
+  }
+  .lab-feed-scroll .feed-detail {
+    padding-left: 12px;
+    padding-right: 8px;
+  }
+}

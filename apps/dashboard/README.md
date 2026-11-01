@@ -4,6 +4,8 @@
 demonstrating RECAP: the incident lab, the multi-agent trace, evidence and decisions, the runbook
 knowledge base, experience memory, safety and approvals, evaluations and the architecture.
 
+![RECAP Mission Control, the Overview page](../../docs/screenshots/overview.png)
+
 **Everything on screen comes from the RECAP API** (`apps/api/main.py`). The dashboard has no
 hardcoded metrics, sample data or fake runs. If there are no runs yet, the pages say so. RECAP
 runs against a **simulated** environment (a simulated shop); nothing on screen suggests a
@@ -44,6 +46,17 @@ cd ../.. && uvicorn apps.api.main:app               # http://127.0.0.1:8000/
 The API mounts `apps/dashboard/dist` at `/` when that folder exists at startup, so (re)start
 uvicorn after the first build. In this mode the API is on the same origin, at the root.
 
+### With demo data (what the screenshots show)
+
+```bash
+python scripts/seed_demo.py --data-dir ~/recap-demo     # real offline runs: scripted, and replays of the committed recordings
+RECAP_DATA_DIR=~/recap-demo uvicorn apps.api.main:app   # http://127.0.0.1:8000/
+```
+
+`scripts/seed_demo.py` refuses the repository's own `data/` folder, so demo runs never mix with
+real experience. Each seeded run is either the scripted policy (labelled SCRIPTED) or a replay
+of a committed real-model recording (labelled REPLAY · RECORDED REAL-LLM RUN); none calls a model.
+
 `VITE_API_URL` (build- or dev-time environment variable) overrides the API origin, e.g.
 `VITE_API_URL=http://127.0.0.1:8000 npm run dev`. The API's CORS settings allow
 `localhost:5173`.
@@ -70,14 +83,14 @@ shows (`GET /health`, `/system`, `/approvals/pending`, and `GET /runs/{id}` for 
   | `#/live` | Incident Lab | `#/safety` | Safety & Approvals |
   | `#/timeline` | Trace Explorer | `#/evals` | Evaluations |
   | `#/evidence` | Evidence & Decisions | `#/architecture` | Architecture & Learning |
-  | `#/knowledge` | Knowledge (new in M4) | | |
+  | `#/knowledge` | Knowledge | | |
 
   A sidebar on wide screens; below 920 px a fixed brand bar with a **Menu** button
   (`aria-expanded`, `aria-controls`) that opens the list; it closes on navigation, Escape
   (focus returns to the button), a click outside or tabbing out. The browser tab reads
   `<page label> · RECAP Mission Control`.
 - **Top bar**: on a run-scoped page (`RUN_SCOPED_PAGES`: Trace Explorer, Evidence & Decisions,
-  Experience Memory, Safety & Approvals; and the Incident Lab's run), **Selected run** with that
+  Knowledge, Experience Memory, Safety & Approvals; and the Incident Lab's run), **Selected run** with that
   run's `DataSourceBadge` read from its record (`provider_info`, `environment`), e.g.
   `REPLAY · RECORDED REAL-LLM RUN qwen3:8b / SIMULATED TARGET`; elsewhere the server's
   **Default provider**. Then approvals waiting (a link to Safety & Approvals) and sign-in.
@@ -117,19 +130,20 @@ target unless `safeHref` accepts it. A test fails if any source under `src/` inj
 Navigation is hash-based, so every view is a shareable deep link:
 `#/timeline?run=<run_id>`, `#/evidence?run=<run_id>&ev=<evidence_id>`, `#/knowledge?q=<query>`.
 The selected run follows you between the run-scoped pages (Trace Explorer, Evidence & Decisions,
-Experience Memory, Safety & Approvals). Without `?run=` they show the latest run.
+Knowledge, Experience Memory, Safety & Approvals). Without `?run=` they show the latest run. Their run
+bar names each investigation round's routing (`R1 parallel`, `R2 parallel`).
 
 | Page | What it shows | API |
 |---|---|---|
-| **Overview** | The implementation behind each interface (environment adapter, provider, retriever, router, policy, oracle, transport, memory size); for runbook search, the default mode and whether hybrid can run (`hybrid_ready`; the retriever names what a run that does not choose uses); run counts by final state; the latest evaluation headline (labeled *synthetic benchmark · simulated · small N*); recent runs (click a run to open its timeline). | `/system`, `/runs`, `/evals/results` |
-| **Incident Lab** (`#/live`) | Scenario picker (demo scenarios first; ground truth only behind *Show ground truth*). Config: strategy, RAG, runbook search (BM25 or hybrid), memory, approval mode (manual = you approve here, auto = simulation auto-approver), simulated tool latency. **Run incident** starts a run and streams it: a lifecycle stepper, a readable live event feed (click a line for the raw event; a claim, search query or summary an agent's provider wrote is quoted, RECAP's notes on a summary are kept apart), an approval card with the exact proposal, and a result panel (the diagnosis as RECAP's checked fields with the claim quoted, disagreements and the verifier's leads, oracle verdict, approval, memory partitions and episode, usage, budget, and the backend's own cost line from `run.summary`). | `POST /incidents/run`, `/runs/{id}/stream` (SSE), `/approvals/pending`, `POST /approvals/{proposal_id}`, `/runs/{id}` |
-| **Trace Explorer** (`#/timeline`) | A Gantt-style chart: one lane per agent plus the controller. Bars are MCP tool calls (`tool.call` paired with `tool.result` by `invocation_id`). Shaded spans show when each agent was active; dots are controller decisions, denials and injection flags. A bracket marks the measured window where parallel specialists ran concurrently (`overlap_ms`). Long human approval waits can be compressed into an axis break. Includes a table view and, per round, the routing decision (mode, rule, reason, signals, step allocation), the verifier's open questions and leads, and per agent its outcome, claims, evidence, runbook searches, citations (red-team overlay chunks marked) and summary. Each claim's verdict comes from the last verification that read it: the final one, the one before a fix that did not recover the system, or none (a finding a budget stop kept is marked *partial*). | `/runs/{id}/events`, `/runs/{id}` |
-| **Evidence & Decisions** (`#/evidence`) | The evidence registry (id, tool, source ref, agent, trust level, flags such as `prompt_injection_suspected`, token estimate, what the final verification relied on; expand a row for the raw content); hypothesis checks with passed/failed rules, proposers, basis and the release or dependency each claim was judged by; disagreements (each settling rule) and the verifier's leads for the next round, with the merge history; every runbook search with its ranking signals and the retriever it actually used; retrieved runbook chunks as citations (overlay sections marked); a knowledge search box. Runs recorded before M3 read *not recorded*, never *none*. | `/runs/{id}`, `/runs/{id}/events`, `/knowledge/search` |
-| **Knowledge** (`#/knowledge`) | The runbook index (documents and their sections, the chunk ids citations use; red-team overlay documents marked); the retrieval configuration from `GET /system` (default search mode, the default retriever, whether hybrid search can run, the stored vectors' embedding model, the vector index identity and knowledge overlays from `features` when the server reports them, indexed sections, fixtures fingerprint; *Not recorded* when the server does not report a field); a search box (`?q=` and `?k=` in the route) whose results show rank, score, the retriever that ranked each one, a reranker when reported, ranking signals, injection flags and parsed action hints, with the section text as untrusted data in a bounded box. Run-level (agent-initiated) searches are on Evidence & Decisions for now. | `/system`, `/knowledge/docs`, `/knowledge/search` |
-| **Experience Memory** | All episodes (outcome, oracle-verified, partition worded by who made the decisions, since a demo episode from before M3 may be a real model's; successful and unsuccessful actions, provenance; expand a row for evidence summaries and the run summary, each checked claim with its release or dependency). For a run: the partitions it read (a replay: *memory as of* its recording), then its memory hits with similarity, past outcome, mechanism match, **safe to reuse YES/NO** and the conditions behind it. *Similar ≠ safe to reuse.* | `/memory`, `/runs/{id}`, `/runs/{id}/events` |
-| **Safety & Approvals** | Pending approvals (approve or reject them here, signed in); the append-only approval decision log; for a run: mitigation policy verdicts with rule ids (the last id is the deciding rule), every gateway decision in the trace, proposals (declared vs trusted risk), approvals (single use, consumed), mitigation attempts (denied ones in red) and prompt-injection flags with the flagged excerpt. Also a static legend of the policy rule ids (documentation, not metrics). | `/approvals/pending`, `/runs/{id}`, `/runs/{id}/events` |
-| **Evaluations** | **Run evaluation** starts the protocol in the background and shows its progress; if it fails, the page shows the error. Results: the test-suite table per configuration, the red-team table, per-case outcomes (filterable), the caveats and reproducibility metadata. Labeled *Synthetic benchmark on the simulator · small N · no statistical claims · not SREGym*. | `POST /evals/run`, `/evals/results` |
-| **Architecture & Learning** (`#/architecture`) | A layered HTML/CSS diagram of the RECAP flow with trust boundaries (dashed amber = untrusted data, solid teal = trusted code), next to the live wiring from `/system`. Swapping the infrastructure means writing one `TargetEnvironment` adapter and changing `configs/environment.yaml`: the controller, gateway, RAG, memory, router and orchestrator code stay unchanged. Still simulator-specific (data, not code): the log conventions the scripted policy and verifier parse, the policy allowlists and the runbooks. | `/system` |
+| **Overview** | *Start the demo* (the golden recording, one click to its replay panel); system readiness (environment adapters: the simulated shop active, SREGym and Kind planned for M5; components and their status); the 10 newest runs with their data source; outcomes counted separately per data source (scripted, replay, local LLM, free hosted LLM: never one success rate); what is running now; access (reading is open, acting needs the operator token); what M5 still has to build; the decision providers (class, readiness, per-run selection; an API key only as set or missing). | `/system`, `/providers`, `/replays`, `/runs`, `/auth/session` |
+| **Incident Lab** (`#/live`) | *Replay a recorded incident*: the committed real-model recordings (integrity-checked against the manifest) at a watchable or instant pace; the replay asks a person to approve again. *Run a scenario*: a scenario, a backend this server lets a run pick, the settings, and what keeps every run safe. A started run streams: the data-source banner, the stage stepper, the live event feed (key or all events; click a line for the raw event), *So far* counters, the **approval modal** (action, target, params, trusted vs declared risk, digest, expiry, the policy and evidence-gate checks, the model's rationale and cited evidence as untrusted text; Approve, Reject, Decide later, *Test binding*), *Stop run*; then the outcome (the oracle's verdict, the approval, wall time) and the run details. | `/replays`, `/providers`, `/scenarios`, `POST /incidents/run`, `/runs/{id}`, `/runs/{id}/stream` (SSE), `/runs/{id}/events`, `/approvals/pending`, `POST /approvals/{proposal_id}`, `/runs/{id}/evidence`, `POST /runs/{id}/cancel`, `/memory` |
+| **Trace Explorer** (`#/timeline`) | *This run* (data source, model, prompt version, timing, counts, replay provenance, the server's notes on reading its times); the *run timeline* (one lane per agent plus the controller: tool calls, model answers, controller decisions, rounds and the measured window where agents ran concurrently; chart or table); *step by step* (before the first round, each round's routing, each agent's steps side by side with its context pack, model requests and tool calls, its claims and the verifier's verdict, then the fix); the *event log* (filter by agent, round, tool or kind; paged). | `/runs/{id}/timeline`, `/runs/{id}` |
+| **Evidence & Decisions** (`#/evidence`) | Counts; *the decision* (the supported diagnosis apart from the claims not accepted, with the rule lines that decided); the causal chain per round and agent; disagreements; *from diagnosis to action* (the proposal, the evidence gate, the safety policy); the *evidence registry* (tool, agent, trust class, injection flags, how the verifier used each item; expand a row for the original observation in a bounded box). | `/runs/{id}/evidence` |
+| **Knowledge** (`#/knowledge`) | *This run's retrieval*: search mode and embedding model, every runbook search (who wrote the query, ranks, scores, signals, what used each section), agent-initiated and refused searches, the sections in context, and its memory search. *The knowledge base*: the retrieval configuration, a search box (`?q=`, `?k=`) and the runbook index. A field a run did not record reads *Not recorded*. | `/runs/{id}/retrieval`, `/system`, `/knowledge/docs`, `/knowledge/search` |
+| **Experience Memory** | How partitions keep kinds of runs apart (who reads and writes what); the episodes grouped by partition (that run's result, oracle verification, who made the decisions, the source run; expand for evidence and reuse conditions; red-team plants marked); for one run: what it read and wrote, its memory hits and RECAP's reuse verdict on each (*similar is not safe to reuse*). | `/memory`, `/system`, `/runs/{id}/retrieval`, `/runs/{id}` |
+| **Safety & Approvals** | Approvals waiting (decide here, signed in); the four layers (policy, evidence gate, exact approval, signed capability) with their status; for one run: unsafe actions *attempted* apart from *executed*, each layer's verdict, the permission lifecycle from the approval log, what RECAP stopped, the policy decisions (filterable), prompt-injection flags and the run's approval log; across runs: the approval audit log, runs that ended in a safety stop, what the adversarial tests check, and the rule reference. | `/approvals/pending`, `/approvals/events`, `/approvals/{id}/events`, `/runs/{id}`, `/runs/{id}/evidence`, `/runs/{id}/timeline`, `/runs?state=BLOCKED`, `/system` |
+| **Evaluations** | One tab per mode, never combined: scripted regression, offline replay, real LLM (exploratory) and Kubernetes (planned, M5). Per batch: plan, providers, models, prompt versions and N; outcomes as *k of N* with a small-sample warning; the configuration × scenario matrix; why runs did not recover (one failure category each); every run (filterable, paged; tokens reported vs estimated); methods and limitations; how to run a batch (real models from a terminal only). The scripted regression can be started here (operator only). | `/evals`, `/evals/{id}`, `/runs`, `/system`, `POST /evals/run`, `/evals/results` |
+| **Architecture & Learning** (`#/architecture`) | The flow of one incident (alert → controller → retrieval & memory → router → agents → MCP gateway → verifier → approval → authorized write → oracle → episode), each step with its status from `/system`, what it does, its code, its ADRs and the trace events it writes; planned (M5) parts are marked planned, never active; the live wiring and versions; links to the docs. | `/system` |
 
 ## How live updates work
 
@@ -150,11 +164,18 @@ Experience Memory, Safety & Approvals). Without `?run=` they show the latest run
   `src/auth.ts`) and sends it as `Authorization: Bearer …`. Signed out, the approval buttons are
   disabled with a hint; a 401 shows the same hint. Read-only views and the live stream need no
   token.
+- **A replay** (Incident Lab, *Replay a recorded incident*) is `POST /incidents/run` with
+  `{scenario_id: <the recording's scenario>, config: {provider: "replay", replay_fixture: <its
+  manifest id>, approval_mode: "manual", replay_pace}}`; the server takes routing, memory and
+  retrieval from the recording's manifest entry. `replay_pace` 0.05 (*Watchable*, the default)
+  waits 5% of each recorded answer's original time, so the run reaches the approval in about
+  half a minute; 0 (*Instant*) in a few seconds. Only the timing changes, never what is replayed.
 - While a run waits at `AWAITING_APPROVAL`, the page polls `/approvals/pending`. Approve and
   Reject send the proposal's exact digest; the server records the signed-in operator as the
   approver. The server refuses any other digest, an expired request or a second decision with
   **409**, and the card shows that response. A rejection also revokes an approval that was not
-  used yet. *Test binding* deliberately sends a tampered digest to show the refusal; the
+  used yet. Any decision refreshes the top bar's *approvals waiting* count at once (the window
+  event `recap:approvals-changed`). *Test binding* deliberately sends a tampered digest to show the refusal; the
   request stays pending.
 - A live run has a **Cancel run** button (`POST /runs/{id}/cancel`); its pending approval
   request expires with it. The Safety page shows the append-only approval decision log
@@ -176,8 +197,9 @@ src/
                          usePolling, useRunEvents (SSE + polling fallback), useRunSelection
   format.ts              state/verdict colors, number and time formatting, honest labels (environment
                          badge, provider, cost), describeEvent (event → one line), splitSummary
-  view/                  pure M3 view helpers (findings, verification, retrieval, memory), tested in tests/
-  styles.css             the whole theme (tokens, shell, shared components; no framework); styles/*-m3.css per page
+  view/                  pure view helpers per page (findings, verification, retrieval, memory, lab, timeline,
+                         safety, evals, system), tested in tests/
+  styles.css             the theme (tokens, shell, shared components; no framework); styles/*.css per page
   components/            Shell (AppShell, NAV, the top bar's data source), EnvironmentBanner, DataSourceBadge,
                          StatusToken, StateViews, Modal, FilterBar, Pager, LogView, Untrusted; and Badge/Chip,
                          Card (+ StatTile, Meter, Notice, Segmented, Toggle), Table, StateStepper, EventFeed,
@@ -185,6 +207,7 @@ src/
                          EmptyState (older state views, error boundary), Icon
   pages/                 one file per page (Knowledge.tsx is new in M4)
 scripts/test.mjs         npm test (see Testing)
+e2e/smoke.mjs            the browser smoke test against a running server (see Testing)
 tests/                   *.test.ts: pure helpers · *.test.tsx: components · support/: the console guard and
                          render helpers for component tests
 ```
@@ -221,3 +244,63 @@ functions and tested there (`trapTarget` for the modal's focus trap, `pageWindow
 
 Checks before a commit, from `apps/dashboard`: `./node_modules/.bin/tsc --noEmit`, `npm test`,
 `npm run build`.
+
+### Browser smoke test (`e2e/smoke.mjs`)
+
+`npm test` cannot see layout, the console or the live stream, so `e2e/smoke.mjs` drives a real,
+installed Google Chrome (headless, a throwaway profile) through the Chrome DevTools Protocol, with
+Node's own `fetch` and `WebSocket` (Node 22+; nothing to install), against a **running** server
+that serves the built dashboard:
+
+```bash
+python scripts/seed_demo.py --data-dir /tmp/recap-demo            # a separate demo folder
+cd apps/dashboard && npm run build && cd ../..
+RECAP_DATA_DIR=/tmp/recap-demo RECAP_OPERATOR_TOKEN=<a throwaway token, 16+ characters> \
+  uvicorn apps.api.main:app --port 8000
+cd apps/dashboard
+node e2e/smoke.mjs --base http://127.0.0.1:8000 --token <the same token>
+```
+
+1. **Pages**: the nine routes at 1440 × 900 and at 390 × 844, the run-scoped ones for a replay
+   of the golden recording, a scripted run, a BLOCKED run and a BUDGET_EXHAUSTED run (those the
+   folder has). Each must show its heading and tab title, no error panel and nothing still
+   loading; log nothing to the console (no error, warning or exception); never scroll sideways,
+   also with every `<details>` opened; show the SIMULATED ENVIRONMENT strip and the selected
+   run's data source (SCRIPTED BASELINE, REPLAY, ...); and never put the operator token or
+   injected markup (`<script>`, `on*=` attributes) in the DOM.
+2. **The live demo** (needs the token): sign in through the top bar, open the Incident Lab,
+   replay the golden recording at the watchable pace, watch the stepper and the event feed
+   advance, approve the exact action in the modal, see RESOLVED with the oracle's verdict, and
+   check that the API agrees (RESOLVED, oracle verified, a replay, approved by
+   `operator:<name>`). Then that run's Trace Explorer, Evidence, Knowledge, Memory and Safety
+   pages, and the operator's name in the approval log.
+
+It prints one PASS/FAIL line per check and exits 0 (all passed), 1 (a check failed) or 2 (it
+could not run: no API, no Chrome). The demo starts one replay run on that server (no model is
+called): point it at a demo folder, not at data you care about. Options: `--chrome <path>`
+(default: `CHROME_PATH`, then the usual install paths), `--token-file <path>` or
+`RECAP_OPERATOR_TOKEN` instead of `--token` (the token is never printed), `--pace instant`,
+`--skip-flow`, `--skip-pages`, and `--screenshots <dir>`, which also saves the screenshots
+below. `node e2e/smoke.mjs --help` lists them.
+
+## Screenshots
+
+The real dashboard on the seeded demo folder, taken by `node e2e/smoke.mjs --screenshots
+../../docs/screenshots` (1440 × 900 unless noted). The run-scoped ones show the smoke test's own
+replay of the golden recording, approved in the browser; `evidence.png` and `safety.png` show
+the seeded `malicious-log` run (BLOCKED).
+
+| File | What it shows |
+|---|---|
+| [overview.png](../../docs/screenshots/overview.png) | Overview: the demo launcher, system readiness (simulated shop active, SREGym and Kind planned) |
+| [incident-lab-approval.png](../../docs/screenshots/incident-lab-approval.png) | Incident Lab during the paced replay: the approval modal for `restart_service` on `inventory` |
+| [incident-lab-resolved.png](../../docs/screenshots/incident-lab-resolved.png) | The same run after approval: every stage done, RESOLVED, the oracle's verdict, approved by the operator |
+| [trace-explorer.png](../../docs/screenshots/trace-explorer.png) | Trace Explorer: two specialists in parallel for two rounds, tool calls and replayed model answers per lane |
+| [evidence-decision.png](../../docs/screenshots/evidence-decision.png) | Evidence & Decisions: resource pressure on inventory supported; the cart-deployment claim not accepted, with the rules that decided |
+| [evidence.png](../../docs/screenshots/evidence.png) | The evidence registry of the `malicious-log` run: one log entry flagged `prompt_injection_suspected`, all tool output untrusted |
+| [knowledge.png](../../docs/screenshots/knowledge.png) | Knowledge: how the run searched (BM25) and its memory search |
+| [memory.png](../../docs/screenshots/memory.png) | Experience Memory: one episode per demo run with its result, oracle verification and the action it took |
+| [safety.png](../../docs/screenshots/safety.png) | Safety & Approvals for `malicious-log`: 1 unsafe action attempted, 0 executed; `delete_namespace` denied by `R9-destructive-deny` |
+| [evals.png](../../docs/screenshots/evals.png) | Evaluations: one tab per mode, never combined; the scripted regression batch |
+| [architecture.png](../../docs/screenshots/architecture.png) | Architecture & Learning: the flow of one incident with each step's status from `GET /system` |
+| [phone-overview.png](../../docs/screenshots/phone-overview.png), [phone-incident-lab.png](../../docs/screenshots/phone-incident-lab.png) | The same dashboard at 390 px: Overview, and the resolved replay in the Incident Lab |

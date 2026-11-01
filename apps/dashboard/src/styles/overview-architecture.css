@@ -1,0 +1,1204 @@
+/*
+ * Overview (ov-*) and Architecture & Learning (amap-*) pages. Colors, spacing and type come
+ * from the theme tokens in ../styles.css; shared classes (card, mini-title, chip-row,
+ * status-token, not-recorded, ...) are reused as they are. Desktop first, one column at a
+ * 390 px phone, no horizontal page scroll.
+ */
+
+/* ---------------------------------------------------------------------------------- */
+/* Overview                                                                             */
+/* ---------------------------------------------------------------------------------- */
+
+.ov,
+.amap-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+/*
+ * A token with a detail (a data-source badge's model name) that does not fit on one line puts
+ * the detail on a second line: the label keeps its words whole (never "HOSTE D") and stays
+ * next to its icon, and a model name ("openai/gpt-oss-120b") stays in one piece.
+ */
+.ov .status-token .status-detail,
+.amap-page .status-token .status-detail {
+  flex: none;
+  max-width: 100%;
+}
+.ov .status-token:has(> .status-detail),
+.amap-page .status-token:has(> .status-detail) {
+  flex-wrap: wrap;
+}
+.ov .status-token:has(> .status-detail) > .status-label,
+.amap-page .status-token:has(> .status-detail) > .status-label {
+  max-width: calc(100% - 20px);
+}
+
+.ov-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+.ov-pill-status {
+  display: inline-flex;
+}
+.ov-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 var(--space-3);
+  border-radius: 8px;
+  border: 1px solid var(--border-2);
+  background: var(--panel);
+}
+.ov-pill:hover {
+  text-decoration: none;
+  background: var(--panel-2);
+}
+.ov-pill.is-active {
+  border-color: var(--accent-line);
+}
+
+.ov-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.ov-title-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.ov-count-badge {
+  min-width: 22px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.ov-num {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.ov-right {
+  text-align: right;
+}
+.ov-sep {
+  margin: 0 var(--space-1);
+  color: var(--muted);
+}
+.ov-tag,
+.amap-tag {
+  display: inline-block;
+  margin-left: var(--space-2);
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border-2);
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 18px;
+  vertical-align: middle;
+}
+.ov-plain-list {
+  margin: var(--space-1) 0 0;
+  padding-left: 18px;
+  color: var(--text-2);
+}
+.ov-plain-list li + li {
+  margin-top: 2px;
+}
+.ov-doc-link,
+.amap-doc-link {
+  overflow-wrap: anywhere;
+}
+
+/* Active incidents */
+.ov-active-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ov-active {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.ov-active-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Start the demo */
+.ov-lead {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-md);
+}
+.ov-demo-fixture {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-radius: 10px;
+  border: 1px solid var(--border-2);
+  background: var(--panel-2);
+}
+.ov-demo-title {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  line-height: 1.35;
+}
+.ov-demo-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.ov-demo-about {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+.ov-demo-facts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+.ov-demo-facts > div {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  gap: var(--space-3);
+}
+.ov-demo-facts dt {
+  color: var(--muted);
+}
+.ov-demo-facts dd {
+  margin: 0;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.ov-demo-guide {
+  margin: 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.ov-demo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+}
+
+/* System readiness */
+.ov-section .mini-title {
+  margin-bottom: var(--space-2);
+}
+.ov-adapters,
+.ov-components,
+.ov-gaps,
+.ov-outcomes,
+.ov-providers,
+.ov-runs-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ov-adapters,
+.ov-gaps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.ov-adapter,
+.ov-gap {
+  padding: var(--space-2) var(--space-3);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.ov-adapter.is-planned,
+.ov-gap {
+  border-style: dashed;
+  border-color: var(--border-2);
+  background: transparent;
+}
+.ov-adapter-head,
+.ov-gap-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.ov-adapter-name,
+.ov-gap-title {
+  font-weight: 600;
+}
+.ov-adapter-status {
+  margin-left: auto;
+}
+.ov-adapter-detail,
+.ov-gap-detail {
+  margin-top: var(--space-1);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+.ov-tally {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 0 0 var(--space-2);
+}
+.ov-tally-item {
+  display: inline-flex;
+  align-items: center;
+}
+.ov-components {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.ov-components li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--border-2);
+}
+.ov-component-name {
+  font-weight: 500;
+}
+.ov-component-detail {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.ov-versions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-4);
+  margin: 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.ov-versions-label {
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+/* Recent runs: one row per run; the scenario link stretches over the whole row. */
+.ov-flush-states > .loading,
+.ov-flush-states > .error-state,
+.ov-flush-states > .stale-note {
+  margin: var(--space-4);
+}
+.ov-runs-head,
+.ov-run {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1.35fr) minmax(0, 0.95fr) minmax(0, 1.7fr) 88px;
+  column-gap: var(--space-4);
+  padding: 0 18px;
+}
+.ov-runs-head {
+  padding-top: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+}
+.ov-run {
+  position: relative;
+  grid-template-areas:
+    "time link outcome source duration"
+    "time id outcome source duration";
+  align-items: center;
+  row-gap: 2px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.ov-runs-list > .ov-run:last-child {
+  border-bottom: 0;
+}
+.ov-run:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+.ov-run-link {
+  grid-area: link;
+  min-width: 0;
+  color: var(--text);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.ov-run-link:hover {
+  color: var(--accent-text);
+  text-decoration: none;
+}
+.ov-run-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 6px;
+}
+.ov-run-link:focus-visible {
+  outline: none;
+}
+.ov-run-link:focus-visible::after {
+  outline: 2px solid var(--accent-text);
+  outline-offset: -2px;
+}
+.ov-run-id {
+  grid-area: id;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ov-run-label {
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--panel-3);
+  color: var(--text-2);
+  font-size: 11.5px;
+}
+.ov-run-time {
+  grid-area: time;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.ov-run-outcome {
+  grid-area: outcome;
+  min-width: 0;
+}
+.ov-run-source {
+  grid-area: source;
+  min-width: 0;
+}
+.ov-run-duration {
+  grid-area: duration;
+  text-align: right;
+}
+
+/* Outcomes by data source */
+.ov-sources {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: var(--space-3);
+}
+.ov-source {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.ov-source.is-empty {
+  border-style: dashed;
+  border-color: var(--border-2);
+  background: transparent;
+}
+.ov-source-title {
+  margin: 0;
+  font-size: inherit;
+  font-weight: inherit;
+}
+.ov-source-total {
+  color: var(--text-2);
+}
+.ov-big {
+  color: var(--text);
+  font-size: var(--fs-2xl);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.ov-outcomes li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 3px 0;
+  border-bottom: 1px dotted var(--border-2);
+}
+.ov-outcomes li:last-child {
+  border-bottom: 0;
+}
+.ov-source-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.ov-source-note {
+  margin: auto 0 0;
+  padding-top: var(--space-1);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+.ov-footnote {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+/* Access */
+.ov-facts {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+}
+.ov-fact {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+.ov-fact:last-child {
+  border-bottom: 0;
+}
+.ov-fact dt {
+  color: var(--text-2);
+  font-size: var(--fs-md);
+}
+.ov-fact dd {
+  margin: 0;
+  text-align: right;
+}
+
+/* Decision providers */
+.ov-providers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.ov-provider {
+  display: grid;
+  /* The class column fits "REPLAY · RECORDED REAL-LLM RUN" on one line. */
+  grid-template-columns: minmax(0, 1.15fr) minmax(264px, 1.2fr) minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: var(--space-3) var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.ov-provider-id,
+.ov-provider-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.ov-provider-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+.ov-provider-desc,
+.ov-provider-note {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+.ov-col-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.ov-provider-foot {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-5);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+.ov-details summary {
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.ov-details[open] summary {
+  margin-bottom: var(--space-1);
+}
+
+/* ---------------------------------------------------------------------------------- */
+/* Architecture & Learning: the flow map                                                */
+/* ---------------------------------------------------------------------------------- */
+
+.amap-header-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.amap-header-links .amap-doc-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 var(--space-3);
+  border-radius: 8px;
+  border: 1px solid var(--border-2);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: 550;
+}
+.amap-header-links .amap-doc-link:hover {
+  background: var(--panel-3);
+  text-decoration: none;
+}
+
+.amap-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+}
+.amap-legend-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.amap-legend-note {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.amap-trust {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.amap-trust.trust-trusted {
+  border: 1px solid var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+.amap-trust.trust-untrusted {
+  border: 1px dashed var(--warn-line);
+  background: var(--warn-soft);
+  color: var(--warn-text);
+}
+.amap-trust.trust-readonly {
+  border: 1px solid var(--border-2);
+  background: rgba(139, 152, 165, 0.1);
+  color: var(--text-2);
+}
+.amap-trust.trust-human {
+  border: 1px solid var(--info-line);
+  background: var(--info-soft);
+  color: var(--info-text);
+}
+
+.amap {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+.amap-graph {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.amap-cell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* A step: a button (role="tab") laid out as a card. */
+.amap-node {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border-2);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.amap-node:hover {
+  background: var(--panel-3);
+}
+.amap-node.trust-trusted {
+  box-shadow: inset 3px 0 0 var(--accent-line);
+}
+.amap-node.trust-untrusted {
+  box-shadow: inset 3px 0 0 var(--warn-line);
+}
+.amap-node.trust-readonly {
+  box-shadow: inset 3px 0 0 var(--border-2);
+}
+.amap-node.trust-human {
+  box-shadow: inset 3px 0 0 var(--info-line);
+}
+.amap-node.is-planned {
+  border-style: dashed;
+  background: transparent;
+}
+.amap-node.is-selected {
+  border-color: var(--accent);
+  background: rgba(43, 196, 207, 0.08);
+}
+.amap-node:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+.amap-node-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.amap-step {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--panel-3);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.amap-node.is-selected .amap-step {
+  background: var(--accent);
+  color: #041316;
+}
+.amap-node-title {
+  font-size: var(--fs-lg);
+  font-weight: 650;
+}
+.amap-node-status {
+  margin-left: auto;
+}
+.amap-node-impl {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+.amap-parts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.amap-part {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  min-width: 0;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  font-size: var(--fs-xs);
+}
+.amap-part.is-planned {
+  border-style: dashed;
+  border-color: var(--border-2);
+}
+.amap-part-label {
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+.amap-part-note {
+  color: var(--muted);
+}
+
+/* The arrow between two steps, with what crosses it. */
+.amap-connector {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-height: 26px;
+  padding: 3px 0 5px 44px;
+}
+.amap-connector-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 24px;
+  width: 2px;
+  background: var(--border-2);
+}
+.amap-connector-line::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid var(--muted);
+}
+.amap-connector-label {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+.amap-connector.is-end {
+  min-height: 0;
+  padding-top: var(--space-2);
+}
+.amap-connector-loop {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent-text);
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+.amap-around {
+  margin: var(--space-4) 0 var(--space-2);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.amap-around ~ .amap-cell + .amap-cell {
+  margin-top: var(--space-2);
+}
+
+/* The selected step's explanation. */
+.amap-panel {
+  position: sticky;
+  top: calc(var(--sticky-top) + var(--space-4));
+  min-width: 0;
+  max-height: calc(100vh - var(--sticky-top) - var(--space-8));
+  overflow-y: auto;
+  padding: var(--space-4) var(--space-5);
+  border-radius: 10px;
+  border: 1px solid var(--border-2);
+  background: var(--inset);
+}
+.amap-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.amap-detail-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.amap-kicker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.amap-kicker .amap-trust {
+  letter-spacing: 0;
+  text-transform: none;
+}
+.amap-detail-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--fs-xl);
+  font-weight: 650;
+}
+.amap-detail-summary {
+  margin: 0;
+  color: var(--text-2);
+}
+.amap-section .mini-title {
+  margin-bottom: var(--space-2);
+}
+.amap-text {
+  margin: 0 0 var(--space-2);
+  color: var(--text-2);
+  font-size: var(--fs-md);
+  line-height: 1.55;
+}
+.amap-text:last-child {
+  margin-bottom: 0;
+}
+.amap-muted {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.amap-loop {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: var(--space-2) 0 0;
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+}
+.amap-loop .icon {
+  margin-top: 2px;
+}
+.amap-components {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.amap-components + .amap-components,
+.amap-components + .amap-muted {
+  margin-top: var(--space-2);
+}
+.amap-component {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+.amap-component.is-planned {
+  border-style: dashed;
+  border-color: var(--border-2);
+  background: transparent;
+}
+.amap-component-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.amap-adapter-name {
+  font-weight: 600;
+}
+.amap-component-impl {
+  font-size: var(--fs-md);
+  overflow-wrap: anywhere;
+}
+.amap-component-detail {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+.amap-provider {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.amap-facts {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+}
+.amap-fact {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.8fr) minmax(0, 1.2fr);
+  gap: var(--space-3);
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-sm);
+}
+.amap-fact:last-child {
+  border-bottom: 0;
+}
+.amap-fact dt {
+  color: var(--muted);
+}
+.amap-fact dd {
+  margin: 0;
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+.amap-links {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-md);
+}
+.amap-links li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.amap-links .icon {
+  margin-top: 3px;
+  color: var(--muted);
+}
+.amap-adr-id {
+  font-family: var(--mono);
+  font-weight: 600;
+}
+.amap-event {
+  padding: 1px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--border-2);
+  background: var(--panel);
+  color: var(--text-2);
+  font-size: 11.5px;
+}
+.amap-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+/* Only where the panel sits under the flow (see the 1099 px query). Two classes, so the
+   theme's .btn display (loaded after this file) does not show it on wide screens. */
+.amap-detail-actions .amap-back {
+  display: none;
+}
+
+/* Live wiring */
+.amap-wiring {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.amap-wire {
+  display: grid;
+  grid-template-columns: minmax(0, 0.75fr) minmax(0, 2fr) 120px;
+  align-items: start;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+.amap-wire:last-child {
+  border-bottom: 0;
+}
+.amap-wire.is-planned .amap-wire-impl {
+  color: var(--muted);
+}
+.amap-wire-interface {
+  min-width: 0;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.amap-wire-impl {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: var(--fs-md);
+  overflow-wrap: anywhere;
+}
+.amap-wire-status {
+  justify-self: end;
+}
+.amap-wire-detail {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.amap-versions {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+.amap-version {
+  min-width: 0;
+}
+.amap-version dt {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+.amap-version dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Learn more */
+.amap-learn {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-4) var(--space-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.amap-learn-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--accent-line);
+}
+.amap-learn-title {
+  font-weight: 600;
+}
+.amap-learn-about {
+  color: var(--text-2);
+  font-size: var(--fs-md);
+}
+.amap-learn-item .mono {
+  color: var(--muted);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------------------------- */
+/* Responsive                                                                           */
+/* ---------------------------------------------------------------------------------- */
+
+@media (max-width: 1280px) {
+  .ov-provider {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1099px) {
+  .ov-grid,
+  .amap {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* The panel sits under the flow: no sticky box, and a way back to the selected step. */
+  .amap-panel {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+  .amap-detail-actions .amap-back {
+    display: inline-flex;
+  }
+  .ov-active {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+  .ov-active .btn {
+    justify-self: start;
+  }
+}
+
+/* Recent runs stack into small cards; the column header goes. */
+@media (max-width: 760px) {
+  .ov-runs-head {
+    display: none;
+  }
+  .ov-run {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "link time"
+      "id id"
+      "outcome duration"
+      "source source";
+    row-gap: 6px;
+    padding: var(--space-3) var(--space-4);
+  }
+  .ov-run-time {
+    text-align: right;
+  }
+  .ov-run-outcome,
+  .ov-run-source {
+    margin-top: 2px;
+  }
+}
+
+@media (max-width: 640px) {
+  .ov-provider {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ov-header-actions {
+    justify-content: flex-start;
+  }
+  .amap-wire {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .ov-demo-facts > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+  .amap-wire-impl {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .amap-fact {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
+  }
+  .ov-fact {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-1);
+  }
+  .ov-fact dd {
+    text-align: left;
+  }
+  .amap-panel {
+    padding: var(--space-3) var(--space-4);
+  }
+}

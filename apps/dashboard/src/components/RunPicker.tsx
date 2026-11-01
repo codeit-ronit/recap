@@ -79,9 +79,10 @@ export function RunScope({
         <RunPicker runs={list} value={runId} onChange={select} />
         <div className="run-scope-meta">
           {summary ? <StateChip state={summary.state} /> : null}
+          {/* Each investigation round's routing, numbered like the Evaluations tables ("R1 single"). */}
           {summary?.modes.map((m, i) => (
-            <Chip key={`${m}-${i}`} tone="accent" mono>
-              {m}
+            <Chip key={`${m}-${i}`} tone="accent" mono title={`Round ${i + 1} routing: ${m}`}>
+              R{i + 1} {m}
             </Chip>
           ))}
           {summary?.pending_approval ? <Chip tone="warn">awaiting approval</Chip> : null}

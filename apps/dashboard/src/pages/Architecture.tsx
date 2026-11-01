@@ -1,404 +1,627 @@
 import { Fragment } from "react";
-import type { ReactNode } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import { api } from "../api";
-import { Chip, Mono, OriginChip, SimulatedBadge } from "../components/Badge";
-import { Card, KeyValues, Notice, PageHeader } from "../components/Card";
-import { ErrorState, Loading } from "../components/EmptyState";
+import { Mono } from "../components/Badge";
+import { Card, PageHeader } from "../components/Card";
+import { DataSourceBadge } from "../components/DataSourceBadge";
 import { Icon } from "../components/Icon";
-import { DataTable } from "../components/Table";
-import { fmtInt, hybridReadiness, searchModeLabel } from "../format";
-import type { Tone } from "../format";
-import { usePolling } from "../hooks";
-import type { PageProps } from "../hooks";
-import type { ProviderStatus, SystemSummary } from "../types";
-
-type Trust = "trusted" | "untrusted" | "readonly";
-
-/** Let long snake_case names (infrastructure_investigator) wrap after an underscore. */
-function breakable(text: string): ReactNode {
-  const parts = text.split("_");
-  return parts.map((part, i) => (
-    <Fragment key={i}>
-      {part}
-      {i < parts.length - 1 ? (
-        <>
-          _<wbr />
-        </>
-      ) : null}
-    </Fragment>
-  ));
-}
-
-const TRUST_TAG: Record<Trust, string> = {
-  trusted: "trusted code",
-  untrusted: "untrusted data",
-  readonly: "read-only agents",
-};
-
-function Layer({
-  n,
-  title,
-  trust,
-  children,
-  subs,
-}: {
-  n: number;
-  title: string;
-  trust: Trust;
-  children?: ReactNode;
-  subs?: { label: string; detail?: string; dim?: boolean; active?: boolean }[];
-}) {
-  return (
-    <div className={`layer trust-${trust}`}>
-      <div className="layer-head">
-        <span className="layer-num">{n}</span>
-        <span className="layer-title">{title}</span>
-        <span className={`trust-tag trust-${trust}`}>{TRUST_TAG[trust]}</span>
-      </div>
-      {children ? <div className="layer-desc">{children}</div> : null}
-      {subs ? (
-        <div className="layer-subs">
-          {subs.map((s) => (
-            <div key={s.label} className={`layer-sub${s.dim ? " dim" : ""}${s.active ? " active" : ""}`}>
-              <span className="layer-sub-label">{breakable(s.label)}</span>
-              {s.detail ? <span className="layer-sub-detail">{s.detail}</span> : null}
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function Arrow({ label }: { label?: string }) {
-  return (
-    <div className="arch-arrow" aria-hidden="true">
-      <span className="arch-arrow-line" />
-      {label ? <span className="arch-arrow-label">{label}</span> : null}
-    </div>
-  );
-}
-
-function Diagram() {
-  return (
-    <div className="arch">
-      <Layer n={1} title="Alert / scenario" trust="untrusted">
-        A simulated fault replayed from fixtures now; an SREGym problem later. Alert text is data, never instructions.
-      </Layer>
-      <Arrow label="typed Incident" />
-      <Layer n={2} title="Incident controller" trust="trusted">
-        Lifecycle state machine, a checkpoint after every transition, bounded retries and hard budgets. The only component
-        that can execute a write.
-      </Layer>
-      <Arrow />
-      <Layer
-        n={3}
-        title="Context & experience"
-        trust="untrusted"
-        subs={[
-          {
-            label: "Runbook RAG",
-            detail: "BM25 keywords by default; hybrid adds meaning from a local embedder (nomic-embed-text); agents search too; cited chunks",
-          },
-          { label: "Episodic memory", detail: "past runs: DEMO partition for scripted runs, LIVE for real models; similar ≠ safe to reuse" },
-          { label: "Evidence registry", detail: "immutable observations with ids" },
-        ]}
-      >
-        The context packer builds bounded, ranked views within an estimated-token budget.
-      </Layer>
-      <Arrow />
-      <Layer n={4} title="Adaptive router" trust="trusted">
-        Single generalist or parallel specialists, chosen from observable signals and the remaining budget; the rule that fired
-        is logged. A disagreement no evidence rule settles sends the verifier's question to one follow-up round (the
-        disagreement signal: RT3-disagreement, unless an earlier rule such as RT2-cross-service fires first); if it stays
-        open, a person decides. The verifier's leads (where to look next, with no conflict) go to the next round too.
-      </Layer>
-      <Arrow label="asyncio.gather when parallel" />
-      <Layer
-        n={5}
-        title="Investigation agents"
-        trust="readonly"
-        subs={[
-          { label: "investigator" },
-          { label: "telemetry_investigator" },
-          { label: "infrastructure_investigator" },
-          { label: "evidence_verifier", detail: "no tools; the merger pools claims, rules V1–V7 judge them, VP1–VP4 the fix" },
-        ]}
-      >
-        observe → reason → act. The provider (the scripted policy, a local or free hosted model on prompts-v4.5, or a replay)
-        sees only packed evidence; every hypothesis must cite evidence ids. In a parallel round each specialist sees the
-        evidence from before the round plus its own, never the other's. Disagreements are settled by evidence rules, never by
-        votes.
-      </Layer>
-      <Arrow label="tool calls" />
-      <Layer n={6} title="MCP tool gateway" trust="trusted">
-        A real MCP client and server over stdio. Discovery is untrusted; typed arguments, the risk policy on every call, bounded
-        outputs and an audit trail. One read tool, search_runbooks, is answered by RECAP itself on the same path.
-      </Layer>
-      <Arrow />
-      <Layer
-        n={7}
-        title="Target environment adapter"
-        trust="untrusted"
-        subs={[
-          { label: "Simulator", detail: "V1 · active", active: true },
-          { label: "SREGym / Kubernetes", detail: "V2 · adapter interface only", dim: true },
-        ]}
-      >
-        Tool outputs and logs come back as untrusted data.
-      </Layer>
-      <Arrow label="mitigation proposal" />
-      <div className="arch-row">
-        <Layer n={8} title="Safety policy" trust="trusted">
-          ALLOW · APPROVAL_REQUIRED · DENY, from trusted inputs only.
-        </Layer>
-        <span className="arch-row-arrow" aria-hidden="true">
-          <Icon name="arrowRight" size={16} />
-        </span>
-        <Layer n={9} title="Approval" trust="trusted">
-          Bound to the exact proposal digest, expiring, single use.
-        </Layer>
-        <span className="arch-row-arrow" aria-hidden="true">
-          <Icon name="arrowRight" size={16} />
-        </span>
-        <Layer n={10} title="Mitigation" trust="trusted">
-          Executed by the controller through the gateway.
-        </Layer>
-      </div>
-      <Arrow />
-      <Layer n={11} title="Independent recovery oracle" trust="trusted">
-        Ground-truth health before vs after, read from environment state — never from agent text.
-      </Layer>
-      <Arrow />
-      <Layer n={12} title="Memory consolidation" trust="trusted">
-        A finished run becomes an episode in its own partition (DEMO for the scripted policy, LIVE for a real model; replays and
-        held-out test scenarios write none), summarized by deterministic extraction (consolidator-v2); <strong>success</strong>{" "}
-        only if the oracle verified recovery.
-        <span className="arch-loop">
-          <Icon name="refresh" size={13} /> feeds the next incident's context (3)
-        </span>
-      </Layer>
-
-      <div className="arch-cross">
-        <div className="arch-cross-title">Cross-cutting</div>
-        <div className="arch-cross-items">
-          <span>Telemetry: structured trace events → SQLite, JSONL, live SSE</span>
-          <span>Budgets: steps, tool calls, estimated tokens, model tokens the server reports, run clock (approval waits excluded)</span>
-          <span>Evaluations: fixed train/test split, baselines, ablations, red team</span>
-          <span>
-            API + dashboard: no endpoint executes an action directly; clients start simulated runs and evaluations and approve
-            or reject one exact proposal
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Wiring({ system }: { system: SystemSummary }) {
-  const env = system.environment;
-  return (
-    <>
-      <KeyValues
-        className="wiring"
-        rows={[
-          [
-            "7 · Environment adapter",
-            <span className="cell-stack">
-              <span className="chip-row">
-                <Mono>{system.environment_kind}</Mono>
-                {env.is_simulated ? <SimulatedBadge /> : <Chip tone="bad">real system</Chip>}
-              </span>
-              <span>
-                {env.name} · namespace <Mono>{env.namespace}</Mono>
-              </span>
-              {env.supported_actions.length ? (
-                <span className="muted small">supported actions: {env.supported_actions.join(", ")}</span>
-              ) : null}
-              {env.description ? <span className="muted small">{env.description}</span> : null}
-            </span>,
-          ],
-          ["6 · Tool transport", system.tool_transport],
-          [
-            "5 · Decision provider",
-            <span className="cell-stack">
-              <span className="chip-row">
-                <Mono>{system.provider.name}</Mono>
-                <OriginChip provider={system.provider} />
-                {system.provider.mode ? <span className="muted small">{system.provider.mode} mode</span> : null}
-                {system.provider.prompt_version ? <span className="muted small">{system.provider.prompt_version}</span> : null}
-              </span>
-              {system.provider.description ? <span className="muted small">{system.provider.description}</span> : null}
-            </span>,
-          ],
-          ["5 · Evidence verifier", <Mono>{system.verifier}</Mono>],
-          [
-            "3 · Retriever",
-            <span className="cell-stack">
-              <span>
-                <Mono>{system.retriever}</Mono> · {fmtInt(system.knowledge_chunks)} chunks
-              </span>
-              {/* M3: the retriever is what a run that does not choose searches with; hybrid_ready says whether hybrid can run. */}
-              {system.retrieval_mode ? (
-                <span className="muted small">
-                  default search: {searchModeLabel(system.retrieval_mode, true)}
-                  {hybridReadiness(system) === "ready" ? " · hybrid can run" : " · hybrid cannot run: stored vectors missing or incomplete"}
-                  {system.embedder ? (
-                    <>
-                      {" "}· stored vectors <Mono>{system.embedder}</Mono>
-                    </>
-                  ) : null}
-                </span>
-              ) : null}
-            </span>,
-          ],
-          ["3 · Experience memory", `${fmtInt(system.memory_episodes)} episodes`],
-          ["4 · Router", <Mono>{system.router}</Mono>],
-          ["8 · Safety policy", <Mono>{system.safety_policy}</Mono>],
-          ["11 · Recovery oracle", <Mono>{system.oracle}</Mono>],
-          [
-            "Trace sinks",
-            <span className="chip-row">
-              {system.trace_sinks.map((s) => (
-                <Chip key={s} mono>
-                  {s}
-                </Chip>
-              ))}
-            </span>,
-          ],
-          ["Config hash", <Mono>{system.config_hash}</Mono>],
-          ["Fixture hash", <Mono>{system.fixture_hash}</Mono>],
-        ]}
-      />
-      <Notice tone="accent" icon="architecture" title="Swapping the infrastructure">
-        Swap the infrastructure by writing one <Mono>TargetEnvironment</Mono> adapter and changing{" "}
-        <Mono>configs/environment.yaml</Mono>: the controller, gateway, RAG, memory, router and orchestrator code stay
-        unchanged. Still simulator-specific (data, not code): the log conventions the scripted policy and verifier parse, the
-        policy allowlists and the runbooks.
-      </Notice>
-    </>
-  );
-}
-
-export function ArchitecturePage({ system }: PageProps) {
-  return (
-    <>
-      <PageHeader
-        title="Architecture"
-        description="How an alert flows through RECAP, where the trust boundaries are, and which implementation is plugged into each interface right now."
-      />
-      <div className="arch-layout">
-        <Card
-          title="RECAP flow"
-          subtitle={
-            <span className="chip-row">
-              <span className="trust-tag trust-trusted">trusted code</span>
-              <span className="trust-tag trust-untrusted">untrusted data</span>
-              <span className="trust-tag trust-readonly">read-only agents</span>
-            </span>
-          }
-        >
-          <Diagram />
-        </Card>
-        <Card title="Live wiring" subtitle="GET /system — numbers refer to the diagram">
-          {system.data ? <Wiring system={system.data} /> : system.error ? <ErrorState error={system.error} /> : <Loading />}
-        </Card>
-      </div>
-      <ProvidersCard />
-    </>
-  );
-}
-
-const STATUS_TONE: Record<ProviderStatus["status"], Tone> = {
-  ready: "ok",
-  needs_setup: "warn",
-  stopped: "bad",
-  disabled: "neutral",
-  unavailable: "warn",
-};
+import { ErrorView, PolledView } from "../components/StateViews";
+import { StatusToken } from "../components/StatusToken";
+import type * as dto from "../dto";
+import { PAGE_LABELS, hrefFor, navigate, usePolling } from "../hooks";
+import type { PageProps, Polled } from "../hooks";
+import "../styles/overview-architecture.css";
+import {
+  ADRS,
+  AROUND_NODES,
+  DOCS,
+  FLOW_STEPS,
+  TRUST_LABELS,
+  adapterLook,
+  adapterName,
+  adrPath,
+  archNode,
+  componentById,
+  componentLook,
+  nextNodeId,
+  nodeFacts,
+  nodeStatus,
+  providerSource,
+  repoUrl,
+  selectedNodeId,
+} from "../view/system";
+import type { ArchNode, ArchNodeId, StatusLook, Trust } from "../view/system";
 
 /**
- * Every configured decision provider and whether it could run now (GET /providers). The
- * server never calls a hosted API or a model to answer this, and a key is shown only as
- * present or missing. The server's default provider is the one new runs use.
+ * Architecture & Learning: the flow one incident takes through RECAP, drawn from what this
+ * server runs. Each step shows the status GET /system reports for its components (active,
+ * available, planned, ...); selecting it explains what it does, where its code lives, the
+ * decisions (ADRs) behind it and the trace events it writes. The explanations are RECAP's own
+ * documentation; every status and fact is the server's.
  */
-function ProvidersCard() {
-  const providers = usePolling(() => api.providers(), 15000, []);
+
+type Loaded<T> = Pick<Polled<T>, "data" | "error" | "loading" | "refresh">;
+
+const PANEL_ID = "amap-panel";
+const tabId = (id: ArchNodeId) => `amap-tab-${id}`;
+
+function DocLink({ path, children }: { path: string; children?: ReactNode }) {
   return (
-    <Card
-      title="Decision providers"
-      subtitle="GET /providers — readiness, free-tier guard and usage; this project's budget is $0"
-    >
-      {providers.data ? (
-        <DataTable
-          rows={providers.data}
-          rowKey={(row) => row.name}
-          columns={[
-            {
-              key: "name",
-              header: "Provider",
-              render: (row) => (
-                <span className="cell-stack">
-                  <span className="chip-row">
-                    <Mono>{row.name}</Mono>
-                    {row.default ? <Chip tone="accent">server default</Chip> : null}
-                  </span>
-                  <span className="muted small">{row.description}</span>
-                </span>
-              ),
-            },
-            { key: "origin", header: "Origin", render: (row) => <OriginChip provider={row} /> },
-            {
-              key: "model",
-              header: "Model",
-              render: (row) =>
-                row.model ? (
-                  <span className="cell-stack">
-                    <Mono>{row.model}</Mono>
-                    {row.mode ? <span className="muted small">{row.mode} mode</span> : null}
-                  </span>
-                ) : (
-                  <span className="muted">—</span>
-                ),
-            },
-            {
-              key: "status",
-              header: "Status",
-              render: (row) => (
-                <span className="cell-stack">
-                  <Chip tone={STATUS_TONE[row.status]} dot>
-                    {row.status.replace("_", " ")}
-                  </Chip>
-                  <span className="muted small">{row.detail}</span>
-                  {row.key_env ? (
-                    <span className="muted small">
-                      key <Mono>{row.key_env}</Mono>: {row.key_present ? "present (value never shown)" : "missing"}
-                    </span>
-                  ) : null}
-                </span>
-              ),
-            },
-            {
-              key: "usage",
-              header: "Requests (24 h)",
-              numeric: true,
-              render: (row) =>
-                row.usage ? (
-                  <span className="cell-stack">
-                    <span>{fmtInt(row.usage.requests_last_24h)}</span>
-                    <span className="muted small">{fmtInt(row.usage.tokens_last_24h)} tokens</span>
-                  </span>
-                ) : (
-                  <span className="muted">—</span>
-                ),
-            },
-          ]}
-        />
-      ) : providers.error ? (
-        <ErrorState error={providers.error} />
-      ) : (
-        <Loading />
-      )}
-    </Card>
+    <a className="amap-doc-link" href={repoUrl(path)} target="_blank" rel="noopener noreferrer">
+      {children ?? <Mono>{path}</Mono>}
+      <span className="sr-only"> (opens on GitHub)</span>
+    </a>
   );
+}
+
+/** Long identifiers (interface.method, snake_case roles) may wrap after a "." or "_" only. */
+export function Breakable({ text }: { text: string }) {
+  const parts = text.split(/(?<=[._])/);
+  return (
+    <>
+      {parts.map((part, i) => (
+        <Fragment key={i}>
+          {part}
+          {i < parts.length - 1 ? <wbr /> : null}
+        </Fragment>
+      ))}
+    </>
+  );
+}
+
+function TrustTag({ trust }: { trust: Trust }) {
+  return <span className={`amap-trust trust-${trust}`}>{TRUST_LABELS[trust]}</span>;
+}
+
+/** What a node's status token says while /system is loading, failed, or lists nothing for it. */
+function statusOf(node: ArchNode, system: dto.SystemView | null, failed: boolean): StatusLook {
+  if (!node.components.length) {
+    return {
+      label: "No status in /system",
+      tone: "neutral",
+      icon: "minus",
+      title: "Not a swappable component: GET /system reports no separate status for it.",
+    };
+  }
+  if (!system) {
+    return failed
+      ? { label: "Status unavailable", tone: "neutral", icon: "minus", title: "GET /system could not be loaded." }
+      : { label: "Checking…", tone: "neutral", icon: "clock", title: "Waiting for GET /system." };
+  }
+  return nodeStatus(node, system)?.look ?? componentLook(null);
+}
+
+function partStatus(component: string | undefined, system: dto.SystemView | null): StatusLook | null {
+  if (!component || !system) return null;
+  const found = componentById(system, component);
+  return found ? componentLook(found.status) : componentLook(null);
+}
+
+/** The implementation line under a node's title: the server's, else the node's own summary. */
+function implementationOf(node: ArchNode, system: dto.SystemView | null): string {
+  if (node.id === "environment" && system) return `${system.environment.name} · ${system.environment_kind}`;
+  const first = node.components.length && system ? componentById(system, node.components[0]) : null;
+  return first ? first.implementation : node.summary;
+}
+
+// ======================================================================================
+// The flow map: a vertical tab list of steps, and the panel of the selected one
+// ======================================================================================
+
+function NodeButton({
+  node,
+  system,
+  failed,
+  selected,
+  onSelect,
+  onKeyDown,
+}: {
+  node: ArchNode;
+  system: dto.SystemView | null;
+  failed: boolean;
+  selected: boolean;
+  onSelect: (id: ArchNodeId, how: "pointer" | "keyboard") => void;
+  onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => void;
+}) {
+  const look = statusOf(node, system, failed);
+  const planned = nodeStatus(node, system)?.component?.status === "planned";
+  const classes = ["amap-node", `trust-${node.trust}`, selected ? "is-selected" : "", planned ? "is-planned" : ""].filter(Boolean).join(" ");
+  return (
+    <button
+      type="button"
+      role="tab"
+      id={tabId(node.id)}
+      className={classes}
+      aria-selected={selected}
+      aria-controls={PANEL_ID}
+      aria-labelledby={`${tabId(node.id)}-title ${tabId(node.id)}-status`}
+      tabIndex={selected ? 0 : -1}
+      onClick={(event) => onSelect(node.id, event.detail === 0 ? "keyboard" : "pointer")}
+      onKeyDown={onKeyDown}
+    >
+      <span className="amap-node-head">
+        <span className="amap-step" aria-hidden="true">
+          {node.step ?? <Icon name={node.icon} size={13} />}
+        </span>
+        <span className="amap-node-title" id={`${tabId(node.id)}-title`}>
+          {node.step ? <span className="sr-only">Step {node.step}: </span> : null}
+          {node.title}
+        </span>
+        <TrustTag trust={node.trust} />
+        <span className="amap-node-status" id={`${tabId(node.id)}-status`}>
+          <StatusToken tone={look.tone} icon={look.icon} label={look.label} title={look.title} size="sm" />
+        </span>
+      </span>
+      <span className="amap-node-impl">{implementationOf(node, system)}</span>
+      {node.parts.length ? (
+        <span className="amap-parts">
+          {node.parts.map((part) => {
+            const status = partStatus(part.component, system);
+            return (
+              <span key={part.label} className="amap-part">
+                <span className="amap-part-label">
+                  <Breakable text={part.label} />
+                </span>
+                {part.note ? <span className="amap-part-note">{part.note}</span> : null}
+                {status ? <StatusToken tone={status.tone} icon={status.icon} label={status.label} size="sm" variant="plain" /> : null}
+              </span>
+            );
+          })}
+        </span>
+      ) : null}
+      {node.id === "environment" && system ? (
+        <span className="amap-parts">
+          {system.environment_adapters.map((adapter) => {
+            const status = adapterLook(adapter);
+            return (
+              <span key={adapter.kind} className={adapter.status === "planned" ? "amap-part is-planned" : "amap-part"}>
+                <span className="amap-part-label">{adapterName(adapter.kind)}</span>
+                <StatusToken tone={status.tone} icon={status.icon} label={status.label} size="sm" variant="plain" />
+              </span>
+            );
+          })}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+function Connector({ label, loop, end = false }: { label?: string; loop?: string; end?: boolean }) {
+  return (
+    <div className={end ? "amap-connector is-end" : "amap-connector"} aria-hidden="true">
+      {end ? null : <span className="amap-connector-line" />}
+      {label ? <span className="amap-connector-label">{label}</span> : null}
+      {loop ? (
+        <span className="amap-connector-loop">
+          <Icon name="refresh" size={12} /> {loop}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+export function FlowMap({
+  system,
+  failed = false,
+  selected,
+  onSelect,
+}: {
+  system: dto.SystemView | null;
+  failed?: boolean;
+  selected: ArchNodeId;
+  onSelect: (id: ArchNodeId, how: "pointer" | "keyboard") => void;
+}) {
+  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    const current = archNode(event.currentTarget.id.replace("amap-tab-", ""))?.id ?? selected;
+    const next = nextNodeId(current, event.key);
+    if (!next) return;
+    event.preventDefault();
+    onSelect(next, "keyboard");
+    document.getElementById(tabId(next))?.focus();
+  };
+  const node = archNode(selected) ?? FLOW_STEPS[0];
+  return (
+    <div className="amap">
+      <div className="amap-graph" role="tablist" aria-orientation="vertical" aria-label="RECAP's flow, step by step">
+        {FLOW_STEPS.map((step, i) => (
+          <div key={step.id} className="amap-cell">
+            <NodeButton node={step} system={system} failed={failed} selected={step.id === selected} onSelect={onSelect} onKeyDown={onKeyDown} />
+            {i < FLOW_STEPS.length - 1 ? <Connector label={step.next} loop={step.loop} /> : step.loop ? <Connector loop={step.loop} end /> : null}
+          </div>
+        ))}
+        <div className="amap-around" aria-hidden="true">
+          Around every step
+        </div>
+        {AROUND_NODES.map((around) => (
+          <div key={around.id} className="amap-cell">
+            <NodeButton node={around} system={system} failed={failed} selected={around.id === selected} onSelect={onSelect} onKeyDown={onKeyDown} />
+          </div>
+        ))}
+      </div>
+      <section id={PANEL_ID} className="amap-panel" role="tabpanel" aria-labelledby={`${tabId(node.id)}-title`}>
+        <NodeDetail node={node} system={system} failed={failed} />
+      </section>
+    </div>
+  );
+}
+
+// ======================================================================================
+// The selected step's explanation
+// ======================================================================================
+
+function ComponentLine({ id, system }: { id: string; system: dto.SystemView }) {
+  const component = componentById(system, id);
+  if (!component) {
+    return (
+      <li className="amap-component">
+        <span className="amap-component-head">
+          <Mono>{id}</Mono>
+          <StatusToken tone="neutral" icon="minus" label="Not reported" size="sm" />
+        </span>
+        <span className="amap-component-detail">This server's GET /system does not list this component.</span>
+      </li>
+    );
+  }
+  const look = componentLook(component.status);
+  return (
+    <li className="amap-component">
+      <span className="amap-component-head">
+        <Mono>
+          <Breakable text={component.interface} />
+        </Mono>
+        <StatusToken tone={look.tone} icon={look.icon} label={look.label} title={look.title} size="sm" />
+      </span>
+      <span className="amap-component-impl">{component.implementation}</span>
+      {component.detail ? <span className="amap-component-detail">{component.detail}</span> : null}
+    </li>
+  );
+}
+
+function StatusSection({ node, system, failed }: { node: ArchNode; system: dto.SystemView | null; failed: boolean }) {
+  let body: ReactNode;
+  if (!node.components.length) {
+    body = (
+      <p className="amap-muted">
+        The controller is not a swappable interface, so GET /system reports no separate status for it. Every run goes through it.
+      </p>
+    );
+  } else if (!system) {
+    body = <p className="amap-muted">{failed ? "GET /system could not be loaded, so no status is shown." : "Waiting for GET /system…"}</p>;
+  } else {
+    body = (
+      <ul className="amap-components">
+        {node.components.map((id) => (
+          <ComponentLine key={id} id={id} system={system} />
+        ))}
+      </ul>
+    );
+  }
+  return (
+    <section className="amap-section">
+      <h4 className="mini-title">Status in GET /system</h4>
+      {body}
+      {node.id === "environment" && system ? (
+        <ul className="amap-components">
+          {system.environment_adapters.map((adapter) => {
+            const look = adapterLook(adapter);
+            return (
+              <li key={adapter.kind} className={adapter.status === "planned" ? "amap-component is-planned" : "amap-component"}>
+                <span className="amap-component-head">
+                  <span className="amap-adapter-name">
+                    {adapterName(adapter.kind)} adapter{adapter.configured ? <span className="amap-tag">configured</span> : null}
+                  </span>
+                  <span className="chip-row">
+                    <StatusToken tone={look.tone} icon={look.icon} label={look.label} title={look.title} size="sm" />
+                    <StatusToken
+                      tone={adapter.operational ? "ok" : "neutral"}
+                      icon={adapter.operational ? "check" : "minus"}
+                      label={adapter.operational ? "Operational" : "Not operational"}
+                      size="sm"
+                      variant="outline"
+                    />
+                  </span>
+                </span>
+                {adapter.adapter ? (
+                  <span className="amap-component-impl">
+                    class <Mono>{adapter.adapter}</Mono>
+                  </span>
+                ) : null}
+                <span className="amap-component-detail">{adapter.detail}</span>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+      {node.id === "environment" ? (
+        <p className="amap-muted">
+          The M5 plan: <DocLink path={DOCS.m5Plan} /> (documentation only: nothing in it is built, installed or provisioned).
+        </p>
+      ) : null}
+      {node.id === "specialists" && system ? <DefaultProvider system={system} /> : null}
+    </section>
+  );
+}
+
+function DefaultProvider({ system }: { system: dto.SystemView }) {
+  const source = providerSource(system.provider);
+  return (
+    <div className="amap-provider">
+      <span className="amap-muted">New runs use, unless they pick another provider:</span>
+      {source.error ? (
+        <StatusToken tone="bad" icon="x" label="Default provider cannot be built" title={source.error} size="sm" />
+      ) : (
+        <DataSourceBadge provider={{ origin: source.origin, kind: source.kind, model: source.model }} size="sm" label="Default provider" />
+      )}
+      {source.name ? <Mono>{source.name}</Mono> : null}
+    </div>
+  );
+}
+
+export function NodeDetail({ node, system, failed = false }: { node: ArchNode; system: dto.SystemView | null; failed?: boolean }) {
+  const facts = system ? nodeFacts(node, system) : [];
+  return (
+    <div className="amap-detail">
+      <div className="amap-detail-head">
+        <span className="amap-kicker">
+          {node.step ? `Step ${node.step} of ${FLOW_STEPS.length}` : "Around every step"}
+          <TrustTag trust={node.trust} />
+        </span>
+        <h3 className="amap-detail-title">
+          <Icon name={node.icon} size={18} />
+          {node.title}
+        </h3>
+        <p className="amap-detail-summary">{node.summary}</p>
+      </div>
+
+      <StatusSection node={node} system={system} failed={failed} />
+
+      <section className="amap-section">
+        <h4 className="mini-title">What it does</h4>
+        {node.what.map((paragraph) => (
+          <p key={paragraph} className="amap-text">
+            {paragraph}
+          </p>
+        ))}
+        {node.loop ? (
+          <p className="amap-loop">
+            <Icon name="refresh" size={13} />
+            {node.loop}
+          </p>
+        ) : null}
+      </section>
+
+      {facts.length ? (
+        <section className="amap-section">
+          <h4 className="mini-title">This server (GET /system)</h4>
+          <dl className="amap-facts">
+            {facts.map(([label, value]) => (
+              <div key={label} className="amap-fact">
+                <dt>{label}</dt>
+                <dd>{value}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      ) : null}
+
+      <section className="amap-section">
+        <h4 className="mini-title">Code</h4>
+        <ul className="amap-links">
+          {node.modules.map((path) => (
+            <li key={path}>
+              <Icon name="code" size={13} />
+              <DocLink path={path} />
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section className="amap-section">
+        <h4 className="mini-title">Decisions (ADRs)</h4>
+        <ul className="amap-links">
+          {node.adrs.map((id) => {
+            const adr = ADRS.get(id);
+            if (!adr) return null;
+            return (
+              <li key={id}>
+                <Icon name="book" size={13} />
+                <DocLink path={adrPath(adr)}>
+                  <span className="amap-adr-id">ADR {adr.id}</span> {adr.title}
+                </DocLink>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+
+      {node.events.length ? (
+        <section className="amap-section">
+          <h4 className="mini-title">In a run's trace</h4>
+          <span className="chip-row">
+            {node.events.map((event) => (
+              <code key={event} className="amap-event">
+                {event}
+              </code>
+            ))}
+          </span>
+        </section>
+      ) : null}
+
+      <div className="amap-detail-actions">
+        {node.page ? (
+          <a className="btn btn-small" href={hrefFor(node.page)}>
+            See it in {PAGE_LABELS[node.page]} <Icon name="chevronRight" size={13} />
+          </a>
+        ) : null}
+        <button
+          type="button"
+          className="btn btn-ghost btn-small amap-back"
+          onClick={() => document.getElementById(tabId(node.id))?.focus()}
+        >
+          Back to the flow
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ======================================================================================
+// Live wiring and learning links
+// ======================================================================================
+
+export function Wiring({ system }: { system: dto.SystemView }) {
+  const v = system.versions;
+  return (
+    <>
+      <ul className="amap-wiring">
+        {system.components.map((c) => {
+          const look = componentLook(c.status);
+          return (
+            <li key={c.id} className={c.status === "planned" ? "amap-wire is-planned" : "amap-wire"}>
+              <span className="amap-wire-interface">
+                <Mono>
+                  <Breakable text={c.interface} />
+                </Mono>
+              </span>
+              <span className="amap-wire-impl">
+                <span>{c.implementation}</span>
+                {c.detail ? <span className="amap-wire-detail">{c.detail}</span> : null}
+              </span>
+              <span className="amap-wire-status">
+                <StatusToken tone={look.tone} icon={look.icon} label={look.label} title={look.title} size="sm" />
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      <dl className="amap-versions">
+        {(
+          [
+            ["RECAP", v.recap],
+            ["API schema", v.api_schema],
+            ["Trace schema", v.trace_schema],
+            ["Prompts", v.prompt_version],
+            ["Policy", v.policy_version],
+            ["Router", v.router],
+            ["Verifier", v.verifier],
+            ["Config hash", v.config_hash],
+            ["Fixture hash", v.fixture_hash],
+            ["Code version", v.code_version],
+          ] as const
+        ).map(([label, value]) => (
+          <div key={label} className="amap-version">
+            <dt>{label}</dt>
+            <dd>
+              <Mono>{value}</Mono>
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </>
+  );
+}
+
+const LEARN: readonly { path: string; title: string; about: string }[] = [
+  { path: DOCS.flow, title: "End-to-end walkthrough", about: "One incident, stage by stage: what comes in, which code handles it, what comes out." },
+  { path: DOCS.adrIndex, title: "Decision records (ADRs)", about: "Why each part is built the way it is, one short record per decision." },
+  { path: DOCS.architecture, title: "Architecture", about: "The components in depth, their trust boundaries, and how to swap the infrastructure." },
+  { path: DOCS.threatModel, title: "Threat model", about: "Every threat RECAP defends against, where the defense lives and the test that proves it." },
+  { path: DOCS.demoWalkthrough, title: "Demo walkthrough", about: "A short tour of the recorded real-model replay, and what it does and does not prove." },
+  { path: DOCS.m5Plan, title: "M5 integration plan", about: "Kind first, then SREGym: the plan for a real Kubernetes target. Documentation only." },
+];
+
+export function LearnLinks() {
+  return (
+    <ul className="amap-learn">
+      {LEARN.map((doc) => (
+        <li key={doc.path} className="amap-learn-item">
+          <DocLink path={doc.path}>
+            <span className="amap-learn-title">{doc.title}</span>
+          </DocLink>
+          <span className="amap-learn-about">{doc.about}</span>
+          <Mono>{doc.path}</Mono>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// ======================================================================================
+// The page
+// ======================================================================================
+
+export function ArchitectureView({
+  system,
+  selected,
+  onSelect,
+}: {
+  system: Loaded<dto.SystemView>;
+  selected: ArchNodeId;
+  onSelect: (id: ArchNodeId, how: "pointer" | "keyboard") => void;
+}) {
+  const failed = !system.data && !!system.error;
+  return (
+    <div className="amap-page">
+      <PageHeader
+        title="Architecture & Learning"
+        description="How one incident moves through RECAP, drawn from what this server runs. Select a step to see what it does, where its code lives, the decisions behind it and its live status."
+        actions={
+          <div className="amap-header-links">
+            <DocLink path={DOCS.flow}>
+              <Icon name="book" size={14} /> Walkthrough
+            </DocLink>
+            <DocLink path={DOCS.adrIndex}>
+              <Icon name="book" size={14} /> ADR index
+            </DocLink>
+          </div>
+        }
+      />
+
+      <Card
+        title="How one incident flows through RECAP"
+        subtitle="Each step's status comes from GET /system. Use the arrow keys to move between steps."
+      >
+        <div className="amap-legend" aria-label="Legend">
+          <span className="amap-legend-group">
+            <TrustTag trust="trusted" />
+            <TrustTag trust="untrusted" />
+            <TrustTag trust="readonly" />
+            <TrustTag trust="human" />
+          </span>
+          <span className="amap-legend-note">Planned parts (M5) are dashed and never shown as active.</span>
+        </div>
+        {failed && system.error ? (
+          <ErrorView error={system.error} title="Could not load GET /system: statuses are not shown" onRetry={system.refresh} />
+        ) : null}
+        <FlowMap system={system.data ?? null} failed={failed} selected={selected} onSelect={onSelect} />
+      </Card>
+
+      <Card title="Live wiring" subtitle="Every interface, the implementation behind it and its status, as GET /system reports them">
+        <PolledView polled={system} loadingLabel="Loading GET /system…" errorTitle="Could not load GET /system">
+          {(data) => <Wiring system={data} />}
+        </PolledView>
+      </Card>
+
+      <Card title="Learn more" subtitle="The documents behind this page, in the repository (links open on GitHub)">
+        <LearnLinks />
+      </Card>
+    </div>
+  );
+}
+
+/** On a narrow screen the panel sits under the flow: bring it into view after a tap. */
+function revealPanel(how: "pointer" | "keyboard") {
+  if (how !== "pointer" || typeof window === "undefined" || !window.matchMedia) return;
+  if (!window.matchMedia("(max-width: 1099px)").matches) return;
+  window.setTimeout(() => document.getElementById(PANEL_ID)?.scrollIntoView({ block: "start", behavior: "smooth" }), 30);
+}
+
+export function ArchitecturePage({ route }: PageProps) {
+  const system = usePolling(() => api.systemView(), 30_000, []);
+  const selected = selectedNodeId(route.params.get("node"));
+  const onSelect = (id: ArchNodeId, how: "pointer" | "keyboard") => {
+    if (id !== selected) navigate("architecture", { node: id }, true);
+    revealPanel(how);
+  };
+  return <ArchitectureView system={system} selected={selected} onSelect={onSelect} />;
 }

@@ -11,8 +11,11 @@
  * This module imports types only, so the Node tests in ../../tests can load it directly.
  */
 
+import type { IconName } from "../components/Icon";
+import type { MemoryAccessView, MemoryHitView, MemoryRetrievalView } from "../dto";
 import type { Tone } from "../format";
 import type {
+  ActionRecord,
   ExperienceEpisode,
   MemoryAssessPayload,
   MemoryHit,
@@ -449,3 +452,399 @@ export const RESTORE_NOTES: Record<Exclude<RestoreState, "named">, string> = {
   not_recorded: "not recorded (this run was checked before M3)",
   not_checked: "no live check yet",
 };
+
+// =============================================================================================
+// M4: episodes grouped by partition, who reads and writes memory (GET /system), each episode's
+// source run and past action, and one run's memory as GET /runs/{id}/retrieval reports it.
+// =============================================================================================
+
+/** The partitions in the order the page groups them (any other partition follows). */
+export const PARTITION_ORDER: readonly string[] = ["demo", "live", "train", "test"];
+
+export interface PartitionInfo {
+  partition: string;
+  /** Who writes it, in a few words ("real-model runs"). */
+  words: string;
+  /** One plain sentence for a newcomer. */
+  line: string;
+  /** Why the partition has no episode (shown when it is empty). */
+  empty: string;
+  tone: Tone;
+}
+
+const PARTITION_LINES = new Map<string, { line: string; empty: string }>([
+  [
+    "demo",
+    {
+      line: "Scripted runs write here. Before M3 real-model runs did too, so each episode says who made its decisions.",
+      empty: "No scripted run on this server has written an episode yet.",
+    },
+  ],
+  [
+    "live",
+    {
+      line: "Real-model runs write here (since M3). Replays and held-out test scenarios never write.",
+      empty: "No real-model run on this server has written an episode yet.",
+    },
+  ],
+  [
+    "train",
+    {
+      line: "Evaluation training runs write here; scored evaluation runs read only this partition.",
+      empty: "No evaluation training run has written an episode into this memory.",
+    },
+  ],
+  [
+    "test",
+    {
+      line: "Held-out evaluation runs never write memory, so this partition stays empty by design.",
+      empty: "Empty by design: held-out test runs never write memory.",
+    },
+  ],
+]);
+
+export function partitionInfo(partition: string): PartitionInfo {
+  const known = PARTITIONS.get(partition);
+  const lines = PARTITION_LINES.get(partition);
+  return {
+    partition,
+    words: known?.words ?? "a partition this dashboard does not know",
+    line: lines?.line ?? "The server lists this partition; this dashboard has no description of it.",
+    empty: lines?.empty ?? "No episode in this partition.",
+    tone: known?.tone ?? "neutral",
+  };
+}
+
+export interface PartitionGroup extends PartitionInfo {
+  episodes: ExperienceEpisode[];
+  /** Red-team plants among them (false memories put there on purpose). */
+  plants: number;
+}
+
+/**
+ * Episodes grouped by partition: demo, live, train, test first (always, so an empty partition
+ * says why it is empty), then any other partition the server lists or an episode names.
+ * Within a group, the server's order is kept.
+ */
+export function groupEpisodes(episodes: readonly ExperienceEpisode[], partitions?: readonly string[] | null): PartitionGroup[] {
+  const order = [...PARTITION_ORDER];
+  for (const name of [...(partitions ?? []), ...episodes.map((e) => text(e.partition) || "not recorded")]) {
+    if (!order.includes(name)) order.push(name);
+  }
+  return order.map((name) => {
+    const members = episodes.filter((e) => (text(e.partition) || "not recorded") === name);
+    return { ...partitionInfo(name), episodes: members, plants: members.filter(isPlanted).length };
+  });
+}
+
+// --- who reads and writes which partition ---------------------------------------------------------
+
+export interface AccessRule {
+  key: string;
+  /** The kind of run, in words. */
+  who: string;
+  read: string[];
+  /** null: this kind of run never writes memory. */
+  write: string | null;
+  note: string | null;
+  /** "server": GET /system reports it now; "code": the evaluation's fixed rule (documentation). */
+  source: "server" | "code";
+}
+
+const ACCESS_WHO: [string, string, string | null][] = [
+  ["scripted", "Scripted baseline run", null],
+  ["local_llm", "Local LLM run", null],
+  ["free_hosted_llm", "Free hosted LLM run", null],
+  ["paid_llm", "Paid LLM run", null],
+  ["replay", "Replay of a recorded run", "reads memory as it was when its recording began"],
+];
+
+/** The evaluation's own access (MemoryAccess.eval_train / eval_test, ADR 0023): fixed in code. */
+export const EVALUATION_ACCESS: readonly AccessRule[] = [
+  { key: "eval_train", who: "Evaluation training run", read: ["train"], write: "train", note: null, source: "code" },
+  {
+    key: "eval_test",
+    who: "Evaluation test run (scored)",
+    read: ["train"],
+    write: null,
+    note: "held-out scenarios never become episodes",
+    source: "code",
+  },
+];
+
+/** GET /system features.memory_access as rows (known run kinds first), then the evaluation's rules. */
+export function accessRules(access: Record<string, MemoryAccessView> | null | undefined): AccessRule[] {
+  const rows: AccessRule[] = [];
+  const known = new Set<string>();
+  const add = (key: string, who: string, note: string | null) => {
+    const rule = access?.[key];
+    if (!rule || !isRecord(rule)) return;
+    known.add(key);
+    rows.push({ key, who, read: texts(rule.read), write: text(rule.write) || null, note, source: "server" });
+  };
+  for (const [key, who, note] of ACCESS_WHO) add(key, who, note);
+  for (const key of Object.keys(access ?? {}).sort()) if (!known.has(key)) add(key, `${key} run`, null);
+  return [...rows, ...EVALUATION_ACCESS];
+}
+
+// --- an episode's source run, outcome and past action ------------------------------------------------
+
+export type SourceRunState = "present" | "absent" | "unknown" | "planted";
+
+export interface SourceRun {
+  runId: string;
+  state: SourceRunState;
+}
+
+/**
+ * Whether the run that wrote an episode is on this server (it then links to its Trace Explorer).
+ * `known`: the run ids this server listed, and whether that list is complete (null: not loaded).
+ */
+export function sourceRun(
+  episode: Pick<ExperienceEpisode, "origin_run_id" | "provenance">,
+  known: { ids: ReadonlySet<string>; complete: boolean } | null,
+): SourceRun {
+  const runId = text(episode.origin_run_id);
+  if (isPlanted(episode)) return { runId, state: "planted" };
+  if (!runId || !known) return { runId, state: "unknown" };
+  if (known.ids.has(runId)) return { runId, state: "present" };
+  return { runId, state: known.complete ? "absent" : "unknown" };
+}
+
+export interface OutcomeWords {
+  label: string;
+  tone: Tone;
+}
+
+/**
+ * What happened in the one run an episode records, worded as that run's result (never as a
+ * general claim about a model or the scripted policy). A plant's outcome is only its claim.
+ */
+export function episodeOutcome(episode: { outcome: string | null | undefined; verified: boolean | null | undefined }): OutcomeWords {
+  switch (episode.outcome) {
+    case "success":
+      return episode.verified
+        ? { label: "Recovered · oracle-verified", tone: "ok" }
+        : { label: "Success claimed · not verified", tone: "warn" };
+    case "failed":
+      return { label: "Not recovered", tone: "bad" };
+    case "blocked":
+      return { label: "Blocked · fix not applied", tone: "bad" };
+    case "budget_exhausted":
+      return { label: "Stopped · budget exhausted", tone: "warn" };
+    default:
+      return { label: text(episode.outcome) ? text(episode.outcome).replace(/_/g, " ") : "Not recorded", tone: "neutral" };
+  }
+}
+
+/**
+ * Who made an episode's decisions when it records no origin (consolidator-v1, before M3): the
+ * scripted policy when its provider says so, else a real model named by its provider.
+ */
+export function legacyDecider(episode: Pick<ExperienceEpisode, "provenance">): { words: string; provider: string | null } {
+  const provenance = isRecord(episode.provenance) ? episode.provenance : {};
+  const provider = text(provenance.provider).trim() || null;
+  if (!provider) return { words: "Not recorded", provider: null };
+  if (provider.startsWith(SCRIPTED_PROVIDER)) return { words: "scripted policy (not an LLM)", provider };
+  return { words: "a real model, recorded before M3", provider };
+}
+
+/** "execute_rollback on checkout (to_version=v2.4.0)", or null when there is no action. */
+export function actionWords(action: Pick<ActionRecord, "action" | "target" | "params"> | null | undefined): string | null {
+  if (!action || !isRecord(action)) return null;
+  const params = isRecord(action.params)
+    ? Object.entries(action.params)
+        .filter(([, value]) => value !== null && value !== undefined)
+        .map(([key, value]) => `${key}=${text(value)}`)
+        .join(", ")
+    : "";
+  const name = text(action.action) || "unknown action";
+  const target = text(action.target);
+  return `${name}${target ? ` on ${target}` : ""}${params ? ` (${params})` : ""}`;
+}
+
+/** "bad deployment on checkout", or null when the run reached no verified diagnosis. */
+export function diagnosisWords(episode: Pick<ExperienceEpisode, "failure_mechanism" | "mechanism_target">): string | null {
+  const mechanism = text(episode.failure_mechanism);
+  if (!mechanism) return null;
+  return `${mechanism.replace(/_/g, " ")} on ${text(episode.mechanism_target) || "an unnamed service"}`;
+}
+
+/** The rule every reuse must pass (assess_reuse, ADR 0023), in plain words: documentation. */
+export const REUSE_RULE: readonly string[] = [
+  "the past run recovered, and the independent oracle verified it",
+  "today's evidence supports the same mechanism on the same service",
+  "a remembered rollback restores a version today's evidence names, never today's bad release",
+];
+
+// --- one run's memory (GET /runs/{id}/retrieval `memory`) ----------------------------------------------
+
+export type WriteState = "written" | "skipped" | "disabled" | "pending" | "not_recorded";
+
+export interface RunMemoryFacts {
+  enabled: boolean;
+  /** The partitions the run read: its search's, else its configuration's. */
+  read: string[];
+  /** A replay reads memory as of its recording's start (the search's created_before). */
+  asOf: string | null;
+  /** The embedder of a semantic search, when one ran. */
+  semantic: string | null;
+  searches: number;
+  /** memory.assessment events: live checks of the hits. */
+  checks: number;
+  write: { state: WriteState; episodeId: string | null; partition: string | null; reasons: string[] };
+}
+
+export function runMemoryFacts(memory: MemoryRetrievalView, terminal: boolean): RunMemoryFacts {
+  const searched = memory.searches.find((s) => s.readable_partitions.length) ?? null;
+  const read = searched ? texts(searched.readable_partitions) : texts(memory.read_partitions);
+  const asOf = memory.searches.map((s) => text(s.created_before)).find(Boolean) ?? null;
+  const semantic = memory.searches.map((s) => text(s.semantic)).find(Boolean) ?? null;
+  const reasons = texts(memory.skipped);
+  let write: RunMemoryFacts["write"];
+  if (memory.written && text(memory.written.episode_id)) {
+    write = { state: "written", episodeId: text(memory.written.episode_id), partition: text(memory.written.partition) || null, reasons: [] };
+  } else if (reasons.length) write = { state: "skipped", episodeId: null, partition: null, reasons };
+  else if (!memory.write_enabled) write = { state: "disabled", episodeId: null, partition: null, reasons: [] };
+  else if (!terminal) write = { state: "pending", episodeId: null, partition: text(memory.write_partition) || null, reasons: [] };
+  else write = { state: "not_recorded", episodeId: null, partition: text(memory.write_partition) || null, reasons: [] };
+  return { enabled: memory.enabled, read, asOf, semantic, searches: memory.searches.length, checks: memory.assessments.length, write };
+}
+
+export type ReuseKind = "safe" | "rejected" | "not_checked";
+
+export interface ReuseView {
+  label: string;
+  tone: Tone;
+  icon: IconName;
+  meaning: string;
+}
+
+export const REUSE_VIEWS: Readonly<Record<ReuseKind, ReuseView>> = {
+  safe: { label: "Safe to reuse", tone: "ok", icon: "check", meaning: "Every reuse condition held on this run's own evidence." },
+  rejected: { label: "Rejected", tone: "bad", icon: "x", meaning: "RECAP's reuse check found at least one condition against reuse." },
+  not_checked: {
+    label: "Not checked",
+    tone: "neutral",
+    icon: "minus",
+    meaning: "No live check covered this hit, so it was never treated as safe to reuse.",
+  },
+};
+
+export interface HitCheck {
+  seq: number;
+  round: number | null;
+  safe: boolean | null;
+  mechanismMatch: boolean | null;
+  reason: string | null;
+  held: string[];
+  against: string[];
+  /** Versions today's evidence named as restore points ([]: none; null: none looked up). */
+  restorePoints: string[] | null;
+}
+
+export interface RunHit {
+  episodeId: string;
+  lexical: number | null;
+  semantic: number | null;
+  otherSignals: [string, string][];
+  /** False when the run recorded no signals (before M3). */
+  signalsRecorded: boolean;
+  partition: string | null;
+  /** The past run's result, as the hit recorded it. */
+  outcome: string | null;
+  verified: boolean | null;
+  mechanism: string | null;
+  service: string | null;
+  reuse: ReuseKind;
+  mechanismMatch: boolean | null;
+  /** RECAP's reuse verdict in its own words. */
+  reason: string | null;
+  held: string[];
+  against: string[];
+  /** Every live check of this hit, oldest first. */
+  checks: HitCheck[];
+  /** The full episode, when the run record or GET /memory has it. */
+  episode: ExperienceEpisode | null;
+  planted: boolean;
+}
+
+function hitCheck(seq: number, round: number | null, hit: MemoryHitView, restore: unknown): HitCheck {
+  return {
+    seq,
+    round,
+    safe: typeof hit.safe_to_reuse === "boolean" ? hit.safe_to_reuse : null,
+    mechanismMatch: typeof hit.mechanism_match === "boolean" ? hit.mechanism_match : null,
+    reason: text(hit.reason) || null,
+    held: texts(hit.supporting),
+    against: texts(hit.contradicting),
+    restorePoints: Array.isArray(restore) ? texts(restore) : null,
+  };
+}
+
+/**
+ * The run's memory hits with RECAP's reuse verdicts: the hits as the run ended (else its latest
+ * search's), each with every live check that covered it. A hit no check covered is "not
+ * checked", whatever default the record holds.
+ */
+export function runHits(memory: MemoryRetrievalView, episodes: ReadonlyMap<string, ExperienceEpisode>): RunHit[] {
+  const lastSearch = memory.searches.length ? memory.searches[memory.searches.length - 1] : null;
+  const base = memory.final_hits.length ? memory.final_hits : (lastSearch?.hits ?? []);
+  const searchHit = (id: string) => {
+    for (let i = memory.searches.length - 1; i >= 0; i -= 1) {
+      const found = memory.searches[i].hits.find((h) => h.episode_id === id);
+      if (found) return found;
+    }
+    return null;
+  };
+  return base.map((hit) => {
+    const id = text(hit.episode_id);
+    const checks = memory.assessments
+      .flatMap((a) => a.hits.filter((h) => h.episode_id === id).map((h) => hitCheck(a.seq, a.round, h, a.restore_points)))
+      .sort((a, b) => a.seq - b.seq);
+    const latest = checks.length ? checks[checks.length - 1] : null;
+    // Without any assessment event (a trace that was lost), the record's own verdict counts.
+    const assessedByRecord =
+      memory.assessments.length === 0 && (typeof hit.mechanism_match === "boolean" || hit.supporting.length + hit.contradicting.length > 0);
+    const safe = typeof hit.safe_to_reuse === "boolean" ? hit.safe_to_reuse : (latest?.safe ?? null);
+    const reuse: ReuseKind = !checks.length && !assessedByRecord ? "not_checked" : safe === true ? "safe" : "rejected";
+    const found = searchHit(id);
+    const signals = isRecord(hit.signals) && Object.keys(hit.signals).length ? hit.signals : isRecord(found?.signals) ? found.signals : {};
+    const keys = Object.keys(signals);
+    const episode = episodes.get(id) ?? null;
+    const held = texts(hit.supporting).length || texts(hit.contradicting).length ? texts(hit.supporting) : (latest?.held ?? []);
+    const against = texts(hit.supporting).length || texts(hit.contradicting).length ? texts(hit.contradicting) : (latest?.against ?? []);
+    return {
+      episodeId: id,
+      lexical: finite(signals.lexical) ?? finite(hit.similarity) ?? finite(found?.similarity),
+      semantic: finite(signals.semantic),
+      otherSignals: keys.filter((key) => key !== "lexical" && key !== "semantic").map((key): [string, string] => [key, fmtSignal(key, signals[key])]),
+      signalsRecorded: keys.length > 0,
+      partition: text(hit.partition) || text(found?.partition) || (episode ? text(episode.partition) : "") || null,
+      outcome: text(hit.outcome) || text(found?.outcome) || (episode ? text(episode.outcome) : "") || null,
+      verified: typeof hit.verified === "boolean" ? hit.verified : typeof found?.verified === "boolean" ? found.verified : (episode?.verified ?? null),
+      mechanism: text(hit.mechanism) || text(found?.mechanism) || (episode ? text(episode.failure_mechanism) : "") || null,
+      service: text(hit.service) || text(found?.service) || (episode ? text(episode.service) : "") || null,
+      reuse,
+      mechanismMatch: typeof hit.mechanism_match === "boolean" ? hit.mechanism_match : (latest?.mechanismMatch ?? null),
+      reason: text(hit.reason) || latest?.reason || null,
+      held,
+      against,
+      checks,
+      episode,
+      planted: isPlanted(episode),
+    };
+  });
+}
+
+/** Episodes by id: the run record's hits first (as the run saw them), then GET /memory. */
+export function episodeIndex(...lists: readonly (readonly ExperienceEpisode[] | null | undefined)[]): Map<string, ExperienceEpisode> {
+  const index = new Map<string, ExperienceEpisode>();
+  for (const list of lists) {
+    for (const episode of list ?? []) {
+      const id = text(episode?.episode_id);
+      if (id && !index.has(id)) index.set(id, episode);
+    }
+  }
+  return index;
+}

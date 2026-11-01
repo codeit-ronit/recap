@@ -115,7 +115,7 @@ test("hash routes keep working: deep links, the run parameter, the new knowledge
   assert.equal(parseHash("#/no-such-page").page, "overview");
   assert.equal(parseHash("").page, "overview");
   assert.equal(hrefFor("evidence", { run: "run-42", ev: null }), "#/evidence?run=run-42");
-  assert.deepEqual([...RUN_SCOPED_PAGES], ["timeline", "evidence", "memory", "safety"]);
+  assert.deepEqual([...RUN_SCOPED_PAGES], ["timeline", "evidence", "knowledge", "memory", "safety"]);
 });
 
 // --- navigation and landmarks ------------------------------------------------------------------

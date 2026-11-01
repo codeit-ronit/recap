@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import {
   arr,
   fmtArgs,
+  fmtInt,
   fmtMs,
   hypothesisTone,
   num,
@@ -19,12 +20,15 @@ import type { Tone } from "../format";
 import { useElementWidth } from "../hooks";
 import { isRunbookSearch } from "../view/findings";
 import type { TextAuthor } from "../view/findings";
+import { laneKey, laneName } from "../view/timeline";
+import type { RequestSplit, RoundGeometry } from "../view/timeline";
 import type {
   AgentFinishPayload,
   AgentStartPayload,
   ApprovalDecidedPayload,
   EvidenceCheckPayload,
   InjectionPayload,
+  LlmCallPayload,
   MemoryWritePayload,
   MitigationExecutedPayload,
   OrchestrationAgent,
@@ -47,6 +51,9 @@ import { DataTable } from "./Table";
 // ======================================================================================
 
 const LANE_ORDER = ["controller", "investigator", "telemetry_investigator", "infrastructure_investigator"];
+
+/** The fields of a trace event the chart reads (a TraceEvent, or a timeline entry turned into one). */
+export type TraceLike = Pick<TraceEvent, "seq" | "ts" | "stage" | "agent" | "category" | "payload" | "duration_ms">;
 
 export interface ToolBar {
   id: string;
@@ -101,6 +108,36 @@ export interface OverlapWindow {
   lanes: string[];
 }
 
+/**
+ * One model request (an `llm.call` event), placed where the trace recorded it: when its answer
+ * had arrived. The trace has no start time for a request, so the chart draws a mark, never an
+ * inferred bar; its duration is in the tooltip (for a replay: the original run's).
+ */
+export interface RequestMark {
+  id: string;
+  lane: string;
+  t: number;
+  step: number | null;
+  purpose: string;
+  model: string;
+  attempt: number;
+  ok: boolean;
+  replayed: boolean;
+  durationMs: number | null;
+  serverMs: number | null;
+  computeMs: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+}
+
+/** An investigation round on the time axis: from its routing decision to its last event. */
+export interface RoundBand {
+  round: number;
+  mode: string;
+  start: number;
+  end: number;
+}
+
 export interface TimelineModel {
   total: number;
   lanes: string[];
@@ -109,13 +146,15 @@ export interface TimelineModel {
   markers: Marker[];
   phases: Phase[];
   windows: OverlapWindow[];
+  requests: RequestMark[];
+  rounds: RoundBand[];
 }
 
 function laneOf(agent: unknown): string {
   return str(agent) || "controller";
 }
 
-export function buildTimeline(events: TraceEvent[]): TimelineModel | null {
+export function buildTimeline(events: readonly TraceLike[]): TimelineModel | null {
   if (!events.length) return null;
   const t0 = tsMs(events[0].ts);
   if (!Number.isFinite(t0)) return null;
@@ -133,8 +172,11 @@ export function buildTimeline(events: TraceEvent[]): TimelineModel | null {
   const transitions: { t: number; to: string; reason: string }[] = [];
   const windows: OverlapWindow[] = [];
   const policies: { seq: number; lane: string; tool: string; verdict: string; ruleIds: string[] }[] = [];
+  const requests: RequestMark[] = [];
+  const rounds: RoundBand[] = [];
+  let band: RoundBand | null = null;
 
-  const mark = (e: TraceEvent, lane: string, t: number, tone: Tone, label: string, detail = "") =>
+  const mark = (e: TraceLike, lane: string, t: number, tone: Tone, label: string, detail = "") =>
     markers.push({ id: `m${e.seq}`, lane, t, tone, label, detail });
 
   for (const e of events) {
@@ -142,6 +184,8 @@ export function buildTimeline(events: TraceEvent[]): TimelineModel | null {
     if (t === null) continue;
     last = Math.max(last, t);
     const p = e.payload ?? {};
+    // A round lasts from its routing decision while the run is investigating.
+    if (band && e.stage === "INVESTIGATING" && e.category !== "state.transition" && e.category !== "routing.decision") band.end = Math.max(band.end, t);
 
     switch (e.category) {
       case "tool.call": {
@@ -175,9 +219,7 @@ export function buildTimeline(events: TraceEvent[]): TimelineModel | null {
         let bar = q.invocation_id ? openBars.get(q.invocation_id) : undefined;
         if (!bar) {
           // No invocation id: pair with the latest open call of the same tool (and agent).
-          const candidates = [...openBars.values()].filter(
-            (b) => b.tool === q.tool && (!e.agent || b.lane === e.agent),
-          );
+          const candidates = [...openBars.values()].filter((b) => b.tool === q.tool && (!e.agent || b.lane === e.agent));
           bar = candidates[candidates.length - 1];
         }
         if (!bar) break;
@@ -192,6 +234,27 @@ export function buildTimeline(events: TraceEvent[]): TimelineModel | null {
         if (q.truncated && !bar.flags.includes("truncated")) bar.flags.push("truncated");
         bar.resultSeq = e.seq;
         last = Math.max(last, bar.end);
+        if (band && e.stage === "INVESTIGATING") band.end = Math.max(band.end, bar.end);
+        break;
+      }
+      case "llm.call": {
+        const q = p as LlmCallPayload & { server_ms?: number | null; server_compute_ms?: number | null };
+        requests.push({
+          id: `q${e.seq}`,
+          lane: laneOf(e.agent),
+          t,
+          step: num(q.step),
+          purpose: str(q.purpose),
+          model: str(q.model),
+          attempt: num(q.attempt) ?? 1,
+          ok: q.ok !== false,
+          replayed: q.replayed === true,
+          durationMs: num(q.duration_ms),
+          serverMs: num(q.server_ms),
+          computeMs: num(q.server_compute_ms),
+          inputTokens: num(q.input_tokens),
+          outputTokens: num(q.output_tokens),
+        });
         break;
       }
       case "policy.decision": {
@@ -216,8 +279,7 @@ export function buildTimeline(events: TraceEvent[]): TimelineModel | null {
       case "agent.finish": {
         const q = p as AgentFinishPayload;
         const lane = laneOf(e.agent ?? q.role);
-        const span =
-          openSpans.get(`${lane}#${num(q.round) ?? 1}`) ?? [...openSpans.values()].find((s) => s.lane === lane);
+        const span = openSpans.get(`${lane}#${num(q.round) ?? 1}`) ?? [...openSpans.values()].find((s) => s.lane === lane);
         if (span) {
           span.end = t;
           span.open = false;
@@ -227,7 +289,9 @@ export function buildTimeline(events: TraceEvent[]): TimelineModel | null {
       }
       case "state.transition": {
         const q = p as StatePayload;
-        transitions.push({ t, to: str(q.to, "?"), reason: str(q.reason) });
+        const to = str(q.to, "?");
+        transitions.push({ t, to, reason: str(q.reason) });
+        if (to !== "INVESTIGATING") band = null;
         break;
       }
       case "orchestration.summary": {
@@ -248,6 +312,8 @@ export function buildTimeline(events: TraceEvent[]): TimelineModel | null {
       case "routing.decision": {
         const q = p as RoutingPayload;
         mark(e, "controller", t, "accent", `route round ${str(q.round, "?")}: ${str(q.mode, "?")}`, `${str(q.rule_id)} · ${str(q.reason)}`);
+        band = { round: num(q.round) ?? rounds.length + 1, mode: str(q.mode, "?"), start: t, end: t };
+        rounds.push(band);
         break;
       }
       case "verification.evidence": {
@@ -266,7 +332,14 @@ export function buildTimeline(events: TraceEvent[]): TimelineModel | null {
         const q = p as ProposalPayload;
         if (q.proposal) {
           const risk = str(q.trusted_risk, "unknown");
-          mark(e, "controller", t, riskTone(risk) === "bad" ? "bad" : "accent", `proposal: ${q.proposal.action} on ${q.proposal.target}`, `trusted risk ${risk} · source ${q.proposal.source}`);
+          mark(
+            e,
+            "controller",
+            t,
+            riskTone(risk) === "bad" ? "bad" : "accent",
+            `proposal: ${str(q.proposal.action, "?")} on ${str(q.proposal.target, "?")}`,
+            `trusted risk ${risk} · source ${str(q.proposal.source, "?")}`,
+          );
         } else {
           mark(e, "controller", t, "bad", "no proposal drafted", arr<string>(q.notes).join("; "));
         }
@@ -314,7 +387,14 @@ export function buildTimeline(events: TraceEvent[]): TimelineModel | null {
       }
       case "verification.recovery": {
         const q = p as RecoveryPayload;
-        mark(e, "controller", t, q.verified ? "ok" : "bad", q.verified ? "oracle: recovered" : "oracle: not recovered", `${str(q.oracle)} · healthy before ${str(q.healthy_before)} → after ${str(q.healthy_after)}`);
+        mark(
+          e,
+          "controller",
+          t,
+          q.verified ? "ok" : "bad",
+          q.verified ? "oracle: recovered" : "oracle: not recovered",
+          `${str(q.oracle)} · healthy before ${str(q.healthy_before)} → after ${str(q.healthy_after)}`,
+        );
         break;
       }
       case "memory.consolidated": {
@@ -331,7 +411,8 @@ export function buildTimeline(events: TraceEvent[]): TimelineModel | null {
         mark(e, "controller", t, "warn", "budget exhausted", str((p as { limit?: unknown }).limit));
         break;
       case "run.error":
-        mark(e, "controller", t, "bad", "run error", str((p as { error?: unknown }).error));
+        // The error text can quote a provider or a tool: shown as recorded, labeled as such.
+        mark(e, "controller", t, "bad", "run error", `As recorded (may quote a provider or a tool): ${str((p as { error?: unknown }).error, "no text")}`);
         break;
       default:
         break;
@@ -378,12 +459,10 @@ export function buildTimeline(events: TraceEvent[]): TimelineModel | null {
   for (const b of bars) present.add(b.lane);
   for (const s of spans) present.add(s.lane);
   for (const m of markers) present.add(m.lane);
-  const lanes = [
-    ...LANE_ORDER.filter((l) => present.has(l)),
-    ...[...present].filter((l) => !LANE_ORDER.includes(l)).sort(),
-  ];
+  for (const q of requests) present.add(q.lane);
+  const lanes = [...LANE_ORDER.filter((l) => present.has(l)), ...[...present].filter((l) => !LANE_ORDER.includes(l)).sort()];
 
-  return { total: Math.max(last, 1), lanes, bars, spans, markers, phases, windows };
+  return { total: Math.max(last, 1), lanes, bars, spans, markers, phases, windows, requests, rounds };
 }
 
 // ======================================================================================
@@ -451,11 +530,12 @@ function tickLabel(t: number, step: number): string {
 // Chart
 // ======================================================================================
 
-const GUTTER = 196; // lane labels
+const WIDE_GUTTER = 196; // lane labels
+const NARROW_GUTTER = 108; // phones: short lane names
 const PAD_R = 18;
 const PHASE_H = 24;
 const AXIS_H = 26;
-const LANES_Y = PHASE_H + AXIS_H + 6;
+const ROUNDS_H = 20;
 const LANE_H = 50;
 const BAR_H = 16;
 const MONO_CHAR = 7.3; // approx. width of a 12px monospace glyph
@@ -486,9 +566,7 @@ function BarTip({ bar, author }: { bar: ToolBar; author: TextAuthor | undefined 
             <span>query (untrusted)</span>
             <span className="mono">{str(bar.args.query, "—")}</span>
           </div>
-          <div className="tip-note">
-            A local read tool, not the environment's MCP server. The query was written by {author?.label ?? "the agent"}.
-          </div>
+          <div className="tip-note">A local read tool, not the environment's MCP server. The query was written by {author?.label ?? "the agent"}.</div>
         </>
       ) : (
         <div className="tip-row">
@@ -529,35 +607,103 @@ function BarTip({ bar, author }: { bar: ToolBar; author: TextAuthor | undefined 
   );
 }
 
-/** `author`: who wrote the agents' free text (runbook search queries), for the tooltip's label. */
-export function AgentGantt({ model, author }: { model: TimelineModel; author?: TextAuthor }) {
+/** "2,134 in / 72 out tokens", or "not reported" when the server sent no counts. */
+function tokenText(input: number | null, output: number | null): string {
+  if (input === null && output === null) return "not reported by the server";
+  return `${fmtInt(input)} in / ${fmtInt(output)} out`;
+}
+
+function RequestTip({ mark }: { mark: RequestMark }) {
+  const wait = mark.serverMs !== null && mark.computeMs !== null ? Math.max(0, mark.serverMs - mark.computeMs) : null;
+  return (
+    <>
+      <div className="tip-title">
+        Model answer · {laneName(mark.lane === "controller" ? null : mark.lane)}
+        {mark.attempt > 1 ? ` · attempt ${mark.attempt}` : ""}
+      </div>
+      <div className="tip-row">
+        <span>purpose</span>
+        <span>
+          {mark.purpose || "—"}
+          {mark.step !== null ? ` · step ${mark.step}` : ""}
+        </span>
+      </div>
+      <div className="tip-row">
+        <span>{mark.replayed ? "took (original run)" : "took"}</span>
+        <strong>{fmtMs(mark.durationMs)}</strong>
+      </div>
+      <div className="tip-row">
+        <span>server time</span>
+        <span>{mark.serverMs === null ? "not reported" : fmtMs(mark.serverMs)}</span>
+      </div>
+      {wait !== null ? (
+        <div className="tip-row">
+          <span>waited inside the server</span>
+          <span>{fmtMs(wait)}</span>
+        </div>
+      ) : null}
+      <div className="tip-row">
+        <span>tokens</span>
+        <span>{tokenText(mark.inputTokens, mark.outputTokens)}</span>
+      </div>
+      {!mark.ok ? <div className="tip-error">No usable answer: RECAP asked again or stopped the agent.</div> : null}
+      <div className="tip-note">
+        {mark.replayed
+          ? "Answered from a recording: no model was called now. Its duration, server time and tokens are the original run's."
+          : "Drawn when the answer was recorded. The trace has no start time for a request, so no bar is drawn for it."}
+      </div>
+    </>
+  );
+}
+
+/**
+ * The whole run on one time axis: one lane per agent plus the controller, the lifecycle phases,
+ * each round as a band, tool calls as bars, model answers as diamonds, controller decisions as
+ * dots, and the measured window where parallel agents ran.
+ *
+ * `author`: who wrote the agents' free text (runbook search queries), for the tooltip's label.
+ * `replay`: the run replayed a recording, so the axis is this replay's own time while the model
+ * requests' durations (tooltips) are the original run's.
+ */
+export function AgentGantt({ model, author, replay = false }: { model: TimelineModel; author?: TextAuthor; replay?: boolean }) {
   const [setWrap, width] = useElementWidth<HTMLDivElement>();
   const [view, setView] = useState<"chart" | "table">("chart");
   const [compress, setCompress] = useState(true);
   const [tip, setTip] = useState<Tip | null>(null);
 
-  const waits = useMemo(
-    () => model.phases.filter((p) => p.state === "AWAITING_APPROVAL" && p.end > p.start),
-    [model.phases],
-  );
+  const waits = useMemo(() => model.phases.filter((p) => p.state === "AWAITING_APPROVAL" && p.end > p.start), [model.phases]);
   const waitTotal = waits.reduce((s, w) => s + (w.end - w.start), 0);
   // Compressing only matters when a human wait dominates the run.
   const canCompress = waitTotal > 1000 && waitTotal > 0.25 * model.total;
-  const plotW = Math.max(240, width - GUTTER - PAD_R);
+  const narrow = width > 0 && width < 640;
+  const gutter = narrow ? NARROW_GUTTER : WIDE_GUTTER;
+  const plotW = Math.max(60, width - gutter - PAD_R);
   const scale = useMemo(
     () => makeScale(model.total, canCompress && compress ? waits : [], plotW),
     [model.total, waits, canCompress, compress, plotW],
   );
-  const X = (t: number) => GUTTER + scale.x(t);
+  const X = (t: number) => gutter + scale.x(t);
 
-  const lanesBottom = LANES_Y + model.lanes.length * LANE_H;
+  const roundsH = model.rounds.length ? ROUNDS_H : 0;
+  const lanesY = PHASE_H + AXIS_H + 6 + roundsH;
+  const lanesBottom = lanesY + model.lanes.length * LANE_H;
   const height = lanesBottom + (model.windows.length ? 34 : 10);
   const laneIndex = new Map(model.lanes.map((l, i) => [l, i]));
-  const laneY = (lane: string) => LANES_Y + (laneIndex.get(lane) ?? 0) * LANE_H;
+  const laneY = (lane: string) => lanesY + (laneIndex.get(lane) ?? 0) * LANE_H;
   const callCount = (lane: string) => model.bars.filter((b) => b.lane === lane).length;
+  const requestCount = (lane: string) => model.requests.filter((q) => q.lane === lane).length;
 
   const show = (x: number, y: number, content: ReactNode) => setTip({ x, y, content });
   const hide = () => setTip(null);
+
+  const laneSub = (lane: string): string => {
+    const calls = callCount(lane);
+    const asked = requestCount(lane);
+    if (lane === "controller") return narrow ? "the only writer" : asked ? `the only writer · ${asked} model req.` : "trusted, the only writer";
+    const parts = [`${calls} tool call${calls === 1 ? "" : "s"}`];
+    if (asked && !narrow) parts.push(`${asked} model req.`);
+    return parts.join(" · ");
+  };
 
   return (
     <div className="gantt">
@@ -572,20 +718,41 @@ export function AgentGantt({ model, author }: { model: TimelineModel; author?: T
           ]}
         />
         {canCompress ? (
-          <Toggle
-            checked={compress}
-            onChange={setCompress}
-            label="Compress approval wait"
-            hint={`a human took ${fmtMs(waitTotal)} to decide`}
-          />
+          <Toggle checked={compress} onChange={setCompress} label="Compress approval wait" hint={`a human took ${fmtMs(waitTotal)} to decide`} />
         ) : null}
         <div className="gantt-legend" aria-label="Legend">
-          <span><i className="lg lg-bar" /> tool call</span>
-          {model.bars.some((b) => b.local) ? <span><i className="lg lg-bar-local" /> runbook search (RECAP's index)</span> : null}
-          <span><i className="lg lg-bar-bad" /> failed or denied</span>
-          <span><i className="lg lg-span" /> agent active</span>
-          <span><i className="lg lg-dot" /> controller decision</span>
-          {model.windows.length ? <span><i className="lg lg-window" /> agents concurrent</span> : null}
+          <span>
+            <i className="lg lg-bar" /> tool call
+          </span>
+          {model.bars.some((b) => b.local) ? (
+            <span>
+              <i className="lg lg-bar-local" /> runbook search (RECAP's index)
+            </span>
+          ) : null}
+          <span>
+            <i className="lg lg-bar-bad" /> failed or denied
+          </span>
+          <span>
+            <i className="lg lg-span" /> agent active
+          </span>
+          {model.requests.length ? (
+            <span>
+              <i className={replay ? "lg lg-req replayed" : "lg lg-req"} /> model answer{replay ? " (replayed)" : ""}
+            </span>
+          ) : null}
+          <span>
+            <i className="lg lg-dot" /> controller decision
+          </span>
+          {model.rounds.length ? (
+            <span>
+              <i className="lg lg-round" /> round
+            </span>
+          ) : null}
+          {model.windows.length ? (
+            <span>
+              <i className="lg lg-window" /> agents concurrent
+            </span>
+          ) : null}
         </div>
       </div>
 
@@ -634,9 +801,14 @@ export function AgentGantt({ model, author }: { model: TimelineModel; author?: T
       ) : (
         <div className="gantt-chart" ref={setWrap} onPointerLeave={hide}>
           {width > 0 ? (
-            <svg width={width} height={height} role="group" aria-label={`Agent timeline: ${model.bars.length} tool calls across ${model.lanes.length} lanes over ${fmtMs(model.total)}`}>
+            <svg
+              width={width}
+              height={height}
+              role="group"
+              aria-label={`Agent timeline: ${model.bars.length} tool calls and ${model.requests.length} model answers across ${model.lanes.length} lanes over ${fmtMs(model.total)}`}
+            >
               {/* lifecycle ribbon */}
-              <text x={14} y={PHASE_H / 2 + 4} className="gantt-gutter-label">
+              <text x={10} y={PHASE_H / 2 + 4} className="gantt-gutter-label">
                 Lifecycle
               </text>
               {model.phases.map((ph, i) => {
@@ -649,15 +821,34 @@ export function AgentGantt({ model, author }: { model: TimelineModel; author?: T
                     key={`${ph.state}-${i}`}
                     tabIndex={0}
                     className="gantt-hit"
+                    aria-label={`${label}, ${fmtMs(ph.end - ph.start)}`}
                     onPointerEnter={() =>
-                      show(x0 + w / 2, PHASE_H, <>
-                        <div className="tip-title">{label}</div>
-                        <div className="tip-row"><span>from</span><span>+{fmtMs(ph.start)}</span></div>
-                        <div className="tip-row"><span>for</span><strong>{fmtMs(ph.end - ph.start)}</strong></div>
-                        {ph.reason ? <div className="tip-note">{ph.reason}</div> : null}
-                      </>)
+                      show(
+                        x0 + w / 2,
+                        PHASE_H,
+                        <>
+                          <div className="tip-title">{label}</div>
+                          <div className="tip-row">
+                            <span>from</span>
+                            <span>+{fmtMs(ph.start)}</span>
+                          </div>
+                          <div className="tip-row">
+                            <span>for</span>
+                            <strong>{fmtMs(ph.end - ph.start)}</strong>
+                          </div>
+                          {ph.reason ? <div className="tip-note">{ph.reason}</div> : null}
+                        </>,
+                      )
                     }
-                    onFocus={() => show(x0 + w / 2, PHASE_H, <div className="tip-title">{label} · {fmtMs(ph.end - ph.start)}</div>)}
+                    onFocus={() =>
+                      show(
+                        x0 + w / 2,
+                        PHASE_H,
+                        <div className="tip-title">
+                          {label} · {fmtMs(ph.end - ph.start)}
+                        </div>,
+                      )
+                    }
                     onBlur={hide}
                     onPointerLeave={hide}
                   >
@@ -672,30 +863,48 @@ export function AgentGantt({ model, author }: { model: TimelineModel; author?: T
               })}
 
               {/* time axis and gridlines */}
-              <text x={14} y={PHASE_H + 18} className="gantt-gutter-label">
-                time since alert
+              <text x={10} y={PHASE_H + 18} className="gantt-gutter-label">
+                {narrow ? "time" : replay ? "time in this replay" : "time since alert"}
               </text>
               {scale.ticks.map((t) => (
                 <g key={t}>
-                  <line x1={X(t)} x2={X(t)} y1={LANES_Y - 4} y2={lanesBottom} className="gridline" />
+                  <line x1={X(t)} x2={X(t)} y1={lanesY - 4 - roundsH} y2={lanesBottom} className="gridline" />
                   <text x={X(t)} y={PHASE_H + 18} className="tick-label" textAnchor={t === 0 ? "start" : "middle"}>
                     {tickLabel(t, scale.step)}
                   </text>
                 </g>
               ))}
 
+              {/* investigation rounds: a band from each routing decision to the round's last event */}
+              {model.rounds.map((r, i) => {
+                const x0 = X(r.start);
+                const w = Math.max(2, X(r.end) - x0);
+                const long = `Round ${r.round} · ${r.mode}`;
+                const label = w > long.length * SANS_CHAR + 8 ? long : w > 26 ? `R${r.round}` : "";
+                return (
+                  <g key={`r${r.round}-${i}`}>
+                    <rect x={x0} y={lanesY - roundsH} width={w} height={lanesBottom - lanesY + roundsH} className={i % 2 ? "round-band alt" : "round-band"} />
+                    {label ? (
+                      <text x={x0 + 4} y={lanesY - 6} className="round-band-label">
+                        {label}
+                      </text>
+                    ) : null}
+                  </g>
+                );
+              })}
+
               {/* lanes */}
               {model.lanes.map((lane, i) => {
-                const y = LANES_Y + i * LANE_H;
-                const calls = callCount(lane);
+                const y = lanesY + i * LANE_H;
                 return (
                   <g key={lane}>
                     <rect x={0} y={y} width={width} height={LANE_H} className={i % 2 ? "lane lane-alt" : "lane"} />
-                    <text x={14} y={y + 21} className="lane-label">
-                      {roleLabel(lane)}
+                    <rect x={2} y={y + 9} width={3} height={LANE_H - 18} rx={1.5} className={`lane-key lane-${laneKey(lane === "controller" ? null : lane)}`} />
+                    <text x={12} y={y + 21} className="lane-label">
+                      {narrow ? laneName(lane === "controller" ? null : lane) : roleLabel(lane)}
                     </text>
-                    <text x={14} y={y + 38} className="lane-sub">
-                      {lane === "controller" ? "trusted, the only writer" : `${calls} tool call${calls === 1 ? "" : "s"}`}
+                    <text x={12} y={y + 38} className="lane-sub">
+                      {laneSub(lane)}
                     </text>
                   </g>
                 );
@@ -704,13 +913,13 @@ export function AgentGantt({ model, author }: { model: TimelineModel; author?: T
               {/* concurrency windows: when parallel specialists were active at the same time */}
               {model.windows.map((w, i) => {
                 const idx = w.lanes.map((l) => laneIndex.get(l)).filter((v): v is number => v !== undefined);
-                const top = idx.length ? LANES_Y + Math.min(...idx) * LANE_H : LANES_Y;
-                const bottom = idx.length ? LANES_Y + (Math.max(...idx) + 1) * LANE_H : lanesBottom;
+                const top = idx.length ? lanesY + Math.min(...idx) * LANE_H : lanesY;
+                const bottom = idx.length ? lanesY + (Math.max(...idx) + 1) * LANE_H : lanesBottom;
                 const x0 = X(w.start);
                 const x1 = X(w.end);
                 const label = `agents concurrent for ${fmtMs(w.overlapMs ?? w.end - w.start)}`;
                 const labelW = label.length * SANS_CHAR;
-                const lx = x1 - x0 > labelW ? (x0 + x1) / 2 : Math.min(x0 + labelW / 2, width - PAD_R - labelW / 2);
+                const lx = x1 - x0 > labelW ? (x0 + x1) / 2 : Math.max(gutter + labelW / 2, Math.min(x0 + labelW / 2, width - PAD_R - labelW / 2));
                 return (
                   <g key={`w${i}`}>
                     <rect x={x0} y={top + 2} width={Math.max(2, x1 - x0)} height={bottom - top - 4} rx={6} className="overlap-window" />
@@ -726,14 +935,14 @@ export function AgentGantt({ model, author }: { model: TimelineModel; author?: T
 
               {/* compressed approval waits (axis breaks) */}
               {scale.breaks.map((b, i) => {
-                const x0 = GUTTER + b.x0;
-                const x1 = GUTTER + b.x1;
+                const x0 = gutter + b.x0;
+                const x1 = gutter + b.x1;
                 const mid = (x0 + x1) / 2;
                 return (
                   <g key={`b${i}`}>
-                    <rect x={x0} y={LANES_Y - 4} width={Math.max(2, x1 - x0)} height={lanesBottom - LANES_Y + 4} className="break-band" />
-                    <line x1={mid - 6} x2={mid - 1} y1={LANES_Y + 2} y2={LANES_Y - 8} className="break-mark" />
-                    <line x1={mid + 1} x2={mid + 6} y1={LANES_Y + 2} y2={LANES_Y - 8} className="break-mark" />
+                    <rect x={x0} y={lanesY - 4} width={Math.max(2, x1 - x0)} height={lanesBottom - lanesY + 4} className="break-band" />
+                    <line x1={mid - 6} x2={mid - 1} y1={lanesY + 2} y2={lanesY - 8} className="break-mark" />
+                    <line x1={mid + 1} x2={mid + 6} y1={lanesY + 2} y2={lanesY - 8} className="break-mark" />
                     <text x={mid} y={PHASE_H + 18} textAnchor="middle" className="tick-label strong">
                       wait {fmtMs(b.end - b.start)}
                     </text>
@@ -785,15 +994,38 @@ export function AgentGantt({ model, author }: { model: TimelineModel; author?: T
                       width={w}
                       height={BAR_H}
                       rx={4}
-                      className={
-                        denied ? "bar bar-bad" : bar.status === "running" ? "bar bar-running" : bar.local ? "bar bar-local" : "bar"
-                      }
+                      className={denied ? "bar bar-bad" : bar.status === "running" ? "bar bar-running" : bar.local ? "bar bar-local" : "bar"}
                     />
                     {fits ? (
                       <text x={x0 + 5} y={y + BAR_H / 2 + 4} className="bar-label">
                         {bar.tool}
                       </text>
                     ) : null}
+                  </g>
+                );
+              })}
+
+              {/* model answers: a diamond where the trace recorded each one */}
+              {model.requests.map((q) => {
+                const cx = X(q.t);
+                const cy = laneY(q.lane) + 12;
+                const content = <RequestTip mark={q} />;
+                return (
+                  <g
+                    key={q.id}
+                    className="gantt-hit"
+                    tabIndex={0}
+                    aria-label={`Model answer for ${q.lane}${q.step !== null ? `, step ${q.step}` : ""}: ${fmtMs(q.durationMs)}${q.replayed ? " (original run)" : ""}`}
+                    onPointerEnter={() => show(cx, cy - 6, content)}
+                    onFocus={() => show(cx, cy - 6, content)}
+                    onBlur={hide}
+                    onPointerLeave={hide}
+                  >
+                    <circle cx={cx} cy={cy} r={10} className="hit" />
+                    <path
+                      d={`M ${cx} ${cy - 5} L ${cx + 5} ${cy} L ${cx} ${cy + 5} L ${cx - 5} ${cy} Z`}
+                      className={["req-mark", q.replayed ? "replayed" : "", q.ok ? "" : "failed"].filter(Boolean).join(" ")}
+                    />
                   </g>
                 );
               })}
@@ -805,7 +1037,10 @@ export function AgentGantt({ model, author }: { model: TimelineModel; author?: T
                 const content = (
                   <>
                     <div className="tip-title">{m.label}</div>
-                    <div className="tip-row"><span>at</span><span>+{fmtMs(m.t)}</span></div>
+                    <div className="tip-row">
+                      <span>at</span>
+                      <span>+{fmtMs(m.t)}</span>
+                    </div>
                     {m.detail ? <div className="tip-note">{m.detail}</div> : null}
                   </>
                 );
@@ -830,16 +1065,120 @@ export function AgentGantt({ model, author }: { model: TimelineModel; author?: T
             <div style={{ height }} />
           )}
           {tip ? (
-            <div
-              className={`gantt-tip${tip.x > width - 170 ? " right" : tip.x < 170 ? " left" : ""}`}
-              style={{ left: tip.x, top: tip.y }}
-              role="tooltip"
-            >
+            <div className={`gantt-tip${tip.x > width - 170 ? " right" : tip.x < 170 ? " left" : ""}`} style={{ left: tip.x, top: tip.y }} role="tooltip">
               {tip.content}
             </div>
           ) : null}
         </div>
       )}
     </div>
+  );
+}
+
+// ======================================================================================
+// One round: each agent's turn on the round's own time axis
+// ======================================================================================
+
+/**
+ * The agents' turns in one round as bars on the round's time axis, with the window where they
+ * ran at the same time shaded. Bars come from the lanes' recorded start and finish; the overlap
+ * figure is the orchestrator's measurement (`overlapMs`), shown next to it.
+ */
+/** A position on an axis: "0 ms" at the origin (fmtMs reads "<1 ms" for a duration that small). */
+function offsetText(ms: number): string {
+  return ms < 0.5 ? "0 ms" : fmtMs(ms);
+}
+
+export function RoundLanes({
+  geometry,
+  overlapMs,
+  round,
+  replay = false,
+}: {
+  geometry: RoundGeometry;
+  overlapMs: number | null;
+  round: number;
+  replay?: boolean;
+}) {
+  const span = geometry.span > 0 ? geometry.span : 1;
+  const pct = (ms: number) => `${Math.max(0, Math.min(100, (ms / span) * 100))}%`;
+  const overlap = geometry.overlap;
+  return (
+    <div className="tl-lanes" role="group" aria-label={`Agent turns in round ${round}`}>
+      {geometry.bars.map((bar) => {
+        const end = bar.end ?? geometry.span;
+        const width = Math.max(0, end - bar.start);
+        return (
+          <div className="tl-lanes-row" key={bar.agent}>
+            <span className="tl-lanes-name">
+              <span className={`tl-lane-key lane-${laneKey(bar.agent)}`} aria-hidden="true" />
+              {laneName(bar.agent)}
+            </span>
+            <span className="tl-lanes-track" aria-hidden="true">
+              {overlap ? <span className="tl-lanes-overlap" style={{ left: pct(overlap.start), width: pct(overlap.end - overlap.start) }} /> : null}
+              <span
+                className={`tl-lanes-bar lane-${laneKey(bar.agent)}${bar.end === null ? " open" : ""}`}
+                style={{ left: pct(bar.start), width: `max(3px, ${pct(width)})` }}
+              />
+            </span>
+            <span className="tl-lanes-time">
+              {bar.end === null ? (
+                <span className="not-recorded">not finished</span>
+              ) : (
+                <>
+                  {fmtMs(bar.lane.duration_ms ?? width)}
+                  <span className="sr-only">
+                    {" "}
+                    from +{offsetText(bar.start)} to +{offsetText(bar.end)}
+                  </span>
+                </>
+              )}
+            </span>
+          </div>
+        );
+      })}
+      <div className="tl-lanes-foot">
+        <span>
+          {geometry.bars.length < 2
+            ? "One agent: nothing to overlap."
+            : overlapMs !== null && overlapMs > 0
+              ? `Turns overlapped for ${fmtMs(overlapMs)} (measured by the orchestrator).`
+              : overlapMs !== null
+                ? "Parallel round, but the turns did not overlap (measured)."
+                : overlap
+                  ? `Turns overlapped for about ${fmtMs(overlap.end - overlap.start)} by their recorded start and finish; the orchestrator's measurement is not recorded.`
+                  : "The turns did not overlap."}
+        </span>
+        <span className="muted">
+          axis 0 – {fmtMs(geometry.span)}
+          {replay ? " · this replay's own time" : ""}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ======================================================================================
+// One model request: where its time went
+// ======================================================================================
+
+const PART_LABELS: Record<string, string> = {
+  compute: "model compute",
+  wait: "waiting inside the server",
+  server: "server time",
+  outside: "outside the server",
+  total: "whole request (not broken down)",
+};
+
+/** A stacked bar of a model request's recorded time: compute, waiting inside the server, outside it. */
+export function RequestBar({ split }: { split: RequestSplit }) {
+  return (
+    <span className="tl-reqbar" aria-hidden="true">
+      {split.parts.map((part) =>
+        part.share > 0 ? (
+          <span key={part.key} className={`tl-reqbar-part part-${part.key}`} style={{ width: `${part.share * 100}%` }} title={`${PART_LABELS[part.key]}: ${fmtMs(part.ms)}`} />
+        ) : null,
+      )}
+    </span>
   );
 }

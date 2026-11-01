@@ -1,0 +1,514 @@
+/*
+ * Safety & Approvals page (src/pages/Safety.tsx): the four layers, pending approvals, one run's
+ * audit (attempted vs executed, layer by layer, permission lifecycle, what was stopped, policy
+ * decisions, injection flags, its approval log) and the cross-run approval log.
+ *
+ * Colors, spacing and type come from the tokens in ../styles.css. That file loads AFTER this one,
+ * so a rule here that changes a shared class must be more specific than the shared rule.
+ */
+
+/* A short "nothing here, and why" line inside a card. */
+.sf-quiet {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--fs-md);
+}
+.sf-quiet > .icon {
+  margin-top: 2px;
+}
+
+/* --- The four layers --------------------------------------------------------------------------- */
+
+.sf-layers {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.sf-layer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-4);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+/* A chevron in the gap: the order in which a fix meets the layers. */
+.sf-layer:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 24px;
+  right: -12px;
+  width: 7px;
+  height: 7px;
+  border-top: 2px solid var(--muted);
+  border-right: 2px solid var(--muted);
+  transform: rotate(45deg);
+}
+.sf-layer-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.sf-layer-num {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.sf-layer-title {
+  margin: 0;
+  font-size: var(--fs-base);
+  font-weight: 650;
+}
+.sf-layer-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+.sf-layer-impl {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+.sf-layer-plain {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+.sf-layer-rules {
+  margin-top: auto;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+}
+
+/* --- Approvals waiting for a person ---------------------------------------------------------------- */
+
+.sf-pending-empty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  color: var(--text-2);
+  font-size: var(--fs-md);
+}
+.sf-pending-empty > .icon {
+  color: var(--muted);
+}
+.sf-pending-empty > span {
+  flex: 1 1 320px;
+}
+.sf-pending {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.sf-pending-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-4);
+  font-size: var(--fs-sm);
+}
+
+/* --- One run: identity, attempted vs executed, layer by layer --------------------------------------- */
+
+.sf-run-source {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+}
+
+.sf-unsafe {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+.sf-unsafe-tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: 10px;
+  border: 1px solid var(--tone-line);
+  background: var(--tone-soft);
+}
+.sf-unsafe-label {
+  color: var(--tone-text);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.sf-unsafe-tile.tone-neutral .sf-unsafe-label {
+  color: var(--text-2);
+}
+.sf-unsafe-value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  color: var(--text);
+  font-size: 28px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+}
+.sf-unsafe-note {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+.sf-unsafe-sub {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+
+.sf-outcomes {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.sf-outcome {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--tone);
+  background: var(--panel-2);
+}
+.sf-outcome-layer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.sf-outcome > .status-token {
+  align-self: flex-start;
+}
+.sf-outcome-headline {
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.sf-outcome-line {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+/* --- One run: permission lifecycle ------------------------------------------------------------------- */
+
+.sf-lifecycles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.sf-lifecycle {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-4);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--tone);
+  background: var(--panel-2);
+}
+.sf-lifecycle-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+}
+.sf-lifecycle-title {
+  margin: 0;
+  font-size: var(--fs-base);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.sf-lifecycle-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+/* Why a proposal never reached an approval (the policy denied it first). */
+.sf-lifecycle-why {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: 8px;
+  border: 1px solid var(--bad-line);
+  background: var(--bad-soft);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.sf-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.sf-step {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding-right: var(--space-3);
+}
+/* The line from a step's node to the next step. */
+.sf-step:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  top: 13px;
+  left: 36px;
+  right: 8px;
+  height: 2px;
+  background: var(--border-2);
+}
+.sf-step-done:not(:last-child)::before {
+  background: var(--ok-line);
+}
+.sf-step-node {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 2px solid var(--border-2);
+  background: var(--panel);
+  color: var(--muted);
+}
+.sf-step-done .sf-step-node {
+  border-color: var(--ok);
+  background: var(--ok-soft);
+  color: var(--ok-text);
+}
+.sf-step-failed .sf-step-node {
+  border-color: var(--bad);
+  background: var(--bad-soft);
+  color: var(--bad-text);
+}
+.sf-step-waiting .sf-step-node {
+  border-color: var(--warn);
+  background: var(--warn-soft);
+  color: var(--warn-text);
+}
+.sf-step-skipped .sf-step-node {
+  opacity: 0.55;
+}
+.sf-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.sf-step-title {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.sf-step-text {
+  color: var(--text);
+  font-size: var(--fs-md);
+  overflow-wrap: anywhere;
+}
+.sf-step-skipped .sf-step-text {
+  color: var(--muted);
+}
+.sf-step-at {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.sf-refused {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+.sf-refused-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding-left: var(--space-5);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+.sf-rationale > summary,
+.sf-reference > summary {
+  cursor: pointer;
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.sf-rationale[open] > summary,
+.sf-reference[open] > summary {
+  margin-bottom: var(--space-2);
+}
+
+/* --- One run: tables, flags ----------------------------------------------------------------------------- */
+
+.sf-result {
+  font-weight: 600;
+}
+.sf-decisions-bar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.sf-flag {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: 10px;
+  border: 1px solid var(--warn-line);
+  background: rgba(210, 153, 34, 0.05);
+}
+.sf-flag-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+
+/* --- Across runs: safety stops, tested guarantees, reference ----------------------------------------- */
+
+.sf-stops,
+.sf-tests {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.sf-stop {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+.sf-stop:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+.sf-stop-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.sf-tests li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+.sf-tests code {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+/* --- Responsive ------------------------------------------------------------------------------------------ */
+
+@media (max-width: 1180px) {
+  .sf-layers,
+  .sf-outcomes {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .sf-layer:not(:last-child)::after {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .sf-unsafe {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /*
+   * Narrow screens: these tables scroll inside their own box (no page scroll). Without a floor the
+   * table squeezes RECAP's reason into a ~115 px column (rows ~155 px tall, mostly empty); keep it
+   * to a few lines instead.
+   */
+  .sf-blocked .reason,
+  .sf-decisions .reason,
+  .sf-log .reason {
+    display: inline-block;
+    min-width: 15rem;
+  }
+}
+
+@media (max-width: 560px) {
+  .sf-layers,
+  .sf-outcomes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .sf-steps {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-3);
+  }
+  .sf-step {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: var(--space-3);
+    padding-right: 0;
+  }
+  .sf-step:not(:last-child)::before {
+    display: none;
+  }
+  .sf-lifecycle {
+    padding: var(--space-3);
+  }
+}

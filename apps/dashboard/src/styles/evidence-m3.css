@@ -1,152 +1,801 @@
 /*
- * Evidence & RAG page, M3: agent text shown as data, the evidence the verifier relied on,
- * disagreements, retrieval signals and knowledge overlays. Colors and the shared pieces
- * (.check, .chip, .trust-tag, .table, .kv, .notice) come from ../styles.css.
+ * Evidence & Decisions (pages/Evidence.tsx), and the shared "ed-" pieces the run scope of the
+ * Knowledge page reuses (lines, labels, quotes, help text). Tokens and the shared components
+ * (.chip, .card, .table, .kv, .notice, .status-token, .untrusted, .untrusted-tag, .trust-tag)
+ * come from ../styles.css.
  */
 
-/* Untrusted text (a claim, a confidence note, an agent's search query): data in a dashed amber
-   box, like the untrusted layers of the Architecture page. Never rendered as HTML. */
-.evid-said {
-  min-width: 0;
-  padding: 1px 7px;
-  border: 1px dashed var(--warn-line);
-  border-radius: 6px;
-  background: var(--inset);
-  color: var(--text);
-  overflow-wrap: anywhere;
-}
-q.evid-said {
-  quotes: "\201C" "\201D";
-}
-.evid-said-row {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 8px;
-  min-width: 0;
-}
-
-/* A check's head wraps (status, claim, diagnosis chip), so a narrow screen never scrolls sideways. */
-.check .check-head {
-  flex-wrap: wrap;
-}
-.check .check-claim {
-  min-width: 0;
-}
-
-/* A rule line that repeats a value the claim named (model text): tagged after the line. */
-.evid-rule-tag {
-  margin-left: 8px;
-}
-
-/* The verifier's leads for the next round (RECAP's own text). */
-.evid-leads .mini-title {
-  margin: 0;
-}
-.evid-leads .plain-list {
-  margin: 6px 0 0;
-}
-
-/* A search receipt's result table inside an expanded registry row: keep its compact cells
-   (styles.css, loaded later, gives every cell of a detail row 14px 18px, also on hover). */
+/* Kept from M3: a compact table inside an expanded detail row keeps its compact cells. */
 .table tr.row-detail .table.compact td,
 .table tr.row-detail:hover .table.compact td {
   padding: 6px 10px;
 }
 
-/* Citations: the document path under the chunk id may wrap, so the table fits its card. */
-.evid-path .mono {
+/* --- shared pieces: lines, labels, quotes, help ---------------------------------------- */
+
+.ed-help {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+.ed-none {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-md);
+}
+.ed-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 4px 12px;
+  min-width: 0;
+  font-size: var(--fs-md);
+}
+.ed-label {
+  flex: none;
+  min-width: 104px;
+  padding-top: 3px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.ed-line-value {
+  display: inline-flex;
+  flex: 1 1 260px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  min-width: 0;
+}
+.ed-quote {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  min-width: 0;
+}
+.ed-quote .untrusted {
+  min-width: 0;
+  line-height: 1.55;
   overflow-wrap: anywhere;
 }
-
-/* The check that became the diagnosis, and an open disagreement (no rule settled it). */
-.check.evid-diagnosis {
-  border-color: var(--ok-line);
+.ed-recap-tag {
+  font-size: 11px;
 }
-.check.evid-open {
-  border-color: var(--warn-line);
+.ed-chip-note {
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: 11px;
 }
-
-/* "cites / basis / contradicted by" rows of a check, the query line of a search. */
-.evid-use {
+.ed-inline-tag {
+  margin-left: 6px;
+}
+.ed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-2);
+}
+.ed-stack {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
-.evid-label {
-  min-width: 96px;
+.ed-more summary {
+  width: fit-content;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-sm);
+  cursor: pointer;
 }
-.evid-line {
+.ed-more summary:hover {
+  color: var(--text-2);
+}
+.ed-more-body {
+  margin: 6px 0 0;
+  font-size: var(--fs-md);
+}
+.ed-error {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 10px;
-  min-width: 0;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0;
+  color: var(--bad-text);
+  font-size: var(--fs-md);
+  overflow-wrap: anywhere;
 }
 
-/* A model's confidence note: quoted and labeled, never a score. */
-.evid-note {
+/* Evidence ids that jump to the registry: chips, or links inside a rule line. */
+a.ed-evlink {
+  text-decoration: none;
+}
+a.ed-evlink:hover {
+  border-color: var(--accent-line);
+  color: var(--accent-text);
+}
+.ed-evlink-inline {
+  color: var(--accent-text);
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.ed-linkbtn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+/* --- run bar ---------------------------------------------------------------------------- */
+
+.ed-runbar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+.ed-runbar-badges {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px 10px;
-  font-size: 13px;
+  gap: var(--space-2);
 }
-.evid-note .mini-title {
+.ed-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+}
+.ed-facts > div {
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.ed-facts dt {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.ed-facts dd {
+  margin: 4px 0 0;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.ed-fact-note {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+}
+.ed-fact-fix {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 6px;
+  font-size: var(--fs-md);
+}
+
+/* Notices above the decision. */
+.ed-notice-text {
+  margin: 0 0 var(--space-2);
+}
+.ed-flag-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ed-flag-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.ed-plain {
   margin: 0;
 }
 
-/* RECAP's own verdict text (a disagreement's resolution): plain, trusted. */
-.evid-resolution {
-  color: var(--text-2);
-  font-size: 13px;
-}
+/* --- 1. the decision --------------------------------------------------------------------- */
 
-/* Key/value rows inside a .check box: tighter than a card's. */
-.evid-kv .kv-row {
-  grid-template-columns: 170px minmax(0, 1fr);
-  padding: 5px 0;
-}
-
-.evid-sub {
-  margin: 6px 0 0;
-}
-
-/* One traced runbook search. */
-.evid-search {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 14px 0;
-  border-top: 1px solid var(--border);
-}
-.evid-searches > .evid-search:first-child {
-  padding-top: 0;
-  border-top: 0;
-}
-.evid-searches > .evid-search:last-child {
-  padding-bottom: 0;
-}
-.evid-search-head {
+.ed-verdict {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: 10px;
+  border: 1px solid var(--accent-line);
+  background: rgba(43, 196, 207, 0.05);
+}
+.ed-verdict-text {
+  flex: 1 1 320px;
+  min-width: 0;
+  color: var(--text);
+}
+.ed-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+.ed-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-4);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--inset);
+}
+.ed-pane.is-ok {
+  border-color: var(--ok-line);
+}
+.ed-pane-title {
+  display: flex;
+  align-items: center;
   gap: 8px;
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 650;
+}
+.ed-pane.is-ok .ed-pane-title .icon {
+  color: var(--ok-text);
+}
+.ed-pane.is-bad .ed-pane-title .icon {
+  color: var(--bad-text);
+}
+.ed-also {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.ed-checks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.ed-checks.ed-checks-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
+  align-items: start;
+}
+.ed-check {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.ed-check.is-diagnosis {
+  border-color: var(--ok-line);
+  box-shadow: inset 3px 0 0 var(--ok);
+}
+.ed-check-head,
+.ed-claim-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.ed-cause {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 6px;
+  min-width: 0;
+  font-size: var(--fs-md);
+}
+.ed-mech {
+  color: var(--text);
+  font-weight: 650;
+}
+.ed-named {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 6px;
 }
 
-/* Evidence the diagnosis relied on, in the registry (next to its "diagnosis basis" chip). */
-.table tr.evid-row-basis td:first-child {
+/* RECAP's rule lines (passed / failed), the rule ids and the evidence they name. */
+.ed-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-md);
+}
+.ed-rule {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  min-width: 0;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.ed-rule > .icon {
+  margin-top: 3px;
+}
+.ed-rule.is-ok > .icon {
+  color: var(--ok-text);
+}
+.ed-rule.is-bad > .icon {
+  color: var(--bad-text);
+}
+.ed-rule-ids .chip {
+  font-size: 11.5px;
+}
+
+/* --- 2. the causal chain ------------------------------------------------------------------- */
+
+.ed-rounds {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ed-round {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  padding-left: 44px;
+}
+/* The thread that joins one round to the next. */
+.ed-round::before {
+  content: "";
+  position: absolute;
+  top: 34px;
+  bottom: calc(-1 * var(--space-6) + 4px);
+  left: 14px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--border-2);
+}
+.ed-round:last-child::before {
+  bottom: 4px;
+}
+.ed-round-num {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+}
+.ed-round-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  min-height: 30px;
+  padding-top: 3px;
+}
+.ed-round-title {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 650;
+}
+.ed-lanes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: start;
+}
+.ed-lanes.is-parallel {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr));
+}
+.ed-lane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.ed-lane-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.ed-claims {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ed-claim {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  scroll-margin-top: calc(var(--sticky-top) + 16px);
+}
+/* The verdict's edge repeats what its status chip says (never color alone). */
+.ed-claim.is-supported {
   box-shadow: inset 3px 0 0 var(--ok);
+}
+.ed-claim.is-insufficient {
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+.ed-claim.is-contradicted {
+  box-shadow: inset 3px 0 0 var(--bad);
+}
+.ed-claim.is-diagnosis {
+  border-color: var(--ok-line);
+}
+.ed-claim:focus {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+.ed-claim-id {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.ed-judged {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--inset);
+}
+.ed-judged-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.ed-judged-head .ed-label {
+  min-width: 0;
+  padding-top: 0;
+}
+
+/* The verification that closed a round: RECAP's own verdict, kept apart from the agents' lanes. */
+.ed-verify {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: 12px;
+  border: 1px solid var(--accent-line);
+  background: rgba(43, 196, 207, 0.05);
+}
+.ed-verify.is-missing {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  border-style: dashed;
+  border-color: var(--border-2);
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--fs-md);
+}
+.ed-verify-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.ed-verify-head > .icon {
+  color: var(--accent-text);
+}
+.ed-verify-title {
+  font-weight: 650;
+}
+.ed-verify-summary {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-md);
+}
+
+/* --- 3. disagreements ------------------------------------------------------------------------ */
+
+.ed-dis-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.ed-dis {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.ed-dis.is-open {
+  border-color: var(--warn-line);
+}
+.ed-dis-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.ed-dis-kind {
+  font-weight: 650;
+}
+.ed-resolution {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-md);
+}
+.ed-dis-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2) var(--space-5);
+}
+
+/* --- 4. from diagnosis to action ----------------------------------------------------------------- */
+
+.ed-proposal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.ed-proposal + .ed-proposal {
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+.ed-proposal-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.ed-proposal-head > .icon {
+  color: var(--accent-text);
+}
+.ed-proposal-action {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  margin-right: 4px;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+.ed-proposal-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.ed-gates {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  align-items: start;
+}
+.ed-gate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.ed-gate-title {
+  margin: 0;
+  font-size: var(--fs-base);
+  font-weight: 650;
+}
+.ed-gate-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.ed-gate-row + .ed-gate-row {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+/* --- 5. the evidence registry ------------------------------------------------------------------- */
+
+.ed-registry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.ed-ref {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.ed-evid {
+  width: fit-content;
+  border-radius: 4px;
+  scroll-margin-top: calc(var(--sticky-top) + 24px);
+}
+.ed-evid:focus {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+.table tr.ed-row-basis td:first-child {
+  box-shadow: inset 3px 0 0 var(--ok);
+}
+.table tr.ed-row-focus td {
+  background: rgba(43, 196, 207, 0.06);
+}
+.table tr.ed-row-focus td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.ed-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(260px, 1fr);
+  gap: var(--space-4);
+  cursor: auto;
+}
+.ed-detail-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.ed-detail-main .segmented {
+  align-self: flex-start;
+}
+.ed-detail-main .segmented button {
+  padding: 4px 10px;
+  font-size: var(--fs-sm);
+}
+.ed-detail-meta .kv-row {
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 10px;
+  padding: 6px 0;
+}
+.ed-legend summary {
+  width: fit-content;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.ed-legend-list {
+  margin-top: var(--space-2);
+}
+.ed-legend-list .kv-row {
+  grid-template-columns: 220px minmax(0, 1fr);
+  align-items: center;
+}
+
+/* An evidence id inside a sentence stays whole; ids and status tokens in the registry stay on one line. */
+.ed-evlink-inline {
+  white-space: nowrap;
+}
+.ed-table .status-token,
+.ed-table .ed-evid {
+  white-space: nowrap;
+}
+/* A long id in a value line (a runbook chunk, say) wraps instead of leaving its card. */
+.ed-line-value .chip {
+  height: auto;
+  min-height: 22px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+  line-height: 1.3;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.ed-phone-only {
+  display: none;
+}
+
+/* --- responsive -------------------------------------------------------------------------------------- */
+
+@media (max-width: 1180px) {
+  .ed-split,
+  .ed-gates,
+  .ed-detail {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ed-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 920px) {
-  .evid-kv .kv-row {
+  .ed-dis-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Phone (390 px): one column, labels above values, the registry keeps its key columns. */
+@media (max-width: 560px) {
+  .ed-label {
+    width: 100%;
+    min-width: 0;
+    padding-top: 0;
+  }
+  .ed-line-value {
+    flex-basis: 100%;
+  }
+  .ed-round {
+    padding-left: 0;
+  }
+  .ed-round::before {
+    display: none;
+  }
+  .ed-round-num {
+    position: static;
+    width: 26px;
+    height: 26px;
+  }
+  .ed-round-head {
+    align-items: center;
+    padding-top: 0;
+  }
+  .ed-pane,
+  .ed-lane,
+  .ed-check,
+  .ed-verify,
+  .ed-dis,
+  .ed-gate {
+    padding: var(--space-3);
+  }
+  .ed-claim-id {
+    margin-left: 0;
+  }
+  .ed-col-opt,
+  .ed-col-trust {
+    display: none;
+  }
+  .ed-phone-only {
+    display: inline-flex;
+  }
+  .ed-legend-list .kv-row,
+  .ed-detail-meta .kv-row {
     grid-template-columns: minmax(0, 1fr);
     gap: 2px;
-  }
-  .evid-label {
-    min-width: 0;
   }
 }

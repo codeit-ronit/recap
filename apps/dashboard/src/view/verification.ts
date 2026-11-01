@@ -1,7 +1,8 @@
 /**
- * View helpers for the verification panels of the Evidence & RAG page: who wrote the agents'
- * text, how each checked claim used its evidence, the disagreements in plain words, the
- * verifier's leads, and the merge history read from verification.merge events.
+ * View helpers for the verification panels (Evidence & Decisions, Live Run, Trace Explorer): who
+ * wrote the agents' text, how each checked claim used its evidence, the disagreements in plain
+ * words, the verifier's leads, and the merge history read from verification.merge events. The
+ * M4 section at the end reads GET /runs/{id}/evidence (the typed EvidenceView).
  *
  * Pure functions with type-only imports, so the Node tests in ../../tests load this file
  * directly. Runs recorded before M3 lack proposers, basis and disagreements. Read back through
@@ -10,6 +11,17 @@
  * verified before M3, and those values come back as null ("not recorded").
  */
 
+import type {
+  CheckView,
+  ClaimView,
+  EvidenceItem,
+  EvidenceView,
+  FindingView,
+  PolicyVerdictView,
+  ProposalCheckView,
+  TextAuthor as AuthorKind,
+  VerificationView,
+} from "../dto";
 import type { Tone } from "../format";
 import type { AgentFinding, Evidence, Hypothesis, HypothesisCheck, ProviderInfo, TraceEvent, VerificationReport } from "../types";
 
@@ -535,4 +547,447 @@ function sharedClaims(raw: unknown): SharedClaim[] {
     else out.push({ cause: label, proposers, count: 1 });
   }
   return out;
+}
+
+// =================================================================================================
+// M4: GET /runs/{id}/evidence (EvidenceView, generated in ../dto). Pure helpers for the Evidence &
+// Decisions page: who wrote each text, the claims per round and agent with the check that judged
+// them, the supported diagnosis apart from the claims that were not accepted, disagreements, the
+// evidence registry's kinds, trust classes and uses, and evidence ids inside RECAP's rule lines.
+// =================================================================================================
+
+/** What a field the server did not record reads as. */
+export const NOT_RECORDED = "Not recorded";
+
+/** A dto TextAuthor (who wrote a claim, a summary, a rationale or a query) in words. */
+export function authorFromKind(kind: AuthorKind | null | undefined): TextAuthor {
+  switch (kind) {
+    case "scripted_policy":
+      return { who: "scripted policy", words: "the scripted policy's words" };
+    case "replayed_model":
+      return { who: "replayed model", words: "a recorded model's own words (replayed)" };
+    case "model":
+      return { who: "model", words: "the model's own words" };
+    case "recap":
+      return { who: "RECAP", words: "RECAP's own text" };
+    default:
+      return { who: "agent", words: "the agent's own words" };
+  }
+}
+
+/** "untrusted · written by the replayed model": the tag on a text a provider wrote. */
+export function untrustedTag(kind: AuthorKind | null | undefined): string {
+  const who = authorFromKind(kind).who;
+  return kind === "recap" ? "RECAP's text" : `untrusted · written by the ${who}`;
+}
+
+// --- evidence kinds and trust classes ----------------------------------------------------------
+
+export type EvidenceKindKey =
+  | "logs"
+  | "metrics"
+  | "deployments"
+  | "events"
+  | "health"
+  | "services"
+  | "action"
+  | "runbook"
+  | "memory"
+  | "alert"
+  | "oracle"
+  | "other";
+
+export const EVIDENCE_KIND_LABELS: Readonly<Record<EvidenceKindKey, string>> = {
+  logs: "Logs",
+  metrics: "Metrics",
+  deployments: "Deployments",
+  events: "Cluster events",
+  health: "Health",
+  services: "Service list",
+  action: "Action result",
+  runbook: "Runbook search",
+  memory: "Memory",
+  alert: "Alert",
+  oracle: "Oracle",
+  other: "Other",
+};
+
+// The simulated shop's MCP tools (recap/tools/mcp_server.py) and RECAP's own search_runbooks.
+const TOOL_KINDS: Readonly<Record<string, EvidenceKindKey>> = {
+  get_service_logs: "logs",
+  get_service_metrics: "metrics",
+  get_recent_deployments: "deployments",
+  propose_rollback: "deployments",
+  get_k8s_like_events: "events",
+  get_service_health: "health",
+  list_services: "services",
+  execute_rollback: "action",
+  restart_service: "action",
+  delete_namespace: "action",
+  search_runbooks: "runbook",
+};
+
+/** What an observation is (logs, metrics, deployments, ...), from its source and tool only. */
+export function evidenceKind(item: { source_type: string; tool: string | null }): EvidenceKindKey {
+  if (item.source_type === "tool" || item.source_type === "doc") {
+    const kind = item.tool ? TOOL_KINDS[item.tool] : undefined;
+    if (kind) return kind;
+    return item.source_type === "doc" ? "runbook" : "other";
+  }
+  if (item.source_type === "memory" || item.source_type === "alert" || item.source_type === "oracle") return item.source_type;
+  return "other";
+}
+
+/** A trust class (EvidenceItem.trust_class) in two or three words. */
+export function trustClassLabel(trustClass: string): string {
+  switch (trustClass) {
+    case "untrusted_tool_output":
+      return "tool output";
+    case "untrusted_runbook_text":
+      return "runbook text";
+    case "untrusted_memory_text":
+      return "memory text";
+    case "untrusted_alert_text":
+      return "alert text";
+    case "recap_trusted_text":
+      return "RECAP (trusted)";
+    default:
+      return trustClass ? trustClass.replace(/_/g, " ") : NOT_RECORDED;
+  }
+}
+
+/** True for every class but RECAP's own text. */
+export function isUntrustedClass(trustClass: string): boolean {
+  return trustClass !== "recap_trusted_text";
+}
+
+// --- matching a claim to the check that judged it ------------------------------------------------
+
+/** The remembered-claim rule: the verifier adds it to every check of a claim from memory (and only those). */
+export const MEMORY_RULE = "V5-memory";
+
+/** The release (bad deployment) or dependency (dependency failure) a claim names itself; "" when none. */
+export function claimDetailOf(claim: { mechanism: string; details: Record<string, unknown> | null | undefined }): string {
+  const key = DETAIL_KEYS[claim.mechanism];
+  const value = key ? record(claim.details)[key] : undefined;
+  return typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
+}
+
+/** A version without its case and one leading "v", as the verifier compares releases. */
+function looseVersion(value: string): string {
+  return value.trim().toLowerCase().replace(/^v/, "");
+}
+
+function sameDetail(mechanism: string, a: string, b: string): boolean {
+  return mechanism === "bad_deployment" ? looseVersion(a) === looseVersion(b) : a.trim() === b.trim();
+}
+
+/**
+ * The check (of one verification) that judged a claim. The merger keys a claim by its origin,
+ * mechanism, target and detail, so the check must have the same mechanism and target, the
+ * claim's agent among its proposers, the same origin (a remembered claim's check notes
+ * V5-memory) and the release or dependency the claim names. The claim's own text breaks a tie
+ * (the merged check keeps its first proposer's words). null: no single check matches.
+ */
+export function checkOfClaim(
+  claim: Pick<ClaimView, "agent" | "claim" | "mechanism" | "target_service" | "details" | "origin">,
+  checks: readonly CheckView[] | null | undefined,
+): CheckView | null {
+  if (!checks?.length) return null;
+  const withProposers = checks.some((c) => c.proposers.length > 0);
+  let found = checks.filter(
+    (c) =>
+      c.mechanism === claim.mechanism &&
+      (c.target ?? "") === (claim.target_service ?? "") &&
+      (!withProposers || c.proposers.includes(claim.agent)),
+  );
+  if (found.some((c) => c.rule_ids.length)) {
+    const remembered = claim.origin === "memory";
+    found = found.filter((c) => c.rule_ids.includes(MEMORY_RULE) === remembered);
+  }
+  const named = claimDetailOf(claim);
+  if (named && found.some((c) => c.detail)) found = found.filter((c) => sameDetail(claim.mechanism, c.detail, named));
+  if (found.length > 1) {
+    const sameText = found.filter((c) => c.claim === claim.claim);
+    if (sameText.length) found = sameText;
+  }
+  return found.length === 1 ? found[0] : null;
+}
+
+/**
+ * The check behind the report's diagnosis (report.best): a supported check with the same text,
+ * mechanism and target. When a live and a remembered claim tie, the verifier ranks the live one
+ * first (V7), so the check without V5-memory is preferred. null: none, or no single one.
+ */
+export function diagnosisCheckOf(report: Pick<VerificationView, "best" | "checks"> | null | undefined): CheckView | null {
+  const best = report?.best;
+  if (!best) return null;
+  let found = report.checks.filter(
+    (c) => c.status === "supported" && c.claim === best.claim && c.mechanism === best.mechanism && (c.target ?? "") === (best.target_service ?? ""),
+  );
+  if (found.length > 1) {
+    const live = found.filter((c) => !c.rule_ids.includes(MEMORY_RULE));
+    if (live.length) found = live;
+  }
+  return found.length === 1 ? found[0] : null;
+}
+
+/** "resource pressure on inventory": a cause in words (mechanism, target and its detail). */
+export function causeWords(mechanism: string, target: string | null | undefined, detail = ""): string {
+  const words = mechanism ? mechanism.replace(/_/g, " ") : "unknown mechanism";
+  const on = `${words} on ${target || "an unnamed service"}`;
+  if (!detail) return on;
+  return mechanism === "dependency_failure" ? `${on} (blames ${detail})` : mechanism === "bad_deployment" ? `${on} (release ${detail})` : on;
+}
+
+export interface ReportSplit {
+  /** The check behind the diagnosis (report.best), when one matches. */
+  diagnosis: CheckView | null;
+  /** Supported, but not the diagnosis (a dependency failure only points elsewhere, say). */
+  alsoSupported: CheckView[];
+  /** Insufficient, contradicted, or any other status: not accepted. */
+  notAccepted: CheckView[];
+  counts: { supported: number; insufficient: number; contradicted: number; other: number };
+}
+
+/** The final report's checks: the supported diagnosis apart from the claims not accepted. */
+export function splitReport(report: Pick<VerificationView, "best" | "checks"> | null | undefined): ReportSplit {
+  const diagnosis = diagnosisCheckOf(report);
+  const checks = report?.checks ?? [];
+  const counts = { supported: 0, insufficient: 0, contradicted: 0, other: 0 };
+  for (const c of checks) {
+    if (c.status === "supported" || c.status === "insufficient" || c.status === "contradicted") counts[c.status] += 1;
+    else counts.other += 1;
+  }
+  return {
+    diagnosis,
+    alsoSupported: checks.filter((c) => c.status === "supported" && c !== diagnosis),
+    notAccepted: checks.filter((c) => c.status !== "supported"),
+    counts,
+  };
+}
+
+// --- the causal chain: claims per round and agent ---------------------------------------------
+
+export interface ChainClaim {
+  claim: ClaimView;
+  /** The check that judged the claim after its round (or the final report's, when untraced). */
+  check: CheckView | null;
+  /** "round": the verification that closed the claim's round · "final": the run record's report. */
+  checkSource: "round" | "final" | null;
+  /** The final verification's verdict on the same claim, when it differs from `check`'s. */
+  finalStatus: string | null;
+  /** The claim the final report diagnosed (several agents can make the same claim). */
+  diagnosis: boolean;
+}
+
+export interface ChainAgent {
+  finding: FindingView;
+  claims: ChainClaim[];
+}
+
+export interface ChainRound {
+  /** null: verifications the trace did not place in a round. */
+  round: number | null;
+  agents: ChainAgent[];
+  /** The last traced verification of this round (the final report when the run has no trace). */
+  verification: VerificationView | null;
+}
+
+/** The last traced verification of a round, or null. */
+export function verificationOfRound(verifications: readonly VerificationView[], round: number | null): VerificationView | null {
+  const found = verifications.filter((v) => v.round === round);
+  return found.length ? found[found.length - 1] : null;
+}
+
+/**
+ * Every round with its agents' claims, each with the check that judged it (rules, never votes)
+ * and the verification that closed the round. Claims keep the order the run recorded them.
+ */
+export function causalChain(view: Pick<EvidenceView, "findings" | "verifications" | "final_report">): ChainRound[] {
+  const final = view.final_report;
+  const diagnosis = diagnosisCheckOf(final);
+  const traced = view.verifications.length > 0;
+  const rounds = unique<number | null>([...view.findings.map((f) => f.round), ...view.verifications.map((v) => v.round)]);
+  if (!traced && final && !rounds.includes(final.round)) rounds.push(final.round);
+  rounds.sort((a, b) => (a === null ? 1 : b === null ? -1 : a - b));
+  return rounds.map((round) => {
+    const verification = traced ? verificationOfRound(view.verifications, round) : final && final.round === round ? final : null;
+    const agents = view.findings
+      .filter((f) => f.round === round)
+      .map((finding) => ({
+        finding,
+        claims: finding.claims.map((claim) => {
+          const own = traced ? checkOfClaim(claim, verification?.checks) : null;
+          const last = checkOfClaim(claim, final?.checks);
+          const check = own ?? (traced ? null : last);
+          const checkSource: ChainClaim["checkSource"] = own ? "round" : check ? "final" : null;
+          return {
+            claim,
+            check,
+            checkSource,
+            finalStatus: own && last && last.status !== own.status ? last.status : null,
+            diagnosis: !!last && last === diagnosis,
+          };
+        }),
+      }));
+    return { round, agents, verification };
+  });
+}
+
+// --- disagreements across verifications ------------------------------------------------------------
+
+export interface DisagreementEntry {
+  view: DisagreementView;
+  /** The rounds whose verification recorded it (the same record can recur round after round). */
+  rounds: (number | null)[];
+  /** Recorded by the final verification too. */
+  final: boolean;
+}
+
+/** Every disagreement the verifications recorded, each once, with the rounds that recorded it. */
+export function disagreementsOf(view: Pick<EvidenceView, "verifications" | "final_report">): DisagreementEntry[] {
+  const entries = new Map<string, DisagreementEntry>();
+  const sources = [...view.verifications, ...(view.final_report ? [view.final_report] : [])];
+  for (const v of sources) {
+    for (const raw of v.disagreements) {
+      const d = readDisagreement(raw);
+      const key = JSON.stringify([d.kind, d.claims, d.agents, d.evidence_ids, d.resolved, d.rule_id, d.resolution, d.question]);
+      let entry = entries.get(key);
+      if (!entry) entries.set(key, (entry = { view: d, rounds: [], final: false }));
+      if (v.source === "run_record") entry.final = true;
+      else if (!entry.rounds.includes(v.round)) entry.rounds.push(v.round);
+    }
+  }
+  return [...entries.values()];
+}
+
+// --- the evidence registry ------------------------------------------------------------------------
+
+export interface RegistryUse {
+  /** The diagnosis' own check relied on it (basis_evidence_ids). */
+  diagnosisBasis: boolean;
+  /** Some passing rule of some verification relied on it (in_rule_basis). */
+  ruleBasis: boolean;
+  /** Claim ids citing it as support, and against. */
+  supports: string[];
+  contradicts: string[];
+}
+
+export function registryUse(item: Pick<EvidenceItem, "id" | "in_rule_basis" | "supports" | "contradicts">, diagnosis: CheckView | null): RegistryUse {
+  return {
+    diagnosisBasis: !!diagnosis?.basis_evidence_ids.includes(item.id),
+    ruleBasis: item.in_rule_basis,
+    supports: unique(item.supports),
+    contradicts: unique(item.contradicts),
+  };
+}
+
+/** How the registry filter "use" reads an item. */
+export function registryUseKey(use: RegistryUse): "diagnosis basis" | "rule basis" | "cited" | "not cited" {
+  if (use.diagnosisBasis) return "diagnosis basis";
+  if (use.ruleBasis) return "rule basis";
+  return use.supports.length || use.contradicts.length ? "cited" : "not cited";
+}
+
+/** A DOM id for an evidence row or a claim (anchors for the links between them). */
+export function domId(prefix: "ev" | "claim", id: string): string {
+  return `${prefix}-${id.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+}
+
+/** A line of text split around the evidence ids it names (only ids in `known`), for linking. */
+export function splitEvidenceIds(line: string, known: ReadonlySet<string>): ({ text: string } | { id: string })[] {
+  const parts: ({ text: string } | { id: string })[] = [];
+  let last = 0;
+  for (const match of line.matchAll(/[A-Za-z0-9][A-Za-z0-9_.:-]*[A-Za-z0-9]/g)) {
+    const token = match[0];
+    const at = match.index ?? 0;
+    if (!known.has(token)) continue;
+    if (at > last) parts.push({ text: line.slice(last, at) });
+    parts.push({ id: token });
+    last = at + token.length;
+  }
+  if (last < line.length || !parts.length) parts.push({ text: line.slice(last) });
+  return parts;
+}
+
+/** The evidence-gate checks (VP1..VP4) recorded for one proposal, in trace order. */
+export function proposalChecksOf(checks: readonly ProposalCheckView[], proposalId: string): ProposalCheckView[] {
+  return checks.filter((c) => c.proposal_id === proposalId).sort((a, b) => a.seq - b.seq);
+}
+
+/** The policy verdicts on a tool (a policy verdict names its tool, not a proposal). */
+export function policyVerdictsOf(verdicts: readonly PolicyVerdictView[], tool: string): PolicyVerdictView[] {
+  return verdicts.filter((v) => v.tool === tool);
+}
+
+/** The deciding rule of a policy verdict: the last rule id it lists. */
+export function decidingRule(ruleIds: readonly string[]): string | null {
+  return ruleIds.length ? ruleIds[ruleIds.length - 1] : null;
+}
+
+/** Evidence-gate rules (recap/agents/verifier.py PROPOSAL_RULES) for tooltips. */
+export const PROPOSAL_RULES: Record<string, string> = {
+  "VP1-evidence-exists": "the fix cites evidence recorded in this run",
+  "VP2-target-matches-diagnosis": "the fix targets the diagnosed service",
+  "VP3-action-named": "the fix names an action from the remediation catalog",
+  "VP4-restore-point": "a fix that restores a version restores one the evidence names",
+};
+
+/** What a rule id means (verifier rules, evidence-gate rules); undefined when unknown. */
+export function anyRuleNote(id: string): string | undefined {
+  return VERIFIER_RULES[id] ?? PROPOSAL_RULES[id] ?? (id === "V1-consistency" ? "details that belong to another mechanism are reported, never used" : undefined);
+}
+
+/**
+ * Per failed rule line of a check: true when it repeats a release or dependency the claim named
+ * that is not shaped like one (older runs quoted it; the verifier now writes "(unnamed)"). The
+ * line is RECAP's sentence, but that part is the provider's text, so the page tags it.
+ */
+export function quotedRuleLines(
+  check: Pick<CheckView, "mechanism" | "detail" | "failed">,
+  details?: Record<string, unknown> | null,
+): boolean[] {
+  const named = claimDetailOf({ mechanism: check.mechanism, details: details ?? {} });
+  const values = unique([named, check.detail.trim()]).filter((v) => v && !isCheckedValue(check.mechanism, v));
+  return check.failed.map((line) => values.some((value) => repeats(line, value)));
+}
+
+/** Open questions a verification left for the next round (its open disagreements' questions). */
+export function openQuestionsOf(v: Pick<VerificationView, "disagreements">): string[] {
+  return unique(v.disagreements.map(readDisagreement).filter((d) => !d.resolved && d.question).map((d) => d.question));
+}
+
+/** True when a value has the shape of a service name (a DNS label): shown as a checked value, else as quoted data. */
+export function isServiceName(value: string | null | undefined): boolean {
+  return typeof value === "string" && SERVICE_SHAPE.test(value);
+}
+
+/**
+ * The text of a JSON object or array with indentation added, for reading; null when the text is
+ * not JSON. Only whitespace changes: values, keys and their order stay as recorded.
+ */
+export function prettyJson(text: string): string | null {
+  const trimmed = text.trim();
+  if (!trimmed || (trimmed[0] !== "{" && trimmed[0] !== "[")) return null;
+  try {
+    const value: unknown = JSON.parse(trimmed);
+    return value !== null && typeof value === "object" ? JSON.stringify(value, null, 2) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * False when the run was verified before RECAP recorded proposers and disagreements (M3): every
+ * check of its reports lacks proposers, and the API serves the missing lists as [].
+ */
+export function recordsDisagreements(view: Pick<EvidenceView, "verifications" | "final_report">): boolean {
+  const checks = [...view.verifications, ...(view.final_report ? [view.final_report] : [])].flatMap((v) => v.checks);
+  return !checks.length || checks.some((c) => c.proposers.length > 0);
+}
+
+/** The run's text author (every finding and proposal of a run has the same provider). */
+export function runAuthorKind(view: Pick<EvidenceView, "findings" | "proposals">): AuthorKind | null {
+  return view.findings[0]?.author ?? view.proposals[0]?.author ?? null;
 }

@@ -1,0 +1,133 @@
+/*
+ * Knowledge page, run scope (pages/Knowledge.tsx: "This run's retrieval"). The shared "ed-"
+ * pieces (lines, labels, quotes, help text) are in evidence-m3.css; the knowledge base's own
+ * "kb-" classes are in ../styles.css.
+ */
+
+.kn-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.kn-runbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* How the run searched | its memory: side by side on a wide screen. */
+.kn-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+.kn-summary .kv-row {
+  grid-template-columns: 150px minmax(0, 1fr);
+}
+
+/* One traced runbook search. */
+.kn-searches {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.kn-search {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.kn-search-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.kn-search-num {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--info-line);
+  background: var(--info-soft);
+  color: var(--info-text);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+}
+.kn-search-title {
+  font-size: var(--fs-lg);
+  font-weight: 650;
+}
+.kn-search-time {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.kn-query {
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+.kn-reason {
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.kn-heading {
+  color: var(--text);
+  font-weight: 550;
+}
+.kn-path .mono {
+  overflow-wrap: anywhere;
+}
+.kn-search .table-wrap {
+  margin-top: var(--space-1);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+.kn-aside {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+.kn-aside-key {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Memory: the configuration, then one row per past episode with RECAP's verdict. */
+.kn-memory {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.kn-memory-table .kn-reason {
+  font-size: var(--fs-sm);
+}
+
+@media (max-width: 1280px) {
+  .kn-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 560px) {
+  .kn-search {
+    padding: var(--space-3);
+  }
+  .kn-search-time {
+    margin-left: 0;
+  }
+  .kn-summary .kv-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

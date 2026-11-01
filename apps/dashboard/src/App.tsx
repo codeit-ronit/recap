@@ -4,7 +4,7 @@ import { api } from "./api";
 import { ErrorBoundary } from "./components/EmptyState";
 import { OperatorSignIn } from "./components/OperatorSignIn";
 import { AppShell, PRODUCT_NAME } from "./components/Shell";
-import { PAGE_LABELS, RUN_SCOPED_PAGES, hrefFor, usePolling, useHashRoute } from "./hooks";
+import { APPROVALS_CHANGED, PAGE_LABELS, RUN_SCOPED_PAGES, hrefFor, usePolling, useHashRoute } from "./hooks";
 import type { PageId, PageProps } from "./hooks";
 import { AgentTimelinePage } from "./pages/AgentTimeline";
 import { ArchitecturePage } from "./pages/Architecture";
@@ -51,6 +51,12 @@ export default function App() {
   const health = usePolling(() => api.health(), 5000, []);
   const system = usePolling(() => api.system(), 30000, []);
   const pending = usePolling(() => api.pendingApprovals(), 4000, []);
+  // A decision made on any page updates the "approvals waiting" count right away.
+  const { refresh: refreshPending } = pending;
+  useEffect(() => {
+    window.addEventListener(APPROVALS_CHANGED, refreshPending);
+    return () => window.removeEventListener(APPROVALS_CHANGED, refreshPending);
+  }, [refreshPending]);
 
   // Remember the run being looked at (and the live run) so navigation keeps it selected.
   const [lastRun, setLastRun] = useState<string | null>(null);
