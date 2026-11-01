@@ -752,7 +752,7 @@ local `qwen3:8b` and 13 to Groq's free plan, plus local embedding requests; **$0
 
 ---
 
-## M4: product control center, agent evaluations and release evidence (in progress, from 2026-10-25)
+## M4: product control center, agent evaluations and release evidence (2026-10-25 to 2026-11-02, release 0.5.0)
 
 M4 turns recorded RECAP runs into a verifiable product demonstration and builds repeatable
 evaluation and safety-analysis tools, over the existing contracts. It does not add a real
@@ -782,3 +782,168 @@ cluster: the live Kubernetes / Kind / SREGym integration is M5, and nothing in M
   (same major version; lockfile updated; tests and build pass). One advisory remains: the
   esbuild development server (GHSA-67mh-4wv8-2f99), fixed only by a major vite upgrade, so
   it is deferred; it concerns `npm run dev` only, never the built dashboard RECAP serves.
+
+### Step 1: a typed, read-only API ([ADR 0027](decisions/0027-a-typed-read-only-api-over-the-run-records.md))
+
+- New typed views (schema `recap-api-v1`, also in the `X-RECAP-API-Schema` header), each built
+  only from what a run persisted (its checkpoints, stored trace, evidence and the oracle's
+  verdict); a fact the record lacks is listed in `not_recorded`, never filled in:
+  `GET /system`, `/providers`, `/runs` (filters, offset paging, `X-Total-Count`),
+  `/runs/{id}` (a typed summary added), `/runs/{id}/timeline` (cursor paging with
+  `after_seq` and `limit`; filters by agent, round, kind and tool), `/runs/{id}/evidence`,
+  `/runs/{id}/retrieval`, `/runs/{id}/usage`, `/evals`, `/evals/{batch_id}`, `/replays`.
+- A client may choose the provider of one run only from an allowlist: the server's default,
+  the scripted baseline, a replay of an intact committed recording (its scenario and routing
+  come from the manifest), or a provider the owner marked `api_selectable`. Paid providers
+  never. The live stream resumes with `Last-Event-ID` without duplicates.
+- No response carries a token, a signed capability, a key or a local path (contract and
+  security tests in `tests/e2e/test_api_contracts.py` and `tests/e2e/test_api_security.py`).
+- The dashboard's TypeScript types are generated from these response models
+  (`scripts/gen_dashboard_types.py` writes `apps/dashboard/src/dto.ts`, 60 interfaces); a
+  test fails when the file is out of date.
+
+### Step 2: the golden multi-agent replay ([ADR 0028](decisions/0028-content-addressed-recordings-and-replay-by-manifest-id.md))
+
+- The M3 deliverable, the owner-approved `qwen3:8b` run of the held-out unfamiliar incident
+  (two specialists in parallel for two rounds, the owner's approved restart, oracle
+  verified), is committed as `fixtures/recordings/ollama-qwen3-8b-unfamiliar-parallel.jsonl`
+  and listed in `fixtures/recordings/MANIFEST.json` with its SHA-256.
+- A replay is chosen by manifest id (`RunConfig.replay_fixture`); an unknown id or a file
+  whose bytes no longer match is refused before any answer is given; a replay is refused
+  when RECAP is configured with a non-simulated environment; the dashboard's replay asks a
+  person for a fresh approval (the recorded approval is never reused).
+- `RunConfig.replay_pace` (0 to 1) makes a replay wait that share of each recorded answer's
+  original time (at most 15 s per answer), so the recorded 11-minute run can be watched in
+  about half a minute; it changes timing only.
+- CI replays it end to end (`tests/e2e/test_golden_replay.py`: event shapes, the approval and
+  authorization chain, the capability-signed write, the oracle, replay labels, determinism
+  when either specialist is delayed, and refusal of an altered file) and checks the manifest
+  (`scripts/recordings_manifest.py --check`).
+- Commit note: `ef80445` alone fails 7 golden-replay tests; it needs the one-line change in
+  `Runtime.make_provider` that landed in the next commit (`6c51a11`). Every later commit
+  passes. History was not rewritten to fix it.
+
+### Step 3: Mission Control, the dashboard ([ADR 0030](decisions/0030-mission-control-reads-only-typed-server-facts.md))
+
+- Nine screens on the typed API, with types generated from the API's models: **Overview**
+  (the environment from `GET /system`, the providers, recent runs with their data source,
+  outcomes counted per data source, the M5 gaps, "Start the demo"), **Incident Lab** (run an
+  incident with a provider the server allows, or replay a committed recording at a Watchable
+  or Instant pace; live stage stepper and SSE feed; an approval dialog that cannot be
+  dismissed; the outcome with the oracle's verdict and links to the run's other views),
+  **Trace Explorer** (lanes per specialist, rounds with their routing decision and measured
+  overlap, MCP tool steps, model requests with reported tokens and the time spent waiting
+  inside the model server, cursor paging of 100 events at a time, filters), **Evidence &
+  Decisions**, **Knowledge** (the index, and each run's searches), **Experience Memory**,
+  **Safety & Approvals** (unsafe actions attempted vs executed), **Evaluations** (one tab per
+  mode, "k of N", the record of each run) and **Architecture & Learning** (the
+  implementation, clickable, with status, code and ADRs; Kind and SREGym planned).
+- Every screen has loading, empty and error states; text a model or tool wrote is quoted,
+  labelled and escaped; status never by colour alone; usable at 390 px.
+- Checks without new dependencies: component tests on Node's test runner (any React warning
+  or console error fails a test), and `apps/dashboard/e2e/smoke.mjs`, which drives the
+  installed Chrome over the DevTools protocol through the nine pages (1440 and 390 px; no
+  console message, no sideways scroll, no token in the page) and the demo: sign in, replay the
+  golden recording, approve in the dialog, RESOLVED with the oracle's verdict, and the API
+  agrees. The README screenshots come from that run.
+- How it was built: six builders on disjoint files, then one quality pass in a real browser.
+  The laptop slept twice while they worked (its lid was closed on battery), which stopped
+  the builders during their final checks; each was resumed from the files it had written.
+
+### Step 4: agent and safety evaluations ([ADR 0029](decisions/0029-one-evaluation-record-per-run-and-modes-that-never-share-a-number.md), [docs/evaluation.md](evaluation.md))
+
+- One `EvalRecord` per run, built from the run's own record and trace
+  (`evals/categorize.py`); batches of exactly one mode: `scripted_regression`,
+  `offline_replay`, `real_llm` (`kubernetes_future` is named, never run). A run is a
+  success only when the oracle verified the recovery; every other run gets one failure
+  category by fixed, generic rules, with a detail line.
+- Cost controls: a hosted free provider needs `--confirm-free-plan` per batch on top of the
+  M2 guards; nothing live runs when `CI` is set; a quota stop ends a batch cleanly (exit 3).
+- Published batches (`evals/reports/batches/`), each a count, never a rate:
+
+| Batch | Mode | N | Outcomes |
+|---|---|---|---|
+| `20261025-114334-c205fe` | scripted regression (scripted policy, not a model) | 32 | 24 success, 7 oracle_not_recovered, 1 safety_blocked |
+| `20261026-044951-offline-replay-916860` | offline replay of both committed recordings | 2 | 2 success |
+| `2026-10-25-real-llm-qwen3-8b-prompts-v4.6` | real model, local `qwen3:8b` (M3) | 7 | 3 success, 2 wrong_service, 1 wrong_mechanism, 1 missed_crucial_tool |
+| `2026-10-25-real-llm-qwen3-8b-prompts-v4.7` | real model, local `qwen3:8b` (M3) | 2 | 1 success, 1 wrong_mechanism |
+| `2026-10-25-real-llm-qwen3-8b-prompts-v4.7-owner-approved` | real model, owner-approved (M3) | 1 | 1 success |
+| `2026-10-25-real-llm-openai-gpt-oss-120b-prompts-v4.6` | real model, Groq Free (M3) | 2 | 1 insufficient_evidence, 1 quota_cap |
+
+- Model time is split honestly: Ollama's `total_duration` counts from receiving a request, so
+  a request queued behind the other specialist's waits inside it. RECAP records the server's
+  compute (load + prompt evaluation + generation) and reports the wait as the difference
+  (`server_wait_ms` in the API, `model_wait_seconds` in a record).
+- Safety tests with a fooled fake model (untrusted log text, a poisoned runbook, a planted
+  memory: nothing unauthorized executes), a false-positive test (a correct, supported fix
+  is not blocked), robustness tests (truncated recordings, malformed evidence ids,
+  out-of-order parallel traces, missing token counts, rejected and expired approvals).
+
+### Step 5: one targeted improvement, from the recorded failures (M4.5)
+
+An analysis of the 11 recorded real-model runs of M3 found the verifier's verdicts correct
+every time and no step, budget or context limit at fault. It found three generic RECAP
+defects, fixed without changing any prompt, schema or parser (both committed recordings still
+replay): **victim leads** (an unsupported claim on a service whose own errors mostly blame a
+dependency now also points the next round at that dependency), **V1-consistency** (details
+that belong to another mechanism are reported, never used) and **allowlisted leads** (a lead
+is trusted prompt text, so it names only allowlisted services). The fixes most likely to help
+a model on the cross-service incident change prompts, so they wait for a future prompt
+version (they would invalidate the owner-approved recording). Scripted baselines: 0 of 51
+runs differ (memory off and on). [ADR 0021](decisions/0021-evidence-rules-settle-disagreements-never-votes.md)
+decision 10.
+
+**Two live runs under M4** (local `qwen3:8b`, prompts-v4.7, simulated environment, simulation
+auto-approver, $0; plan `evals/plans/m4-comparisons.yaml`, one data folder each, 2026-10-26):
+
+| Run | Incident | Routing | State | Requests | Tokens in / out (server) | Tool calls | Run time | Model server time (waiting inside) |
+|---|---|---|---|---|---|---|---|---|
+| `run-602b88cbf1` | `ambiguous-incident` (cross-service) | parallel, 2 rounds | FAILED (`wrong_mechanism`), nothing executed | 15 | 54,945 / 1,813 | 18 | 474 s | 837.1 s (361.8 s) |
+| `run-fd18436dfe` | `m3-inventory-leak-behind-frontend` (held-out unfamiliar) | single, 2 rounds | RESOLVED, oracle verified | 11 | 40,571 / 1,216 | 14 | 304 s | 299.8 s (2.9 s) |
+
+- The cross-service run repeats the M3 prompts-v4.7 failure of this incident
+  (`run-33427c4450`) almost step for step: round 1's supported link checkout -> payment sent
+  round 2 to `payment` (as in M3); there the telemetry specialist read `payment`'s metrics but
+  not its logs and claimed resource pressure (contradicted by rule V3), and no specialist
+  filed the `payment` release as the cause, although the infrastructure specialist read it.
+  This is the expected result: the M4.5 fixes changed no prompt text, and the changes aimed
+  at exactly these gaps (handing a round's own plan to the next round, leads that name the
+  evidence the rules need) wait for a future prompt version.
+- The single-agent run of the unfamiliar incident resolved it in two rounds: round 1's
+  supported claim "cart's calls to inventory fail" left a lead that sent round 2 to
+  `inventory`, where resource pressure was supported; the restart (approved by the
+  simulation auto-approver) was verified by the oracle. The owner-approved M3 run of the same
+  incident used two specialists in parallel (14 requests, 52,585 / 2,394 tokens). One run
+  each, with different approvers and different routing: this does not show that either
+  topology is better, cheaper or more accurate.
+- The last column shows why model time is split: two specialists asking one local server
+  queue behind each other (362 s of waiting); one agent almost never waits (3 s).
+
+### Step 6: readiness for M5, without deploying it
+
+[docs/m5-integration-plan.md](m5-integration-plan.md): first a minimal local Kind cluster with
+a two-service demo and an intentionally bad deployment (typed, allowlisted operations, a
+namespace-scoped service account, rollback to a named revision, rollout status and readiness
+as the oracle), then SREGym once a version is pinned and its install verified. It maps every
+`TargetEnvironment` method, lists the prerequisites (Docker or colima, kind, kubectl: none
+installed), the safety rules for a live cluster, the risks and the first three acceptance
+tests. Nothing was installed or provisioned; `GET /system` shows Kind and SREGym as planned.
+
+### Step 7: smoke, security, accessibility and handoff
+
+- Type checking: `mypy` (with the pydantic plugin) on the core interfaces and the M4 modules,
+  28 files listed in `pyproject.toml`; clean; a CI step.
+- Secret scan: `scripts/secret_scan.py` checks every tracked file and every blob in the git
+  history (1,275 blobs, 57 commits on 2026-10-26) for the key shapes the recorder redacts, and
+  that the owner's own key value appears nowhere; nothing found. Six fake test keys are
+  allowed by the SHA-256 of their exact value. A CI step, with the whole history fetched.
+- Tests at release 0.5.0: `pytest` 1681 passed, 1 skipped (149 end to end); ruff clean; mypy
+  clean; recordings manifest and secret scan clean. Dashboard: 494 tests, `tsc --noEmit`, a
+  build, and the browser smoke test 72 of 72 (seeded demo data, Chrome over the DevTools
+  protocol; the README screenshots come from that run). Version 0.5.0 in `pyproject.toml`,
+  `recap/__init__.py` and the dashboard's package files.
+- Not done in M4, and why: a human-approved live run under M4 (the owner approves at the
+  terminal; both M4 live runs used the simulation auto-approver); repeated real-model runs for
+  rates; the prompt changes P4 to P6 (they would invalidate the owner-approved recording);
+  hosted free-plan runs after 2026-10-28 need the owner's fresh free-plan confirmation; the
+  browser smoke test is run by hand, not in CI (it needs Chrome and a seeded server).

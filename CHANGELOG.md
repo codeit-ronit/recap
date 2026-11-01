@@ -9,6 +9,111 @@ version from v0.3.0 on.
 
 Everything below runs against a **simulated** environment; nothing repairs a real cluster.
 
+## [0.5.0] — 2026-11-02 — M4: product control center, agent evaluations and release evidence
+
+RECAP's runs can now be checked by anyone, in a browser: a typed, read-only API serves every
+run from what it stored, and the Mission Control dashboard shows it in nine screens. Its
+centerpiece is a one-click replay of the real two-agent `qwen3:8b` run of M3 (the owner-
+approved fix of an incident RECAP had never seen): a SHA-256-pinned recording, replayed
+through the whole system against the simulator, paced so people can watch it, with a fresh
+approval in the browser. Every evaluated run becomes one record with a named reason when it
+did not recover, and scripted, replayed and real-model results are never added together.
+Two new live runs under M4 are recorded, a failure included. Nothing here touches a real
+cluster: Kubernetes and SREGym are M5, and only planned.
+
+### Added
+
+- **Typed read-only API** ([ADR 0027](docs/decisions/0027-a-typed-read-only-api-over-the-run-records.md)):
+  `GET /system`, `/providers`, `/runs` (filters, offset paging, `X-Total-Count`),
+  `/runs/{id}` (typed summary), `/runs/{id}/timeline` (cursor paging, filters by agent,
+  round, kind and tool), `/runs/{id}/evidence`, `/runs/{id}/retrieval`, `/runs/{id}/usage`,
+  `/evals`, `/evals/{batch_id}`, `/replays`; schema `recap-api-v1` (also the
+  `X-RECAP-API-Schema` header); a fact the record lacks is listed in `not_recorded`; the
+  live stream resumes with `Last-Event-ID`.
+- **Mission Control, the dashboard** ([ADR 0030](docs/decisions/0030-mission-control-reads-only-typed-server-facts.md),
+  [apps/dashboard/README.md](apps/dashboard/README.md)): nine screens on the typed API:
+  Overview (environment, providers, recent runs, outcomes counted per data source, "Start the
+  demo"), Incident Lab (run an incident or replay a committed recording at a Watchable or
+  Instant pace, live stage stepper and event feed, an approval dialog that cannot be
+  dismissed, the outcome with the oracle's verdict), Trace Explorer (lanes per specialist,
+  rounds with their routing and overlap, model requests with the time spent waiting inside
+  the model server, cursor paging for runs with over 1000 events), Evidence & Decisions,
+  Knowledge (with each run's searches), Experience Memory (partitions, reuse verdicts),
+  Safety & Approvals (policy decisions, the approval lifecycle, unsafe actions attempted vs
+  executed), Evaluations (one tab per mode, "k of N") and Architecture & Learning (the
+  implementation with each part's status, code and ADRs). Loading, empty and error states on
+  every screen; untrusted text escaped and labelled; status never by colour alone; usable at
+  390 px. Component tests run on Node's own test runner (no new dependencies), and
+  `apps/dashboard/e2e/smoke.mjs` drives the installed Chrome over the DevTools protocol
+  through all nine pages and the replay-and-approve flow.
+- **A safe per-run provider choice**: `POST /incidents/run` accepts the server's default, the
+  scripted baseline, a replay of an intact committed recording, or a provider the owner marked
+  `api_selectable`; paid providers never.
+- **Replay by manifest id** ([ADR 0028](docs/decisions/0028-content-addressed-recordings-and-replay-by-manifest-id.md)):
+  `fixtures/recordings/MANIFEST.json` pins each recording's SHA-256 and the run it reproduces;
+  `RunConfig.replay_fixture`; an unknown id or altered file is refused before any answer; a
+  replay is refused against a non-simulated environment; `scripts/recordings_manifest.py
+  --check/--update`; the golden replay of the owner-approved two-agent run in CI
+  (`tests/e2e/test_golden_replay.py`).
+- **`RunConfig.replay_pace`** (0 to 1): a replay waits that share of each recorded answer's
+  original time (at most 15 s), so the 11-minute golden run plays in about half a minute.
+- **Evaluation records** ([ADR 0029](docs/decisions/0029-one-evaluation-record-per-run-and-modes-that-never-share-a-number.md),
+  [docs/evaluation.md](docs/evaluation.md)): `evals/records.py`, `evals/categorize.py`; batches of
+  one mode (`scripted_regression`, `offline_replay`, `real_llm`; `kubernetes_future` named,
+  never run); success only with the oracle's verified recovery; generic failure categories
+  with a detail line; `scripts/eval_replay.py`; published batches in `evals/reports/batches/`.
+- **Generated dashboard types**: `scripts/gen_dashboard_types.py` writes
+  `apps/dashboard/src/dto.ts` from the API's response models; a test fails when it is stale.
+- **`scripts/seed_demo.py`**: fills a separate folder with real offline runs (scripted runs
+  and replays of every committed recording) for a demo; refuses the repository's `data/`.
+- **Two live runs under M4** (`evals/plans/m4-comparisons.yaml`, local `qwen3:8b`, $0): the
+  cross-service incident with parallel specialists FAILED (`wrong_mechanism`, nothing
+  executed); the held-out unfamiliar incident with one agent RESOLVED (oracle verified).
+  One run each; [docs/status.md](docs/status.md).
+- **[docs/m5-integration-plan.md](docs/m5-integration-plan.md)**: a minimal Kind cluster first,
+  then SREGym; nothing installed or provisioned.
+- **`scripts/secret_scan.py`** (CI, with the whole history): the recorder's key shapes in every
+  tracked file and every blob in the git history, and the owner's own key values nowhere;
+  prints no value.
+- **mypy** (with the pydantic plugin) on the core interfaces and the M4 modules (28 files), in
+  CI.
+
+### Changed
+
+- **Model time is split honestly**: Ollama's `total_duration` includes time a request waited
+  in the server's queue, so RECAP now also records the server's compute
+  (`ModelCall.server_compute_ms`) and reports the wait (`server_wait_ms` in the API,
+  `model_wait_seconds` in a record, a column in batch digests).
+- **Verifier leads from the recorded failures** (ADR 0021 decision 10): victim leads (an
+  unsupported claim on a service whose own errors blame a dependency also points the next
+  round at that dependency), V1-consistency notes, and leads that name only allowlisted
+  services. No prompt text, schema or parser changed; both recordings still replay.
+- `missed_crucial_tool` needs that no recorded observation showed the root service (a
+  namespace-wide read that listed it counts as seeing it).
+- `LLMProvider.info` is a read-only protocol member (a wrapper may compute it).
+- vite 5.4.10 -> 5.4.21 (security patch within v5).
+
+### Fixed
+
+- Statements corrected against the records: the owner-approved run had no contradicted claim
+  (its round-1 claim blaming a cart release stayed insufficient); in the adversarial run the
+  infrastructure agent's claim came from the poisoned runbook and planted memory; the
+  verifier "accepted no wrong claim"; leads were followed in 7 of 7 recorded runs, 3 of 7
+  resolved.
+- `GET /providers` never shows a local folder for the replay recording; `GET /evals` also
+  lists evaluations started from the dashboard; the export's replay note no longer says a
+  parallel round replays only in its original order.
+
+### Verified
+
+- 1681 tests passed, 1 skipped (an optional OpenTelemetry test), 149 of them end to end;
+  ruff, mypy (29 files), the recordings manifest and the secret scan (tracked files and the
+  whole history) clean.
+- Dashboard: 494 tests, `tsc --noEmit` and a build; the browser smoke test passed 72 of 72
+  checks on the seeded demo data (nine pages at 1440 and 390 px; the replay, approval and
+  RESOLVED flow, confirmed by the API).
+- Scripted baselines: 0 of 51 runs differ (memory off and on) after the M4.5 verifier change.
+
 ## [0.4.0] — 2026-10-25 — M3: real multi-agent intelligence, RAG and episodic memory
 
 Two independent AI specialists now investigate an incident side by side, each with its own

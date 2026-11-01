@@ -30,25 +30,31 @@ how often the model is right ([docs/status.md](status.md) lists the failed runs 
 
 ## Before you start (once, a few minutes)
 
-Follow the Quickstart in the [README](../README.md): create the Python environment, then
-build the dashboard and start the API, which serves the built dashboard:
+Follow the Quickstart in the [README](../README.md): create the Python environment, fill a
+separate demo folder with real offline runs (scripted runs and replays of the committed
+recordings, so every screen has something to show), build the dashboard and start the API,
+which serves the built dashboard:
 
 ```bash
+python scripts/seed_demo.py --data-dir ~/recap-demo       # about a minute, no model, $0
 cd apps/dashboard && npm install && npm run build && cd ../..
-uvicorn apps.api.main:app        # http://127.0.0.1:8000/ (no --reload needed)
+RECAP_DATA_DIR=~/recap-demo uvicorn apps.api.main:app     # http://127.0.0.1:8000/
 ```
 
-On its first start the API prints an operator token and saves it to `data/operator-token`
-(readable by your user only). Open http://127.0.0.1:8000/ and paste the token into **Sign
+On its first start the API prints an operator token and saves it to
+`~/recap-demo/operator-token` (readable by your user only). Open http://127.0.0.1:8000/ and paste the token into **Sign
 in** (top right): starting a run and approving a fix need it; looking does not. **Sign in
 before you start any screen recording**, and never show the token, that file or the
 terminal line where the API printed it.
 
 ## Start the replay
 
-**In the dashboard:** the one-click **Replay recorded incident** launcher (part of the M4
-dashboard work) lists the committed recordings and, for the one you pick, sends the request
-below with your operator token, then opens the run's live page. It needs nothing else.
+**In the dashboard:** on **Overview** click **Start the demo**, or open the **Incident Lab**.
+Its "Replay a recorded incident" panel lists the committed recordings with their integrity
+check (intact, altered or missing). Pick the two-agent recording, keep the pace on
+**Watchable** (each recorded answer waits 5% of its original time, at most 15 s, so the run
+takes about half a minute; **Instant** answers at once) and click **Replay**. The button
+sends the request below with your operator token, and the run plays on the same page.
 
 **The same request by hand** (useful to see exactly what the button does):
 
@@ -59,7 +65,8 @@ curl -s http://127.0.0.1:8000/replays            # the committed recordings, and
 curl -s -X POST http://127.0.0.1:8000/incidents/run \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"scenario_id": "m3-inventory-leak-behind-frontend",
-       "config": {"provider": "replay", "replay_fixture": "qwen3-8b-unfamiliar-parallel"}}'
+       "config": {"provider": "replay", "replay_fixture": "qwen3-8b-unfamiliar-parallel",
+                  "approval_mode": "manual", "replay_pace": 0.05}}'
 # -> {"run_id": "run-...", ...}
 ```
 
@@ -92,19 +99,20 @@ python scripts/demo.py --scenario m3-inventory-leak-behind-frontend --strategy p
 
 ## The tour (about 150 seconds)
 
-The investigation takes about 2 seconds (2.2 to 2.3 s measured with the configured simulated
-tool latencies); then the run waits for you at the approval. Take your time there: the
-request expires after 15 minutes.
+At the Watchable pace the investigation takes about half a minute (at the Instant pace about
+2 seconds); then the run waits for you at the approval. Take your time there: the request
+expires after 15 minutes. The pace changes timing only: requests are matched by what they
+ask, so the run decides exactly what the recording decided.
 
 | Time | Where | What to show | What it demonstrates |
 |---|---|---|---|
-| 0:00 - 0:15 | the run's page, header | the labels `REPLAY`, `RECORDED REAL-LLM RUN`, `SIMULATED ENVIRONMENT`; the provider `replay:ollama:qwen3:8b`; the recording's id | what this run is, before anything else |
-| 0:15 - 0:35 | the stage stepper | CREATED, RETRIEVING, INVESTIGATING (two rounds), PROPOSING, then AWAITING_APPROVAL | the controller's lifecycle, running now |
-| 0:35 - 1:05 | the agent timeline | two lanes, telemetry and infrastructure, side by side in round 1; round 2 started from the verifier's leads ("cart's calls to inventory fail ... find out what is wrong with inventory"); every read is an MCP tool call through the gateway; each model request is marked replayed | two independent specialists with their own tools and their own evidence |
-| 1:05 - 1:30 | evidence and decisions | round 1: two supported dependency failures (frontend on checkout, cart on inventory), not actionable by themselves; a claim that cart's recent deployment broke frontend **not accepted**: it cited none of the evidence its rules relied on; round 2: resource pressure on inventory supported by its OOMKilled and BackOff events | evidence rules decide, never a vote between agents |
-| 1:30 - 2:00 | the approval dialog | `restart_service` on `inventory`, parameters `{}`, risk `reversible_write`, the proposal's digest and its expiry; press **Approve** | a person approves one exact action, once |
-| 2:00 - 2:20 | safety and approvals | the policy said APPROVAL_REQUIRED (`R11-reversible-approval`), then ALLOW only for your approval (`R12-approval-binding`); the write went out under that approval's id and the approval is now used | the authorization chain |
-| 2:20 - 2:40 | the run's result | the oracle: unhealthy before, healthy after, inventory `CrashLoopBackOff` to `Running`, every error rate 0; state RESOLVED ("oracle verified recovery (simulated environment)"); memory: nothing written (a replay is not new experience) | recovery judged by the environment, not by the model |
+| 0:00 - 0:15 | Incident Lab, the run's header | the labels `REPLAY`, `RECORDED REAL-LLM RUN`, `SIMULATED ENVIRONMENT`; the provider `replay:ollama:qwen3:8b`; the recording's id | what this run is, before anything else |
+| 0:15 - 0:35 | Incident Lab, the stage stepper and the live feed | CREATED, RETRIEVING, INVESTIGATING (two rounds), PROPOSING, then AWAITING_APPROVAL; the feed shows both specialists' tool calls as they happen | the controller's lifecycle, running now |
+| 0:35 - 1:05 | Trace Explorer | two lanes, telemetry and infrastructure, side by side in round 1; round 2 started from the verifier's leads ("cart's calls to inventory fail ... find out what is wrong with inventory"); every read is an MCP tool call through the gateway; each model request is marked replayed | two independent specialists with their own tools and their own evidence |
+| 1:05 - 1:30 | Evidence & Decisions | round 1: two supported dependency failures (frontend on checkout, cart on inventory), not actionable by themselves; a claim that cart's recent deployment broke frontend **not accepted**: it cited none of the evidence its rules relied on; round 2: resource pressure on inventory supported by its OOMKilled and BackOff events | evidence rules decide, never a vote between agents |
+| 1:30 - 2:00 | the approval dialog (Incident Lab) | `restart_service` on `inventory`, parameters `{}`, risk `reversible_write`, the proposal's digest and its expiry; press **Approve** | a person approves one exact action, once |
+| 2:00 - 2:20 | Safety & Approvals | the policy said APPROVAL_REQUIRED (`R11-reversible-approval`), then ALLOW only for your approval (`R12-approval-binding`); the write went out under that approval's id and the approval is now used | the authorization chain |
+| 2:20 - 2:40 | Incident Lab, the result | the oracle: unhealthy before, healthy after, inventory `CrashLoopBackOff` to `Running`, every error rate 0; state RESOLVED ("oracle verified recovery (simulated environment)"); memory: nothing written (a replay is not new experience) | recovery judged by the environment, not by the model |
 | 2:40 - 2:50 | provenance | the recording id `20261025-121828-ollama-6a5cfd`, its SHA-256, the export folder; this is a replay, not live inference | a reviewer can check every claim |
 
 If you **reject** instead, the run ends BLOCKED and nothing is written to the simulated
@@ -121,8 +129,10 @@ never makes up a number. For this run:
   calls no model and spends no tokens: its usage says 0 model requests and the cost line
   says "$0.00 - replayed recording".
 - **Timing**: the overlap of the two specialists that a replay shows is the replay's own
-  (well under a second), not the original run's (146.9 s in round 1): a replay answers at
-  once. The original timings are in the export's README.
+  (a few seconds at the Watchable pace, well under a second at Instant), not the original
+  run's (146.9 s in round 1). Each model request still shows the original run's own times,
+  including how long it waited inside the model server: one local server answered the two
+  specialists' requests one after another. The original timings are in the export's README.
 - **Evidence IDs** like `ev-<run>-r1t03` (round 1, telemetry, third item) and
   `ev-<run>-r2i02` (round 2, infrastructure): each specialist numbers its own evidence, so
   the replay asks exactly what the original run asked, whichever agent is faster.

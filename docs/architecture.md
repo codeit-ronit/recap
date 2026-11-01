@@ -9,6 +9,13 @@ infrastructure with a real one.
 > stabilization wait and epoch-aware verification, signed single-use execution capabilities, and
 > an operator-authenticated API. [flow.md](flow.md) follows one incident through all of it.
 >
+>
+> **Since then:** M2 added real model providers at $0 (local Ollama, Groq's free plan) and
+> recorded replays; M3 two independent specialists, an evidence merger, hybrid retrieval and
+> memory partitions; M4 the read side: a typed API over the stored runs, the Mission Control
+> dashboard, a replay of committed recordings by manifest id, and evaluation records
+> ([section 13](#13-the-read-side-typed-views-replays-and-evaluation-records-m4)).
+>
 > **Scope of V1.** RECAP V1 runs only against a **simulated** five-service shop. The default
 > decision provider is a **scripted deterministic policy, not an LLM**. The SREGym adapter is an
 > **interface stub**: it says it is not integrated, lists no scenarios and refuses every other
@@ -43,6 +50,7 @@ Related documents: the [threat model](threat-model.md) (attacks and defenses in 
 10. [Configuration files](#10-configuration-files)
 11. [Deterministic reproducibility](#11-deterministic-reproducibility)
 12. [Known limitations of this architecture](#12-known-limitations-of-this-architecture)
+13. [The read side: typed views, replays and evaluation records (M4)](#13-the-read-side-typed-views-replays-and-evaluation-records-m4)
 
 ---
 
@@ -935,6 +943,8 @@ Everything is local files. The `data/` folder is git-ignored. `RECAP_DATA_DIR` m
 | `data/sandbox/<run_id>.db` | `SandboxStateStore`, from both adapter instances | Table `sandbox_state`: exactly one row, the run's simulated world as JSON, including an audit log of every attempted write with its approval ID and proposal digest. |
 | `data/traces/<run_id>.jsonl` | `JsonlTraceSink` | One trace event per line. The easiest audit log to read, grep or attach to a bug report. |
 | `evals/reports/runs/<report_id>/data/` | Evaluation runner | Its own `recap.db`, `memory.db`, `sandbox/` and `traces/`, created fresh for every evaluation, so demo memory can never leak into it. Git-ignored. |
+| `fixtures/recordings/*.jsonl` and `MANIFEST.json` | `scripts/recordings_manifest.py --update` (committed by hand) | Real model exchanges that CI and the dashboard replay; the manifest pins each file's SHA-256 and the run it reproduces (ADR 0028). |
+| `evals/reports/batches/<batch_id>/` | `--publish` of `scripts/evaluate.py`, `scripts/eval_replay.py`, `scripts/live_eval.py` | `batch.json` (one `EvalRecord` per run, one mode) and `README.md` (the digest for people) (ADR 0029). Local batches go to `<data>/evals/batches/`. |
 | `evals/reports/runs/<report_id>/` and `evals/reports/latest/` | Evaluation runner and `scripts/evaluate.py` | `results.json`, `results.csv` and `summary.md`. The script copies them to `evals/reports/latest/`, the only report kept in git ([`summary.md`](../evals/reports/latest/summary.md)), with `update_latest`, which refuses to replace it with an empty report. An evaluation started from the dashboard stays under `evals/reports/runs/`. |
 
 Notes:
@@ -1069,3 +1079,35 @@ were produced from identical configuration and fixtures.
 - **Checkpoints are not resumable.** A run interrupted mid-way is recorded but not resumed.
 - **Nothing is trained.** `TrainingPipeline` and `LearnedRouter` only mark where learning would plug
   in.
+
+---
+
+## 13. The read side: typed views, replays and evaluation records (M4)
+
+Nothing on the read side can change a run. It reads the stores of section 9 and answers in
+typed, versioned shapes ([ADR 0027](decisions/0027-a-typed-read-only-api-over-the-run-records.md)).
+
+```mermaid
+flowchart LR
+    ST["Stores: runs, events, evidence, approvals (recap.db); episodes (memory.db)"] --> RM["RunManager (apps/api/service.py)"]
+    RM --> VB["View builders (apps/api/views.py)"]
+    VB --> DTO["Response models, schema recap-api-v1 (apps/api/dto.py)"]
+    DTO --> API["GET /system /providers /runs /runs/{id}/timeline /evidence /retrieval /usage /evals /replays"]
+    DTO -.->|"scripts/gen_dashboard_types.py"| TS["apps/dashboard/src/dto.ts"]
+    API --> MC["Mission Control (React): nine screens"]
+    TS --> MC
+    MAN["fixtures/recordings/MANIFEST.json (SHA-256)"] --> RP["GET /replays; POST /incidents/run with a replay_fixture"]
+    RP --> RT["Runtime: the same controller, gateway, simulator and oracle"]
+    ST --> EV["evals/categorize.py: one EvalRecord per run"]
+    EV --> BT["Batches of one mode: evals/reports/batches/"]
+    BT --> API
+```
+
+| Part | Status | What it guarantees |
+|---|---|---|
+| Typed views | implemented | Built only from persisted records; a missing fact is listed in `not_recorded`; no token, capability, key or local path in any response. |
+| Per-run provider choice | implemented | The server's default, the scripted baseline, a replay of an intact committed recording, or a provider marked `api_selectable`; never a paid one. |
+| Replay by manifest id | implemented | SHA-256 checked before any answer; refused unless the environment is simulated; a fresh approval; `replay_pace` changes only timing. |
+| Evaluation records | implemented | One mode per batch; success only with the oracle's verified recovery; a named failure category otherwise. |
+| Mission Control | implemented | Reads only the typed API; types generated from the response models; untrusted text escaped and labelled. |
+| Kubernetes evaluation mode | not yet built | Named in the records (`kubernetes_future`), never run; the plan is [m5-integration-plan.md](m5-integration-plan.md). |

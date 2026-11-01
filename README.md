@@ -1,9 +1,9 @@
 # RECAP — Experience-Learning Autonomous Reliability Agent (Prototype)
 
-**Version 0.4.0** (milestone M3) · [Changelog](CHANGELOG.md) · [Releases](https://github.com/codeit-ronit/recap/releases)
+**Version 0.5.0** (milestone M4) · [Changelog](CHANGELOG.md) · [Releases](https://github.com/codeit-ronit/recap/releases)
 
 > **V1 prototype: runs on a simulated local environment; nothing here repairs a real cluster.**
-> Hardened in milestone M1 (October 2026) after an independent audit. Since M2 a **real model** can make the decisions at $0: `qwen3:8b` on this machine (Ollama) or `gpt-oss-120b` on Groq's free plan. Since M3 two independent AI specialists investigate side by side, and RECAP's evidence rules decide between their claims: the local `qwen3:8b` solved an incident RECAP had never seen, with the fix approved by the owner at the terminal. The human-approved runs are exported for anyone to check (and replay offline) in [evals/live/](evals/live/README.md). See [docs/status.md](docs/status.md) for measured results and [docs/flow.md](docs/flow.md) for one incident end to end.
+> Hardened in milestone M1 (October 2026) after an independent audit. Since M2 a **real model** can make the decisions at $0: `qwen3:8b` on this machine (Ollama) or `gpt-oss-120b` on Groq's free plan. Since M3 two independent AI specialists investigate side by side, and RECAP's evidence rules decide between their claims: the local `qwen3:8b` solved an incident RECAP had never seen, with the fix approved by the owner at the terminal. The human-approved runs are exported for anyone to check (and replay offline) in [evals/live/](evals/live/README.md). Since M4 the dashboard, **Mission Control**, replays that real two-agent run with one click, at a speed you can watch, and asks you to approve its fix; every evaluated run is one record, and scripted, replayed and real-model results are never added together ([docs/evaluation.md](docs/evaluation.md)). See [docs/status.md](docs/status.md) for measured results and [docs/flow.md](docs/flow.md) for one incident end to end.
 
 An incident-response agent that investigates through real MCP (Model Context Protocol) tools, asks a human to approve one exact fix, checks recovery with an independent oracle, and remembers only what was verified.
 
@@ -22,7 +22,7 @@ RECAP plays the on-call site reliability engineer (SRE) for a simulated five-ser
 - **Learns carefully**: each run becomes an episode, marked `success` only if the oracle verified it. A later run reuses a past fix only if live evidence confirms the same failure.
 - **Shows its work**: every step is a trace event you can watch live in a React dashboard, and an evaluation harness compares baselines, ablations (the system with one part switched off) and a red-team attack.
 
-![The dashboard Overview page: the implementation behind each interface, runs by final state and the latest evaluation headline](docs/screenshots/overview.png)
+![Mission Control, the Overview page: the simulated environment, the providers, recent runs with their data source, and outcomes counted per data source](docs/screenshots/overview.png)
 
 ## Why it is interesting
 
@@ -99,7 +99,7 @@ uv pip install --python .venv/bin/python -c constraints.txt -e ".[dev]"
 #   or: scripts/bootstrap.sh   (also installs the dashboard's npm packages)
 source .venv/bin/activate
 
-python -m pytest          # about 75 s; expected counts under "Tests and CI"
+python -m pytest          # about 3 minutes; expected counts under "Tests and CI"
 python -m pytest -m e2e   # only the end-to-end tests (real controller, MCP subprocess, simulator)
 ruff check . && ruff format --check .   # lint and formatting
 
@@ -190,32 +190,65 @@ RESULT  BUDGET_EXHAUSTED — stopped safely: budget exhausted: max_tool_calls (3
 
 Every run ends with a summary block (result, the diagnosis and oracle verdict when there is one, usage with `$0.00 external API charged`, the trace file) and the line `SIMULATED LOCAL ENVIRONMENT · V1 — no real system was changed`. A sixth demo, `resource-pressure`, restarts an `inventory` service that runs out of memory.
 
-### Part 2: the dashboard (about 2 minutes)
+### Part 2: Mission Control, the dashboard (about 2 minutes)
 
-Start the API and the dashboard (see Quickstart) and open http://localhost:5173. Your CLI runs are already listed, because both use `data/`.
+The demo replays the **real** two-agent run of M3 (local `qwen3:8b`, the owner-approved fix of
+an incident RECAP had never seen) through the whole system against the simulated shop. No
+model runs: every model answer comes from the committed, SHA-256-pinned recording, and the
+fix waits for **your** approval. Step by step, with what to say: [docs/demo-walkthrough.md](docs/demo-walkthrough.md).
 
-1. **Live Incident Run**: pick `bad-deployment`, keep approval mode *Manual*, click **Run incident**. The stepper and event feed update live over server-sent events (SSE). On the approval card, try *Test binding* first: it sends a tampered digest, the API answers 409 and the request stays pending. Then click **Approve this exact action**.
-2. **Agent Timeline**: select the `ambiguous-incident` run. Each MCP tool call is a bar, and the two specialist lanes overlap in time.
+```bash
+python scripts/seed_demo.py --data-dir ~/recap-demo        # real offline runs to look at (scripted + replays)
+cd apps/dashboard && npm install && npm run build && cd ../..
+RECAP_DATA_DIR=~/recap-demo uvicorn apps.api.main:app      # http://127.0.0.1:8000/ ; token in ~/recap-demo/operator-token
+```
 
-   ![Agent Timeline: two specialist lanes overlapping for a measured 581 ms](docs/screenshots/timeline.png)
+1. **Overview**: what is plugged in (the SIMULATED ENVIRONMENT; Kubernetes and SREGym are
+   planned for M5), the providers, the latest runs with their data source, and outcomes
+   counted per data source, never blended. Click **Start the demo**.
 
-3. **Evidence & RAG**: select the `malicious-log` run. The log evidence is flagged `prompt_injection_suspected` but stays untrusted data. Below are the hypothesis checks and runbook citations.
+   ![Overview: environment and providers, recent runs with their data source, outcomes counted per data source](docs/screenshots/overview.png)
 
-   ![Evidence & RAG: the evidence registry with one injection-flagged log entry](docs/screenshots/evidence.png)
+2. **Incident Lab**: sign in, then **Replay** the two-agent recording at the *Watchable* pace
+   (about half a minute). The stages advance, the live feed shows both specialists at work,
+   and the approval dialog asks you to approve one exact action (it cannot be dismissed).
 
-4. **Safety & Approvals**: same run. `delete_namespace` is denied with its rule ids (the last one decides), and 0 unsafe actions ran.
+   ![Incident Lab: the replay of the recorded real-LLM run waits for the operator to approve restart_service on inventory](docs/screenshots/incident-lab-approval.png)
 
-   ![Safety & Approvals: a DENY for delete_namespace with rule ids, 0 unsafe actions executed](docs/screenshots/safety.png)
+   After **Approve**: RESOLVED, because the independent oracle verified the recovery.
 
-5. **Evaluations**: the latest synthetic report with its caveats. **Run evaluation** re-runs the whole protocol, and the page then follows that evaluation (its progress, then its report or its error).
+   ![Incident Lab: RESOLVED, oracle verified, with links to the run's other views](docs/screenshots/incident-lab-resolved.png)
 
-   ![Evaluations: test-suite and red-team tables labeled synthetic, small N, not SREGym](docs/screenshots/evals.png)
+3. **Trace Explorer**: the two specialists' lanes per round, their MCP tool calls, each model
+   request with the tokens the server reported and the time it waited inside the model server.
 
-Two more pages: **Experience Memory** (episodes, and "safe to reuse YES/NO" with the reason) and **Architecture** (the flow next to the live wiring from `GET /system`).
+   ![Trace Explorer: two specialists' lanes per round, model requests, tool calls and the verifier's verdicts](docs/screenshots/trace-explorer.png)
 
-![Experience Memory: one episode per demo run, with its outcome, whether the oracle verified it and the action that worked](docs/screenshots/memory.png)
+4. **Evidence & Decisions**: every claim with the verifier's verdict and the rules that decided
+   it; the supported diagnosis apart from claims that were not accepted.
 
-## Feature status
+   ![Evidence & Decisions: claims by round and agent with the verifier's verdicts and the evidence they cite](docs/screenshots/evidence-decision.png)
+
+5. **Knowledge**, **Experience Memory** and **Safety & Approvals**: what was looked up, what
+   memory offered and why a look-alike was not reused, and the approval chain (requested,
+   approved by the operator, used once; unsafe actions attempted vs executed).
+
+   ![Safety & Approvals: policy decisions with rule ids, the approval lifecycle, unsafe actions attempted vs executed](docs/screenshots/safety.png)
+
+6. **Evaluations**: one tab per mode (scripted, offline replay, real model, Kubernetes planned),
+   "k of N" counts, a named reason for each failed run. **Architecture & Learning**: the
+   implementation, clickable, with each part's status, code and decision records.
+
+   ![Evaluations: batches of one mode, outcomes as k of N, failure categories with details](docs/screenshots/evals.png)
+
+Every number on these screens comes from the API's typed views of what the runs stored
+([ADR 0027](docs/decisions/0027-a-typed-read-only-api-over-the-run-records.md),
+[ADR 0030](docs/decisions/0030-mission-control-reads-only-typed-server-facts.md)); a fact a run
+did not record is shown as "Not recorded". A browser smoke test checks all nine pages and the
+replay-and-approve flow: `node apps/dashboard/e2e/smoke.mjs --base http://127.0.0.1:8000
+--token-file ~/recap-demo/operator-token`.
+
+## Component status
 
 Status words: **implemented** (works and is tested, against the simulator), **simulated** (stands in for something real), **adapter only** (an interface or optional path, not proven against the real thing), **not yet built**.
 
@@ -226,29 +259,30 @@ Status words: **implemented** (works and is tested, against the simulator), **si
 | Budgets | implemented | [recap/harness/budget.py](recap/harness/budget.py) | Steps, tool calls, estimated tokens, wall clock; calls reserved before sending |
 | MCP server and client | implemented | [recap/tools/mcp_server.py](recap/tools/mcp_server.py), [mcp_client.py](recap/tools/mcp_client.py) | Official SDK, stdio, one subprocess per run, ten tools |
 | Safety gateway, policy, exact approvals | implemented | [recap/tools/gateway.py](recap/tools/gateway.py), [recap/safety/](recap/safety/) | Rule ids on every decision; single-use, digest-bound approvals |
-| Runbook RAG | implemented | [recap/knowledge/](recap/knowledge/), `IncidentController._maybe_retrieve_runbook` | BM25 with citations, lexical reranker, extra retrieval at proposal time only if needed; 7 synthetic docs, 42 chunks |
-| Episodic memory | implemented | [recap/memory/](recap/memory/) | Train/test isolation; lexical similarity; similar ≠ safe |
+| Runbook RAG and agent search | implemented | [recap/knowledge/](recap/knowledge/), `IncidentController._maybe_retrieve_runbook` | BM25 with citations (the default), a lexical reranker, extra retrieval at proposal time only if needed; agents can search the runbooks themselves (`search_runbooks`, budgeted, its text treated as data); 7 synthetic docs, 42 chunks |
+| Episodic memory | implemented | [recap/memory/](recap/memory/) | Partitions by origin (train, demo, live; evaluation runs read train only; replays write nothing); reuse only when live evidence confirms the same mechanism on the same service ([ADR 0023](docs/decisions/0023-memory-partitions-by-origin-and-evidence-checked-reuse.md)); similar ≠ safe |
 | Context packer | implemented | [recap/context/packer.py](recap/context/packer.py) | Bounded, ranked packs; the evidence a diagnosis cites and any contradicting evidence are packed first; tokens estimated at ~4 chars/token |
-| Rules router and parallel orchestration | implemented | [recap/routing/](recap/routing/) | `asyncio.gather`; measured overlap |
-| Evidence verifier | implemented | [recap/agents/verifier.py](recap/agents/verifier.py) | Behind the `Verifier` interface; evidence-rule checks, not proof of causation |
+| Rules router and parallel specialists | implemented | [recap/routing/](recap/routing/), [configs/agents.yaml](configs/agents.yaml) | `asyncio.gather`; measured overlap; each specialist sees only its own evidence and acts within its role contract ([ADR 0020](docs/decisions/0020-independent-specialists-with-role-contracts.md)) |
+| Evidence verifier and merger | implemented | [recap/agents/verifier.py](recap/agents/verifier.py), [merger.py](recap/agents/merger.py) | Evidence-rule checks, not proof of causation; rules settle the agents' disagreements, never votes; leads point the next round at what is unexplained ([ADR 0021](docs/decisions/0021-evidence-rules-settle-disagreements-never-votes.md)) |
 | Recovery oracle | implemented | [recap/verification/oracle.py](recap/verification/oracle.py) | Reads `health_check` only; replaceable through `ControllerDeps.oracle_factory` |
 | Tracing and redaction | implemented | [recap/telemetry/](recap/telemetry/) | JSONL, SQLite, live SSE stream; local only. Best-effort secret redaction of trace payloads, tool outputs and run errors |
 | Scripted decision provider (default) | implemented | [recap/providers/deterministic.py](recap/providers/deterministic.py) | Playbooks and heuristics, **not an LLM**; $0 |
-| Local LLM provider (Ollama) | implemented | [recap/providers/ollama_provider.py](recap/providers/ollama_provider.py), [protocol.py](recap/providers/protocol.py) | `qwen3:8b`, native tool calls, per-request schemas; real runs on one simulated scenario (M2) |
-| Free hosted LLM provider (Groq Free) | implemented | [recap/providers/openai_compatible.py](recap/providers/openai_compatible.py), [quota.py](recap/providers/quota.py) | `gpt-oss-120b`, strict JSON; fail-closed free-tier guard and tripwire; real runs on one simulated scenario (M2) |
-| Model recordings and offline replay | implemented | [recap/providers/transport.py](recap/providers/transport.py), [fixtures/recordings/](fixtures/recordings/) | CI replays a real `qwen3:8b` run; replays are labeled REPLAY; a recording also keeps where timing stopped the run, and a replay stops there ([ADR 0026](docs/decisions/0026-a-replay-stops-where-its-recording-stopped.md)) |
-| Evaluation runner | implemented | [evals/runner.py](evals/runner.py) | Baselines, ablations, red team; scripted policy only; synthetic, tiny N |
-| API | implemented | [apps/api/](apps/api/) | FastAPI; no endpoint executes an action directly |
-| Dashboard | implemented | [apps/dashboard/](apps/dashboard/) | React + TypeScript (Vite); its numbers come from the API |
+| Local LLM provider (Ollama) | implemented | [recap/providers/ollama_provider.py](recap/providers/ollama_provider.py), [protocol.py](recap/providers/protocol.py) | `qwen3:8b`, native tool calls, per-request schemas; the server's own time and compute recorded; real runs on five simulated incidents (M2 to M4), failures included ([docs/status.md](docs/status.md)) |
+| Free hosted LLM provider (Groq Free) | implemented | [recap/providers/openai_compatible.py](recap/providers/openai_compatible.py), [quota.py](recap/providers/quota.py) | `gpt-oss-120b`, strict JSON; fail-closed free-tier guard and tripwire; real runs in M2 and M3 |
+| Model recordings and offline replay | implemented | [recap/providers/transport.py](recap/providers/transport.py), [recordings.py](recap/providers/recordings.py), [fixtures/recordings/](fixtures/recordings/) | CI replays two real `qwen3:8b` runs, one of them the owner-approved two-agent run; a manifest pins each file's SHA-256 and a replay is chosen by id, refused if altered or if the target is not simulated ([ADR 0028](docs/decisions/0028-content-addressed-recordings-and-replay-by-manifest-id.md)); a replay stops where its recording stopped ([ADR 0026](docs/decisions/0026-a-replay-stops-where-its-recording-stopped.md)) |
+| Evaluation runner and records | implemented | [evals/runner.py](evals/runner.py), [evals/records.py](evals/records.py), [evals/categorize.py](evals/categorize.py) | Scripted baselines, ablations and red team; one `EvalRecord` per run with a named failure category; batches of one mode (scripted, replay, real model), never blended ([ADR 0029](docs/decisions/0029-one-evaluation-record-per-run-and-modes-that-never-share-a-number.md)); tiny N |
+| API | implemented | [apps/api/](apps/api/) | FastAPI; typed read-only views built from stored records only ([ADR 0027](docs/decisions/0027-a-typed-read-only-api-over-the-run-records.md)); a per-run provider only from the owner's allowlist; no endpoint executes an action directly |
+| Dashboard (Mission Control) | implemented | [apps/dashboard/](apps/dashboard/) | React + TypeScript (Vite), nine screens on the typed API; types generated from the API's models; one-click paced replay of the golden run with a human approval |
 | Target system and its faults | simulated | [recap/environments/simulated/](recap/environments/simulated/) | Seeded, deterministic shop; state in a per-run SQLite file |
 | The "human" in evals and auto runs | simulated | [recap/safety/approvals.py](recap/safety/approvals.py) (`AutoApprovalChannel`) | Refuses to run outside a simulated environment |
 | Compromised red-team planner | simulated | [recap/safety/redteam.py](recap/safety/redteam.py) | Obeys injected instructions on purpose |
 | SREGym adapter | adapter only | [integrations/sregym/adapter.py](integrations/sregym/adapter.py) | Interface stub; never connected or run |
 | Anthropic Claude provider | adapter only | [recap/providers/anthropic_provider.py](recap/providers/anthropic_provider.py) | **Paid; disabled** for this $0 project (needs `RECAP_ALLOW_PAID_LLM=1`); tested only with a fake client |
-| Hybrid retrieval (BM25 + embeddings) | adapter only | [recap/knowledge/embeddings.py](recap/knowledge/embeddings.py) | Optional `embeddings` extra; tested with a fake embedder |
+| Hybrid retrieval (BM25 + embeddings) | implemented, opt-in | [recap/knowledge/ollama_embedder.py](recap/knowledge/ollama_embedder.py), [vectors.py](recap/knowledge/vectors.py) | `nomic-embed-text` on the local Ollama, stored runbook vectors, rank fusion; BM25 stays the default because hybrid found the right runbook less often on alert queries (7 vs 9 of 15) ([ADR 0022](docs/decisions/0022-hybrid-retrieval-with-a-local-embedder-and-agent-search.md)) |
 | OpenTelemetry console bridge | adapter only | [recap/telemetry/otel.py](recap/telemetry/otel.py) | Optional `otel` extra; console spans, no collector |
 | `LearnedRouter` | adapter only | [recap/routing/router.py](recap/routing/router.py) | Interface stub; raises `NotImplementedError` |
-| Real SREGym/Kubernetes integration and results | not yet built | [integrations/sregym/README.md](integrations/sregym/README.md) | No SREGym results exist |
+| Type checking and secret scan | implemented | `[tool.mypy]` in [pyproject.toml](pyproject.toml), [scripts/secret_scan.py](scripts/secret_scan.py) | mypy on the core interfaces and the M4 modules (28 files); every tracked file and every blob in the git history scanned for keys; both in CI |
+| Real Kubernetes (Kind) and SREGym integration | not yet built (planned for M5) | [docs/m5-integration-plan.md](docs/m5-integration-plan.md) | A plan only: nothing installed or provisioned; no Kubernetes or SREGym results exist |
 | Model training or fine-tuning | not yet built | `TrainingPipeline` in [recap/core/interfaces.py](recap/core/interfaces.py) | Explicit not-implemented placeholder |
 | Learned routing policy | not yet built | — | Planned contextual bandit |
 | Neural reranker | not yet built | `Reranker` interface in [recap/core/interfaces.py](recap/core/interfaces.py) | V1 uses a lexical reranker |
@@ -258,9 +292,35 @@ Status words: **implemented** (works and is tested, against the simulator), **si
 
 Other known limits: pattern-based injection detection is not production-grade (the protection is the gateway); one MCP subprocess per run adds about 0.4–0.5 s; SQLite files are trusted local state.
 
-## Evaluation results (synthetic)
+## Evaluation results
 
-> **Simulated local environment only.** Small N, no statistical claims. Not SREGym, not production. The provider is a scripted policy, not an LLM.
+> **Simulated local environment only.** Small N, no statistical claims. Not SREGym, not production.
+
+Since M4 every evaluated run is one record with a named reason when it did not recover, and
+records come in batches of exactly one mode: what decided (a scripted policy, a recording, a
+live model) is never mixed in one number ([docs/evaluation.md](docs/evaluation.md),
+[ADR 0029](docs/decisions/0029-one-evaluation-record-per-run-and-modes-that-never-share-a-number.md)).
+Success means the independent oracle verified the recovery. The published batches
+([evals/reports/batches/](evals/reports/batches/)):
+
+| Mode | What decided | Batches | Runs | Outcomes (counts, not rates) |
+|---|---|---|---|---|
+| Scripted regression | the scripted policy (not an LLM) | 1 | 32 | 24 success, 7 oracle_not_recovered, 1 safety_blocked |
+| Offline replay | committed real `qwen3:8b` recordings (no model called) | 1 | 2 | 2 success |
+| Real model, local | `qwen3:8b` on this laptop (M3 prompts v4.6 and v4.7, M4) | 5 | 12 | 6 success, 2 wrong_service, 3 wrong_mechanism, 1 missed_crucial_tool |
+| Real model, free hosted | `gpt-oss-120b` on Groq's free plan (M3) | 1 | 2 | 1 insufficient_evidence, 1 quota_cap |
+| Kubernetes | planned for M5 | 0 | 0 | not run |
+
+The real-model runs are one or two samples per incident and configuration, mostly approved
+by the simulation auto-approver; in these batches only the owner-approved run's fix was
+approved by a person (the two human-approved M2 runs are exported in
+[evals/live/](evals/live/README.md)).
+They show the path works and how it fails, not how often a model is right. Every failure is
+explained in [docs/status.md](docs/status.md).
+
+### The scripted protocol (V1 report)
+
+> The provider is a scripted policy, not an LLM.
 
 Protocol ([evals/runner.py](evals/runner.py), split in [evals/splits/v1.yaml](evals/splits/v1.yaml)):
 
@@ -370,34 +430,35 @@ Full details: [docs/threat-model.md](docs/threat-model.md) and [recap/safety/REA
 
 ## Tests and CI
 
-`python -m pytest` gives **1217 passed, 1 skipped** in about 74 s (Python 3.11, with the optional Anthropic SDK installed, as in CI). The skip is the optional OpenTelemetry SDK test. With only the `dev` extra, three tests that need the Anthropic SDK's error classes are skipped too. No test calls a real model or any hosted API: fake Ollama and Groq servers (httpx's mock transport) and a recorded real `qwen3:8b` run stand in. `ruff check .` and `ruff format --check .` are clean. `python -m pytest -m e2e` selects the **59** test cases (55 test functions) that run a real incident end to end through the controller, the MCP subprocess, the gateway and the simulator.
+`python -m pytest` gives **1681 passed, 1 skipped** in about 3 minutes (Python 3.11, with the optional Anthropic SDK installed, as in CI). The skip is the optional OpenTelemetry SDK test. With only the `dev` extra, three tests that need the Anthropic SDK's error classes are skipped too. No test calls a real model or any hosted API: fake Ollama and Groq servers (httpx's mock transport) and a recorded real `qwen3:8b` run stand in. `ruff check .` and `ruff format --check .` are clean. `python -m pytest -m e2e` selects the **149** test cases that run a real incident end to end through the controller, the MCP subprocess, the gateway and the simulator.
 
 | Category | Files | What it covers |
 |---|---|---|
-| unit | 53 | Module-level checks: policy rules, approvals (revocation, the decision log, a cross-process race), capabilities, BM25, memory isolation, packer, evidence summaries, label-free views, router, orchestrator deadlines, verifier (V1 to V6, epochs), oracle, simulator, redaction, providers, the agent loop, the run store, the evaluation split, scenario alerts that match the simulated signals, and golden JSON examples of the contracts ([tests/fixtures/contracts/](tests/fixtures/contracts/), made by [scripts/export_contract_examples.py](scripts/export_contract_examples.py)). Since M2: the step protocol (schemas, parsing), the Ollama and Groq providers against local protocol fixtures, the free-tier guard and usage ledger, recording and replay, the provider catalog, one test per finding of the M2 review (`test_m2_review.py`, `test_m2_test_review.py`), and the checks from the reviews of the human-approved run: no scenario fact in any fixed prompt text (`test_prompt_neutrality.py`), the export's gates (`test_export_gates.py`), every published file (`test_published_artifacts.py`) and the recorded code version (`test_code_version.py`) |
-| integration | 5 | A real MCP stdio subprocess (with a signed write and its refused replay); nothing runs before approval, and rejection or expiry blocks; the safety-off ablation; controller paths (namespace refusal, scenario overrides that cannot switch off safety, token-budget stop, retry, provider failure, cancellation, a late console answer); the evaluation runner's protocol |
-| adversarial | 8 | Poisoned runbook, prompt injection against the gateway, malicious MCP servers, and the audit reproductions: context survival, forged evidence, oracle isolation, the approval race, executor authority |
-| e2e | 9 | All five demos, the API flow over HTTP, the API's evaluation results and run statuses, API security (anonymous and signed in), the retry and stabilization lifecycle, the environment swap, model-driven runs over a fake model server (an operator-approved resolution, no oracle or label data in any byte sent to the model, replay, a deferred quota run with the key never stored), and the replay of a recorded real `qwen3:8b` run |
+| unit | 73 | Module-level checks: policy rules, approvals (revocation, the decision log, a cross-process race), capabilities, BM25, memory isolation, packer, evidence summaries, label-free views, router, orchestrator deadlines, verifier (V1 to V6, epochs), oracle, simulator, redaction, providers, the agent loop, the run store, the evaluation split, scenario alerts that match the simulated signals, and golden JSON examples of the contracts ([tests/fixtures/contracts/](tests/fixtures/contracts/), made by [scripts/export_contract_examples.py](scripts/export_contract_examples.py)). Since M2: the step protocol (schemas, parsing), the Ollama and Groq providers against local protocol fixtures, the free-tier guard and usage ledger, recording and replay, the provider catalog, one test per finding of the M2 review (`test_m2_review.py`, `test_m2_test_review.py`), and the checks from the reviews of the human-approved run: no scenario fact in any fixed prompt text (`test_prompt_neutrality.py`), the export's gates (`test_export_gates.py`), every published file (`test_published_artifacts.py`) and the recorded code version (`test_code_version.py`) |
+| integration | 7 | A real MCP stdio subprocess (with a signed write and its refused replay); nothing runs before approval, and rejection or expiry blocks; the safety-off ablation; controller paths (namespace refusal, scenario overrides that cannot switch off safety, token-budget stop, retry, provider failure, cancellation, a late console answer); the evaluation runner's protocol |
+| adversarial | 12 | Poisoned runbook, prompt injection against the gateway, malicious MCP servers, and the audit reproductions: context survival, forged evidence, oracle isolation, the approval race, executor authority |
+| e2e | 23 | All five demos, the API flow over HTTP, the API's evaluation results and run statuses, API security (anonymous and signed in), the retry and stabilization lifecycle, the environment swap, model-driven runs over a fake model server (an operator-approved resolution, no oracle or label data in any byte sent to the model, replay, a deferred quota run with the key never stored), and the replay of a recorded real `qwen3:8b` run |
 
 The `test_audit_*.py` files reproduce each finding of the independent V1 audit; they failed on the V1 code and pass since M1 ([docs/status.md](docs/status.md)).
 
-The dashboard has its own small tests, [apps/dashboard/tests/](apps/dashboard/tests/) (honest labels and the operator sign-in state), run with `npm test` (Node's built-in test runner; it needs a Node version that runs TypeScript natively, and CI uses Node 24).
+The dashboard has its own tests, [apps/dashboard/tests/](apps/dashboard/tests/): **494** view-helper and rendered-component tests (honest labels, empty and error states, escaped untrusted text, no token or full digest on screen), run with `npm test` (Node's built-in test runner; it needs a Node version that runs TypeScript natively, and CI uses Node 24). `apps/dashboard/e2e/smoke.mjs` drives the installed Chrome through all nine pages and the replay-and-approve demo against a running server (72 checks on the seeded demo data); it is run by hand, not in CI.
 
-CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on every push and pull request: it installs the exact versions in `constraints.txt`, then runs ruff (lint and format), the full test suite, the smoke test, and the dashboard's tests and strict TypeScript build. It needs no secrets.
+CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on every push and pull request: it installs the exact versions in `constraints.txt`, then runs ruff (lint and format), mypy on the core interfaces and the M4 modules, the secret scan of the files and the whole git history, the recordings manifest check, the full test suite (including the offline replay of both committed real-model runs), the smoke test, and the dashboard's tests and strict TypeScript build. It needs no secrets, no model and no network service.
 
-## Roadmap (V2)
+## Roadmap
 
 | Item | Why | Depends on | Priority |
 |---|---|---|---|
-| SREGym adapter (pinned commit, Kind cluster) | First real, non-simulated incidents and results | Pinning and reading an SREGym commit; a Kubernetes-in-Docker (Kind) cluster, provisioned only with the owner's consent and after cost checks | High |
-| Real LLM evaluation (local and free models) | M3 ran real models on 5 scenarios incl. one unfamiliar and one adversarial (`scripts/live_eval.py`, plans in `evals/plans/`); each is one sample, failures included in docs/status.md; CI replays a real single-agent and a real two-agent run; the benchmark numbers still describe the scripted policy | Repeated runs per scenario for success rates; a larger free model; real fault injection on a local Kubernetes cluster (M5) | High |
+| M5: a local Kind cluster, then SREGym ([plan](docs/m5-integration-plan.md)) | First real, non-simulated incidents: a two-service demo with an intentionally bad deployment first, then a pinned SREGym version | Docker or colima, kind and kubectl, installed only with the owner's consent; a `TargetEnvironment` adapter with typed, allowlisted operations | High |
+| Real LLM evaluation (local and free models) | Real models ran on 5 simulated incidents (M2 to M4), one or two samples each, failures included ([docs/status.md](docs/status.md)); CI replays a real single-agent and a real two-agent run | Repeated runs per scenario for success rates; a larger free model; real fault injection (M5) | High |
+| A prompt version from the M4.5 failure analysis | Hand each round's own plan to the next, leads that name the evidence the rules need, claims across roles (the deferred fixes P4 to P6) | Re-recording the golden replay, with the owner's approval | Medium |
 | Larger scenario set with confidence intervals | N = 6 supports no statistical claim | More scenarios per failure family; interval estimates in `evals/runner.py` | High |
 | Per-user approvals (chat-ops) | M1 added a single operator token; approvals should come from a verified individual person, with roles, for example in a chat tool | Single sign-on and a chat integration | High before any real cluster |
 | Learned router (contextual bandit) | Spend parallel compute only where it pays off | Many logged runs with verified outcomes; the existing `RoutingSignals` and `LearnedRouter` interface | Medium |
 | Hybrid retrieval + neural reranker | BM25 misses synonyms ("OOM" vs "out of memory") | A larger, realistic runbook corpus; the `Reranker` interface | Medium |
 | Crash-resume from checkpoints | An interrupted run is recorded but not resumed | Safe replay of each stage from `RunStore` checkpoints | Medium |
 | Docker packaging | One-command setup | A machine where the image can be built and tested | Medium |
-| Static demo site (GitHub Pages) | A shareable link that replays real recorded runs in the dashboard, clearly labeled as a recording | A replay mode in the dashboard and an export of recorded runs | Medium |
+| Static demo site (GitHub Pages) | A shareable link that replays real recorded runs in the dashboard, clearly labeled as a recording | The dashboard's replay (M4) without a running API: an export of the replayed run | Medium |
 | OpenTelemetry collector | Nested spans in a real trace viewer | The `TraceSink` interface; a local collector | Low |
 | Trajectory distillation | Learn a policy from verified runs, the long-term goal | Only with enough valid, verified trajectory data and a free GPU | Low, conditional |
 
@@ -408,6 +469,9 @@ CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on every push and
 - [docs/architecture.md](docs/architecture.md): the full architecture, data flow and trust boundaries
 - [docs/learning-notes.md](docs/learning-notes.md): the concepts behind RECAP, explained simply
 - [docs/threat-model.md](docs/threat-model.md): what can go wrong and what stops it
+- [docs/demo-walkthrough.md](docs/demo-walkthrough.md): the live demo, click by click (the replay of the real two-agent run)
+- [docs/evaluation.md](docs/evaluation.md): evaluation modes, records, failure categories and the published batches
+- [docs/m5-integration-plan.md](docs/m5-integration-plan.md): the plan for a local Kubernetes (Kind) cluster, then SREGym
 - [docs/benchmark-plan.md](docs/benchmark-plan.md): the plan for a real SREGym benchmark
 - [docs/provider-options.md](docs/provider-options.md): free LLM inference options (researched; Ollama and Groq Free in use since M2)
 - [CHANGELOG.md](CHANGELOG.md): what each version (milestone) changed; each version is a git tag and a GitHub release
