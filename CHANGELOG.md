@@ -106,7 +106,7 @@ cluster: Kubernetes and SREGym are M5, and only planned.
 
 ### Verified
 
-- 1681 tests passed, 1 skipped (an optional OpenTelemetry test), 149 of them end to end;
+- 1682 tests passed, 1 skipped (an optional OpenTelemetry test), 149 of them end to end;
   ruff, mypy (29 files), the recordings manifest and the secret scan (tracked files and the
   whole history) clean.
 - Dashboard: 494 tests, `tsc --noEmit` and a build; the browser smoke test passed 72 of 72

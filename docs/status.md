@@ -938,7 +938,7 @@ tests. Nothing was installed or provisioned; `GET /system` shows Kind and SREGym
   history (1,275 blobs, 57 commits on 2026-10-26) for the key shapes the recorder redacts, and
   that the owner's own key value appears nowhere; nothing found. Six fake test keys are
   allowed by the SHA-256 of their exact value. A CI step, with the whole history fetched.
-- Tests at release 0.5.0: `pytest` 1681 passed, 1 skipped (149 end to end); ruff clean; mypy
+- Tests at release 0.5.0: `pytest` 1682 passed, 1 skipped (149 end to end); ruff clean; mypy
   clean; recordings manifest and secret scan clean. Dashboard: 494 tests, `tsc --noEmit`, a
   build, and the browser smoke test 72 of 72 (seeded demo data, Chrome over the DevTools
   protocol; the README screenshots come from that run). Version 0.5.0 in `pyproject.toml`,
