@@ -7,8 +7,9 @@ Two checks:
 
   key shapes    the key and token formats the recorder redacts (recap/telemetry/redact.py:
                 Anthropic, OpenAI, OpenRouter, Groq, Google, AWS, GitHub, Slack, bearer
-                tokens, private-key blocks) in every tracked text file and every text blob in
-                the history (all branches, tags and, locally, the reflog);
+                tokens, private-key blocks, JSON Web Tokens, kubeconfig key material) in
+                every tracked text file and every text blob in the history (all branches,
+                tags and, locally, the reflog);
   owner's keys  every secret value in the local key files (~/.config/recap/*.env: names
                 containing KEY, SECRET, TOKEN or PASSWORD) must appear nowhere, binary blobs
                 included. The values are read locally and never printed. In CI there are no
@@ -54,6 +55,8 @@ KINDS = (
     "GitHub token",
     "Slack token",
     "bearer token",
+    "JSON Web Token",
+    "kubeconfig key material",
 )
 assert len(KINDS) == len(SECRET_PATTERNS), "a redaction pattern has no name here"
 

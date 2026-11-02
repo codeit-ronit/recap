@@ -23,6 +23,7 @@ After a fix (the recovery lifecycle, audit finding 2.6):
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
@@ -108,6 +109,10 @@ from recap.telemetry.usage import cost_label
 from recap.tools.gateway import ToolGateway
 from recap.tools.registry import ToolRegistry
 from recap.verification.oracle import EnvironmentHealthOracle, recovery_result
+
+# The owner's explicit permission for a free hosted model to see a live target
+# (_check_provider_scope).
+HOSTED_ON_LIVE_ENV = "RECAP_ALLOW_HOSTED_MODEL_ON_LIVE_TARGET"
 
 S = IncidentState
 TransportFactory = Callable[[EnvironmentConfig, str], AbstractAsyncContextManager[ToolTransport]]
@@ -215,6 +220,7 @@ class IncidentController:
         self._check_replay_scope(self._replay_requested())  # before any recording is read
         self.provider = self.deps.provider_factory(self.config)
         self._check_replay_scope(self.provider.info.origin == "replay")  # whatever its name
+        self._check_provider_scope(self.provider.info.origin)
         self.config = _memory_defaults(self.config, self.provider.info.origin)
         seed = self._seed()
 
@@ -1304,6 +1310,27 @@ class IncidentController:
                 f"a replay may run only against a simulated environment; {self.info.name!r} "
                 f"({self.info.kind}) is not simulated, so the replay was refused before it started"
             )
+
+    def _check_provider_scope(self, origin: str) -> None:
+        """A hosted model would receive a live target's logs, events and names, so against an
+        environment that is not simulated only the scripted policy or a local model may decide
+        (a replay is refused by _check_replay_scope). A free hosted plan needs the owner's
+        explicit permission for such a target (RECAP_ALLOW_HOSTED_MODEL_ON_LIVE_TARGET=1 in the
+        process's environment); a paid model is refused whatever is set. Checked after the
+        provider is built (building sends nothing) and before the environment is reset."""
+        if self.info.is_simulated or origin in ("scripted", "local_llm", "replay"):
+            return
+        if origin == "free_hosted_llm" and os.environ.get(HOSTED_ON_LIVE_ENV) == "1":
+            return
+        raise ConfigError(
+            f"a {origin} provider may not see a live target's data: {self.info.name!r} "
+            f"({self.info.kind}) is not simulated; use the local model or the scripted policy"
+            + (
+                f" (or set {HOSTED_ON_LIVE_ENV}=1 to permit a free hosted plan)"
+                if origin == "free_hosted_llm"
+                else ""
+            )
+        )
 
     def _seed(self) -> int:
         if self.config.seed is not None:

@@ -178,3 +178,13 @@ def test_free_text_key_value_secrets_keep_the_key_but_lose_the_value() -> None:
     out = Redactor(environ={})(line)
     assert "hunter2hunter2" not in out and "abc123def456" not in out
     assert "password=[REDACTED]" in out and "user=shop" in out and "retrying" in out
+
+
+def test_kubernetes_tokens_and_kubeconfig_key_material_are_redacted() -> None:
+    """A ServiceAccount token is a JSON Web Token; a kubeconfig may inline keys. Built at run
+    time, so this file holds no secret shape for the repository's own secret scan."""
+    jwt = "eyJ" + "hbGciOiJSUzI1NiJ9" + "." + "eyJ" + "zdWIiOiJzeXN0ZW06" + "." + "c2ln" * 6
+    key = "client-key-data: " + "LS0tLS1CRUdJTi" + "A" * 24
+    out = Redactor(environ={})({"log": f"token {jwt} and {key}"})
+    assert jwt not in out["log"] and "LS0tLS1CRUdJTi" not in out["log"]
+    assert out["log"].count(REDACTED) >= 2

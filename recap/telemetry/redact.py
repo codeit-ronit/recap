@@ -19,7 +19,9 @@ The Redactor returns a redacted deep copy and applies three rules:
                       wherever they appear inside a string.
   3. Key formats      strings shaped like Anthropic, OpenAI (including project and service
                       account keys), OpenRouter, Groq, Google, AWS (long-term and temporary),
-                      GitHub or Slack keys, private-key blocks, or bearer tokens, are replaced.
+                      GitHub or Slack keys, private-key blocks, bearer tokens, JSON Web Tokens
+                      (Kubernetes ServiceAccount tokens) or inline kubeconfig key material, are
+                      replaced.
 
 The pattern list is best-effort, not a guarantee: a secret in a format these rules do not
 recognize is stored as it is. This is a local prototype, not a data-loss-prevention system.
@@ -60,6 +62,12 @@ SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),  # GitHub tokens (personal, OAuth, app, refresh)
     re.compile(r"xox[abprs]-[A-Za-z0-9-]{10,}"),  # Slack token
     re.compile(r"(?i)bearer\s+[A-Za-z0-9._-]{8,}"),  # HTTP "Authorization: Bearer ..." value
+    # A JSON Web Token, e.g. a Kubernetes ServiceAccount token (header.payload.signature).
+    re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),
+    # Kubeconfig key material: a client key or certificate, or the cluster's CA, inline.
+    re.compile(
+        r"(?:client-key|client-certificate|certificate-authority)-data:\s*[A-Za-z0-9+/=]{16,}"
+    ),
 )
 
 
