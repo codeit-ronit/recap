@@ -1,0 +1,21 @@
+# Kind target (M5): the frontend's dependency gets a release that crashes at start-up.
+# backend v1.2.0 exits during start-up, so its new pod crash-loops. With the demo's rolling
+# update (maxUnavailable 0) the old pods keep serving and the rollout is stuck; the alert
+# fires on the crash loop and the stuck rollout, measured from the API. Evaluation-only labels.
+id: kind-dependency-crash
+title: "Backend release crash-loops at start-up"
+description: "backend v1.2.0 fails at start-up (CrashLoopBackOff) and its rollout cannot finish. The fix is a rollback of backend to v1.0.0."
+family: bad_deployment
+partition: demo
+seed: 502
+tags: [kind, demo]
+baseline: {frontend: v1.0.0, backend: v1.0.0}
+faults:
+  - {type: set_image, service: backend, version: v1.2.0}
+alert: {service: backend, error_rate: 0.05, not_ready: true, crash_looping: true, rounds: 2,
+        timeout_seconds: 240}
+expected: {root_cause_service: backend, mechanism: bad_deployment, fix: execute_rollback,
+           fix_params: {to_version: v1.0.0}}
+budget: {max_elapsed_seconds: 1800}
+run_overrides: {}
+requires_memory_of: []

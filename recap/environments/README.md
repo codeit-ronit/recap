@@ -17,6 +17,7 @@ map its logs to those conventions (or use an LLM provider) and update allowlists
 | Adapter | Where | Status |
 |---|---|---|
 | `SimulatedEnvironment` (`kind: simulated`) | `recap/environments/simulated/` | V1 default: deterministic local simulation |
+| `KubernetesEnvironment` (`kind: kind`) | `recap/environments/kubernetes/` | M5: a local Kind cluster through typed `kubectl` operations, chosen with `RECAP_TARGET=kind-demo`. Built and tested offline against a fake cluster; **not yet run against a real cluster** |
 | `SREGymEnvironment` (`kind: sregym`) | `integrations/sregym/` | Interface only, **not integrated**: every operation raises `EnvironmentNotIntegrated` |
 | `FakeEnvironment` (`kind: tests.fakes:FakeEnvironment`) | `tests/fakes.py` | A tiny second adapter used by tests to prove the interface is swappable |
 
@@ -106,6 +107,66 @@ The oracle only uses `health_check`.
 simulation-only "safety off" ablation can show what an unsafe executed action would do:
 every service becomes `Deleted`, nothing new is logged, and further actions are rejected.
 
+## The Kind adapter (M5)
+
+`KubernetesEnvironment` puts RECAP on a small local Kubernetes cluster (Kind, cluster
+`recap-m5`, namespace `recap-demo`, services `frontend` and `backend`) without changing any
+other part of RECAP: the same ten MCP tools, the same gateway, policy, approvals, signed
+capabilities, verifier and oracle rule. Everything below is in
+`docs/m5-integration-plan.md` (sections 3 and 4); the cluster's own files are in
+`infra/kind/`.
+
+```
+controller (trusted): reset, describe, bind_executor, health_check
+MCP server subprocess: observe_*, plan_rollback, execute_authorized
+        \                    /
+     KubernetesEnvironment (one per process, same run id, same local files)
+        |  one ServiceAccount per purpose, each in its own kubeconfig:
+        |    recap-reader (reads)    recap-writer (the two writes)
+        |    recap-oracle (health)   recap-scenario (reset's fault steps)
+        |  closed operation set -> argv lists -> kubectl (no shell, minimal environment)
+        |  fixed PromQL -> Prometheus;  the oracle's own HTTP probe -> NodePorts
+        v
+  Kind cluster recap-m5 (API server and every port on 127.0.0.1 only)
+```
+
+| File | Role |
+|---|---|
+| `kubernetes/options.py` | The adapter's options, checked at start (loopback URLs, Kubernetes names, an absolute kubectl path); no credential, ever: options travel on the MCP subprocess' command line |
+| `kubernetes/kubectl.py` | The closed set of typed operations (list/get Deployments, ReplicaSets, pods, events, pod logs, version; rollout undo and restart; set image for reset only), argument checks, identity-to-operation matrix, the subprocess (bounded output, timeouts, strict JSON) and the command audit |
+| `kubernetes/translate.py` | Pure Kubernetes JSON -> observation models (versions from image tags, levels from the app's log format, image-pull and non-OOM back-offs renamed, OOMKilled from pod status) |
+| `kubernetes/rollout.py` | Revisions, the rollout-complete rule, releases since the run's baseline (restarts folded in), rollback plans and the revision a rollback restores |
+| `kubernetes/metrics.py` | Fixed PromQL templates; no data, NaN or infinity is a tool error, never a number |
+| `kubernetes/probe.py` | The oracle's HTTP probe (two rounds), the alert rule reset waits for, a scenario's HTTP burst |
+| `kubernetes/preflight.py` | Cluster pinning: the context, an https loopback API server, the recorded CA fingerprint, a token credential, a private file |
+| `kubernetes/state.py` | `kind-<run_id>.db` (executor key, used nonces, release log, write and command audits), `kind-leases.db` (one run per namespace), `kind-writes-disabled` (the write switch) |
+| `kubernetes/scenario.py` | The schema of `fixtures/kind-scenarios/*.yaml`: a baseline, typed fault steps, an alert rule, evaluation-only labels |
+| `kubernetes/fake.py` | An offline fake cluster (`client: fake`) for tests: synthetic Kubernetes JSON, Kubernetes' rollout rules, the app's behaviour from a seed folder |
+| `kubernetes/engine.py` | `KubernetesEnvironment` |
+
+**What makes it different from the simulator:**
+
+* **Writes.** Only `rollback` and `restart`; `delete_namespace` is refused even with a valid
+  capability. While `<state dir>/kind-writes-disabled` exists every write is refused. The
+  capability is verified with `allow_safety_off=False` and its nonce is **committed before
+  the cluster is touched** (a crash burns it; it never works twice). The target is checked
+  again, a rollback restores the highest revision whose image is exactly the approved
+  version (never a revision number: an undo renumbers what it restores), and every write is
+  a server-side dry run, then the write, then a read-back, all inside the 10 s tool limit and
+  shielded from cancellation. The audit row holds the approval, the digest, generations and
+  images before and after; never the capability.
+* **Time is real.** `describe()` declares a stabilization window (180 s, polled every 5 s);
+  the oracle says `Running` only when the rollout is complete (the checks of `kubectl
+  rollout status`, made strict) and probes twice. Reads show only this run's window:
+  releases, events and logs from before the run's baseline belong to earlier runs.
+* **Nothing at construction.** The runtime builds an adapter for every GET /system: the
+  constructor, `describe()` and `list_scenarios()` never touch the cluster or create a
+  file. Every reset re-checks the cluster's identity and takes the namespace lease.
+* **Honest limits.** The demo app logs in a phrasing RECAP's parsers already read, so a
+  success with the scripted policy proves the plumbing, not an understanding of arbitrary
+  logs. A metric without a source is a tool error. The fake client (`client: fake`) is
+  labelled in `describe()`; it proves the wiring offline, not Kubernetes.
+
 ## Scenario files
 
 `fixtures/scenarios/<id>.yaml` (the id must equal the file name). `family` and `expected`
@@ -118,6 +179,12 @@ loader rejects any other key, and the controller applies only those two, so a sc
 never switch off safety or approvals, change memory isolation or pick the provider. Its
 separate `budget:` field sets that scenario's run limits (the `budget-exhausted` demo allows
 3 tool calls).
+
+Kind scenarios (`fixtures/kind-scenarios/<id>.yaml`) have their own schema
+(`recap/environments/kubernetes/scenario.py`): a `baseline` version per service, typed `faults`
+(`set_image` of a demo version, or an `http_burst` to one path), an `alert` rule (error-rate
+threshold, readiness, crash loops, how many consecutive probe rounds), and the same
+evaluation-only `family`, `expected` and `budget` (1800 s: a live run waits for rollouts).
 
 ## How to add an adapter
 

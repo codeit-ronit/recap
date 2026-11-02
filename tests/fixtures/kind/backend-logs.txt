@@ -1,0 +1,11 @@
+[pod/backend-8e2c4f6a1b-m3n4b/backend] 2026-11-02T09:50:05.123456789Z 2026-11-02T09:50:05.120Z INFO serving on :8080 [build v1.1.0]
+[pod/backend-8e2c4f6a1b-m3n4b/backend] 2026-11-02T09:51:00.000000001Z 2026-11-02T09:51:00.000Z ERROR handler panic: KeyError: 'region' [build v1.1.0]
+[pod/backend-8e2c4f6a1b-m3n4b/backend] 2026-11-02T09:51:10.5Z 2026-11-02T09:51:10.400Z WARNING slow request: GET /items took 900 ms
+[pod/backend-8e2c4f6a1b-m3n4b/backend] 2026-11-02T09:51:20Z Traceback (most recent call last):
+[pod/backend-8e2c4f6a1b-m3n4b/backend] 2026-11-02T09:51:21Z 2026-11-02T09:51:21.000Z FATAL cannot open the item store
+[pod/backend-8e2c4f6a1b-m3n4b/backend] 2026-11-02T09:51:22Z 2026-11-02T09:51:22.000Z CRITICAL disk almost full
+[pod/backend-8e2c4f6a1b-m3n4b/backend] 2026-11-02T09:51:23Z 2026-11-02T09:51:23.000Z PANIC worker 1 stopped
+[pod/backend-8e2c4f6a1b-m3n4b/backend] 2026-11-02T09:51:24Z
+a line with no prefix and no time at all
+[pod/backend-8e2c4f6a1b-m3n4b/backend] 2026-11-02T09:51:25Z 2026-11-02T09:51:25.000Z DEBUG cache miss region=eu
+[pod/backend-8e2c4f6a1b-m3n4b/backend] 2026-11-02T09:51:26Z 2026-11-02T09:51:26.000Z NOTALEVEL looks like a level but is not one

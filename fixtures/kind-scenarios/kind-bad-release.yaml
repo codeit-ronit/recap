@@ -1,0 +1,23 @@
+# Kind target (M5, acceptance test 2): a bad backend release on the real local cluster.
+# backend v1.1.0 has a real coding defect: part of its /items requests raise KeyError. The
+# frontend calls backend for every request, so users see errors too. reset() returns only the
+# alert it MEASURED with its own probe; family and expected below are evaluation-only.
+id: kind-bad-release
+title: "Frontend errors after a backend release"
+description: "backend v1.1.0 raises KeyError for part of /items requests, and frontend fails with it. The fix is a rollback of backend to v1.0.0, after a human approves it."
+family: bad_deployment
+partition: demo
+seed: 501
+tags: [kind, demo]
+baseline: {frontend: v1.0.0, backend: v1.0.0}
+faults:
+  - {type: set_image, service: backend, version: v1.1.0}
+alert: {service: frontend, error_rate: 0.05, not_ready: true, crash_looping: true, rounds: 2,
+        timeout_seconds: 240}
+# Evaluation-only ground truth: never shown to agents.
+expected: {root_cause_service: backend, mechanism: bad_deployment, fix: execute_rollback,
+           fix_params: {to_version: v1.0.0}}
+# A live run waits for the rollout (stabilization window 180 s) and may use the local model.
+budget: {max_elapsed_seconds: 1800}
+run_overrides: {}
+requires_memory_of: []

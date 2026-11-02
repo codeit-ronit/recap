@@ -49,7 +49,26 @@ def test_simulated_kind_builds_the_simulator(settings: Settings):
 
 
 def test_built_in_kinds_are_listed():
-    assert {"simulated", "sregym"} <= set(available_kinds())
+    assert {"simulated", "kind", "sregym"} <= set(available_kinds())
+
+
+def test_kind_builds_the_kubernetes_adapter_without_touching_anything(tmp_path: Path):
+    """The Kind adapter (M5) is built by name; building it reads no file and runs nothing."""
+    from recap.environments.kubernetes import KubernetesEnvironment
+
+    options = {
+        "scenarios_dir": str(tmp_path / "scenarios"),
+        "state_dir": str(tmp_path / "sandbox"),
+        "client": "kubectl",
+        "kubectl": "/opt/homebrew/bin/kubectl",
+        "credentials_dir": str(tmp_path / "creds"),
+    }
+
+    environment = create_environment(EnvironmentConfig(kind="kind", options=options), "describe")
+
+    assert isinstance(environment, KubernetesEnvironment)
+    assert environment.kind == "kind" and environment.describe().is_simulated is False
+    assert not (tmp_path / "sandbox").exists() and not (tmp_path / "creds").exists()
 
 
 def test_unknown_kind_is_a_config_error_that_lists_the_supported_kinds():

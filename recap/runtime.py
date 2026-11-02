@@ -65,8 +65,7 @@ STDIO_TRANSPORT = "MCP over stdio (official Python SDK, subprocess per run)"
 
 # What each environment adapter in this repository really is (GET /system). Only an
 # implemented adapter can ever be reported as operational: SREGym is an interface whose every
-# operation raises EnvironmentNotIntegrated, and a Kind cluster has no adapter at all. Both
-# are milestone M5 (docs/status.md).
+# operation raises EnvironmentNotIntegrated (milestone M5, docs/status.md).
 #   kind: (adapter class or None, implemented, what it is)
 ENVIRONMENT_ADAPTERS: dict[str, tuple[str | None, bool, str]] = {
     "simulated": (
@@ -81,11 +80,18 @@ ENVIRONMENT_ADAPTERS: dict[str, tuple[str | None, bool, str]] = {
         "(integrations/sregym/); the real integration is planned for M5",
     ),
     "kind": (
-        None,
-        False,
-        "no adapter in this repository: a local Kind cluster is the first M5 target",
+        "KubernetesEnvironment",
+        True,
+        "a local Kind cluster through typed kubectl operations, four RBAC-limited identities "
+        "and an HTTP probe of its own (recap/environments/kubernetes/); chosen with "
+        "RECAP_TARGET=kind-demo. GET /system never contacts the cluster: whether it is up "
+        "is checked when a run starts",
     ),
 }
+# Adapters that act on a live target. Being implemented does not make one operational: it
+# needs its cluster, which GET /system never contacts, so it counts as operational only
+# while it is the configured adapter (and even then a run's preflight decides).
+LIVE_ADAPTERS = frozenset({"kind"})
 
 
 class Runtime:
@@ -258,7 +264,8 @@ class Runtime:
             "router": self.router.name,
             "safety_policy": f"{self.policy.name} ({self.policy.version})",
             "verifier": self.verifier.name,
-            "oracle": f"{self.settings.environment.kind}-health-oracle",
+            # The name the oracle gives itself (EnvironmentHealthOracle: "<adapter kind>-...").
+            "oracle": f"{environment.kind}-health-oracle",
             "memory_episodes": self.memory.count(),
             "trace_sinks": sinks,
             "config_hash": self.settings.config_hash,
@@ -426,7 +433,7 @@ class Runtime:
             component(
                 "oracle",
                 "RecoveryOracle",
-                f"{self.settings.environment.kind}-health-oracle",
+                f"{environment.kind}-health-oracle",
                 "active" if operational else "planned",
                 "judges recovery from the environment's own health, never from agent text",
             ),
@@ -472,7 +479,11 @@ class Runtime:
                     "configured": is_configured,
                     "status": status,
                     "operational": implemented
-                    and (self._environment_operational(scenarios) if is_configured else True),
+                    and (
+                        self._environment_operational(scenarios)
+                        if is_configured
+                        else kind not in LIVE_ADAPTERS
+                    ),
                     "milestone": None if implemented else "M5",
                     "detail": detail,
                 }

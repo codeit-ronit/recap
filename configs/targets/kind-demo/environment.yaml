@@ -1,0 +1,31 @@
+# Target profile "kind-demo" (M5, target 1): RECAP on the local Kind cluster recap-m5.
+#
+# Read only when RECAP_TARGET=kind-demo is set; without it RECAP stays on the simulator and
+# configs/environment.yaml is used. Files this profile does not have (agents, providers,
+# retrieval) come from configs/ as usual.
+#
+# No secret lives here. The credentials folder (outside git, mode 700) holds the kubeconfigs of
+# RECAP's four ServiceAccounts (recap-reader, recap-writer, recap-oracle, recap-scenario; short-
+# lived tokens, mode 600) and ca.sha256, the cluster CA's SHA-256 fingerprint recorded when the
+# cluster was created. RECAP never uses the administrator's kubeconfig.
+kind: kind
+options:
+  scenarios_dir: fixtures/kind-scenarios
+  client: kubectl
+  # Absolute (a launchd PATH may not include it); ~ is expanded. Edit to where kubectl lives.
+  kubectl: /opt/homebrew/bin/kubectl
+  credentials_dir: ~/.config/recap/kind
+  # The pinned cluster: every reset and every process's first call checks the context, a
+  # loopback API server and the CA fingerprint, and stops before any request otherwise.
+  cluster: recap-m5
+  context: kind-recap-m5
+  namespace: recap-demo
+  services: [frontend, backend]
+  image_repository: recap-demo
+  # NodePorts mapped to 127.0.0.1 only (Kind extraPortMappings with listenAddress 127.0.0.1).
+  service_urls: {frontend: "http://127.0.0.1:30080", backend: "http://127.0.0.1:30081"}
+  probe_paths: {frontend: /, backend: /items}
+  prometheus_url: "http://127.0.0.1:30090"
+  # Starting guesses, to be replaced by measured rollout times (docs/m5-integration-plan.md 3.7).
+  stabilization_timeout_seconds: 180
+  stabilization_poll_seconds: 5

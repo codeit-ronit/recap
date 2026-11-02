@@ -3,11 +3,17 @@
 One `Settings` object is built at startup and passed to the components that need it.
 A few environment variables can override defaults (see .env.example). The hash of
 all config files is recorded on every run for reproducibility.
+
+A target profile (configs/targets/<name>/, chosen with RECAP_TARGET=<name>) replaces the
+files that describe one target: its environment.yaml, policies.yaml and budget.yaml. The
+Kind cluster's profile is "kind-demo" (M5). Without RECAP_TARGET nothing changes: tests,
+demos and CI stay on the simulator. The config hash covers the files actually read.
 """
 
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -26,6 +32,18 @@ from recap.core.models import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+CONFIG_FILES = (
+    "environment.yaml",
+    "budget.yaml",
+    "agents.yaml",
+    "policies.yaml",
+    "providers.yaml",
+    "retrieval.yaml",
+)
+# What a target profile may replace: the description of one target, never the agents,
+# the providers or the retrieval settings.
+TARGET_FILES = ("environment.yaml", "policies.yaml", "budget.yaml")
+_TARGET_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 
 
 # --- Schemas for each config file -------------------------------------------------------
@@ -302,6 +320,7 @@ class Settings(Contract):
     retrieval: RetrievalSettings = Field(default_factory=RetrievalSettings)
     features: Features = Field(default_factory=Features)
     config_hash: str
+    target: str | None = None  # the target profile in use (RECAP_TARGET); None: configs/ only
 
 
 # --- Loading ----------------------------------------------------------------------------
@@ -344,22 +363,37 @@ def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def load_settings(root: Path | None = None, *, data_dir: Path | None = None) -> Settings:
-    """Read configs/*.yaml under `root` (the repo root by default) into `Settings`."""
+def config_files(config_dir: Path, target: str | None) -> dict[str, Path]:
+    """The file each setting is read from: configs/<name>, or the target profile's copy."""
+    files = {name: config_dir / name for name in CONFIG_FILES}
+    if not target:
+        return files
+    folder = config_dir / "targets" / target
+    # The name becomes a path: it may not climb out of configs/targets/.
+    if not _TARGET_NAME.fullmatch(target) or not folder.is_dir():
+        raise ConfigError(f"unknown target profile {target[:64]!r} (configs/targets/<name>/)")
+    for name in TARGET_FILES:
+        if (folder / name).is_file():
+            files[name] = folder / name
+    return files
+
+
+def load_settings(
+    root: Path | None = None, *, data_dir: Path | None = None, target: str | None = None
+) -> Settings:
+    """Read configs/*.yaml under `root` (the repo root by default) into `Settings`.
+
+    `target` (else RECAP_TARGET) names a target profile in configs/targets/ whose files
+    replace configs/' own environment, policies and budget.
+    """
     root = (root or REPO_ROOT).resolve()
     config_dir = root / "configs"
-    names = [
-        "environment.yaml",
-        "budget.yaml",
-        "agents.yaml",
-        "policies.yaml",
-        "providers.yaml",
-        "retrieval.yaml",
-    ]
-    raw = {name: _read_yaml(config_dir / name) for name in names}
-    config_hash = sha256_hex("".join((config_dir / n).read_text(encoding="utf-8") for n in names))[
-        :16
-    ]
+    target = target if target is not None else os.environ.get("RECAP_TARGET", "").strip()
+    files = config_files(config_dir, target or None)
+    raw = {name: _read_yaml(path) for name, path in files.items()}
+    # Exactly the files read, in a fixed order (unchanged from before profiles existed).
+    texts = "".join(files[name].read_text(encoding="utf-8") for name in CONFIG_FILES)
+    config_hash = sha256_hex(texts)[:16]
 
     data_dir = Path(data_dir or os.environ.get("RECAP_DATA_DIR") or root / "data")
     if not data_dir.is_absolute():
@@ -417,6 +451,7 @@ def load_settings(root: Path | None = None, *, data_dir: Path | None = None) -> 
         retrieval=retrieval,
         features=Features(embeddings=embeddings, otel=_env_flag("RECAP_ENABLE_OTEL")),
         config_hash=config_hash,
+        target=target or None,
     )
 
 

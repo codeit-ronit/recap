@@ -45,6 +45,7 @@ def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
     (tests/helpers.py: OPERATOR_HEADERS). Tests that send no token still get 401.
     """
     monkeypatch.delenv("RECAP_PROVIDER", raising=False)
+    monkeypatch.delenv("RECAP_TARGET", raising=False)  # the simulator, whatever the shell exports
     monkeypatch.setenv("RECAP_TOOL_LATENCY_MS", "0")
     monkeypatch.setenv("RECAP_ALLOWED_HOSTS", "localhost,127.0.0.1,[::1],testserver")
     monkeypatch.setenv("RECAP_OPERATOR_TOKEN", OPERATOR_TOKEN)

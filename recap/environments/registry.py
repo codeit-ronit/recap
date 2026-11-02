@@ -10,6 +10,8 @@ as log conventions, allowlists and runbooks must still match the new target.)
     kind                       adapter
     -------------------------  ---------------------------------------------------------
     simulated                  SimulatedEnvironment - deterministic local sandbox (V1 default)
+    kind                       KubernetesEnvironment - a local Kind cluster through typed
+                               kubectl operations (M5; configs/targets/kind-demo/)
     sregym                     SREGymEnvironment - interface only, NOT integrated in V1
     package.module:ClassName   any importable TargetEnvironment subclass
                                (the tests use "tests.fakes:FakeEnvironment")
@@ -40,6 +42,13 @@ def _simulated(**options: Any) -> TargetEnvironment:
     return SimulatedEnvironment(**options)
 
 
+def _kind(**options: Any) -> TargetEnvironment:
+    """Build the Kind adapter (M5): RECAP's local Kubernetes demo cluster."""
+    from recap.environments.kubernetes.engine import KubernetesEnvironment
+
+    return KubernetesEnvironment(**options)
+
+
 def _sregym(**options: Any) -> TargetEnvironment:
     """Build the SREGym adapter (an interface only in V1; it reports that it is not integrated)."""
     from integrations.sregym.adapter import SREGymEnvironment
@@ -48,7 +57,11 @@ def _sregym(**options: Any) -> TargetEnvironment:
 
 
 # Built-in kinds. The imports live inside the factories, so only the chosen adapter is loaded.
-_FACTORIES: dict[str, EnvironmentFactory] = {"simulated": _simulated, "sregym": _sregym}
+_FACTORIES: dict[str, EnvironmentFactory] = {
+    "simulated": _simulated,
+    "kind": _kind,
+    "sregym": _sregym,
+}
 
 
 def register_environment(kind: str, factory: EnvironmentFactory) -> None:

@@ -1,0 +1,281 @@
+{
+  "_comment": "SYNTHETIC kubectl -o json output for backend at 2026-11-02T10:00:00Z, hand-written from the Kubernetes API reference (apps/v1 Deployment and ReplicaSet, core/v1 Pod and Event); NOT recorded from a cluster. Story: v1.0.0 (revision 1) was rolled back to on 2026-10-31 after a crashing v1.2.0 (revision 2), so its ReplicaSet was REUSED as revision 3 and keeps its old creation time; a rolling restart made revision 4 (same image); v1.1.0 (revision 5) is rolling out now (one surge pod).",
+  "deployment": {
+    "apiVersion": "apps/v1",
+    "kind": "Deployment",
+    "metadata": {
+      "name": "backend",
+      "namespace": "recap-demo",
+      "uid": "d-backend",
+      "generation": 7,
+      "creationTimestamp": "2026-10-28T09:00:00Z",
+      "labels": {"app": "backend"},
+      "annotations": {
+        "deployment.kubernetes.io/revision": "5",
+        "kubernetes.io/change-cause": "release v1.1.0"
+      }
+    },
+    "spec": {
+      "replicas": 2,
+      "selector": {"matchLabels": {"app": "backend"}},
+      "progressDeadlineSeconds": 60,
+      "strategy": {"type": "RollingUpdate", "rollingUpdate": {"maxSurge": 1, "maxUnavailable": 0}},
+      "template": {
+        "metadata": {"labels": {"app": "backend"}},
+        "spec": {
+          "containers": [
+            {
+              "name": "backend",
+              "image": "recap-demo/backend:v1.1.0",
+              "imagePullPolicy": "IfNotPresent",
+              "resources": {"limits": {"memory": "128Mi", "cpu": "250m"}}
+            }
+          ]
+        }
+      }
+    },
+    "status": {
+      "observedGeneration": 7,
+      "replicas": 3,
+      "updatedReplicas": 1,
+      "readyReplicas": 2,
+      "availableReplicas": 2,
+      "unavailableReplicas": 1,
+      "conditions": [
+        {"type": "Available", "status": "True", "reason": "MinimumReplicasAvailable"},
+        {"type": "Progressing", "status": "True", "reason": "ReplicaSetUpdated"}
+      ]
+    }
+  },
+  "replicasets": {
+    "apiVersion": "v1",
+    "kind": "List",
+    "metadata": {"resourceVersion": ""},
+    "items": [
+      {
+        "apiVersion": "apps/v1",
+        "kind": "ReplicaSet",
+        "metadata": {
+          "name": "backend-5d8f6c7b9d",
+          "creationTimestamp": "2026-10-28T09:00:00Z",
+          "annotations": {
+            "deployment.kubernetes.io/revision": "3",
+            "deployment.kubernetes.io/revision-history": "1",
+            "kubernetes.io/change-cause": "release v1.0.0"
+          },
+          "ownerReferences": [{"apiVersion": "apps/v1", "kind": "Deployment", "name": "backend", "uid": "d-backend", "controller": true}]
+        },
+        "spec": {"replicas": 0, "template": {"metadata": {"labels": {"app": "backend"}}, "spec": {"containers": [{"name": "backend", "image": "recap-demo/backend:v1.0.0"}]}}}
+      },
+      {
+        "apiVersion": "apps/v1",
+        "kind": "ReplicaSet",
+        "metadata": {
+          "name": "backend-7c9f5b8d6e",
+          "creationTimestamp": "2026-10-31T08:00:00Z",
+          "annotations": {"deployment.kubernetes.io/revision": "2", "kubernetes.io/change-cause": "release v1.2.0"},
+          "ownerReferences": [{"apiVersion": "apps/v1", "kind": "Deployment", "name": "backend", "uid": "d-backend", "controller": true}]
+        },
+        "spec": {"replicas": 0, "template": {"metadata": {"labels": {"app": "backend"}}, "spec": {"containers": [{"name": "backend", "image": "recap-demo/backend:v1.2.0"}]}}}
+      },
+      {
+        "apiVersion": "apps/v1",
+        "kind": "ReplicaSet",
+        "metadata": {
+          "name": "backend-6a1b2c3d4e",
+          "creationTimestamp": "2026-11-02T09:00:00Z",
+          "annotations": {"deployment.kubernetes.io/revision": "4", "kubernetes.io/change-cause": "release v1.0.0"},
+          "ownerReferences": [{"apiVersion": "apps/v1", "kind": "Deployment", "name": "backend", "uid": "d-backend", "controller": true}]
+        },
+        "spec": {
+          "replicas": 2,
+          "template": {
+            "metadata": {"labels": {"app": "backend"}, "annotations": {"kubectl.kubernetes.io/restartedAt": "2026-11-02T09:00:00Z"}},
+            "spec": {"containers": [{"name": "backend", "image": "recap-demo/backend:v1.0.0"}]}
+          }
+        }
+      },
+      {
+        "apiVersion": "apps/v1",
+        "kind": "ReplicaSet",
+        "metadata": {
+          "name": "backend-8e2c4f6a1b",
+          "creationTimestamp": "2026-11-02T09:50:00Z",
+          "annotations": {"deployment.kubernetes.io/revision": "5", "kubernetes.io/change-cause": "release v1.1.0"},
+          "ownerReferences": [{"apiVersion": "apps/v1", "kind": "Deployment", "name": "backend", "uid": "d-backend", "controller": true}]
+        },
+        "spec": {
+          "replicas": 1,
+          "template": {
+            "metadata": {"labels": {"app": "backend"}, "annotations": {"kubectl.kubernetes.io/restartedAt": "2026-11-02T09:00:00Z"}},
+            "spec": {"containers": [{"name": "backend", "image": "recap-demo/backend:v1.1.0"}]}
+          }
+        }
+      },
+      {
+        "apiVersion": "apps/v1",
+        "kind": "ReplicaSet",
+        "metadata": {
+          "name": "frontend-9f8e7d6c5b",
+          "creationTimestamp": "2026-10-28T09:00:00Z",
+          "annotations": {"deployment.kubernetes.io/revision": "1"},
+          "ownerReferences": [{"apiVersion": "apps/v1", "kind": "Deployment", "name": "frontend", "uid": "d-frontend", "controller": true}]
+        },
+        "spec": {"replicas": 2, "template": {"spec": {"containers": [{"name": "frontend", "image": "recap-demo/frontend:v1.0.0"}]}}}
+      },
+      {
+        "apiVersion": "apps/v1",
+        "kind": "ReplicaSet",
+        "metadata": {
+          "name": "backend-0000000000",
+          "creationTimestamp": "2026-10-28T08:00:00Z",
+          "annotations": {},
+          "ownerReferences": [{"apiVersion": "apps/v1", "kind": "Deployment", "name": "backend", "uid": "d-backend", "controller": true}]
+        },
+        "spec": {"replicas": 0, "template": {"spec": {"containers": [{"name": "backend", "image": "recap-demo/backend:v0.1.0"}]}}}
+      }
+    ]
+  },
+  "pods": {
+    "apiVersion": "v1",
+    "kind": "List",
+    "metadata": {"resourceVersion": ""},
+    "items": [
+      {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "backend-6a1b2c3d4e-x7k2p",
+          "creationTimestamp": "2026-11-02T09:00:05Z",
+          "labels": {"app": "backend", "pod-template-hash": "6a1b2c3d4e"},
+          "ownerReferences": [{"apiVersion": "apps/v1", "kind": "ReplicaSet", "name": "backend-6a1b2c3d4e"}]
+        },
+        "status": {
+          "phase": "Running",
+          "conditions": [{"type": "Ready", "status": "True"}],
+          "containerStatuses": [
+            {
+              "name": "backend",
+              "image": "recap-demo/backend:v1.0.0",
+              "ready": true,
+              "restartCount": 1,
+              "state": {"running": {"startedAt": "2026-11-02T09:40:02Z"}},
+              "lastState": {"terminated": {"reason": "OOMKilled", "exitCode": 137, "startedAt": "2026-11-02T09:00:06Z", "finishedAt": "2026-11-02T09:40:00Z"}}
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "backend-6a1b2c3d4e-q9w8e",
+          "creationTimestamp": "2026-11-02T09:00:20Z",
+          "labels": {"app": "backend", "pod-template-hash": "6a1b2c3d4e"},
+          "ownerReferences": [{"apiVersion": "apps/v1", "kind": "ReplicaSet", "name": "backend-6a1b2c3d4e"}]
+        },
+        "status": {
+          "phase": "Running",
+          "conditions": [{"type": "Ready", "status": "True"}],
+          "containerStatuses": [
+            {"name": "backend", "image": "recap-demo/backend:v1.0.0", "ready": true, "restartCount": 0, "state": {"running": {"startedAt": "2026-11-02T09:00:21Z"}}, "lastState": {}}
+          ]
+        }
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "backend-8e2c4f6a1b-m3n4b",
+          "creationTimestamp": "2026-11-02T09:50:01Z",
+          "labels": {"app": "backend", "pod-template-hash": "8e2c4f6a1b"},
+          "ownerReferences": [{"apiVersion": "apps/v1", "kind": "ReplicaSet", "name": "backend-8e2c4f6a1b"}]
+        },
+        "status": {
+          "phase": "Running",
+          "conditions": [{"type": "Ready", "status": "False"}],
+          "containerStatuses": [
+            {"name": "backend", "image": "recap-demo/backend:v1.1.0", "ready": false, "restartCount": 0, "state": {"running": {"startedAt": "2026-11-02T09:50:04Z"}}, "lastState": {}}
+          ]
+        }
+      }
+    ]
+  },
+  "events": {
+    "apiVersion": "v1",
+    "kind": "List",
+    "metadata": {"resourceVersion": ""},
+    "items": [
+      {
+        "apiVersion": "v1",
+        "kind": "Event",
+        "metadata": {"name": "backend.1", "creationTimestamp": "2026-11-02T09:50:00Z"},
+        "involvedObject": {"kind": "Deployment", "name": "backend"},
+        "reason": "ScalingReplicaSet",
+        "message": "Scaled up replica set backend-8e2c4f6a1b to 1",
+        "type": "Normal",
+        "count": 1,
+        "firstTimestamp": "2026-11-02T09:50:00Z",
+        "lastTimestamp": "2026-11-02T09:50:00Z"
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Event",
+        "metadata": {"name": "backend-8e2c4f6a1b-m3n4b.2", "creationTimestamp": "2026-11-02T09:50:30Z"},
+        "involvedObject": {"kind": "Pod", "name": "backend-8e2c4f6a1b-m3n4b"},
+        "reason": "BackOff",
+        "message": "Back-off pulling image \"recap-demo/backend:v1.1.0\"",
+        "type": "Normal",
+        "count": 2,
+        "firstTimestamp": "2026-11-02T09:50:10Z",
+        "lastTimestamp": "2026-11-02T09:50:30Z"
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Event",
+        "metadata": {"name": "backend-8e2c4f6a1b-m3n4b.3", "creationTimestamp": "2026-11-02T09:55:00Z"},
+        "involvedObject": {"kind": "Pod", "name": "backend-8e2c4f6a1b-m3n4b"},
+        "reason": "Unhealthy",
+        "message": "Readiness probe failed: HTTP probe failed with statuscode: 503",
+        "type": "Warning",
+        "count": 4,
+        "firstTimestamp": "2026-11-02T09:52:00Z",
+        "lastTimestamp": "2026-11-02T09:55:00Z"
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Event",
+        "metadata": {"name": "backend-7c9f5b8d6e-zt5vb.4", "creationTimestamp": "2026-10-31T08:05:00Z"},
+        "involvedObject": {"kind": "Pod", "name": "backend-7c9f5b8d6e-zt5vb"},
+        "reason": "BackOff",
+        "message": "Back-off restarting failed container backend in pod backend-7c9f5b8d6e-zt5vb",
+        "type": "Warning",
+        "count": 12,
+        "firstTimestamp": "2026-10-31T08:01:00Z",
+        "lastTimestamp": "2026-10-31T08:05:00Z"
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Event",
+        "metadata": {"name": "backend-8e2c4f6a1b.5", "creationTimestamp": "2026-11-02T09:50:01Z"},
+        "involvedObject": {"kind": "ReplicaSet", "name": "backend-8e2c4f6a1b"},
+        "reason": "SuccessfulCreate",
+        "message": "Created pod: backend-8e2c4f6a1b-m3n4b",
+        "type": "Normal",
+        "eventTime": "2026-11-02T09:50:01.123456Z",
+        "series": {"count": 3, "lastObservedTime": "2026-11-02T09:58:00.000000Z"}
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Event",
+        "metadata": {"name": "traffic.6", "creationTimestamp": "2026-11-02T09:59:00Z"},
+        "involvedObject": {"kind": "Pod", "name": "traffic-5c6d7e8f9a-abcde"},
+        "reason": "Started",
+        "message": "Started container traffic",
+        "type": "Normal",
+        "count": 1,
+        "lastTimestamp": "2026-11-02T09:59:00Z"
+      }
+    ]
+  }
+}

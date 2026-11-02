@@ -716,9 +716,14 @@ def test_the_system_never_calls_a_stub_operational(settings: Settings) -> None:
 
     adapters = {a.kind: a for a in simulated.environment_adapters}
     assert adapters["simulated"].status == "active" and adapters["simulated"].operational
-    for kind in ("sregym", "kind"):
-        assert adapters[kind].status == "planned" and not adapters[kind].operational
-        assert adapters[kind].milestone == "M5"
+    assert adapters["sregym"].status == "planned" and not adapters["sregym"].operational
+    assert adapters["sregym"].milestone == "M5"
+    # The Kind adapter is built (M5), but it needs its live cluster: never operational unless
+    # it is the configured adapter (GET /system never contacts a cluster).
+    assert adapters["kind"].status == "available" and not adapters["kind"].operational
+    assert (
+        adapters["kind"].adapter == "KubernetesEnvironment" and adapters["kind"].milestone is None
+    )
     assert simulated.simulation_notice and simulated.label.startswith("SIMULATED")
     assert simulated.features.writes_require_operator_token
     assert "replay" in simulated.features.per_run_providers

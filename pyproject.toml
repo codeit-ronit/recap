@@ -36,6 +36,7 @@ asyncio_default_fixture_loop_scope = "function"
 addopts = "-q --strict-markers"
 markers = [
     "e2e: runs a real incident through the controller, the MCP tool server subprocess, the gateway and the simulator (sometimes through the HTTP API)",
+    "live_cluster: needs the real local Kind cluster (M5); skipped unless RECAP_LIVE_KIND=1, never run in CI",
 ]
 
 [tool.mypy]
@@ -52,6 +53,7 @@ files = [
     "recap/providers/transport.py",
     "recap/providers/factory.py",
     "recap/providers/catalog.py",
+    "recap/environments/kubernetes",
     "apps/api",
     "evals/records.py",
     "evals/categorize.py",

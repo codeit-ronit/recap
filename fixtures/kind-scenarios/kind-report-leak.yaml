@@ -1,0 +1,21 @@
+# Kind target (M5, acceptance test 3): a dormant defect, woken by real traffic.
+# Every backend version caches /report results and never evicts them. A burst of /report
+# requests pushes its memory past 90% of the container limit; /readyz then refuses traffic,
+# so the pods keep running but are not ready, and frontend's calls fail. A rolling restart
+# clears it: a mitigation of the state, not a fix of the cache defect. Evaluation-only labels.
+id: kind-report-leak
+title: "Backend stops serving after a burst of reports"
+description: "A burst of /report requests fills backend's never-evicting cache; readiness refuses traffic and frontend fails. The fix is a rolling restart of backend."
+family: resource_pressure
+partition: demo
+seed: 503
+tags: [kind, demo]
+baseline: {frontend: v1.0.0, backend: v1.0.0}
+faults:
+  - {type: http_burst, service: backend, path: /report, requests: 400, concurrency: 8}
+alert: {service: frontend, error_rate: 0.05, not_ready: true, crash_looping: true, rounds: 2,
+        timeout_seconds: 240}
+expected: {root_cause_service: backend, mechanism: resource_pressure, fix: restart_service}
+budget: {max_elapsed_seconds: 1800}
+run_overrides: {}
+requires_memory_of: []
