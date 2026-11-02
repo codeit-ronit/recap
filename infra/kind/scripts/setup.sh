@@ -26,8 +26,8 @@ source "$(dirname "$0")/lib.sh"
 require_tools docker kind kubectl openssl curl
 check_kind_home
 docker info >/dev/null 2>&1 \
-  || die "docker does not answer: start the container engine first (README, setup order)"
-say "docker context: $(docker context show 2>/dev/null || echo default)"
+  || die "the recap-m5 engine does not answer ($DOCKER_HOST): colima start --profile recap-m5 --cpu 4 --memory 4 --disk 20 (README, setup order)"
+say "docker engine: $DOCKER_HOST"
 kind_version="$(kind version)"
 say "$kind_version"
 case "$kind_version" in

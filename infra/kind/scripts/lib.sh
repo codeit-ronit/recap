@@ -34,6 +34,16 @@ PROMETHEUS_URL="http://127.0.0.1:30090"
 # The private credentials folder, outside git: the admin kubeconfig, the four identity
 # kubeconfigs and ca.sha256. RECAP_KIND_HOME may name another absolute path.
 KIND_HOME="${RECAP_KIND_HOME:-$HOME/.config/recap/kind}"
+# The container engine: the dedicated colima profile's socket (README, setup order), never
+# whatever Docker context happens to be current, so the cluster cannot land in another engine.
+# A private Docker client configuration (no credential helper: every image used here is
+# public) leaves the user's own ~/.docker untouched, whatever credential store it names.
+export DOCKER_HOST="${RECAP_DOCKER_HOST:-unix://$HOME/.colima/recap-m5/docker.sock}"
+unset DOCKER_CONTEXT
+export DOCKER_CONFIG="$KIND_HOME/docker-client"
+if [[ ! -f "$DOCKER_CONFIG/config.json" ]]; then
+  (umask 077 && mkdir -p "$DOCKER_CONFIG" && printf '{}\n' >"$DOCKER_CONFIG/config.json")
+fi
 ADMIN_KUBECONFIG="$KIND_HOME/admin.kubeconfig"
 CA_FINGERPRINT_FILE="$KIND_HOME/ca.sha256"
 
