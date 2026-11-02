@@ -1,0 +1,78 @@
+# The admission policy that checks every change RECAP's two writing identities make
+# (docs/m5-integration-plan.md, section 3.4). Not applied yet, so not yet tested against an API
+# server: the acceptance tests of section 11 exercise it (a patch of the wrong shape, sent as
+# the writer, must be denied and leave the Deployment's generation unchanged).
+#
+# patch on a Deployment can do more than a rollback or a restart: it can change the image,
+# the command, the mounts or the identity a pod runs with. RBAC cannot see inside a patch, so
+# the API server evaluates these rules on every UPDATE of a Deployment by recap-writer or
+# recap-scenario (a server-side dry run included) and refuses the change when one fails. The
+# administrator's own changes are not matched. ValidatingAdmissionPolicy is stable since
+# Kubernetes 1.30; a policy only takes effect through a binding with validationActions [Deny].
+#
+# What a rollback (`kubectl rollout undo`), a restart (`kubectl rollout restart`) and the
+# scenario's image change all pass: the same replica count, the five demo images (each
+# container its own service's image), no command or args, no init containers, no volumes, and
+# the namespace's default ServiceAccount with no token mounted. Pod Security "restricted" on
+# the namespace still refuses a privileged pod whatever the template says.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: recap-writes-keep-their-shape
+  labels: {app.kubernetes.io/part-of: recap-m5}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [UPDATE]
+        resources: [deployments]
+  matchConditions:
+    - name: recap-identities-only
+      expression: >-
+        request.userInfo.username in [
+          'system:serviceaccount:recap-system:recap-writer',
+          'system:serviceaccount:recap-system:recap-scenario']
+  validations:
+    - expression: object.spec.replicas == oldObject.spec.replicas
+      message: "RECAP may not scale a Deployment"
+    - expression: >-
+        object.spec.template.spec.containers.all(c,
+          c.image.matches('^recap-demo/(frontend|backend):v[0-9]+[.][0-9]+[.][0-9]+$'))
+      message: "only RECAP demo images with a vX.Y.Z tag"
+    # Only the images setup.sh loads into the node: with imagePullPolicy IfNotPresent, any other
+    # tag would make the node try to pull it from a public registry.
+    - expression: >-
+        object.spec.template.spec.containers.all(c, c.image in [
+          'recap-demo/frontend:v1.0.0',
+          'recap-demo/backend:v1.0.0',
+          'recap-demo/backend:v1.1.0',
+          'recap-demo/backend:v1.1.1',
+          'recap-demo/backend:v1.2.0'])
+      message: "only the five demo images loaded into the node"
+    - expression: >-
+        object.spec.template.spec.containers.all(c,
+          c.image.startsWith('recap-demo/' + c.name + ':'))
+      message: "each container runs its own service's image"
+    - expression: >-
+        object.spec.template.spec.containers.all(c, !has(c.command) && !has(c.args))
+      message: "RECAP may not change the command a container runs"
+    - expression: "!has(object.spec.template.spec.initContainers)"
+      message: "RECAP may not add init containers"
+    - expression: "!has(object.spec.template.spec.volumes)"
+      message: "RECAP may not mount volumes (a Secret, for example)"
+    - expression: >-
+        !has(object.spec.template.spec.serviceAccountName) &&
+        has(object.spec.template.spec.automountServiceAccountToken) &&
+        object.spec.template.spec.automountServiceAccountToken == false
+      message: "demo pods keep the namespace's default ServiceAccount, with no token mounted"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: recap-writes-keep-their-shape
+  labels: {app.kubernetes.io/part-of: recap-m5}
+spec:
+  policyName: recap-writes-keep-their-shape
+  validationActions: [Deny]

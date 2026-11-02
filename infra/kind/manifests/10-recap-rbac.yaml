@@ -1,0 +1,182 @@
+# RECAP's four Kubernetes identities (docs/m5-integration-plan.md, section 3.4). Not applied yet.
+#
+# Each is a ServiceAccount in recap-system, bound by a Role in recap-demo only: no ClusterRole,
+# no ClusterRoleBinding, nothing in any other namespace, no Secrets, no ConfigMaps, no
+# pods/exec, pods/portforward or proxies, no wildcards. RECAP never uses the administrator's
+# credential; mint-tokens.sh writes a short-lived kubeconfig per identity.
+#
+#   recap-reader    the seven read tools (MCP server)       get, list: pods, events,
+#                                                           deployments, replicasets; get: pods/log
+#   recap-writer    execute_authorized only (MCP server)    get, patch: deployments frontend and
+#                                                           backend; list: replicasets
+#   recap-oracle    the recovery oracle (controller)        get, list: deployments, pods
+#   recap-scenario  reset and fault injection (controller   get, patch: the two deployments;
+#                   and infra/kind/scripts)                 list: replicasets, pods
+#
+# RECAP's two writes, `kubectl rollout undo` and `kubectl rollout restart`, are each one
+# `patch` on a Deployment. patch can also change the image, so the admission policy in
+# 20-recap-admission-policy.yaml checks the shape of every change these identities make.
+#
+# Kill switch (with the administrator credential): deleting the recap-writer RoleBinding makes
+# the API server refuse every later write; deleting the ServiceAccount also ends its tokens.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: recap-reader
+  namespace: recap-system
+  labels: {app.kubernetes.io/part-of: recap-m5, recap.dev/identity: reader}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: recap-writer
+  namespace: recap-system
+  labels: {app.kubernetes.io/part-of: recap-m5, recap.dev/identity: writer}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: recap-oracle
+  namespace: recap-system
+  labels: {app.kubernetes.io/part-of: recap-m5, recap.dev/identity: oracle}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: recap-scenario
+  namespace: recap-system
+  labels: {app.kubernetes.io/part-of: recap-m5, recap.dev/identity: scenario}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: recap-reader
+  namespace: recap-demo
+  labels: {app.kubernetes.io/part-of: recap-m5}
+rules:
+  - apiGroups: [""]
+    resources: [pods, events]
+    verbs: [get, list]
+  # `kubectl get events` reads the core events; the same events through the events.k8s.io API
+  # are allowed too, read-only, so a client that prefers that API is not refused.
+  - apiGroups: [events.k8s.io]
+    resources: [events]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: recap-writer
+  namespace: recap-demo
+  labels: {app.kubernetes.io/part-of: recap-m5}
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [frontend, backend]
+    verbs: [get, patch]
+  # `kubectl rollout undo` lists the Deployment's ReplicaSets to find the revision to restore.
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: recap-oracle
+  namespace: recap-demo
+  labels: {app.kubernetes.io/part-of: recap-m5}
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: recap-scenario
+  namespace: recap-demo
+  labels: {app.kubernetes.io/part-of: recap-m5}
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [frontend, backend]
+    verbs: [get, patch]
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [list]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: recap-reader
+  namespace: recap-demo
+  labels: {app.kubernetes.io/part-of: recap-m5}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: recap-reader
+subjects:
+  - kind: ServiceAccount
+    name: recap-reader
+    namespace: recap-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: recap-writer
+  namespace: recap-demo
+  labels: {app.kubernetes.io/part-of: recap-m5}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: recap-writer
+subjects:
+  - kind: ServiceAccount
+    name: recap-writer
+    namespace: recap-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: recap-oracle
+  namespace: recap-demo
+  labels: {app.kubernetes.io/part-of: recap-m5}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: recap-oracle
+subjects:
+  - kind: ServiceAccount
+    name: recap-oracle
+    namespace: recap-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: recap-scenario
+  namespace: recap-demo
+  labels: {app.kubernetes.io/part-of: recap-m5}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: recap-scenario
+subjects:
+  - kind: ServiceAccount
+    name: recap-scenario
+    namespace: recap-system

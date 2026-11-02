@@ -1,0 +1,31 @@
+# Kind configuration for RECAP's M5 demo cluster (infra/kind/README.md). Not applied yet.
+#
+#   kind create cluster --name recap-m5 --config infra/kind/cluster.yaml \
+#     --kubeconfig ~/.config/recap/kind/admin.kubeconfig        (setup.sh does this)
+#
+# One node runs everything. The API server and the three NodePorts listen on 127.0.0.1 only:
+# Kind's default for extraPortMappings is 0.0.0.0, which would put the demo on the local
+# network. The node image is kind v0.33.0's default, pinned by digest
+# (docs/m5-integration-plan.md, section 7.1). Kind picks a free host port for the API server
+# and writes it into the admin kubeconfig.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: recap-m5
+networking:
+  apiServerAddress: "127.0.0.1"  # Kind's default too; written down so it can never drift
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+    extraPortMappings:
+      - containerPort: 30080  # frontend Service: the user path RECAP's oracle probes
+        hostPort: 30080
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+      - containerPort: 30081  # backend Service: the report burst and direct checks
+        hostPort: 30081
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+      - containerPort: 30090  # Prometheus: RECAP's fixed, read-only metric queries
+        hostPort: 30090
+        listenAddress: "127.0.0.1"
+        protocol: TCP

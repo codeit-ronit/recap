@@ -1,4 +1,4 @@
-# `infra/` — how RECAP runs (V1) and how it would be hosted later (not done)
+# `infra/`: how RECAP runs (V1), its local Kind demo (M5, files only) and later hosting (not done)
 
 ## V1: everything is local, nothing is deployed
 
@@ -13,13 +13,32 @@
 V1 makes **no cloud calls, no paid API calls, and needs no Kubernetes or GPU**. The optional
 Anthropic provider only runs if you explicitly select it and supply your own API key.
 
-A Docker/Compose setup is **not included**: it could not be tested on the build machine, and an
-untested container recipe would be a false claim. It is listed in the V2 backlog.
+A Docker/Compose setup for RECAP itself is **not included**: it could not be tested on the build
+machine, and an untested container recipe would be a false claim. It is listed in the V2 backlog.
 
-## Later (V2+): a real benchmark host — plan only, nothing provisioned
+## M5: a local Kind cluster as a real target (files only, nothing run yet)
 
-The plan for running RECAP against SREGym on a Kubernetes-in-Docker (Kind) cluster is in
-[`docs/benchmark-plan.md`](../docs/benchmark-plan.md). The hosting rules that plan follows:
+[`infra/kind/`](kind/README.md) holds everything M5's first real target needs, as files: the
+Kind cluster config (one node, the API server and every host port on 127.0.0.1), a
+standard-library demo program with two services and deliberate defects, its Dockerfile, the
+manifests (Pod Security `restricted`, RECAP's four least-privilege identities, the admission
+policy, a small Prometheus, a traffic generator) and the owner's scripts to set up, inspect,
+break, reset and delete it. The plan behind it is
+[`docs/m5-integration-plan.md`](../docs/m5-integration-plan.md), sections 3 and 4.
+
+**No cluster exists yet, and no image was built.** `kind`, `kubectl` and a running container
+engine are not installed on the build machine; installing them waits for the owner's
+approval. The demo program and the manifests are checked offline by
+`tests/unit/test_kind_demo_app.py` and `tests/unit/test_kind_manifests.py`. The cluster's
+credentials (the administrator and RECAP's four kubeconfigs, the recorded CA fingerprint)
+will live in `~/.config/recap/kind/`, outside the repository, and are never committed.
+
+## Later (V2+): a real benchmark host (plan only, nothing provisioned)
+
+The plan for running RECAP against SREGym is in
+[`docs/benchmark-plan.md`](../docs/benchmark-plan.md) and
+[`docs/m5-integration-plan.md`](../docs/m5-integration-plan.md) (sections 6 and 8). The hosting
+rules those plans follow:
 
 1. **Explicit owner consent before any provisioning.** No script in this repo creates cloud resources.
 2. **Check before spending:** the account's EC2 quotas, whether promotional credits actually apply

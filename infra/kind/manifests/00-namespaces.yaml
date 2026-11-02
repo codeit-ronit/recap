@@ -1,0 +1,33 @@
+# The two namespaces of RECAP's Kind demo (infra/kind/README.md). Not applied yet.
+#
+#   recap-demo    the two demo services: the only place RECAP's identities have permissions
+#   recap-system  RECAP's four ServiceAccounts (no pods use them), Prometheus and the traffic
+#                 generator: environment plumbing RECAP's identities cannot touch
+#
+# Both enforce Pod Security "restricted" (no privileged pods, whoever asks), pinned to the
+# policy version of the node image's Kubernetes minor version, and audit and warn the same.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: recap-demo
+  labels:
+    app.kubernetes.io/part-of: recap-m5
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.37
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.37
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.37
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: recap-system
+  labels:
+    app.kubernetes.io/part-of: recap-m5
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.37
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.37
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.37

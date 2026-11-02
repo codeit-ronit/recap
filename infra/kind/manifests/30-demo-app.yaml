@@ -1,0 +1,163 @@
+# The two demo services RECAP may observe and change (infra/kind/README.md). Not applied yet.
+#
+#   frontend  GET / calls http://backend.recap-demo.svc.cluster.local/items;
+#             Service port 80, NodePort 30080 (127.0.0.1:30080 on the Mac)
+#   backend   GET /items and GET /report; Service port 80, NodePort 30081 (127.0.0.1:30081)
+#
+# Cautious on purpose: two replicas each; a rolling update starts one new pod and stops an
+# old one only once the new one is ready (maxSurge 1, maxUnavailable 0); a stuck rollout is
+# reported after 60 s; five old revisions are kept for rollbacks. Every pod meets Pod Security
+# "restricted": a numeric non-root user, no privilege escalation, every capability dropped, the
+# runtime's default seccomp profile, a read-only root filesystem, no ServiceAccount token.
+#
+# The images are built locally and loaded into the node (setup.sh); IfNotPresent means the
+# node never pulls them, and the admission policy keeps RECAP's identities on those five tags.
+# The role and the version are baked into each image, so a rollback that changes the image
+# changes the behaviour too. kubernetes.io/change-cause names each release; RECAP reads it as
+# a deployment's change summary. recap.dev/depends-on is how RECAP learns the dependency.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: recap-demo
+  labels: {app: frontend, app.kubernetes.io/part-of: recap-m5}
+  annotations:
+    kubernetes.io/change-cause: "release v1.0.0"
+    recap.dev/depends-on: "backend"
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  progressDeadlineSeconds: 60
+  selector:
+    matchLabels: {app: frontend}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  template:
+    metadata:
+      labels: {app: frontend, app.kubernetes.io/part-of: recap-m5}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 10
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: frontend
+          image: recap-demo/frontend:v1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 8080, protocol: TCP}
+          env:
+            - name: BACKEND_URL
+              value: "http://backend.recap-demo.svc.cluster.local"
+            - name: MEMORY_LIMIT_BYTES
+              valueFrom:
+                resourceFieldRef: {containerName: frontend, resource: limits.memory}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 250m, memory: 128Mi}
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            initialDelaySeconds: 1
+            periodSeconds: 2
+            timeoutSeconds: 1
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: recap-demo
+  labels: {app: backend, app.kubernetes.io/part-of: recap-m5}
+  annotations:
+    kubernetes.io/change-cause: "release v1.0.0"
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  progressDeadlineSeconds: 60
+  selector:
+    matchLabels: {app: backend}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  template:
+    metadata:
+      labels: {app: backend, app.kubernetes.io/part-of: recap-m5}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 10
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: backend
+          image: recap-demo/backend:v1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 8080, protocol: TCP}
+          env:
+            # The readiness rule (refuse traffic above 90% of this limit) and the report-cache
+            # leak are measured against the container's own memory limit.
+            - name: MEMORY_LIMIT_BYTES
+              valueFrom:
+                resourceFieldRef: {containerName: backend, resource: limits.memory}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 250m, memory: 128Mi}
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            initialDelaySeconds: 1
+            periodSeconds: 2
+            timeoutSeconds: 1
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: recap-demo
+  labels: {app: frontend, app.kubernetes.io/part-of: recap-m5}
+spec:
+  type: NodePort
+  selector: {app: frontend}
+  ports:
+    - {name: http, port: 80, targetPort: http, nodePort: 30080, protocol: TCP}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: recap-demo
+  labels: {app: backend, app.kubernetes.io/part-of: recap-m5}
+spec:
+  type: NodePort
+  selector: {app: backend}
+  ports:
+    - {name: http, port: 80, targetPort: http, nodePort: 30081, protocol: TCP}

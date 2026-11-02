@@ -1,0 +1,56 @@
+# The traffic generator: a steady ~5 requests a second to the frontend Service, so error rates
+# and latencies are measured on real requests, as users would send them (infra/kind/README.md).
+# Not applied yet.
+#
+# It is the demo program in its third role (DEMO_SERVICE=traffic), run from the frontend
+# image, which never changes: no other image, nothing to pull, and its code is tested with the
+# rest of the program. It lives in recap-system, where RECAP's identities have no permissions,
+# so no agent can see or stop it, and it sends no item ids: the frontend picks them in turn,
+# as it does for any caller. Every 60 s it logs how many requests it sent and how many failed.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traffic
+  namespace: recap-system
+  labels: {app: traffic, app.kubernetes.io/part-of: recap-m5}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels: {app: traffic}
+  template:
+    metadata:
+      labels: {app: traffic, app.kubernetes.io/part-of: recap-m5}
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: traffic
+          image: recap-demo/frontend:v1.0.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: DEMO_SERVICE, value: traffic}
+            - {name: TRAFFIC_TARGET, value: "http://frontend.recap-demo.svc.cluster.local/"}
+            - {name: TRAFFIC_RPS, value: "5"}
+          ports:
+            - {name: http, containerPort: 8080, protocol: TCP}
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 64Mi}
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}

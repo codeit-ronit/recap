@@ -1,0 +1,3 @@
+# The build context is the program and nothing else (no caches, no editor files).
+*
+!demo_app.py
