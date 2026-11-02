@@ -890,7 +890,8 @@ that belong to another mechanism are reported, never used) and **allowlisted lea
 is trusted prompt text, so it names only allowlisted services). The fixes most likely to help
 a model on the cross-service incident change prompts, so they wait for a future prompt
 version (they would invalidate the owner-approved recording). Scripted baselines: 0 of 51
-runs differ (memory off and on). [ADR 0021](decisions/0021-evidence-rules-settle-disagreements-never-votes.md)
+runs differ with memory off, 0 of 34 with memory on. The full analysis, run by run with
+counterfactuals: [m4-failure-analysis.md](m4-failure-analysis.md). [ADR 0021](decisions/0021-evidence-rules-settle-disagreements-never-votes.md)
 decision 10.
 
 **Two live runs under M4** (local `qwen3:8b`, prompts-v4.7, simulated environment, simulation

@@ -5073,7 +5073,7 @@ allowlisted services.
 
 **The idea most worth understanding: fix the system, not the test case.** Every change had to
 be generic (it fires on held-out services and phrasings, and must not fire where it should
-not), leave the scripted baselines identical (0 of 51 runs differ) and leave both committed
+not), leave the scripted baselines identical (0 of 51 runs differ with memory off, 0 of 34 with memory on) and leave both committed
 recordings replayable. The changes most likely to help on the failed incident change the
 prompts; they would invalidate the owner-approved recording, so they wait for a new prompt
 version instead of being slipped in. A live run under M4 then failed the same way as in M3,

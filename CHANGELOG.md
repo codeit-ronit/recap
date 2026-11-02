@@ -112,7 +112,8 @@ cluster: Kubernetes and SREGym are M5, and only planned.
 - Dashboard: 494 tests, `tsc --noEmit` and a build; the browser smoke test passed 72 of 72
   checks on the seeded demo data (nine pages at 1440 and 390 px; the replay, approval and
   RESOLVED flow, confirmed by the API).
-- Scripted baselines: 0 of 51 runs differ (memory off and on) after the M4.5 verifier change.
+- Scripted baselines: 0 of 51 runs differ with memory off and 0 of 34 with memory on after the
+  M4.5 verifier change ([docs/m4-failure-analysis.md](docs/m4-failure-analysis.md)).
 
 ## [0.4.0] — 2026-10-25 — M3: real multi-agent intelligence, RAG and episodic memory
 
