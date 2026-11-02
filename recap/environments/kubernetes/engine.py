@@ -658,31 +658,35 @@ class KubernetesEnvironment(TargetEnvironment):
         )
 
     async def _await_monitoring(self, services: list[str]) -> None:
-        """Wait, bounded, until Prometheus itself shows the error rate the probe measured, for at
-        least one service the probe saw failing (a real alert fires on one expression over the
-        monitoring system's own data; a service with no ready pod never counts the requests it
-        refuses, so it cannot be required). Declaring the incident before the first scrape
-        hands the agents a platform view that still reads healthy: the first live runs met an
-        error-rate series of zeros seven seconds after the bad release, so the verifier rightly
-        rejected a correct dependency claim. On timeout the run goes on with what the platform
-        shows."""
+        """Wait, bounded, until Prometheus itself shows the errors the probe measured, as a real
+        alert fires on the monitoring system's own data. Each service the probe saw failing
+        must either show an error rate at or above the threshold, or be unobservable (no
+        number: no request reaches a service with no ready pod, so it counts nothing it
+        refuses). Declaring the incident earlier hands the agents a platform view that still
+        reads healthy: the first live runs met an error-rate series of zeros seven seconds after
+        the bad release, while the release's new pods had not been scraped twice and the old
+        pods' successes still filled the rate window, so the verifier rightly rejected a correct
+        dependency claim. On timeout the run goes on with what the platform shows."""
         timeout = self.options.monitoring_timeout_seconds
         if not services or timeout <= 0:
             return
         deadline = time.monotonic() + timeout
         prometheus = self._prometheus()
-        while True:
+        pending = list(services)
+        while pending:
             end = utcnow()
-            for service in services:
+            still: list[str] = []
+            for service in pending:
                 try:
                     points = await prometheus.range(
                         "error_rate", service, end - timedelta(seconds=60), end, 15
                     )
                 except MetricsUnavailable:
-                    continue
-                if points and points[-1].value >= ERROR_RATE_THRESHOLD:
-                    return
-            if time.monotonic() >= deadline:
+                    continue  # no number: nothing reaches it, so it cannot show the errors
+                if not points or points[-1].value < ERROR_RATE_THRESHOLD:
+                    still.append(service)
+            pending = still
+            if not pending or time.monotonic() >= deadline:
                 return
             await asyncio.sleep(self.options.alert_poll_seconds)
 

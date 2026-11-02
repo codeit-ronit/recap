@@ -31,6 +31,37 @@ Nothing below claims a live result unless it says where it ran.
   proposed. SREGym: not feasible on this Mac (it needs 8 vCPU, 16 GB RAM and 100 GB of
   disk); an AWS VM is proposed.
 
-**Next**
-- The Kubernetes environment adapter (offline-tested with a fake client) and the Kind demo
-  app, manifests and scripts are being built; both need no cluster.
+**Then** (commits `cd23dcf`, `fce55f5`, `0b01cfa`): the Kubernetes environment adapter behind
+`TargetEnvironment` (typed kubectl operations, a fake cluster for offline tests, a Kind target
+profile) and the Kind demo app, manifests and scripts. Offline: 383 Kind-related tests passed.
+
+## W2: a real Kind cluster (2026-11-02)
+
+**Approved by the owner:** `brew install kind kubernetes-cli` (kind 0.33.0, kubectl 1.37.2) and
+a dedicated colima profile `recap-m5` (4 CPU, 4 GiB, 20 GiB); the owner's default profile is
+untouched.
+
+**Verified on the real cluster** (commit `bf8057f`): `setup.sh` created the cluster and
+deployed frontend, backend, Prometheus and the traffic generator (frontend 20 of 20 requests
+answered); the four least-privilege identities' tokens are accepted. bad-release: 10 of 40
+frontend requests failed, Prometheus 5xx share 0.199; reset: 0 of 40. injected-logs: 9 of 40
+failed, the planted line in the backend's logs; reset: 0 of 40. Node container 742 MiB of
+3.8 GiB.
+
+## W3: authorization, permissions and recovery on the real cluster (2026-11-02)
+
+**Found by the first live acceptance run** (1 of 6 passed) and fixed (`512a07d` and the next
+commit): kubectl 1.37's `rollout restart` has no `--dry-run` (a restart is now the patch that
+command makes, which a server-side dry run accepts); the alert fired before Prometheus had
+scraped the errors, so the verifier saw a healthy platform and rightly refused the diagnosis
+(reset now waits until each failing service shows its errors in Prometheus or cannot be
+observed).
+
+**Verified on the real cluster:** all six live acceptance tests pass
+(`tests/e2e/test_kind_live.py`, `RECAP_LIVE_KIND=1`, scripted policy): reads are real and change
+nothing; a bad release is rolled back only after an exact approval and the oracle verifies the
+recovery; a rejected proposal changes nothing (BLOCKED); a restart fixes a full memory only
+when readiness says so; the scripted pipeline resolves the report burst; the write boundary
+holds for a direct MCP caller.
+
+**Next:** W4, a real `qwen3:8b` investigation on the cluster with the owner approving the fix.
