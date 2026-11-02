@@ -359,6 +359,23 @@ def _overlays(root: Path) -> list[Path]:
     return [(folder if folder.is_absolute() else root / folder).resolve() for folder in folders]
 
 
+def _target_overlays(config_dir: Path, target: str | None, root: Path) -> tuple[list[Path], str]:
+    """A target profile's own knowledge overlays (configs/targets/<name>/knowledge.yaml:
+    `overlays`, folders repo-relative or absolute), and that file's text for the config hash
+    ("" when the profile has none). Only a profile that runs against its own kind of system
+    adds runbooks; the simulator's index stays as it is."""
+    if not target:
+        return [], ""
+    path = config_dir / "targets" / target / "knowledge.yaml"
+    if not path.is_file():
+        return [], ""
+    folders = _read_yaml(path).get("overlays") or []
+    if not isinstance(folders, list) or not all(isinstance(f, str) and f for f in folders):
+        raise ConfigError(f"targets/{target}/knowledge.yaml: 'overlays' must list folders")
+    resolved = [(Path(f) if Path(f).is_absolute() else root / f).resolve() for f in folders]
+    return resolved, path.read_text(encoding="utf-8")
+
+
 def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -393,7 +410,8 @@ def load_settings(
     raw = {name: _read_yaml(path) for name, path in files.items()}
     # Exactly the files read, in a fixed order (unchanged from before profiles existed).
     texts = "".join(files[name].read_text(encoding="utf-8") for name in CONFIG_FILES)
-    config_hash = sha256_hex(texts)[:16]
+    target_overlays, knowledge_text = _target_overlays(config_dir, target or None, root)
+    config_hash = sha256_hex(texts + knowledge_text)[:16]
 
     data_dir = Path(data_dir or os.environ.get("RECAP_DATA_DIR") or root / "data")
     if not data_dir.is_absolute():
@@ -402,7 +420,9 @@ def load_settings(
         root=root,
         data_dir=data_dir,
         knowledge_dir=root / "fixtures" / "knowledge",
-        knowledge_overlays=_overlays(root),
+        # The profile's folders first, then RECAP_KNOWLEDGE_OVERLAYS; a folder named by both
+        # is read once (a folder listed twice is refused by the index).
+        knowledge_overlays=list(dict.fromkeys([*target_overlays, *_overlays(root)])),
         traces_dir=data_dir / "traces",
         sandbox_dir=data_dir / "sandbox",
         recap_db=data_dir / "recap.db",

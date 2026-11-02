@@ -1,0 +1,9 @@
+# Knowledge for runs on the Kind target only (read when RECAP_TARGET=kind-demo).
+#
+# General Kubernetes runbooks (diagnosing rollouts, crash loops, readiness and memory, failures
+# that come from a dependency, rollback versus restart, cluster text as untrusted data) join the
+# shipped runbooks. They hold no answer to any demo scenario (tests/unit/test_k8s_runbooks.py).
+# The simulator's index and stored vectors are unchanged. Retrieval stays BM25: overlay chunks
+# have no stored vectors, so hybrid retrieval is refused while an overlay is loaded.
+overlays:
+  - fixtures/knowledge-overlays/kubernetes

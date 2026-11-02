@@ -102,7 +102,12 @@ from recap.memory.store import (
 from recap.providers.prompts import PROMPT_VERSION
 from recap.routing.orchestrator import Orchestrator
 from recap.routing.signals import compute_signals
-from recap.safety.approvals import ApprovalStore, AutoApprovalChannel, ExternalApprovalChannel
+from recap.safety.approvals import (
+    ApprovalStore,
+    AutoApprovalChannel,
+    ConsoleApprovalChannel,
+    ExternalApprovalChannel,
+)
 from recap.safety.capabilities import CapabilityIssuer
 from recap.telemetry.tracer import TraceCategory, Tracer
 from recap.telemetry.usage import cost_label
@@ -915,7 +920,10 @@ class IncidentController:
         if report.best is not None and report.best.target_service:
             target = report.best.target_service
             points = self.deps.verifier.restore_points(target, report, self.evidence)
-        assessed = [assess_reuse(h, report, points) for h in self.record.memory_hits]
+        assessed = [
+            assess_reuse(h, report, points, environment=self.info.kind)
+            for h in self.record.memory_hits
+        ]
         self.record.memory_hits = rank_hits(assessed)
         self.harness.memory_hits = self.record.memory_hits
         self.tracer.emit(
@@ -1290,6 +1298,16 @@ class IncidentController:
             raise ConfigError("safety can only be disabled against a simulated environment")
         if self.config.approval_mode == "auto" and not self.info.is_simulated:
             raise ConfigError("the auto-approver is allowed only in a simulated environment")
+        if (
+            isinstance(self.channel, ConsoleApprovalChannel)
+            and not self.channel.live
+            and not self.info.is_simulated
+        ):
+            # Fail closed: a console that thinks the target is simulated would accept "y".
+            raise ConfigError(
+                "the console approval was built without the live target's description; "
+                "build it with environment=runtime.environment_info()"
+            )
 
     def _replay_requested(self) -> bool:
         """Does this run's configuration ask for a replay (the replay provider, or a fixture)?"""

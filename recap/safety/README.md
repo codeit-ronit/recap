@@ -82,6 +82,18 @@ An approval is never general consent. It allows **one** action, once:
 * **Who decided** is the authenticated operator for the API (`operator:<name>`, from the
   bearer token; see `apps/api/auth.py`), `console-user` for the terminal and
   `auto-approver[simulation]` for the simulation-only auto-approver.
+* **No anonymous approval on a live target** (M5). On a target that is not simulated (the
+  local Kind cluster), the console accepts only the target service's exact name as a "yes":
+  `y` is a rejection there. It also records this machine's login name
+  (`getpass.getuser()`) with its decision, as local evidence, in `approval_logins`: an
+  append-only table keyed by the decision-log entry and written in the same transaction
+  (`ApprovalStore.local_logins(proposal_id)`). The entry's own text says only "login name
+  kept in the local decision log": traces, the API and exports read `approval_events`
+  alone, so the name never leaves the machine. (The export's last gate would not catch a
+  one-word login name written as text, and would refuse a whole export over a name of
+  several parts; `tests/unit/test_console_approval_live.py` exports a live run with both
+  kinds of name.) A live request with no login name to record, or whose proposal is not the
+  one its digest names, is rejected without asking.
 * **The write boundary checks it too.** After consuming the approval, the gateway signs a
   single-use capability for exactly the approved action (`capabilities.py`); the environment
   refuses any write without one (audit finding 2.5).
@@ -89,7 +101,7 @@ An approval is never general consent. It allows **one** action, once:
 | Channel | Who decides | Notes |
 |---|---|---|
 | `AutoApprovalChannel` | nobody (simulation only) | raises `ConfigError` unless the environment is simulated |
-| `ConsoleApprovalChannel` | whoever answers at an interactive terminal (recorded as `console-user`: a terminal and a timing, not a person) | shows the exact action, target, params, evidence IDs and digest prefix; only `y`/`yes` approves; control characters in planner text are stripped |
+| `ConsoleApprovalChannel` | whoever answers at an interactive terminal (recorded as `console-user`: a terminal and a timing, not a person) | shows the exact action, target, params, evidence IDs and digest prefix; on a simulated target only `y`/`yes` approves; built with `environment=<EnvironmentInfo>` of a target that is not simulated, it marks the target LIVE, only the target service's exact name approves, and the OS login name is kept locally (see above); input typed before the prompt is discarded; control characters in planner text are stripped |
 | `ExternalApprovalChannel` | a human in the dashboard | the API calls `ApprovalStore.decide`; the waiter is woken in-process or by polling |
 
 ## Red team
@@ -135,5 +147,11 @@ first matters: a secret cut in half by truncation would no longer match. See
 * Approvals live in a local SQLite file and `actor` is a label: V1 does not authenticate who
   approved. Anyone who can write that file could forge an approval. The API/UI layer would need
   real authentication before this could protect anything beyond a local prototype.
+* The console's login name on a live target is local evidence, not authentication: it comes
+  from the process's environment (`LOGNAME`, `USER`, ...) or the password database, which the
+  person running RECAP controls, and typing a service's name proves attention, not identity.
+  The console only knows the target is live when its caller passes the environment
+  (`scripts/demo.py` must pass `environment=runtime.environment_info()`); without it, the
+  console keeps the simulator's `y`/`yes`.
 * Code running inside the RECAP process can bypass Python-level boundaries; V1 assumes a
   single-user, local deployment.

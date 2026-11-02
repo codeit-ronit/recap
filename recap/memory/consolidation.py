@@ -123,7 +123,11 @@ class Consolidator:
     def _provenance(
         self, record: RunRecord, simulated: bool, environment_kind: str
     ) -> dict[str, Any]:
-        """Where the episode came from, so it can always be audited and reproduced."""
+        """Where the episode came from, so it can always be audited and reproduced.
+
+        `environment` (the adapter's kind) also scopes memory: a search reads only episodes
+        from its own incident's kind of target (store.episode_environment).
+        """
         info = record.provider_info
         retrieval = record.retrieval
         return {

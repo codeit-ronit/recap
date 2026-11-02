@@ -9,7 +9,9 @@ RECAP has two kinds of "context from the past", and they are kept apart on purpo
 | Search | BM25 over text (or hybrid with a local embedder) | deterministic word overlap + service match; with an embedder, semantic recall can add close paraphrases |
 | Trust | untrusted text with citations | untrusted historical data, never instructions |
 
-In V1 every episode comes from the **simulated** environment, and its provenance says so.
+Until M5 every episode came from the **simulated** environment, and its provenance says so.
+Since M5 a run can act on a real local Kind cluster too, and each kind of target keeps its
+own experience (see "Environments" below).
 
 ## Where it sits in a run
 
@@ -61,6 +63,36 @@ and in the stored episode; nothing else about it changes. Each move is recorded 
 (`deterministic-scripted-policy`), and every episode since M3 (whose partition its run
 chose), never move. Opening the file again moves nothing more.
 
+## Environments: each kind of target has its own experience
+
+Partitions say *whose* experience a run reads; the environment says *where* it happened.
+Every episode's provenance names the kind of target its run acted on
+(`{"simulated": true, "environment": "simulated"}`, or `{"simulated": false, "environment":
+"kind"}` for the local Kind cluster). A search reads only episodes from the incident's own
+kind (`MemoryQuery.environment`, which `MemoryQuery.from_incident` takes from
+`Incident.environment`, the adapter's `describe().kind`):
+
+| Run on | Finds episodes from | Never finds |
+|---|---|---|
+| the simulator (`simulated`) | the simulator, and every episode that names no environment | a Kind cluster's (or any other target's) episodes |
+| the Kind cluster (`kind`) | Kind runs only | the simulator's episodes, however alike they read |
+
+A rollback that fixed the simulated shop says nothing about a real Deployment's revisions,
+and a cluster's timing says nothing about the simulator, so neither can make the other's
+incident look familiar (routing) or offer it a fix (the scripted policy's memory option).
+
+- **Legacy episodes count as simulated.** An episode whose provenance has no `environment`
+  (every episode before M5 was simulated; the red-team fixture's planted one names none) is
+  read as `simulated`. One that says `"simulated": false` but names no kind matches no run.
+- **The simulator is unchanged.** Its incidents are `simulated` and so are all of its
+  episodes, so its hits, similarities and reuse verdicts are exactly what they were.
+- **Reuse can check it again.** `assess_reuse(..., environment=<kind>)` marks an episode
+  from another kind of target not safe ("the past run acted on another kind of target
+  (simulated, not kind)"). `search` already filters, so this is a second check for a
+  caller holding hits from elsewhere.
+- **Not a partition.** The environment filter applies on top of the partitions: a scripted
+  run on Kind still reads TRAIN + DEMO, but only those partitions' Kind episodes.
+
 ## Similarity (`similarity.py`)
 
 ```
@@ -102,7 +134,9 @@ this run's evidence, `assess_reuse(hit, report, restore_points)` marks a hit saf
 5. the remembered fix still fits today's evidence: a rollback restores one of today's
    `restore_points` (the versions the verifier finds in this run's evidence, the same rule
    as VP4), and not the release diagnosed as bad now. A remembered rollback that names no
-   plain release cannot be checked, so it does not pass.
+   plain release cannot be checked, so it does not pass,
+6. when the caller passes `environment=<kind>` (the run's environment kind): the past run
+   acted on the same kind of target (search already guarantees it; see "Environments").
 
 A high similarity never outweighs a failed condition. Each checked hit lists the
 conditions that held (`supporting`) and those against reuse (`contradicting`), and its
@@ -147,6 +181,7 @@ episode summarizes its run by deterministic extraction from RECAP's own records
 | A held-out test scenario finding its own past runs | `Consolidator.build_episode` never builds an episode from a test scenario, whatever partition the run writes to, so even a demo or API run of one leaves nothing for later runs to reuse (the controller traces this as `memory.skip`) |
 | Demo runs leaking into evaluation | `eval_train()` and `eval_test()` never read DEMO or LIVE episodes |
 | A real model's experience mixing with the scripted policy's | model runs read and write LIVE, scripted runs DEMO; neither reads the other's (episodes written before M3 are moved, see above) |
+| A simulated fix offered to a real cluster, or a cluster's to the simulator | `search` reads only episodes from the incident's environment kind (an episode naming none counts as simulated); `assess_reuse(..., environment=...)` checks it again |
 | A replay counted as new experience | a replay never writes memory |
 | Agent text claiming success | `outcome=success` needs `verified=True` from the oracle; `add` rejects anything else |
 | A crash or a cancellation remembered as experience | the controller does not consolidate a run that ended by an error or a cancellation (traced as `memory.skip`) |
@@ -172,12 +207,14 @@ store = ExperienceStore(settings.paths.memory_db)
 # A run reads and writes its own kind of memory: the scripted policy DEMO, a real model LIVE.
 access = MemoryAccess.for_origin(provider.info.origin)
 
+# The query carries the incident's environment kind: only that kind's episodes are read.
 hits = store.search(MemoryQuery.from_incident(incident), access)
 conflict = memory_conflict(hits, settings.budget.routing.conflict_similarity)
 # ... investigate, then verify this run's evidence ...
 target = report.best.target_service if report.best else None
 points = verifier.restore_points(target, report, registry) if target else None
-hits = rank_hits([assess_reuse(hit, report, points) for hit in hits])
+kind = incident.environment
+hits = rank_hits([assess_reuse(hit, report, points, environment=kind) for hit in hits])
 
 # Raises ValueError for an unfinished run or a held-out test scenario.
 episode = Consolidator().build_episode(
@@ -192,8 +229,8 @@ stored = store.add(episode, access)  # False when this run may not write memory
 ```
 
 The memory code never imports an environment. It only sees `RunRecord`, `Evidence` and the
-environment's `kind` label, so swapping the simulator for a SREGym/Kubernetes adapter does not
-change this package.
+environment's `kind` label (which also scopes every search), so swapping the simulator for a
+SREGym/Kubernetes adapter does not change this package.
 
 ## Limitations (V1) and planned upgrades
 

@@ -16,6 +16,7 @@ from recap.core.errors import ConfigError
 from recap.core.models import IncidentState, RunConfig
 from recap.harness.controller import HOSTED_ON_LIVE_ENV
 from recap.providers.deterministic import DeterministicProvider
+from recap.safety.approvals import ConsoleApprovalChannel
 from tests.e2e.test_golden_replay import not_simulated
 from tests.llm_fakes import OperatorApproves
 
@@ -73,3 +74,17 @@ async def test_a_local_model_or_the_scripted_policy_still_runs_there(
         approval_channel=OperatorApproves(runtime.approvals),
     )
     assert record.state == IncidentState.RESOLVED, record.error
+
+
+async def test_a_console_that_does_not_know_the_target_is_live_is_refused(
+    settings: Settings, tmp_path: Path
+) -> None:
+    """Fail closed: such a console would accept a plain "y" for a live write."""
+    state = tmp_path / "state"
+    runtime = not_simulated(settings, state)
+    blind = ConsoleApprovalChannel(runtime.approvals)  # no environment given
+    with pytest.raises(ConfigError, match="live target's description"):
+        await runtime.run_incident("fake-bad-release", RunConfig(), approval_channel=blind)
+    assert not state.exists() and runtime.runs.list(10) == []
+    informed = ConsoleApprovalChannel(runtime.approvals, environment=runtime.environment_info())
+    assert informed.live

@@ -59,6 +59,7 @@ def test_the_profile_replaces_environment_policies_and_budget_only(
     assert kind_settings.target == "kind-demo"
     assert kind_settings.agents == settings.agents and kind_settings.providers == settings.providers
     texts = "".join(files[name].read_text(encoding="utf-8") for name in CONFIG_FILES)
+    texts += (profile / "knowledge.yaml").read_text(encoding="utf-8")  # the profile's runbooks
     assert kind_settings.config_hash == sha256_hex(texts)[:16] != settings.config_hash
 
 
@@ -162,3 +163,17 @@ def test_configured_kind_is_the_active_adapter_with_its_own_oracle(kind_settings
     assert components["environment"]["status"] == "active"
     assert "NOT simulated" in components["environment"]["detail"]
     assert summary["versions"]["policy_version"] == "policy-kind-v1"
+
+
+def test_the_kind_profile_reads_its_kubernetes_runbooks_and_the_default_does_not(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("RECAP_KNOWLEDGE_OVERLAYS", raising=False)
+    default = load_settings()
+    kind = load_settings(target="kind-demo")
+    assert default.paths.knowledge_overlays == []
+    assert [p.name for p in kind.paths.knowledge_overlays] == ["kubernetes"]
+    assert kind.config_hash != default.config_hash  # the profile's knowledge file is hashed
+    # Named by the profile and by RECAP_KNOWLEDGE_OVERLAYS: read once (the index refuses twice).
+    monkeypatch.setenv("RECAP_KNOWLEDGE_OVERLAYS", "fixtures/knowledge-overlays/kubernetes")
+    assert len(load_settings(target="kind-demo").paths.knowledge_overlays) == 1

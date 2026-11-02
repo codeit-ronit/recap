@@ -13,6 +13,10 @@ A high score only means the incidents *look* alike. Whether the past fix is safe
 reuse is decided later, against live evidence (see `assess_reuse` in store.py).
 Since M3 the store also compares stored incident embeddings, but only to add candidates
 after the lexical hits (see store.py); this lexical score stays the one that decides.
+
+The environment is not part of the score: since M5 it is a hard filter. A query names the
+kind of target its incident happened on, and only episodes from that same kind are
+compared at all (store.episode_environment).
 """
 
 from __future__ import annotations
@@ -25,6 +29,9 @@ from recap.core.models import Contract, ExperienceEpisode, Incident
 
 SYMPTOM_WEIGHT = 0.7
 SERVICE_WEIGHT = 0.3
+# The simulator's environment kind. Every episode before M5 came from it, and a query that
+# names no environment is one of its incidents.
+SIMULATED = "simulated"
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
 
@@ -58,6 +65,10 @@ class MemoryQuery(Contract):
     service: str  # primary alerted service
     affected_services: list[str] = Field(default_factory=list)
     symptoms: list[str]
+    # The kind of target the incident happened on ("simulated", "kind", ...). Memory
+    # compares only episodes from the same kind: what fixed the simulator says nothing
+    # about a real cluster, and the other way round.
+    environment: str = SIMULATED
 
     @classmethod
     def from_incident(cls, incident: Incident) -> MemoryQuery:
@@ -66,6 +77,7 @@ class MemoryQuery(Contract):
             service=incident.service,
             affected_services=list(incident.affected_services),
             symptoms=list(incident.symptoms),
+            environment=incident.environment,
         )
 
 

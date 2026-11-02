@@ -22,6 +22,11 @@ Three rules keep memory honest:
      moves the episodes a real model made to LIVE and records each move (`partition_moves`).
   3. Success needs proof. An episode can be stored as SUCCESS only if the independent
      recovery oracle verified it. Failed runs are kept as cautionary cases.
+  4. Each kind of target has its own experience (M5). An episode is a hit only for an
+     incident on the same environment kind as the run that made it (its provenance's
+     "environment"; an episode without one counts as simulated, as every episode before M5
+     was): a Kind cluster run never finds the simulator's episodes, and the simulator never
+     finds a cluster's. `assess_reuse` can check the same thing again for its caller.
 
 Search uses word overlap (`similarity`, which routing and the scripted policy use) and,
 when the run embeds its incident, a semantic signal that can only ADD candidates: after
@@ -57,7 +62,7 @@ from recap.core.models import (
     VerificationReport,
 )
 from recap.knowledge.embeddings import cosine
-from recap.memory.similarity import MemoryQuery, episode_similarity
+from recap.memory.similarity import SIMULATED, MemoryQuery, episode_similarity
 
 ALL_PARTITIONS = tuple(MemoryPartition)
 UNCHECKED_REASON = "similar symptoms; not yet checked against live evidence"
@@ -252,13 +257,21 @@ class ExperienceStore:
     ) -> list[MemoryHit]:
         """Up to `k` readable episodes at least `min_similarity` alike, most similar first.
 
+        Only episodes from the query's environment kind are read (`episode_environment`).
         With `query_vector` (the incident embedded by `embedding_model`), up to `k` more
         follow: episodes embedded by the same model whose cosine is at least
         SEMANTIC_RECALL and that the list does not hold yet, closest first. Every hit starts
         as "similar but unchecked" (safe_to_reuse=False). Only `assess_reuse` can mark it
         safe, after comparing it with live evidence.
         """
-        candidates = self._select(access.readable_partitions, created_before=access.created_before)
+        candidates = [
+            episode
+            for episode in self._select(
+                access.readable_partitions, created_before=access.created_before
+            )
+            # Experience from another kind of target is never a hit, however alike it reads.
+            if episode_environment(episode) == query.environment
+        ]
         hits: list[MemoryHit] = []
         close: dict[str, float] = {}  # episode ID -> cosine, for each semantic match to recall
         for episode in candidates:
@@ -322,7 +335,11 @@ class ExperienceStore:
 
 
 def assess_reuse(
-    hit: MemoryHit, report: VerificationReport, restore_points: Sequence[str] | None = None
+    hit: MemoryHit,
+    report: VerificationReport,
+    restore_points: Sequence[str] | None = None,
+    *,
+    environment: str | None = None,
 ) -> MemoryHit:
     """Decide whether a *similar* past episode is also *safe to reuse* today.
 
@@ -331,10 +348,18 @@ def assess_reuse(
     the fix that worked were both on it), and the remembered fix still fits today's
     evidence. For a rollback that means its version is one of today's `restore_points`
     (the versions the deployment evidence or a dry run names) and not the release
-    diagnosed as bad. A high similarity never outweighs a failed condition. Returns a new
-    hit; the one passed in is not changed.
+    diagnosed as bad. With `environment` (this run's environment kind), the episode must
+    also come from that kind of target; `search` already returns only those, so this is a
+    second check for a caller that has hits from elsewhere. A high similarity never
+    outweighs a failed condition. Returns a new hit; the one passed in is not changed.
     """
     supporting, contradicting = _conditions(hit, report, restore_points)
+    past = episode_environment(hit.episode)
+    if environment is not None and past != environment:
+        contradicting.append(
+            f"the past run acted on another kind of target ({_shown(past or 'unknown')}, "
+            f"not {_shown(environment)})"
+        )
     live = report.best.mechanism if report.best is not None else None
     mechanism_match = live is not None and live == hit.episode.failure_mechanism
     safe = not contradicting
@@ -375,6 +400,20 @@ def memory_conflict(hits: Sequence[MemoryHit], threshold: float) -> bool:
     mechanisms = {hit.episode.failure_mechanism for hit in close} - {None}
     outcomes = {hit.outcome for hit in close}
     return len(mechanisms) > 1 or len(outcomes) > 1
+
+
+def episode_environment(episode: ExperienceEpisode) -> str:
+    """The kind of target the episode's run acted on ("simulated", "kind", ...).
+
+    Read from its provenance's "environment". Without one it counts as simulated: every
+    episode before M5 was, and the red-team fixture's planted episode names none. One that
+    says it was not simulated but names no kind has no kind at all ("") and matches no run.
+    """
+    provenance = episode.provenance
+    kind = provenance.get("environment")
+    if isinstance(kind, str) and kind:
+        return kind
+    return "" if provenance.get("simulated") is False else SIMULATED
 
 
 # --- helpers ---------------------------------------------------------------------------

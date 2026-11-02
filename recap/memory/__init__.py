@@ -3,7 +3,8 @@
 Kept separate from the runbook RAG index (generic knowledge). A finished run is stored
 as one episode, with its own kind (scripted runs in DEMO, real models in LIVE), unless
 memory writes are off (as for a replay), the run crashed, or the scenario is a held-out
-test case; for a new incident, similar episodes are retrieved.
+test case; for a new incident, similar episodes from the same kind of environment (the
+simulator, a Kind cluster, ...) are retrieved.
 
     similarity.py     word-overlap score between an incident and a past episode
     store.py          SQLite ExperienceStore, partition rules (MemoryAccess), search, reuse checks

@@ -326,7 +326,12 @@ async def main() -> int:
 
     await ensure_prerequisites(runtime, scenario, config, provider.info, sink)
     sink.started = time.perf_counter()
-    channel = ConsoleApprovalChannel(runtime.approvals) if args.approve == "ask" else None
+    # The console must know when the target is live: there it asks for the service's name.
+    channel = (
+        ConsoleApprovalChannel(runtime.approvals, environment=runtime.environment_info())
+        if args.approve == "ask"
+        else None
+    )
     record = await runtime.run_incident(scenario.id, config, approval_channel=channel)
     expected = expected_state(scenario, record.config)
     print_summary(record, expected, runtime, sink.cost)
