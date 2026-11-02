@@ -525,6 +525,12 @@ class KubeClient(ABC):
         finally:
             self._audit(command, code, stdout, error, started)
         if code != 0:
+            if "must be logged in" in (error or "") or "Unauthorized" in (error or ""):
+                # 401: the identity's short-lived token expired or was revoked (not a 403).
+                raise KubeError(
+                    f"kubectl {op.value}: the {self.identity} token was refused (expired or "
+                    "revoked); mint new ones with infra/kind/scripts/mint-tokens.sh"
+                )
             raise KubeError(f"kubectl {op.value} failed (exit {code}): {error or 'no message'}")
         return stdout
 

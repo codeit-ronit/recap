@@ -22,8 +22,10 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import json
 import re
 import stat
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -144,3 +146,26 @@ def _check_credential(who: str, user: dict[str, Any]) -> None:
         raise PreflightError(f"{who} uses a client certificate, not a ServiceAccount token")
     if not (user.get("token") or user.get("tokenFile")):
         raise PreflightError(f"{who} holds no ServiceAccount token")
+    _check_expiry(who, user.get("token"))
+
+
+# Tokens are minted short-lived on purpose (infra/kind/scripts/mint-tokens.sh); say so plainly
+# before kubectl answers with a bare "You must be logged in to the server".
+REMINT = "mint new ones with infra/kind/scripts/mint-tokens.sh"
+
+
+def _check_expiry(who: str, token: object, *, margin_seconds: float = 60.0) -> None:
+    """Refuse a ServiceAccount token whose own `exp` claim has passed (or is about to). Only
+    the claim is read, never the signature (the API server checks that) and never printed; an
+    opaque or unreadable token is left to the API server."""
+    if not isinstance(token, str) or token.count(".") != 2:
+        return
+    body = token.split(".")[1]
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+    except (ValueError, binascii.Error):
+        return
+    expires = claims.get("exp") if isinstance(claims, dict) else None
+    if isinstance(expires, int | float) and expires < time.time() + margin_seconds:
+        minutes = max(0, round((time.time() - expires) / 60))
+        raise PreflightError(f"{who}'s token expired {minutes} min ago: {REMINT}")

@@ -24,6 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # allow running without install
 
+from recap.core.errors import ConfigError
 from recap.core.models import (
     EnvironmentInfo,
     EpisodeOutcome,
@@ -33,6 +34,7 @@ from recap.core.models import (
     ScenarioInfo,
     TraceEvent,
 )
+from recap.environments.kubernetes.kubectl import KubeError
 from recap.memory.store import MemoryAccess
 from recap.runtime import Runtime
 from recap.safety.approvals import ConsoleApprovalChannel
@@ -332,7 +334,13 @@ async def main() -> int:
         if args.approve == "ask"
         else None
     )
-    record = await runtime.run_incident(scenario.id, config, approval_channel=channel)
+    try:
+        record = await runtime.run_incident(scenario.id, config, approval_channel=channel)
+    except (ConfigError, KubeError, RuntimeError) as exc:
+        # Refused before the run started (a target's preflight or reset, the safety scope):
+        # nothing was changed, so say why in one line instead of a traceback.
+        print(f"refused before the run started: {exc}", file=sys.stderr)
+        return 2
     expected = expected_state(scenario, record.config)
     print_summary(record, expected, runtime, sink.cost)
     return 0 if record.state.value == expected else 1

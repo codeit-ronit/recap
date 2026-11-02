@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -195,3 +197,25 @@ def test_both_fingerprint_conventions_of_one_certificate_are_accepted() -> None:
     pem = ca_certificate()
     der = x509.load_pem_x509_certificate(pem).fingerprint(hashes.SHA256()).hex()
     assert ca_fingerprints(pem) == {der, hashlib.sha256(pem).hexdigest()}
+
+
+def _jwt(claims: dict[str, object]) -> str:
+    """A token shaped like a ServiceAccount JWT, built at run time (no key shape in this file)."""
+
+    def part(value: dict[str, object]) -> str:
+        raw = json.dumps(value).encode()
+        return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+    return ".".join([part({"alg": "RS256"}), part(claims), "c2lnbmF0dXJl"])
+
+
+def test_an_expired_token_is_refused_with_the_command_that_renews_it() -> None:
+    from recap.environments.kubernetes.preflight import _check_expiry
+
+    now = time.time()
+    with pytest.raises(PreflightError, match=r"expired \d+ min ago: mint new ones"):
+        _check_expiry("recap-reader", _jwt({"exp": int(now - 3600)}))
+    with pytest.raises(PreflightError, match="expired"):  # about to expire counts too
+        _check_expiry("recap-reader", _jwt({"exp": int(now + 10)}))
+    _check_expiry("recap-reader", _jwt({"exp": int(now + 3600)}))  # valid: no error
+    _check_expiry("recap-reader", "an-opaque-token")  # not a JWT: left to the API server
