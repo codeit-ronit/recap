@@ -40,10 +40,7 @@ KIND_HOME="${RECAP_KIND_HOME:-$HOME/.config/recap/kind}"
 # public) leaves the user's own ~/.docker untouched, whatever credential store it names.
 export DOCKER_HOST="${RECAP_DOCKER_HOST:-unix://$HOME/.colima/recap-m5/docker.sock}"
 unset DOCKER_CONTEXT
-export DOCKER_CONFIG="$KIND_HOME/docker-client"
-if [[ ! -f "$DOCKER_CONFIG/config.json" ]]; then
-  (umask 077 && mkdir -p "$DOCKER_CONFIG" && printf '{}\n' >"$DOCKER_CONFIG/config.json")
-fi
+export DOCKER_CONFIG="$KIND_HOME/docker-client"  # created by check_kind_home, after its checks
 ADMIN_KUBECONFIG="$KIND_HOME/admin.kubeconfig"
 CA_FINGERPRINT_FILE="$KIND_HOME/ca.sha256"
 
@@ -108,6 +105,10 @@ check_kind_home() {
   case "$physical/" in
     "$REPO_ROOT"/*) die "the credentials folder $KIND_HOME is inside the repository: choose another RECAP_KIND_HOME" ;;
   esac
+  # Only now, with the folder known to be safe: the private Docker client configuration.
+  if [[ ! -f "$DOCKER_CONFIG/config.json" ]]; then
+    (umask 077 && mkdir -p "$DOCKER_CONFIG" && printf '{}\n' >"$DOCKER_CONFIG/config.json")
+  fi
 }
 
 sha256_hex() {

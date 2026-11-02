@@ -643,6 +643,8 @@ class KubernetesEnvironment(TargetEnvironment):
                     "fault steps were applied; the fault did not take visible effect"
                 )
             await asyncio.sleep(self.options.alert_poll_seconds)
+        failing = [s for s, result in probes.items() if result.error_rate >= rule.error_rate]
+        await self._await_monitoring(failing)
         affected = [s for s in self.services if s in fired]
         primary = rule.service if rule.service in fired else affected[0]
         ordered = [primary, *(s for s in affected if s != primary)]
@@ -654,6 +656,35 @@ class KubernetesEnvironment(TargetEnvironment):
             fired_at=utcnow(),
             metadata={"source": SOURCE, "namespace": self.namespace},
         )
+
+    async def _await_monitoring(self, services: list[str]) -> None:
+        """Wait, bounded, until Prometheus itself shows the error rate the probe measured, for at
+        least one service the probe saw failing (a real alert fires on one expression over the
+        monitoring system's own data; a service with no ready pod never counts the requests it
+        refuses, so it cannot be required). Declaring the incident before the first scrape
+        hands the agents a platform view that still reads healthy: the first live runs met an
+        error-rate series of zeros seven seconds after the bad release, so the verifier rightly
+        rejected a correct dependency claim. On timeout the run goes on with what the platform
+        shows."""
+        timeout = self.options.monitoring_timeout_seconds
+        if not services or timeout <= 0:
+            return
+        deadline = time.monotonic() + timeout
+        prometheus = self._prometheus()
+        while True:
+            end = utcnow()
+            for service in services:
+                try:
+                    points = await prometheus.range(
+                        "error_rate", service, end - timedelta(seconds=60), end, 15
+                    )
+                except MetricsUnavailable:
+                    continue
+                if points and points[-1].value >= ERROR_RATE_THRESHOLD:
+                    return
+            if time.monotonic() >= deadline:
+                return
+            await asyncio.sleep(self.options.alert_poll_seconds)
 
     # ==================================================================================
     # The write

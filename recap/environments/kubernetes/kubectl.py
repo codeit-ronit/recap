@@ -72,6 +72,8 @@ class KubeOp(StrEnum):
 
 
 WRITE_OPS = frozenset({KubeOp.ROLLOUT_UNDO, KubeOp.ROLLOUT_RESTART, KubeOp.SET_IMAGE})
+# The pod-template annotation `kubectl rollout restart` sets (its value is the request time).
+RESTARTED_AT = "kubectl.kubernetes.io/restartedAt"
 _READS = frozenset(
     {
         KubeOp.LIST_DEPLOYMENTS,
@@ -226,10 +228,7 @@ def build_command(
         values = {"name": name, "revision": revision, "dry_run": dry_run}
         return Command(op, (*undo, *_dry(dry_run)), values)
     if op == KubeOp.ROLLOUT_RESTART:
-        name = check_name(params.get("name"), "deployment")
-        dry_run = bool(params.get("dry_run"))
-        restart = ("rollout", "restart", f"deployment/{name}", "-o", "json")
-        return Command(op, (*restart, *_dry(dry_run)), {"name": name, "dry_run": dry_run})
+        return _restart_command(params)
     if op == KubeOp.SET_IMAGE:
         return _set_image_command(params, repository, services)
     raise KubeError(f"refused: unknown operation {_shown(op)}")  # pragma: no cover
@@ -238,6 +237,27 @@ def build_command(
 def _dry(dry_run: bool) -> tuple[str, ...]:
     """A server-side dry run passes RBAC and admission without saving anything."""
     return ("--dry-run=server",) if dry_run else ()
+
+
+def _restart_command(params: Mapping[str, Any]) -> Command:
+    """What `kubectl rollout restart` does, written as the patch it sends: a new value of the pod
+    template's restartedAt annotation starts a rolling replacement. kubectl 1.37's `rollout
+    restart` has no --dry-run (found on the live cluster), and a write must pass a server-side
+    dry run first. The time comes from RECAP's own clock, never from a model."""
+    name = check_name(params.get("name"), "deployment")
+    at = params.get("restarted_at")
+    if not isinstance(at, datetime):
+        raise KubeError("refused: a restart needs the time it is requested")
+    moment = (at if at.tzinfo else at.replace(tzinfo=UTC)).astimezone(UTC)
+    stamp = moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+    patch = {
+        "spec": {"template": {"metadata": {"annotations": {RESTARTED_AT: stamp}}}},
+    }
+    body = json.dumps(patch, sort_keys=True, separators=(",", ":"))
+    dry_run = bool(params.get("dry_run"))
+    tail = ("patch", "deployment", name, "--type=strategic", "-p", body, "-o", "json")
+    values = {"name": name, "restarted_at": stamp, "dry_run": dry_run}
+    return Command(KubeOp.ROLLOUT_RESTART, (*tail, *_dry(dry_run)), values)
 
 
 def _logs_command(params: Mapping[str, Any]) -> Command:
@@ -452,8 +472,11 @@ class KubeClient(ABC):
         text = await self._run(KubeOp.ROLLOUT_UNDO, name=name, revision=revision, dry_run=dry_run)
         return parse_object(text, KubeOp.ROLLOUT_UNDO, {"Deployment"})
 
-    async def rollout_restart(self, name: str, *, dry_run: bool) -> dict[str, Any]:
-        text = await self._run(KubeOp.ROLLOUT_RESTART, name=name, dry_run=dry_run)
+    async def rollout_restart(
+        self, name: str, *, dry_run: bool, restarted_at: datetime | None = None
+    ) -> dict[str, Any]:
+        at = restarted_at or datetime.now(UTC)
+        text = await self._run(KubeOp.ROLLOUT_RESTART, name=name, dry_run=dry_run, restarted_at=at)
         return parse_object(text, KubeOp.ROLLOUT_RESTART, {"Deployment"})
 
     async def set_image(

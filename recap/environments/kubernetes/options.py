@@ -126,6 +126,8 @@ class KindOptions(Contract):
     calm_timeout_seconds: float = Field(420.0, gt=0)
     baseline_margin_seconds: float = Field(120.0, ge=0, le=3600)
     alert_poll_seconds: float = Field(3.0, gt=0)
+    # After the probe fires: how long to wait for Prometheus to show the same errors (0: no wait).
+    monitoring_timeout_seconds: float = Field(120.0, ge=0)
     lease_seconds: float = Field(3600.0, gt=0)
     max_clock_skew_seconds: float = Field(5.0, gt=0)
     write_switch_file: str | None = None

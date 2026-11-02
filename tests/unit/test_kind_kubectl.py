@@ -106,9 +106,27 @@ def test_writes_are_typed_and_the_dry_run_is_server_side() -> None:
         "--dry-run=server",
     )
     assert undo.writes and undo.dry_run
-    restart = build_command(KubeOp.ROLLOUT_RESTART, name="frontend", dry_run=False)
-    assert restart.tail == ("rollout", "restart", "deployment/frontend", "-o", "json")
-    assert restart.writes and not restart.dry_run
+    at = datetime(2026, 11, 2, 12, 45, 23, tzinfo=UTC)
+    restart = build_command(KubeOp.ROLLOUT_RESTART, name="frontend", dry_run=True, restarted_at=at)
+    # `kubectl rollout restart` has no --dry-run in 1.37 (seen on the live cluster): the same
+    # change is sent as the patch that command makes, which a server-side dry run accepts.
+    annotation = {"kubectl.kubernetes.io/restartedAt": "2026-11-02T12:45:23Z"}
+    body = json.dumps({"spec": {"template": {"metadata": {"annotations": annotation}}}})
+    body = body.replace(" ", "")  # compact, as the command builder writes it
+    assert restart.tail == (
+        "patch",
+        "deployment",
+        "frontend",
+        "--type=strategic",
+        "-p",
+        body,
+        "-o",
+        "json",
+        "--dry-run=server",
+    )
+    assert restart.writes and restart.dry_run
+    with pytest.raises(KubeError, match="needs the time"):
+        build_command(KubeOp.ROLLOUT_RESTART, name="frontend", dry_run=False)
 
 
 def test_set_image_is_a_fixed_patch_of_one_demo_image() -> None:
