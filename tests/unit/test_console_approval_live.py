@@ -547,4 +547,9 @@ async def test_an_export_of_a_live_run_approved_at_the_console_holds_no_login_na
             assert spelled.lower() not in text.lower(), name
     # The export still says how the approval was given, and that a login was kept locally.
     assert "typed the target service's name" in texts["README.md"]
+    # It names what kind of target the run worked on: never "a simulated scenario" here.
+    assert "on a real cluster (`live`: real faults, reads and writes, not production)" in (
+        texts["README.md"]
+    )
+    assert "simulated scenario" not in texts["README.md"]
     assert "login name kept in the local decision log" in texts["trace.jsonl"]

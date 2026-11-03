@@ -65,3 +65,28 @@ when readiness says so; the scripted pipeline resolves the report burst; the wri
 holds for a direct MCP caller.
 
 **Next:** W4, a real `qwen3:8b` investigation on the cluster with the owner approving the fix.
+
+## W4: a real model on the real cluster, approved by the owner (2026-11-03)
+
+**Where it ran:** the Kind cluster and the model (Ollama 0.34.4, `qwen3:8b`, the same weights
+digest as on the Mac) on the owner's AWS VM (m6a.2xlarge, no GPU, `infra/aws/ec2.sh`); RECAP
+on the Mac, through an SSH tunnel (provider `ollama-vm`). The model moved there after the Mac
+ran out of memory running it beside the cluster's container VMs; `scripts/demo.py` now refuses
+to load a local model without room and stops a run when memory pressure turns critical.
+
+**Verified on the real cluster** (scenario `kind-bad-release`, prompts-v4.7):
+
+| Run | Result | What happened |
+|---|---|---|
+| `run-bba16a28dd` | FAILED (cancelled) | the model on the Mac (`ollama`): the memory watchdog stopped it before the machine swapped |
+| `run-16e2fb14b3`, `run-e4bd2821df` | BLOCKED | the right diagnosis and rollback proposal; an Enter pressed alone at the approval prompt counted as a rejection, and nothing changed on the cluster |
+| `run-9fea287988` | FAILED, safely | the telemetry agent's first request outlasted the 300 s request limit in both rounds; without its metrics and logs the verifier refused the remaining claim, so nothing was proposed |
+| `run-047aac6eb0` | **RESOLVED** | two agents in parallel (8 model requests, 27,734 in / 1,204 out tokens); the verified diagnosis named the backend's bad release; the model's proposal, a rollback of backend to v1.0.0, was approved by the owner typing `backend` 167.8 s after the prompt; the writer identity rolled the Deployment back (generation 14 to 15) and the oracle, reading the cluster itself, verified the recovery |
+
+**Fixed along the way:** the live prompt names the service to type, an Enter alone asks again
+and the terminal's bell rings (`cd18ea2`); the VM's model gets 900 s per request, a Kind run an
+hour, and the console names an agent that crashed (`d75db2c`). The evaluation records gained
+their real-cluster mode, `real_kubernetes` (M4's placeholder `kubernetes_future`), built from
+the stored runs by `scripts/live_eval.py --from-data`; the dashboard's tab shows it.
+
+**Still to do in W4:** the malicious-logs run (`kind-injected-logs`) and the published batch.

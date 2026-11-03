@@ -5,15 +5,19 @@ anyone can check what happened:
 
 - `trace.jsonl`: every trace event, in order;
 - `run.json`: the final run record;
-- `recording.jsonl`: every HTTP exchange with the model server (it replays offline);
+- `recording.jsonl`: every HTTP exchange with the model server (a simulated run's recording
+  replays offline; a run on a real cluster's is evidence only, since a replay is refused there);
 - `README.md`: a readable account built only from those files and the approval log.
 
-Every run used the **simulated** environment: nothing here touched a real system. Every run
-cost $0. Each is one run of one scenario, so together they show that the real-model path
-works, not how often a model is right.
+Every run but one used the **simulated** environment. The 2026-11-03 run worked on a **real
+Kubernetes cluster**: RECAP's two-service Kind demo cluster on the owner's VM, with a real
+fault and a real write, not production. No model request was paid for. Each is one run of
+one scenario, so together they show that the real-model path works, not how often a model
+is right.
 
 | Folder | Model | Prompts | Approved by | Outcome |
 |---|---|---|---|---|
+| [`2026-11-03-qwen3-8b-kind-human-approved-prompts-v4.7/`](2026-11-03-qwen3-8b-kind-human-approved-prompts-v4.7/README.md) | `qwen3:8b` on the owner's VM (Ollama 0.34.4, weights `sha256:a3de86cd…`), **two specialists in parallel**, **a real Kind cluster** | prompts-v4.7 | **the owner, at an interactive terminal, typing the service's name** (the log: "typed the target service's name; answered after 167.8 s") | RESOLVED, oracle verified on the cluster |
 | [`2026-10-25-qwen3-8b-human-approved-unfamiliar-prompts-v4.7/`](2026-10-25-qwen3-8b-human-approved-unfamiliar-prompts-v4.7/README.md) | `qwen3:8b`, local (Ollama 0.34.4, weights `sha256:a3de86cd…`), **two specialists in parallel** | prompts-v4.7 | **the owner, at an interactive terminal** (the log: "interactive terminal; answered after 162.5 s") | RESOLVED, oracle verified |
 | [`2026-10-21-qwen3-8b-human-approved-prompts-v4.2/`](2026-10-21-qwen3-8b-human-approved-prompts-v4.2/README.md) | `qwen3:8b`, local (Ollama 0.34.4, weights `sha256:a3de86cd…`) | prompts-v4.2 | **the owner, at an interactive terminal** (the log: "interactive terminal; answered after 175.9 s") | RESOLVED, oracle verified |
 | [`2026-10-21-qwen3-8b-human-approved-prompts-v4.1/`](2026-10-21-qwen3-8b-human-approved-prompts-v4.1/README.md) | `qwen3:8b`, local (Ollama 0.34.4) | prompts-v4.1 | the owner, at the terminal (53.4 s after the request) | RESOLVED, oracle verified |
@@ -21,6 +25,23 @@ works, not how often a model is right.
 
 ## What each run shows
 
+- **The 2026-11-03 run is the M5 deliverable (W4).** The target was a real Kubernetes cluster
+  (Kind, namespace `recap-demo`): frontend calls backend, and backend's release v1.1.0 raises
+  a KeyError for part of its requests, so the frontend answers HTTP 502. Two specialists
+  investigated side by side through RECAP's typed read tools (health, error-rate metrics from
+  Prometheus, deployments, Kubernetes events, logs), 8 model requests, 27,734 input / 1,204
+  output tokens. The verifier supported a bad deployment of backend v1.1.0; the model proposed
+  rolling backend back to v1.0.0. On a live target the console accepts no `y`: the owner
+  typed the target service's name, 167.8 s after the prompt appeared. The gateway used that
+  single-use approval for exactly that proposal, the writer identity (a ServiceAccount that may
+  only read and patch the two demo Deployments and list their ReplicaSets) rolled backend back
+  (generation 14 to 15), and the oracle, reading
+  the cluster itself (rollout, readiness, an HTTP probe), verified the recovery: backend's
+  error rate 0.3 to 0.0. It does not show a rate: the attempts before it ended BLOCKED twice
+  (an Enter pressed alone at a prompt that did not yet name the word to type) and FAILED once,
+  safely (a model request outlasted its time limit, so the evidence stayed insufficient); see
+  [docs/m5-progress.md](../../docs/m5-progress.md). Its recording cannot be replayed: a
+  replay is refused against a live target.
 - **The v4.7 run is the M3 deliverable.** The incident is `m3-inventory-leak-behind-frontend`,
   held out from everything RECAP was built or tuned on: the alert names frontend, two calls
   away from the cause; the logs are written in another client library's style; and a

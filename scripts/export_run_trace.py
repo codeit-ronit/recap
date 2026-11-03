@@ -512,11 +512,19 @@ def _scope(
 ) -> list[str]:
     """What this run does and does not show."""
     config = record.config
+    target = record.environment
+    live = target is not None and not target.is_simulated
+    what = (
+        f"one scenario ({_code(record.scenario_id)}) on a real cluster "
+        f"({_code(target.kind)}: real faults, reads and writes, not production)"
+        if target is not None and live
+        else f"one simulated scenario ({_code(record.scenario_id)})"
+    )
     lines = [
         "## Scope and caveats",
         "",
-        f"- One run of one simulated scenario ({_code(record.scenario_id)}): it shows that the "
-        "path works end to end, not how often the model is right.",
+        f"- One run of {what}: it shows that the path works end to end, not how often the "
+        "model is right.",
         "- Memory: " + ("read" if config.use_memory else "not read (memory off for this run)"),
     ]
     docs = sorted(
@@ -565,7 +573,13 @@ def _scope(
             f"({_code(str(record.versions.get('prompt_version')))}); after a prompt change a "
             "replay stops with ReplayMismatch instead of guessing."
         )
-        if _had_parallel_round(events):
+        if live:
+            replay = (
+                "- The recording keeps the model's answers as its server sent them, as evidence; "
+                "it cannot be replayed: a replay is refused against a live target, and its "
+                "prompts hold the real cluster's answers, which the simulator would not give."
+            )
+        elif _had_parallel_round(events):
             replay += (
                 " This run had a parallel round: each specialist's prompts hold only its own "
                 "view of the round, and requests are matched by what they say, not by order, "
