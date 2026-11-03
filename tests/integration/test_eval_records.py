@@ -644,8 +644,7 @@ def test_the_published_batches_cover_each_implemented_mode() -> None:
     batches = find_batches([PUBLISHED_DIR])
     assert len(batches) == len(published())  # every file loads
     modes = {b.mode for b in batches}
-    assert {"scripted_regression", "offline_replay", "real_llm"} <= modes
-    assert modes <= set(get_args(EvalMode))
+    assert modes == set(get_args(EvalMode))  # since M5 every mode has a published batch
 
 
 @pytest.mark.parametrize("path", published(), ids=lambda p: p.parent.name)
