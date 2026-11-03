@@ -416,8 +416,12 @@ class _Observations:
             return []
         for _, snapshot in snapshots:
             ready = snapshot.replicas > 0 and snapshot.ready_replicas >= snapshot.replicas
-            slow = not snapshot.latency_p95_ms <= slo  # NaN counts as not healthy
-            if snapshot.status != "Running" or not ready or snapshot.error_rate > threshold or slow:
+            # NaN counts as not healthy; None (a target without request metrics) is not a
+            # reading at all, so status and readiness decide alone.
+            latency, errors = snapshot.latency_p95_ms, snapshot.error_rate
+            slow = latency is not None and not latency <= slo
+            failing = errors is not None and not errors <= threshold
+            if snapshot.status != "Running" or not ready or failing or slow:
                 return []
         if any(not p.value <= threshold for _, series in rates for p in series.points):
             return []

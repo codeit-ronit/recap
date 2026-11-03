@@ -219,8 +219,14 @@ def _health(snapshot: HealthSnapshot, alert: datetime | None, limit: int) -> lis
     return [
         f"Health of {snapshot.service} at {_stamp(snapshot.observed_at, alert)}: "
         f"{snapshot.status}, {snapshot.ready_replicas}/{snapshot.replicas} replicas ready, "
-        f"error rate {_num(snapshot.error_rate)}, p95 latency {_num(snapshot.latency_p95_ms)} ms"
+        f"error rate {_measured(snapshot.error_rate)}, "
+        f"p95 latency {_measured(snapshot.latency_p95_ms, ' ms')}"
     ]
+
+
+def _measured(value: float | None, unit: str = "") -> str:
+    """A measured number, or that this target does not measure it."""
+    return "not measured on this target" if value is None else f"{_num(value)}{unit}"
 
 
 def _deployments(listing: DeploymentList, alert: datetime | None, limit: int) -> list[str]:

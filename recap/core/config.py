@@ -105,7 +105,10 @@ class AgentSpec(Contract):
 class ArgRule(Contract):
     """Validation rule for one tool argument (see configs/policies.yaml)."""
 
-    type: Literal["service", "namespace", "version", "int", "enum", "string"]
+    # "version": a vX.Y.Z release; "release": any container image tag, for a target whose
+    # images carry date or commit tags (SREGym). Either is only a key into a Deployment's own
+    # revision history: the adapter restores the image that revision ran.
+    type: Literal["service", "namespace", "version", "release", "int", "enum", "string"]
     required: bool = True
     min: int | None = None
     max: int | None = None

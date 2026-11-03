@@ -4,7 +4,9 @@ No I/O here: every function takes the parsed objects kubectl printed and returns
 from recap/core/observations.py (or the facts the adapter builds them from). The rules
 that need care on a real cluster (the M5 audit's gotchas) live here, each next to its why:
 
-* versions are image tags in the vX.Y.Z form; any other tag reads as "unknown";
+* versions are image tags: in the vX.Y.Z form on the demo cluster (any other tag reads as
+  "unknown"), or, on a target whose images carry other release tags (SREGym's hotel
+  reservation: date and commit tags, each pinned by a digest), the tag itself ("tag" format);
 * "BackOff" keeps its meaning in RECAP's conventions (recap/core/signals.py counts it as
   memory evidence, because in the simulator it always follows an out-of-memory kill).
   Kubernetes uses that one reason for every back-off, so a pod that cannot pull its image
@@ -14,9 +16,11 @@ that need care on a real cluster (the M5 audit's gotchas) live here, each next t
 * "OOMKilled" is not an Event reason: it lives in a container's last termination state. The
   adapter reports it as a ClusterEvent whose message says it was read from pod status, so
   nothing is presented as an event the API never stored;
-* log levels are read from the demo app's line format ("<time>Z <LEVEL> <message>"), with
-  WARNING -> WARN and FATAL/CRITICAL/PANIC -> ERROR; a line in another format keeps its text
-  at level INFO, with the kubelet's timestamp;
+* log levels are read from the line format "<time>Z <LEVEL> <message>" (the demo app's, and
+  zerolog's console format, whose levels are three letters), with WARNING/WRN -> WARN,
+  FATAL/CRITICAL/PANIC/FTL/PNC -> ERROR and TRC/DBG/INF mapped alike; a line in another
+  format keeps its text at level INFO, with the kubelet's timestamp;
+* terminal colour codes are removed from log text (zerolog's console writer adds them);
 * every timestamp is UTC.
 """
 
@@ -39,6 +43,14 @@ from recap.environments.kubernetes.options import DNS_LABEL
 DEPENDS_ON = "recap.dev/depends-on"  # set by the demo manifests: Kubernetes knows no dependencies
 UNKNOWN_VERSION = "unknown"
 MAX_MESSAGE_CHARS = 2000
+
+# How a target names its releases: "semver" (vX.Y.Z tags, the demo cluster) or "tag" (any
+# image tag, also when a digest pins it). A release is only ever a key into a Deployment's own
+# revision history: an approved rollback restores the image that revision ran, never an image
+# composed from the key.
+ReleaseFormat = Literal["semver", "tag"]
+# A container image tag (the reference grammar of the OCI distribution spec).
+RELEASE_TAG = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
 
 # --- small accessors ------------------------------------------------------------------------
 
@@ -119,12 +131,29 @@ def image_of(obj: Mapping[str, Any], service: str, repository: str) -> str | Non
     return image if isinstance(image, str) and image else None
 
 
-def version_of(image: str | None) -> str | None:
-    """'recap-demo/backend:v1.1.0' -> 'v1.1.0'; None for a digest or a non-vX.Y.Z tag."""
-    if not image or "@" in image:
+def version_of(image: str | None, release_format: ReleaseFormat = "semver") -> str | None:
+    """'recap-demo/backend:v1.1.0' -> 'v1.1.0'; None for a digest or a non-vX.Y.Z tag.
+
+    In the "tag" format any tag is the release, also when a digest pins the image:
+    'ghcr.io/sregym/hotel-reservation:20260912.1@sha256:...' -> '20260912.1'; an image
+    without a tag (a digest alone, or 'registry:5000/app') has none.
+    """
+    if not image:
+        return None
+    if release_format == "tag":
+        name = image.split("@", 1)[0]
+        _, colon, tag = name.rpartition(":")
+        return tag if colon and "/" not in tag and RELEASE_TAG.fullmatch(tag) else None
+    if "@" in image:
         return None
     _, _, tag = image.rpartition(":")
     return tag if VERSION_TAG.fullmatch(tag) and "/" not in tag else None
+
+
+def valid_release(value: object, release_format: ReleaseFormat = "semver") -> bool:
+    """Whether `value` has the shape of a release of this target (an approved rollback's)."""
+    pattern = RELEASE_TAG if release_format == "tag" else VERSION_TAG
+    return isinstance(value, str) and pattern.fullmatch(value) is not None
 
 
 def desired_replicas(deployment: Mapping[str, Any]) -> int:
@@ -165,15 +194,27 @@ def dependencies(deployment: Mapping[str, Any], allowed: Iterable[str]) -> list[
 
 
 def service_info(
-    deployment: Mapping[str, Any], namespace: str, allowed: Iterable[str], repository: str
+    deployment: Mapping[str, Any],
+    namespace: str,
+    allowed: Iterable[str],
+    repository: str,
+    release_format: ReleaseFormat = "semver",
+    documented: Mapping[str, Collection[str]] | None = None,
 ) -> ServiceInfo:
+    """One Deployment as a ServiceInfo. Its dependencies come from its own annotation, else
+    from the target profile's documented call graph (`documented`): Kubernetes knows none."""
     service = name_of(deployment)
+    allowed = list(allowed)
+    found = dependencies(deployment, allowed)
+    if not found and documented:
+        found = [d for d in documented.get(service, ()) if d in allowed and d != service]
+    image = image_of(deployment, service, repository)
     return ServiceInfo(
         name=service,
         namespace=namespace,
-        version=version_of(image_of(deployment, service, repository)) or UNKNOWN_VERSION,
+        version=version_of(image, release_format) or UNKNOWN_VERSION,
         replicas=desired_replicas(deployment),
-        dependencies=dependencies(deployment, allowed),
+        dependencies=found,
     )
 
 
@@ -391,6 +432,8 @@ def oom_kills(pods: Iterable[Mapping[str, Any]], service: str) -> list[ClusterEv
 # --- logs -----------------------------------------------------------------------------------
 
 _PREFIX = re.compile(r"^\[(?:pod/)?(?P<pod>[^/\]\s]+)/(?P<container>[^\]\s]+)\] ")
+# Terminal control sequences (CSI, e.g. colours): zerolog's console writer colours by default.
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 _STAMP = re.compile(r"^(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})) ")
 _APP_LINE = re.compile(
     r"^(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z) (?P<level>[A-Za-z]+) (?P<message>.*)$"
@@ -409,6 +452,13 @@ LEVELS: dict[str, LogLevel] = {
     "CRITICAL": "ERROR",
     "CRIT": "ERROR",
     "PANIC": "ERROR",
+    # zerolog's console writer (Go services such as DeathStarBench's) writes three letters.
+    "TRC": "DEBUG",
+    "DBG": "DEBUG",
+    "INF": "INFO",
+    "WRN": "WARN",
+    "FTL": "ERROR",
+    "PNC": "ERROR",
 }
 
 
@@ -416,7 +466,7 @@ def log_lines(service: str, text: str) -> list[LogLine]:
     """Lines of `kubectl logs --prefix --timestamps`, oldest first within the text."""
     lines: list[LogLine] = []
     for raw in text.splitlines():
-        line = _PREFIX.sub("", raw.rstrip("\r"), count=1)
+        line = _ANSI.sub("", _PREFIX.sub("", raw.rstrip("\r"), count=1))
         stamp = _STAMP.match(line)
         kubelet_time = parse_time(stamp.group("ts")) if stamp else None
         body = line[stamp.end() :] if stamp else line

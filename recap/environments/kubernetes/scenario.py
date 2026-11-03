@@ -5,6 +5,12 @@ trusted reset applies to the real cluster (as the recap-scenario identity), and 
 rule reset waits for. There is no free-form command anywhere: a step is a new image version
 for one demo service, or an HTTP burst to one of its paths.
 
+A scenario whose fault an external benchmark harness injects (SREGym's external-harness
+mode, `external:`) has no baseline and no fault steps: the harness deployed the app and
+injected the fault before the run, and reset only waits for the alert. Its `external` block
+is provenance for evaluation (the harness, its pinned release and the problem id), like
+`family` and `expected`.
+
 `family` and `expected` are ground truth for evaluation only, exactly as in the simulator's
 scenario files: reset returns nothing but the measured alert. Unknown fields are refused,
 so a typo fails at load time instead of silently changing the incident.
@@ -49,6 +55,16 @@ class HttpBurst(Contract):
 FaultStep = Annotated[SetImage | HttpBurst, Field(discriminator="type")]
 
 
+class ExternalProblem(Contract):
+    """A fault an external benchmark harness injected before the run (evaluation provenance:
+    it never reaches an agent)."""
+
+    harness: Literal["sregym"]
+    release: str = Field(pattern=r"^[0-9]+(\.[0-9]+)*$")  # the harness's pinned release
+    commit: str = Field(pattern=r"^[0-9a-f]{40}$")  # ... and its exact commit
+    problem: str = Field(pattern=r"^[a-z0-9_]{1,80}$")  # the harness's own problem id
+
+
 class KindScenarioSpec(Contract):
     """One Kind scenario file."""
 
@@ -59,8 +75,9 @@ class KindScenarioSpec(Contract):
     partition: MemoryPartition
     seed: int = 0  # recorded with the run; a real cluster is not deterministic
     tags: list[str] = Field(default_factory=list)
-    baseline: dict[str, str]  # service -> the version reset restores before the fault
-    faults: list[FaultStep] = Field(min_length=1)
+    baseline: dict[str, str] = Field(default_factory=dict)  # service -> version reset restores
+    faults: list[FaultStep] = Field(default_factory=list)
+    external: ExternalProblem | None = None  # set: an external harness injects the fault
     alert: AlertRule
     expected: dict[str, Any]  # evaluation only: never reaches an agent
     budget: dict[str, Any] = Field(default_factory=dict)  # RunBudget field overrides
@@ -91,6 +108,14 @@ class KindScenarioSpec(Contract):
 
     @model_validator(mode="after")
     def _check_services(self) -> KindScenarioSpec:
+        if self.external is not None:
+            # The harness owns the fault: RECAP neither restores nor injects anything. The
+            # adapter checks the alert and expected service against its own allowlist.
+            if self.baseline or self.faults:
+                raise ValueError("an external problem has no baseline and no fault steps")
+            return self
+        if not self.baseline or not self.faults:
+            raise ValueError("a scenario needs a baseline and at least one fault step")
         for service, version in self.baseline.items():
             if not DNS_LABEL.fullmatch(service) or not re.fullmatch(VERSION, version):
                 raise ValueError(f"baseline: {service!r} must map to a vX.Y.Z version")

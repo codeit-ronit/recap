@@ -29,6 +29,7 @@ from recap.core.observations import DeploymentRecord, RollbackPlan
 from recap.environments.kubernetes.state import Baseline, ReleaseEntry
 from recap.environments.kubernetes.translate import (
     UNKNOWN_VERSION,
+    ReleaseFormat,
     annotations_of,
     created_at,
     image_of,
@@ -88,6 +89,7 @@ def revisions(
     replicasets: Sequence[Mapping[str, Any]],
     service: str,
     repository: str,
+    release_format: ReleaseFormat = "semver",
 ) -> list[Revision]:
     """The Deployment's revisions, oldest first. ReplicaSets it does not own are ignored."""
     found: list[Revision] = []
@@ -108,7 +110,7 @@ def revisions(
                 number=int(raw),
                 replicaset=name_of(replicaset),
                 image=image,
-                version=version_of(image),
+                version=version_of(image, release_format),
                 created_at=created_at(replicaset),
                 reused=bool(annotations.get(REVISION_HISTORY)),
                 change_cause=annotations.get(CHANGE_CAUSE, ""),

@@ -137,7 +137,9 @@ class ParsedEvidence:
         ids += [
             eid
             for eid, snapshot in self.health
-            if snapshot.service == service and snapshot.error_rate > ERROR_RATE_THRESHOLD
+            if snapshot.service == service
+            and snapshot.error_rate is not None
+            and snapshot.error_rate > ERROR_RATE_THRESHOLD
         ]
         return list(dict.fromkeys(ids))
 

@@ -44,11 +44,12 @@ class EnvironmentHealthOracle(RecoveryOracle):
         )
 
     def is_healthy(self, health: GroundTruthHealth) -> bool:
-        """Healthy = Running, every replica ready, and error rate below the threshold."""
+        """Healthy = Running, every replica ready, and error rate below the threshold (a
+        service the oracle has no probe for is judged by status and readiness alone)."""
         return (
             health.status == "Running"
             and health.ready_replicas == health.replicas
-            and health.error_rate < self.max_error_rate
+            and (health.error_rate is None or health.error_rate < self.max_error_rate)
         )
 
 

@@ -28,6 +28,8 @@ from recap.core.models import (
 
 # ASCII digits only: "\d" would also accept look-alike Unicode digits such as "v١.٢.٣".
 _VERSION_RE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+")
+# A container image tag (OCI distribution grammar), as the Kubernetes adapter reads releases.
+_RELEASE_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}")
 MAX_STRING_CHARS = 200
 _TARGET_ARG_TYPES = ("service", "namespace")  # argument types a mitigation target can fill
 
@@ -145,6 +147,10 @@ class ToolRegistry:
             if isinstance(value, str) and _VERSION_RE.fullmatch(value):
                 return None
             return f"{arg}: {_preview(value)} is not a version like v1.2.3"
+        if rule.type == "release":
+            if isinstance(value, str) and _RELEASE_RE.fullmatch(value):
+                return None
+            return f"{arg}: {_preview(value)} is not a release (an image tag)"
         if rule.type == "int":
             return _check_int(arg, rule, value)
         if rule.type == "enum":

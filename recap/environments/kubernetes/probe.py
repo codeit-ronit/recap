@@ -118,9 +118,15 @@ def combine_rounds(
             status=status,
             ready_replicas=min(earlier.ready_replicas, later.ready_replicas),
             replicas=later.replicas,
-            error_rate=max(earlier.error_rate, later.error_rate),
+            error_rate=_worse_rate(earlier.error_rate, later.error_rate),
         )
     return combined
+
+
+def _worse_rate(first: float | None, second: float | None) -> float | None:
+    """The higher of two probe error rates; None only when neither round probed."""
+    rates = [rate for rate in (first, second) if rate is not None]
+    return max(rates) if rates else None
 
 
 # --- the alert rule -------------------------------------------------------------------------

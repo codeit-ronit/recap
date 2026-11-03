@@ -99,6 +99,17 @@ class KindOptions(Contract):
     namespace: str = "recap-demo"
     services: list[str] = Field(default_factory=lambda: ["frontend", "backend"])
     image_repository: str = "recap-demo"  # images are <repository>/<service>:vX.Y.Z
+    # How releases are named: vX.Y.Z tags ("semver"), or any image tag ("tag": a target whose
+    # images carry date or commit tags pinned by a digest, such as SREGym's hotel reservation).
+    release_format: Literal["semver", "tag"] = "semver"
+    # Who injects the fault. "recap": RECAP's own scenario steps, after restoring a baseline
+    # (the demo cluster). "external": a benchmark harness deployed the app and injected the
+    # fault before the run (SREGym's external-harness mode); reset then changes nothing and
+    # the recap-scenario identity is not used.
+    harness: Literal["recap", "external"] = "recap"
+    # The app's documented call graph (service -> the services it calls), for Deployments
+    # without a recap.dev/depends-on annotation: the architecture, never anything about a fault.
+    dependencies: dict[str, list[str]] = Field(default_factory=dict)
 
     # Loopback endpoints: each service's NodePort, the path its probe asks, and Prometheus.
     service_urls: dict[str, str] = Field(
@@ -110,7 +121,7 @@ class KindOptions(Contract):
     probe_paths: dict[str, str] = Field(
         default_factory=lambda: {"frontend": "/", "backend": "/items"}
     )
-    prometheus_url: str = "http://127.0.0.1:30090"
+    prometheus_url: str | None = "http://127.0.0.1:30090"  # None: a target without request metrics
     metrics_rate_window: str = "1m"  # the rate() range of the error-rate and latency queries
     metrics_max_points: int = Field(60, ge=2, le=240)  # the step grows to stay under this
 
@@ -162,8 +173,8 @@ class KindOptions(Contract):
 
     @field_validator("prometheus_url")
     @classmethod
-    def _prometheus(cls, value: str) -> str:
-        return _loopback_url(value, "prometheus_url")
+    def _prometheus(cls, value: str | None) -> str | None:
+        return None if value is None else _loopback_url(value, "prometheus_url")
 
     @field_validator("service_urls")
     @classmethod
@@ -186,8 +197,18 @@ class KindOptions(Contract):
         for service in self.services:
             if not DNS_LABEL.fullmatch(service):
                 raise ValueError("every service must be a DNS-1123 label")
-        if set(self.service_urls) != set(self.services):
-            raise ValueError("service_urls must name exactly the allowed services")
+        if self.harness == "recap":
+            # RECAP's own scenarios measure every service: its fault steps, its calm baseline
+            # and its alert all read the probes and Prometheus.
+            if set(self.service_urls) != set(self.services):
+                raise ValueError("service_urls must name exactly the allowed services")
+            if self.prometheus_url is None:
+                raise ValueError("harness 'recap' needs prometheus_url")
+        elif not set(self.service_urls) <= set(self.services):
+            raise ValueError("service_urls may name only allowed services")
+        for service, called in self.dependencies.items():
+            if service not in self.services or not set(called) <= set(self.services):
+                raise ValueError("dependencies may name only allowed services")
         for service, path in self.probe_paths.items():
             if service not in self.services or not URL_PATH.fullmatch(path):
                 raise ValueError("probe_paths must map allowed services to plain URL paths")

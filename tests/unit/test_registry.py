@@ -145,6 +145,36 @@ def test_string_args_are_length_capped(settings: Settings) -> None:
     assert len(registry.validate_args("annotate", {"note": 7})[1]) == 1
 
 
+@pytest.mark.parametrize(
+    ("value", "ok"),
+    [
+        ("20260912.1", True),  # SREGym's date tags
+        ("sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a", True),  # ... and commit tags
+        ("v1.2.3", True),
+        ("latest", True),
+        ("x" * 128, True),
+        ("x" * 129, False),  # longer than any image tag
+        (".hidden", False),  # a tag never starts with a dot or a dash
+        ("-rf", False),
+        ("1.0 && rm", False),
+        ("v1/../etc", False),
+        ("v١.٢", False),  # look-alike Unicode digits
+        ("", False),
+        (12, False),
+    ],
+)
+def test_a_release_is_an_image_tag(settings: Settings, value: Any, ok: bool) -> None:
+    """M5 (SREGym): a target may name releases by image tag; it is only ever a key into a
+    Deployment's own revision history, so the grammar is the tag's and nothing more."""
+    rule = ArgRule(type="release")
+    tools = {
+        "execute_rollback": ToolPolicy(risk=ToolRisk.REVERSIBLE_WRITE, args={"to_version": rule})
+    }
+    registry = ToolRegistry(settings.policies.model_copy(update={"tools": tools}))
+    errors = registry.validate_args("execute_rollback", {"to_version": value})[1]
+    assert (errors == []) is ok, errors
+
+
 def test_error_messages_do_not_echo_huge_inputs(registry: ToolRegistry) -> None:
     errors = registry.validate_args("get_service_health", {"service": "x" * 10_000})[1]
     assert len(errors[0]) < 120

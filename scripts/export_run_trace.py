@@ -695,8 +695,8 @@ def _error_rates(record: RunRecord) -> str:
     signals = r.observed_signals or {}
     before = (signals.get("before") or {}).get(target) or {}
     after = (signals.get("after") or {}).get(target) or {}
-    if "error_rate" not in before or "error_rate" not in after:
-        return ""
+    if before.get("error_rate") is None or after.get("error_rate") is None:
+        return ""  # not probed by the oracle (a target without a probe for this service)
     return f"; {_code(target)} error rate {before['error_rate']} → {after['error_rate']}"
 
 

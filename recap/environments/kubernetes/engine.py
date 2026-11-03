@@ -72,7 +72,6 @@ from recap.environments.kubernetes import probe, rollout, translate
 from recap.environments.kubernetes.fake import STATE_FILE as FAKE_STATE_FILE
 from recap.environments.kubernetes.fake import FakeCluster, FakeKubeClient
 from recap.environments.kubernetes.kubectl import (
-    VERSION_TAG,
     CommandRecord,
     KubeClient,
     KubectlClient,
@@ -189,19 +188,23 @@ class KubernetesEnvironment(TargetEnvironment):
         await self.preflight()
         self.lease.take(self.namespace, self.run_id, self.options.lease_seconds)
         try:
-            baselines = await self._restore_baseline(spec)
-            await self._wait_calm()
-            baseline_at = utcnow()
-            margin = timedelta(seconds=self.options.baseline_margin_seconds)
-            self.state.put(
-                baselines={
-                    s: {"version": b.version, "revision": b.revision} for s, b in baselines.items()
-                },
-                baseline_at=baseline_at.isoformat(),
-                observation_start=(baseline_at - margin).isoformat(),
-            )
-            for step in spec.faults:
-                await self._apply(step)
+            if self.options.harness == "external":
+                await self._external_baseline()
+            else:
+                baselines = await self._restore_baseline(spec)
+                await self._wait_calm()
+                baseline_at = utcnow()
+                margin = timedelta(seconds=self.options.baseline_margin_seconds)
+                self.state.put(
+                    baselines={
+                        s: {"version": b.version, "revision": b.revision}
+                        for s, b in baselines.items()
+                    },
+                    baseline_at=baseline_at.isoformat(),
+                    observation_start=(baseline_at - margin).isoformat(),
+                )
+                for step in spec.faults:
+                    await self._apply(step)
             alert = await self._await_alert(spec.alert)
         except BaseException:
             self.lease.release(self.namespace, self.run_id)  # no run starts: free the namespace
@@ -212,11 +215,14 @@ class KubernetesEnvironment(TargetEnvironment):
     async def preflight(self) -> None:
         """Prove this is the pinned cluster, and that its clocks and versions line up."""
         self._pinned.clear()  # every reset checks the kubeconfigs again
-        for identity in IDENTITIES:
+        for identity in self._identities():
             self._pin(identity)
         versions = await self._client("reader").version()
         _check_version_skew(versions)
-        server = await self._prometheus().server_time()
+        prometheus = self._prometheus()
+        if prometheus is None:
+            return  # no monitoring system to compare clocks with (a target without metrics)
+        server = await prometheus.server_time()
         skew = abs((server - utcnow()).total_seconds())
         if skew > self.options.max_clock_skew_seconds:
             raise PreflightError(
@@ -244,7 +250,12 @@ class KubernetesEnvironment(TargetEnvironment):
         }
         services = [
             translate.service_info(
-                deployments[s], self.namespace, self.services, self.options.image_repository
+                deployments[s],
+                self.namespace,
+                self.services,
+                self.options.image_repository,
+                self.options.release_format,
+                self.options.dependencies,
             )
             for s in self.services
             if s in deployments
@@ -264,14 +275,17 @@ class KubernetesEnvironment(TargetEnvironment):
         replicas = translate.desired_replicas(deployment) if deployment else 0
         now = utcnow()
         prometheus = self._prometheus()
-        try:
-            error_rate = await prometheus.instant("error_rate", service, now)
-            latency = await prometheus.instant("latency_p95_ms", service, now)
-        except MetricsUnavailable as exc:
-            raise MetricsUnavailable(
-                f"{service} is {status} with {ready} of {replicas} replicas ready, but its "
-                f"error rate and latency cannot be measured: {exc}"
-            ) from None
+        error_rate: float | None = None
+        latency: float | None = None
+        if prometheus is not None:  # else: a target without request metrics, said as such
+            try:
+                error_rate = await prometheus.instant("error_rate", service, now)
+                latency = await prometheus.instant("latency_p95_ms", service, now)
+            except MetricsUnavailable as exc:
+                raise MetricsUnavailable(
+                    f"{service} is {status} with {ready} of {replicas} replicas ready, but its "
+                    f"error rate and latency cannot be measured: {exc}"
+                ) from None
         return HealthSnapshot(
             service=service,
             status=status,
@@ -342,13 +356,17 @@ class KubernetesEnvironment(TargetEnvironment):
             return MetricSeries(
                 service=service, metric=metric, unit=UNITS[metric], points=points, step_minutes=1
             )
+        prometheus = self._prometheus()
+        if prometheus is None:
+            raise MetricsUnavailable(
+                f"this target exports no {metric} metric for {service} (it has no monitoring "
+                "system RECAP can query); its health, events, deployments and logs are available"
+            )
         step_minutes = max(1, math.ceil(window / self.options.metrics_max_points))
         step = timedelta(minutes=step_minutes)
         begin = max(now - timedelta(minutes=window), info.observation_start)
         start = now - step * int((now - begin) / step)
-        points = await self._prometheus().range(
-            metric, service, start, now, int(step.total_seconds())
-        )
+        points = await prometheus.range(metric, service, start, now, int(step.total_seconds()))
         limit = None
         repository = self.options.image_repository
         if metric == "memory_mb":
@@ -386,7 +404,7 @@ class KubernetesEnvironment(TargetEnvironment):
             replicasets, pods = await asyncio.gather(
                 reader.list_replicasets(selector), reader.list_pods(selector)
             )
-            found = rollout.revisions(deployment, replicasets, name, self.options.image_repository)
+            found = self._revisions(deployment, replicasets, name)
             return rollout.releases(
                 name,
                 found,
@@ -448,7 +466,7 @@ class KubernetesEnvironment(TargetEnvironment):
                 reason=f"{service} has no Deployment",
             )
         replicasets = await reader.list_replicasets(translate.selector_of(deployment))
-        found = rollout.revisions(deployment, replicasets, service, self.options.image_repository)
+        found = self._revisions(deployment, replicasets, service)
         return rollout.rollback_plan(service, found, info.baselines.get(service))
 
     # --- act (the single write path; the final privilege barrier) ----------------------
@@ -487,10 +505,11 @@ class KubernetesEnvironment(TargetEnvironment):
                 action, f"refused: namespace {self.namespace} belongs to another run now"
             )
         version = action.params.get("to_version") if action.action == "rollback" else None
-        if action.action == "rollback" and not (
-            isinstance(version, str) and VERSION_TAG.fullmatch(version)
+        if action.action == "rollback" and not translate.valid_release(
+            version, self.options.release_format
         ):
-            return self._refused(action, "refused: a rollback needs a target version vX.Y.Z")
+            wanted = "vX.Y.Z" if self.options.release_format == "semver" else "image tag"
+            return self._refused(action, f"refused: a rollback needs a target version {wanted}")
         # 5-7. Dry run, write, read-back, audit. Shielded: a cancelled tool call must never
         #      cut a write in half; the write finishes, is audited, and only then returns.
         write = asyncio.ensure_future(self._write(action, service, version, deadline))
@@ -511,10 +530,64 @@ class KubernetesEnvironment(TargetEnvironment):
     # ==================================================================================
 
     def _check_scenario(self, spec: KindScenarioSpec) -> None:
+        external = spec.external is not None
+        if external != (self.options.harness == "external"):
+            raise ValueError(
+                f"scenario '{spec.id}' is for "
+                f"{'an external harness' if external else 'RECAP-injected faults'}, but this "
+                f"target's harness is '{self.options.harness}'"
+            )
+        if external:
+            named = {spec.alert.service, str(spec.expected.get("root_cause_service", ""))}
+            if unknown := sorted(named - set(self.services)):
+                raise ValueError(
+                    f"scenario '{spec.id}' names services this target does not allow: "
+                    + ", ".join(unknown)
+                )
+            return
         if set(spec.baseline) != set(self.services):
             raise ValueError(
                 f"scenario '{spec.id}' must give a baseline for exactly {list(self.services)}"
             )
+
+    async def _external_baseline(self) -> None:
+        """An external harness deployed the app and injected the fault before this run: change
+        nothing. Each Deployment's first revision is the run's baseline (the harness deploys
+        the app afresh for every problem), so the incident's whole history, the deploy and
+        then the fault, is in the run's window, and a rollback may restore what the harness
+        first deployed. Read as recap-reader (the rollout history; the alert then reads as
+        recap-oracle): this reset never writes."""
+        reader = self._client("reader")
+        deployments = {translate.name_of(d): d for d in await reader.list_deployments()}
+        missing = [s for s in self.services if s not in deployments]
+        if missing:
+            raise RuntimeError(
+                f"{', '.join(missing)} not found in namespace {self.namespace}: the harness has "
+                "not deployed the problem (or a service name in the target profile is wrong)"
+            )
+        baselines: dict[str, dict[str, Any]] = {}
+        deployed: list[datetime] = []
+        for service in self.services:
+            deployment = deployments[service]
+            replicasets = await reader.list_replicasets(translate.selector_of(deployment))
+            found = self._revisions(deployment, replicasets, service)
+            if not found:
+                raise RuntimeError(f"{service} has no revision history to start the run from")
+            first = found[0]
+            baselines[service] = {
+                "version": first.version or translate.UNKNOWN_VERSION,
+                "revision": first.number,
+            }
+            created = translate.created_at(deployment)
+            if created is not None:
+                deployed.append(created)
+        baseline_at = min(deployed) if deployed else utcnow()
+        margin = timedelta(seconds=self.options.baseline_margin_seconds)
+        self.state.put(
+            baselines=baselines,
+            baseline_at=baseline_at.isoformat(),
+            observation_start=(baseline_at - margin).isoformat(),
+        )
 
     async def _restore_baseline(self, spec: KindScenarioSpec) -> dict[str, Baseline]:
         """Put every service back on its baseline image (as recap-scenario) and wait until
@@ -583,6 +656,8 @@ class KubernetesEnvironment(TargetEnvironment):
         margin = self.options.baseline_margin_seconds
         deadline = time.monotonic() + self.options.calm_timeout_seconds
         prometheus = self._prometheus()
+        if prometheus is None:  # harness "recap" requires Prometheus (options.py)
+            raise RuntimeError("no Prometheus to read a calm baseline from")
         while True:
             end = utcnow()
             start = end - timedelta(seconds=margin)
@@ -632,7 +707,7 @@ class KubernetesEnvironment(TargetEnvironment):
         deadline = time.monotonic() + rule.timeout_seconds
         streak = 0
         while True:
-            view = await self._view("scenario")
+            view = await self._view(self._reset_identity())
             probes = await self._probe_round()
             conditions = {
                 service: _condition(deployment, pods)
@@ -673,10 +748,10 @@ class KubernetesEnvironment(TargetEnvironment):
         pods' successes still filled the rate window, so the verifier rightly rejected a correct
         dependency claim. On timeout the run goes on with what the platform shows."""
         timeout = self.options.monitoring_timeout_seconds
-        if not services or timeout <= 0:
+        prometheus = self._prometheus()
+        if not services or timeout <= 0 or prometheus is None:
             return
         deadline = time.monotonic() + timeout
-        prometheus = self._prometheus()
         pending = list(services)
         while pending:
             end = utcnow()
@@ -734,7 +809,7 @@ class KubernetesEnvironment(TargetEnvironment):
             detail["revision_before"] = translate.annotations_of(before).get(rollout.REVISION)
             if action.action == "rollback":
                 replicasets = await writer.list_replicasets(translate.selector_of(before))
-                found = rollout.revisions(before, replicasets, service, repository)
+                found = self._revisions(before, replicasets, service)
                 target = rollout.revision_for(found, str(version))
                 detail["to_revision"] = target.number
             if deadline - time.monotonic() < 2 * call:
@@ -756,7 +831,8 @@ class KubernetesEnvironment(TargetEnvironment):
                 return self._refused(action, f"not executed: {reason}", detail=detail)
             self._audit_write(action, "failed", {**detail, "reason": reason})
             raise KubeError(f"the write may have reached the cluster: {reason}") from None
-        read_back = await self._read_back(writer, action, service, version, before, deadline, call)
+        expected = target.image if target is not None else None
+        read_back = await self._read_back(writer, action, service, expected, before, deadline, call)
         detail.update(read_back)
         detail["seconds"] = round(time.monotonic() - started, 3)
         if not read_back.get("confirmed"):
@@ -765,7 +841,7 @@ class KubernetesEnvironment(TargetEnvironment):
                 f"{service}: the write was sent, but the read-back did not confirm it "
                 f"({read_back.get('why', 'unknown')}); the oracle will judge"
             )
-        previous = translate.version_of(detail["image_before"])
+        previous = translate.version_of(detail["image_before"], self.options.release_format)
         if action.action == "rollback":
             self.state.log_release(service, str(version), previous, "rollback")
         else:
@@ -795,12 +871,13 @@ class KubernetesEnvironment(TargetEnvironment):
         writer: KubeClient,
         action: AuthorizedAction,
         service: str,
-        version: str | None,
+        expected_image: str | None,
         before: Mapping[str, Any],
         deadline: float,
         call: float,
     ) -> dict[str, Any]:
-        """Step 7: read the Deployment again and check the change is the approved one."""
+        """Step 7: read the Deployment again and check the change is the approved one: a
+        rollback must now run exactly the image its target revision ran."""
         if deadline - time.monotonic() < call:
             return {"confirmed": False, "why": "no time left to read the Deployment back"}
         try:
@@ -816,7 +893,7 @@ class KubernetesEnvironment(TargetEnvironment):
         }
         changed = (_generation(after) or 0) > (_generation(before) or 0)
         if action.action == "rollback":
-            confirmed = changed and image_after == f"{repository}/{service}:{version}"
+            confirmed = changed and expected_image is not None and image_after == expected_image
         else:
             confirmed = changed and _restarted_at(after) != _restarted_at(before)
         result["confirmed"] = confirmed
@@ -870,7 +947,7 @@ class KubernetesEnvironment(TargetEnvironment):
                 status=translate.ground_status(deployment, pods, complete),
                 ready_replicas=translate.ready_replicas(deployment) if deployment else 0,
                 replicas=translate.desired_replicas(deployment) if deployment else 0,
-                error_rate=probes[service].error_rate,
+                error_rate=probes[service].error_rate if service in probes else None,
             )
         return found
 
@@ -919,7 +996,13 @@ class KubernetesEnvironment(TargetEnvironment):
         return _Owners(exact, self.services)
 
     async def _probe_round(self) -> dict[str, ProbeResult]:
-        urls = {service: self.options.probe_url(service) for service in self.services}
+        """The oracle's HTTP probe of every service that has a loopback URL (all of them on
+        the demo cluster; on a target without one, status and readiness decide)."""
+        urls = {
+            service: self.options.probe_url(service)
+            for service in self.services
+            if service in self.options.service_urls
+        }
         return await probe.probe_round(
             urls,
             self.options.probe_requests,
@@ -953,6 +1036,18 @@ class KubernetesEnvironment(TargetEnvironment):
         full = len(found) >= limit or len(text.encode()) >= LOG_BYTES_PER_CONTAINER
         return found, full
 
+    def _revisions(
+        self, deployment: Mapping[str, Any], replicasets: list[dict[str, Any]], service: str
+    ) -> list[rollout.Revision]:
+        """The Deployment's revisions, each named in this target's release format."""
+        return rollout.revisions(
+            deployment,
+            replicasets,
+            service,
+            self.options.image_repository,
+            self.options.release_format,
+        )
+
     def _container(self, deployment: Mapping[str, Any], service: str) -> str:
         container = translate.container_of(
             translate.template_of(deployment), service, self.options.image_repository
@@ -964,6 +1059,17 @@ class KubernetesEnvironment(TargetEnvironment):
     # ==================================================================================
     # Plumbing: identities, clients, checks
     # ==================================================================================
+
+    def _identities(self) -> tuple[Identity, ...]:
+        """The identities this target uses: recap-scenario only when RECAP injects faults."""
+        if self.options.harness == "external":
+            return tuple(i for i in IDENTITIES if i != "scenario")
+        return IDENTITIES
+
+    def _reset_identity(self) -> Identity:
+        """Who reset reads the cluster as: recap-scenario, or recap-oracle (read-only) when an
+        external harness owns the fault."""
+        return "oracle" if self.options.harness == "external" else "scenario"
 
     def _run(self) -> RunInfo:
         """This run's baseline; RuntimeError('environment not reset') before a complete reset."""
@@ -1045,7 +1151,10 @@ class KubernetesEnvironment(TargetEnvironment):
     def _http_transport(self) -> httpx.AsyncBaseTransport | None:
         return self.fake_cluster().http_transport() if self.options.client == "fake" else None
 
-    def _prometheus(self) -> PrometheusClient:
+    def _prometheus(self) -> PrometheusClient | None:
+        """The monitoring system's client, or None on a target that exports no metrics."""
+        if self.options.prometheus_url is None:
+            return None
         return PrometheusClient(
             self.options.prometheus_url,
             self.namespace,

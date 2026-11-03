@@ -1,0 +1,43 @@
+{
+  "_comment": "SYNTHETIC seed of the offline fake cluster in the shape of an external harness's problem (SREGym's hotel reservation): one image for the Go services, tagged and pinned by digest, and geo already on a release that crashes at start-up. Hand-written for offline tests; NOT recorded from SREGym or a cluster.",
+  "kubernetes": {"client": "v1.37.1", "server": "v1.37.0"},
+  "rollout_seconds": 0,
+  "memory_high_ratio": 0.95,
+  "report_burst": {"service": "frontend", "path": "/", "fills_at": 100000},
+  "services": {
+    "frontend": {
+      "image": "ghcr.io/example/hotel-reservation:sha-1f2e3d4c5b6a@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "replicas": 1,
+      "memory_limit": "128Mi",
+      "cpu_limit": "250m",
+      "age_minutes": 30
+    },
+    "geo": {
+      "image": "ghcr.io/example/hotel-reservation:20260101.1@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "image_age_minutes": 5,
+      "replicas": 1,
+      "memory_limit": "128Mi",
+      "cpu_limit": "250m",
+      "age_minutes": 30,
+      "history": [
+        {"image": "ghcr.io/example/hotel-reservation:sha-1f2e3d4c5b6a@sha256:1111111111111111111111111111111111111111111111111111111111111111", "age_minutes": 30}
+      ]
+    },
+    "mongodb-geo": {
+      "image": "docker.io/library/mongo:8.0.4@sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "replicas": 1,
+      "memory_limit": "256Mi",
+      "cpu_limit": "500m",
+      "age_minutes": 30
+    }
+  },
+  "images": {
+    "ghcr.io/example/hotel-reservation:sha-1f2e3d4c5b6a@sha256:1111111111111111111111111111111111111111111111111111111111111111": {"latency_ms": 5, "memory_mb": 30, "cpu_cores": 0.01, "log": "serving requests"},
+    "ghcr.io/example/hotel-reservation:20260101.1@sha256:2222222222222222222222222222222222222222222222222222222222222222": {
+      "crash": true,
+      "error_log": "server selection error: dial tcp mongodb-geo:27777: connect: connection refused"
+    },
+    "docker.io/library/mongo:8.0.4@sha256:3333333333333333333333333333333333333333333333333333333333333333": {"latency_ms": 2, "memory_mb": 80, "cpu_cores": 0.02, "log": "connection accepted"}
+  },
+  "upstream_errors": {}
+}

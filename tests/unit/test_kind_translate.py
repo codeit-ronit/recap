@@ -83,6 +83,42 @@ def test_only_a_vxyz_tag_is_a_version(image: str | None, version: str | None) ->
     assert translate.version_of(image) == version
 
 
+@pytest.mark.parametrize(
+    ("image", "version"),
+    [
+        ("ghcr.io/sregym/hotel-reservation:20260912.1@sha256:" + "8" * 64, "20260912.1"),
+        ("ghcr.io/sregym/hotel-reservation:sha-d2c036bc3d11", "sha-d2c036bc3d11"),
+        ("recap-demo/backend:v1.1.0", "v1.1.0"),
+        ("registry.local:5000/app:latest", "latest"),
+        ("registry.local:5000/app", None),  # a port, no tag
+        ("ghcr.io/sregym/hotel-reservation@sha256:" + "8" * 64, None),  # a digest alone
+        ("app:-bad", None),
+        (None, None),
+    ],
+)
+def test_in_the_tag_format_any_tag_is_the_release(image: str | None, version: str | None) -> None:
+    """M5 (SREGym): date and commit tags, also when a digest pins the image."""
+    assert translate.version_of(image, "tag") == version
+    assert translate.valid_release(version, "tag") is (version is not None)
+
+
+def test_a_release_shape_follows_the_targets_format() -> None:
+    assert translate.valid_release("v1.0.0") and not translate.valid_release("20260912.1")
+    assert translate.valid_release("20260912.1", "tag")
+    assert not translate.valid_release("1.0 && rm", "tag") and not translate.valid_release(None)
+
+
+def test_documented_dependencies_fill_in_for_a_missing_annotation(snapshot: dict) -> None:
+    """A target whose manifests carry no depends-on annotation (SREGym's hotel reservation)
+    takes its call graph from the profile: the app's architecture, nothing about a fault."""
+    plain = json.loads(json.dumps(snapshot["deployment"]))
+    plain["metadata"].get("annotations", {}).pop(translate.DEPENDS_ON, None)
+    documented = {"backend": ["frontend", "payments", "backend"]}
+    allowed = ["frontend", "backend"]
+    info = translate.service_info(plain, "demo", allowed, REPOSITORY, "semver", documented)
+    assert info.dependencies == ["frontend"]  # allowlisted services only, never itself
+
+
 def test_a_selector_the_adapter_did_not_build_from_plain_labels_is_refused() -> None:
     expressions = {
         "metadata": {"name": "backend"},
@@ -251,6 +287,24 @@ def test_log_lines_take_level_and_time_from_the_apps_own_format() -> None:
     assert all(line.service == "backend" for line in lines)
     # The phrasing RECAP's parsers read (recap/core/signals.py) survives the translation.
     assert version_tag(lines[1].message) == "v1.1.0"
+
+
+def test_zerolog_console_lines_keep_their_level_without_their_colours() -> None:
+    """DeathStarBench's Go services log through zerolog's console writer: RFC 3339 time, a
+    three-letter level, colours on by default (SREGym's hotel reservation)."""
+    grey, red, reset = "\x1b[90m", "\x1b[31m", "\x1b[0m"
+    text = (
+        "[pod/geo-6b9d-xk2lp/hotel-reserv-geo] 2026-11-03T15:58:40.120000000Z "
+        f"{grey}2026-11-03T15:58:40Z{reset} {red}PNC{reset} "
+        "cmd/geo/db.go:30 > no reachable servers\n"
+        "[pod/geo-6b9d-xk2lp/hotel-reserv-geo] 2026-11-03T15:58:39.000000000Z "
+        f"{grey}2026-11-03T15:58:39Z{reset} INF cmd/geo/main.go:40 > Reading config...\n"
+    )
+    panic, info = translate.log_lines("geo", text)
+    assert (panic.level, info.level) == ("ERROR", "INFO")
+    assert panic.message == "cmd/geo/db.go:30 > no reachable servers"
+    assert "\x1b" not in panic.message + info.message
+    assert panic.timestamp == at("2026-11-03T15:58:40")
 
 
 def test_the_demo_apps_rpc_phrasing_is_what_the_parsers_read() -> None:

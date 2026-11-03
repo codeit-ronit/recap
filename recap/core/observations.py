@@ -55,8 +55,11 @@ class HealthSnapshot(Contract):
     status: ServiceStatus
     ready_replicas: int
     replicas: int
-    error_rate: float  # fraction of failing requests over the last 5 minutes (0..1)
-    latency_p95_ms: float
+    # Fraction of failing requests over the last 5 minutes (0..1), and the p95 latency. None:
+    # not measured, on a target that exports no request metrics (SREGym's hotel reservation):
+    # status and readiness are then all the health there is, and nothing is guessed.
+    error_rate: float | None
+    latency_p95_ms: float | None
     observed_at: UtcDatetime
 
 
@@ -161,7 +164,7 @@ class GroundTruthHealth(Contract):
     status: ServiceStatus
     ready_replicas: int
     replicas: int
-    error_rate: float  # without observation noise
+    error_rate: float | None  # without observation noise; None: the oracle has no probe here
 
 
 class HealthReport(Contract):

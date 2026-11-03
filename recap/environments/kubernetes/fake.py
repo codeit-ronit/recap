@@ -78,14 +78,15 @@ class FakeCluster:
         state_path: Path,
         *,
         namespace: str,
-        prometheus_url: str,
+        prometheus_url: str | None,
         service_urls: Mapping[str, str],
         clock: Callable[[], datetime] = utcnow,
     ) -> None:
         self.data_dir = data_dir
         self.store = SandboxStateStore(state_path)
         self.namespace = namespace
-        self.prometheus = urlsplit(prometheus_url).netloc
+        # None: a target without a monitoring system (no request is ever answered as one).
+        self.prometheus = urlsplit(prometheus_url).netloc if prometheus_url else None
         self.hosts = {urlsplit(url).netloc: service for service, url in service_urls.items()}
         self.clock = clock
         # In-process only (tests): the next call of an operation fails with (code, stderr).
@@ -127,7 +128,12 @@ class FakeCluster:
             born = now - timedelta(minutes=int(entry.get("age_minutes", 4320)))
             deployment = _deployment(self.namespace, service, entry, born)
             state["deployments"][service] = deployment
-            history = [*entry.get("history", []), {"image": entry["image"]}]
+            # The current image's own age (image_age_minutes): a fault an external harness
+            # injected minutes ago, while the app itself was deployed earlier.
+            current: State = {"image": entry["image"]}
+            if "image_age_minutes" in entry:
+                current["age_minutes"] = entry["image_age_minutes"]
+            history = [*entry.get("history", []), current]
             for number, item in enumerate(history, start=1):
                 age = item.get("age_minutes")
                 created = now - timedelta(minutes=int(age)) if age is not None else born
@@ -321,8 +327,13 @@ class FakeCluster:
         replicas = state["deployments"][service]["spec"]["replicas"]
         serving, current, in_progress = self._rollout(state, service, now)
         full = self._pressure(state, service, now)
+        # A crashing image serves only when it was seeded as the current release: an external
+        # harness rolled it out with no readiness probe, so the old pods are gone and its own
+        # pods crash-loop. Through a write it never takes over (the rollout stays stuck).
+        rs = state["replicasets"][serving]
+        broken = bool(self._behaviour(_image_of_rs(rs)).get("crash"))
         pods = [
-            self._pod(state, state["replicasets"][serving], i, ready=not full, crash=False)
+            self._pod(state, rs, i, ready=not full and not broken, crash=broken)
             for i in range(replicas)
         ]
         if in_progress:
