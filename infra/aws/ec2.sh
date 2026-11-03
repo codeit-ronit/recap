@@ -129,6 +129,14 @@ cmd_up() {
     sleep 10
   done
   say "ready: $(ssh_ 'docker --version; kind version; kubectl version --client | head -1' | tr '\n' ' ')"
+  # Kind's node container restarts only on failure, so a stopped VM brings the cluster back
+  # down: start it again and wait until the API server answers.
+  if ssh_ "docker inspect recap-m5-control-plane >/dev/null 2>&1"; then
+    ssh_ "docker start recap-m5-control-plane >/dev/null && for i in \$(seq 1 60); do \
+      kubectl --kubeconfig ~/.config/recap/kind/admin.kubeconfig get --raw=/readyz >/dev/null 2>&1 \
+      && exit 0; sleep 3; done; exit 1" && say "cluster recap-m5 is up" \
+      || die "the cluster did not come back; rebuild it with infra/kind/scripts/setup.sh on the VM"
+  fi
 }
 
 cmd_status() {
