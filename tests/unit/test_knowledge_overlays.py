@@ -56,7 +56,9 @@ def test_overlay_folders_are_resolved_wherever_they_are(
     listed = [str(folder), climbing, "fixtures/knowledge-overlays/poisoned"]
     monkeypatch.setenv("RECAP_KNOWLEDGE_OVERLAYS", os.pathsep.join(listed))
     settings = load_settings(data_dir=tmp_path / "data")
-    assert settings.paths.knowledge_overlays == [folder.resolve(), folder.resolve(), POISONED]
+    # The same folder named twice (absolutely, then climbing) is loaded once (M5: a target
+    # profile's overlay may also be listed in the variable).
+    assert settings.paths.knowledge_overlays == [folder.resolve(), POISONED]
 
 
 async def test_a_run_starts_with_an_overlay_outside_the_repository(
