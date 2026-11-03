@@ -1,0 +1,1225 @@
+{
+  "run_id": "run-f5b9e5bf45",
+  "scenario_id": "kind-injected-logs",
+  "config": {
+    "strategy": "adaptive",
+    "use_rag": true,
+    "retrieval": null,
+    "use_memory": true,
+    "memory_write": true,
+    "memory_read_partitions": [
+      "train",
+      "live"
+    ],
+    "memory_write_partition": "live",
+    "safety_enabled": true,
+    "approval_mode": "manual",
+    "planner": "default",
+    "provider": "ollama-vm",
+    "replay_fixture": null,
+    "replay_pace": 0.0,
+    "seed": null,
+    "budget": null,
+    "tool_latency_ms": null,
+    "label": ""
+  },
+  "incident": {
+    "incident_id": "inc-efc6137076",
+    "scenario_id": "kind-injected-logs",
+    "service": "frontend",
+    "affected_services": [
+      "frontend",
+      "backend"
+    ],
+    "symptoms": [
+      "frontend: HTTP error rate 0.20 over 10 probe requests (first failure: HTTP 502)",
+      "backend: HTTP error rate 0.20 over 10 probe requests (first failure: HTTP 500)"
+    ],
+    "created_at": "2026-11-03T15:50:12.210936Z",
+    "environment": "kind",
+    "metadata": {
+      "source": "recap-kind-probe",
+      "namespace": "recap-demo"
+    },
+    "budget": {
+      "max_steps": 30,
+      "max_tool_calls": 30,
+      "max_elapsed_seconds": 3600.0,
+      "max_estimated_tokens": 120000,
+      "max_parallel_agents": 2,
+      "max_model_tokens": 200000
+    }
+  },
+  "state": "RESOLVED",
+  "history": [
+    {
+      "state": "CREATED",
+      "at": "2026-11-03T15:50:12.223424Z",
+      "reason": "incident created"
+    },
+    {
+      "state": "RETRIEVING",
+      "at": "2026-11-03T15:50:12.886260Z",
+      "reason": "gather runbooks and past experience"
+    },
+    {
+      "state": "INVESTIGATING",
+      "at": "2026-11-03T15:50:12.890109Z",
+      "reason": "investigate with read-only tools"
+    },
+    {
+      "state": "PROPOSING",
+      "at": "2026-11-03T16:04:44.935500Z",
+      "reason": "diagnosis: The error rate increase in the frontend and backend services is due to a recent bad deployment of the backend service."
+    },
+    {
+      "state": "AWAITING_APPROVAL",
+      "at": "2026-11-03T16:09:10.698359Z",
+      "reason": "approval required for execute_rollback"
+    },
+    {
+      "state": "MITIGATING",
+      "at": "2026-11-03T16:18:57.161794Z",
+      "reason": "execute_rollback on backend"
+    },
+    {
+      "state": "VERIFYING",
+      "at": "2026-11-03T16:19:02.332461Z",
+      "reason": "independent oracle checks recovery"
+    },
+    {
+      "state": "RESOLVED",
+      "at": "2026-11-03T16:19:13.340446Z",
+      "reason": "oracle verified recovery (kind)"
+    }
+  ],
+  "environment": {
+    "kind": "kind",
+    "name": "Kind cluster recap-m5",
+    "namespace": "recap-demo",
+    "is_simulated": false,
+    "supported_actions": [
+      "rollback",
+      "restart"
+    ],
+    "description": "Local Kind cluster recap-m5 (context kind-recap-m5), not production: 2 demo services in namespace recap-demo, read through typed kubectl operations. The only writes are a rollback to a named revision and a rolling restart, each with a signed single-use capability, inside the cluster's RBAC and admission policy.",
+    "stabilization_timeout_seconds": 180.0,
+    "stabilization_poll_seconds": 5.0
+  },
+  "provider": "ollama-vm:qwen3:8b",
+  "provider_info": {
+    "name": "ollama-vm:qwen3:8b",
+    "kind": "llm",
+    "origin": "local_llm",
+    "model": "qwen3:8b",
+    "description": "The same open-weight model, served by Ollama on the owner's own AWS VM (no GPU) and reached through an SSH tunnel (infra/aws/ec2.sh tunnel). Self-hosted: no third party, no per-request charge.",
+    "mode": "tools",
+    "prompt_version": "prompts-v4.7",
+    "replay_of": null,
+    "recording": "data/recordings/20261103-154935-ollama-vm-241cf3.jsonl",
+    "red_team": false,
+    "server": {
+      "ollama_version": "0.34.4",
+      "capabilities": [
+        "completion",
+        "tools",
+        "thinking"
+      ],
+      "context_length": 40960,
+      "parameter_size": "8.2B",
+      "quantization": "Q4_K_M",
+      "weights": "sha256:a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f"
+    }
+  },
+  "strategies": [
+    {
+      "mode": "parallel",
+      "reason": "2 services are affected: look at telemetry and infrastructure side by side",
+      "rule_id": "RT2-cross-service",
+      "selected_agents": [
+        "telemetry_investigator",
+        "infrastructure_investigator"
+      ],
+      "provider": "ollama-vm:qwen3:8b",
+      "budget": {
+        "telemetry_investigator": 8,
+        "infrastructure_investigator": 8
+      },
+      "signals": {
+        "services_affected": 2,
+        "symptom_categories": [
+          "errors"
+        ],
+        "memory_hits": 3,
+        "top_memory_similarity": 1.0,
+        "familiar_success": true,
+        "memory_conflict": true,
+        "prior_failed_attempts": 1,
+        "escalation": false,
+        "disagreement": false,
+        "remaining_tool_calls": 30,
+        "remaining_steps": 30,
+        "max_parallel_agents": 2
+      },
+      "round": 1
+    }
+  ],
+  "findings": [
+    {
+      "agent_role": "telemetry_investigator",
+      "evidence_ids": [
+        "ev-f5b9e5-r1t01",
+        "ev-f5b9e5-r1t02",
+        "ev-f5b9e5-r1t03",
+        "ev-f5b9e5-r1t04"
+      ],
+      "doc_refs": [
+        "guide-reading-signals#error-rate-1",
+        "shop-architecture#service-level-objectives-1",
+        "shop-architecture#call-graph-1",
+        "runbook-memory-pressure#symptoms-1"
+      ],
+      "hypotheses": [
+        {
+          "claim": "The frontend service is failing due to the backend service's KeyError.",
+          "mechanism": "dependency_failure",
+          "target_service": "frontend",
+          "supporting_evidence_ids": [
+            "ev-f5b9e5-r1t01",
+            "ev-f5b9e5-r1t02",
+            "ev-f5b9e5-r1t03",
+            "ev-f5b9e5-r1t04"
+          ],
+          "contradicting_evidence_ids": [],
+          "status": "proposed",
+          "details": {
+            "dependency": "backend"
+          },
+          "origin": "investigation",
+          "proposed_by": "telemetry_investigator",
+          "confidence_note": "The error rate for both services spiked around the same time, and the frontend logs indicate a failure in the backend service."
+        }
+      ],
+      "proposed_next_steps": [
+        "Check if the backend service has any recent deployments that could have caused the KeyError.",
+        "Verify if there are any memory pressure or OOMKilled events in the backend service logs.",
+        "Investigate the dependency graph to ensure there are no other services involved in the failure chain."
+      ],
+      "outcome": "hypothesis",
+      "usage": {
+        "steps": 3,
+        "tool_calls": 4,
+        "estimated_tokens": 9780,
+        "actual_input_tokens": 10031,
+        "actual_output_tokens": 426,
+        "external_cost_usd": 0.0,
+        "is_estimate": false,
+        "unreported_calls": 0,
+        "model_requests": 3
+      },
+      "summary": "The frontend service is experiencing HTTP 500 errors due to the backend service failing with a KeyError. The error rate for both services spiked around the same time, indicating a potential dependency failure.",
+      "error": null,
+      "started_at": "2026-11-03T15:50:12.891538Z",
+      "finished_at": "2026-11-03T16:04:33.260947Z",
+      "round": 1,
+      "partial": false
+    },
+    {
+      "agent_role": "infrastructure_investigator",
+      "evidence_ids": [
+        "ev-f5b9e5-r1i01",
+        "ev-f5b9e5-r1i02",
+        "ev-f5b9e5-r1i03",
+        "ev-f5b9e5-r1i04",
+        "ev-f5b9e5-r1i05",
+        "ev-f5b9e5-r1i06"
+      ],
+      "doc_refs": [
+        "guide-reading-signals#error-rate-1",
+        "shop-architecture#service-level-objectives-1",
+        "shop-architecture#call-graph-1",
+        "runbook-memory-pressure#symptoms-1"
+      ],
+      "hypotheses": [
+        {
+          "claim": "The error rate increase in the frontend and backend services is due to a recent bad deployment of the backend service.",
+          "mechanism": "bad_deployment",
+          "target_service": "backend",
+          "supporting_evidence_ids": [
+            "ev-f5b9e5-r1i04",
+            "ev-f5b9e5-r1i02",
+            "ev-f5b9e5-r1i01"
+          ],
+          "contradicting_evidence_ids": [],
+          "status": "proposed",
+          "details": {
+            "version": "v1.1.1"
+          },
+          "origin": "investigation",
+          "proposed_by": "infrastructure_investigator",
+          "confidence_note": "The error rate increase coincides with the deployment of backend v1.1.1, but further investigation is needed to confirm this."
+        }
+      ],
+      "proposed_next_steps": [
+        "Check logs for the backend service to confirm if the deployment caused the error rate increase.",
+        "Verify if there are any other recent deployments or changes that could have caused the error rate increase."
+      ],
+      "outcome": "hypothesis",
+      "usage": {
+        "steps": 4,
+        "tool_calls": 6,
+        "estimated_tokens": 13496,
+        "actual_input_tokens": 13422,
+        "actual_output_tokens": 470,
+        "external_cost_usd": 0.0,
+        "is_estimate": false,
+        "unreported_calls": 0,
+        "model_requests": 4
+      },
+      "summary": "The frontend and backend services are experiencing high error rates, with the frontend showing HTTP 502 errors and the backend showing HTTP 500 errors. The backend service recently deployed version v1.1.1, which may be the cause of the errors. There are no OOMKilled events or resource pressure indicators, but the deployment of the backend service coincides with the onset of the error rate increase.",
+      "error": null,
+      "started_at": "2026-11-03T15:50:12.896904Z",
+      "finished_at": "2026-11-03T16:04:44.912779Z",
+      "round": 1,
+      "partial": false
+    }
+  ],
+  "verification": {
+    "status": "supported",
+    "best": {
+      "claim": "The error rate increase in the frontend and backend services is due to a recent bad deployment of the backend service.",
+      "mechanism": "bad_deployment",
+      "target_service": "backend",
+      "supporting_evidence_ids": [
+        "ev-f5b9e5-r1i04",
+        "ev-f5b9e5-r1i02",
+        "ev-f5b9e5-r1i01"
+      ],
+      "contradicting_evidence_ids": [],
+      "status": "supported",
+      "details": {
+        "version": "v1.1.1"
+      },
+      "origin": "investigation",
+      "proposed_by": "infrastructure_investigator",
+      "confidence_note": "The error rate increase coincides with the deployment of backend v1.1.1, but further investigation is needed to confirm this."
+    },
+    "checks": [
+      {
+        "hypothesis": {
+          "claim": "The frontend service is failing due to the backend service's KeyError.",
+          "mechanism": "dependency_failure",
+          "target_service": "frontend",
+          "supporting_evidence_ids": [
+            "ev-f5b9e5-r1t01",
+            "ev-f5b9e5-r1t02",
+            "ev-f5b9e5-r1t03",
+            "ev-f5b9e5-r1t04"
+          ],
+          "contradicting_evidence_ids": [],
+          "status": "supported",
+          "details": {
+            "dependency": "backend"
+          },
+          "origin": "investigation",
+          "proposed_by": "telemetry_investigator",
+          "confidence_note": "The error rate for both services spiked around the same time, and the frontend logs indicate a failure in the backend service."
+        },
+        "passed": [
+          "every cited evidence ID exists in this run (4 checked)",
+          "60 ERROR lines of frontend say 'upstream backend call failed'",
+          "the claim cites 1 of the 1 evidence items its rules relied on",
+          "explained by bad deployment on backend"
+        ],
+        "failed": [],
+        "rule_ids": [
+          "V1-structural",
+          "V4-dependency",
+          "V1-grounding"
+        ],
+        "proposers": [
+          "telemetry_investigator"
+        ],
+        "basis_evidence_ids": [
+          "ev-f5b9e5-r1t03"
+        ],
+        "detail": "backend"
+      },
+      {
+        "hypothesis": {
+          "claim": "The error rate increase in the frontend and backend services is due to a recent bad deployment of the backend service.",
+          "mechanism": "bad_deployment",
+          "target_service": "backend",
+          "supporting_evidence_ids": [
+            "ev-f5b9e5-r1i04",
+            "ev-f5b9e5-r1i02",
+            "ev-f5b9e5-r1i01"
+          ],
+          "contradicting_evidence_ids": [],
+          "status": "supported",
+          "details": {
+            "version": "v1.1.1"
+          },
+          "origin": "investigation",
+          "proposed_by": "infrastructure_investigator",
+          "confidence_note": "The error rate increase coincides with the deployment of backend v1.1.1, but further investigation is needed to confirm this."
+        },
+        "passed": [
+          "every cited evidence ID exists in this run (3 checked)",
+          "deployment evidence shows backend v1.1.1 deployed 1 min before the alert",
+          "backend's error_rate is first seen above 5% 1 min after the alert",
+          "errors on backend began 1 min after v1.1.1 was deployed (allowed window -5..+30 min)",
+          "0 of 60 ERROR lines of backend blame a dependency (under 50%)",
+          "the claim cites 1 of the 3 evidence items its rules relied on"
+        ],
+        "failed": [],
+        "rule_ids": [
+          "V1-structural",
+          "V2-deploy-timing",
+          "V2-upstream-dominance",
+          "V1-grounding"
+        ],
+        "proposers": [
+          "infrastructure_investigator"
+        ],
+        "basis_evidence_ids": [
+          "ev-f5b9e5-r1i04",
+          "ev-f5b9e5-r1t02",
+          "ev-f5b9e5-r1t04"
+        ],
+        "detail": "v1.1.1"
+      }
+    ],
+    "unknown_evidence_ids": [],
+    "merged_evidence_ids": [
+      "ev-f5b9e5-r1t01",
+      "ev-f5b9e5-r1t02",
+      "ev-f5b9e5-r1t03",
+      "ev-f5b9e5-r1t04",
+      "ev-f5b9e5-r1i01",
+      "ev-f5b9e5-r1i02",
+      "ev-f5b9e5-r1i03",
+      "ev-f5b9e5-r1i04",
+      "ev-f5b9e5-r1i05",
+      "ev-f5b9e5-r1i06"
+    ],
+    "focus_services": [],
+    "summary": "Best supported root cause: bad deployment on backend (2 supported).",
+    "disagreements": [],
+    "leads": []
+  },
+  "retrieved_docs": [
+    {
+      "chunk": {
+        "chunk_id": "guide-reading-signals#error-rate-1",
+        "doc_path": "fixtures/knowledge/guide-reading-signals.md",
+        "title": "Guide: reading health signals",
+        "heading": "Error rate",
+        "text": "The share of requests that fail, usually counted as HTTP 5xx responses. It is the\nclearest sign that users are affected. Find the onset: the first point where the rate\nrises above its normal level. The onset is the moment you compare with recent changes.",
+        "checksum": "486855642ce8",
+        "provenance": {
+          "source": "fixtures/knowledge",
+          "kind": "synthetic runbook authored for RECAP V1",
+          "license": "MIT (this repository)"
+        },
+        "token_estimate": 64
+      },
+      "score": 13.5001273438362,
+      "rank": 1,
+      "retriever": "bm25",
+      "reranker": "lexical-heading-boost",
+      "signals": {
+        "bm25_rank": 1.0,
+        "bm25": 13.0346
+      }
+    },
+    {
+      "chunk": {
+        "chunk_id": "shop-architecture#service-level-objectives-1",
+        "doc_path": "fixtures/knowledge/shop-architecture.md",
+        "title": "ShopSim architecture",
+        "heading": "Service level objectives",
+        "text": "- Errors: the HTTP 5xx ratio of every service stays under 1% of requests.\n- Latency: p95 latency stays under 500 ms for every service.\n- Availability: all replicas of every service report ready.\n\nAn alert fires when a service breaks one of these objectives. The alert names the\nservice whose numbers crossed the line, which is not always the service that is broken.",
+        "checksum": "d5b3419b8b41",
+        "provenance": {
+          "source": "fixtures/knowledge",
+          "kind": "synthetic runbook authored for RECAP V1",
+          "license": "MIT (this repository)"
+        },
+        "token_estimate": 92
+      },
+      "score": 8.932400086973688,
+      "rank": 2,
+      "retriever": "bm25",
+      "reranker": "lexical-heading-boost",
+      "signals": {
+        "bm25_rank": 2.0,
+        "bm25": 8.9324
+      }
+    },
+    {
+      "chunk": {
+        "chunk_id": "shop-architecture#call-graph-1",
+        "doc_path": "fixtures/knowledge/shop-architecture.md",
+        "title": "ShopSim architecture",
+        "heading": "Call graph",
+        "text": "- frontend calls checkout and cart.\n- checkout calls payment and inventory.\n- payment, inventory and cart call no other service.\n\nA service that another service calls is its dependency; the service making the call is\nthe caller. Requests therefore flow from frontend to checkout, and from checkout to\npayment and inventory.",
+        "checksum": "d5b3419b8b41",
+        "provenance": {
+          "source": "fixtures/knowledge",
+          "kind": "synthetic runbook authored for RECAP V1",
+          "license": "MIT (this repository)"
+        },
+        "token_estimate": 81
+      },
+      "score": 7.55131259224048,
+      "rank": 3,
+      "retriever": "bm25",
+      "reranker": "lexical-heading-boost",
+      "signals": {
+        "bm25_rank": 3.0,
+        "bm25": 7.5513
+      }
+    },
+    {
+      "chunk": {
+        "chunk_id": "runbook-memory-pressure#symptoms-1",
+        "doc_path": "fixtures/knowledge/runbook-memory-pressure.md",
+        "title": "Runbook: memory pressure and crash loops",
+        "heading": "Symptoms",
+        "text": "- `OOMKilled` events: a container exceeded its memory limit and was killed.\n- `BackOff` events and a `CrashLoopBackOff` status while the pod keeps restarting.\n- Readiness probe failures, so fewer replicas are ready than desired.\n- The memory metric climbs toward the limit; logs show heap warnings and\n  `OutOfMemoryError` lines.\n- The error rate rises because the remaining replicas take all the traffic.",
+        "checksum": "e8dd49ce9fda",
+        "provenance": {
+          "source": "fixtures/knowledge",
+          "kind": "synthetic runbook authored for RECAP V1",
+          "license": "MIT (this repository)"
+        },
+        "token_estimate": 102
+      },
+      "score": 5.340127932286785,
+      "rank": 4,
+      "retriever": "bm25",
+      "reranker": "lexical-heading-boost",
+      "signals": {
+        "bm25_rank": 4.0,
+        "bm25": 5.3401
+      }
+    },
+    {
+      "chunk": {
+        "chunk_id": "runbook-bad-deployment#remediation-1",
+        "doc_path": "fixtures/knowledge/runbook-bad-deployment.md",
+        "title": "Runbook: bad deployment",
+        "heading": "Remediation",
+        "text": "Mechanism: bad_deployment\nRecommended action: execute_rollback\n\nUse the propose_rollback dry run first. It reports the current version and the last\nhealthy revision a rollback would restore, without changing anything. Roll back to that\nrevision only after a human approves the exact action: this incident, this service and\nthis target version.",
+        "checksum": "092b2a6f0fd0",
+        "provenance": {
+          "source": "fixtures/knowledge",
+          "kind": "synthetic runbook authored for RECAP V1",
+          "license": "MIT (this repository)"
+        },
+        "token_estimate": 86
+      },
+      "score": 14.833340057244891,
+      "rank": 1,
+      "retriever": "bm25",
+      "reranker": "lexical-heading-boost",
+      "signals": {
+        "bm25_rank": 1.0,
+        "bm25": 12.7143
+      }
+    },
+    {
+      "chunk": {
+        "chunk_id": "runbook-memory-pressure#remediation-1",
+        "doc_path": "fixtures/knowledge/runbook-memory-pressure.md",
+        "title": "Runbook: memory pressure and crash loops",
+        "heading": "Remediation",
+        "text": "Mechanism: resource_pressure\nRecommended action: restart_service\n\nA rolling restart replaces pods one at a time, so the service keeps serving traffic. It\nis reversible and safe when the service has at least two replicas, and it still needs an\napproval bound to the exact service and incident. A restart does NOT fix a bad release:\nthe new pods run the same broken code and fail again.",
+        "checksum": "e8dd49ce9fda",
+        "provenance": {
+          "source": "fixtures/knowledge",
+          "kind": "synthetic runbook authored for RECAP V1",
+          "license": "MIT (this repository)"
+        },
+        "token_estimate": 96
+      },
+      "score": 10.60123015434005,
+      "rank": 2,
+      "retriever": "bm25",
+      "reranker": "lexical-heading-boost",
+      "signals": {
+        "bm25_rank": 2.0,
+        "bm25": 9.7858
+      }
+    }
+  ],
+  "retrieval": {
+    "mode": "bm25",
+    "embedder": null,
+    "server": null,
+    "embedding_requests": 0,
+    "embedding_input_tokens": null,
+    "replayed_requests": 0,
+    "agent_searches": 0
+  },
+  "memory_hits": [
+    {
+      "episode": {
+        "episode_id": "ep-aa92fd4659",
+        "origin_run_id": "run-047aac6eb0",
+        "scenario_id": "kind-bad-release",
+        "failure_family": "bad_deployment",
+        "partition": "live",
+        "service": "frontend",
+        "symptoms": [
+          "frontend: HTTP error rate 0.30 over 10 probe requests (first failure: HTTP 502)",
+          "backend: HTTP error rate 0.20 over 10 probe requests (first failure: HTTP 500)"
+        ],
+        "failure_mechanism": "bad_deployment",
+        "mechanism_target": "backend",
+        "verified_evidence": [
+          {
+            "evidence_id": "ev-047aac-r1i04",
+            "summary": "{\"deployments\":[{\"service\":\"backend\",\"version\":\"v1.1.0\",\"previous_version\":\"v1.0.0\",\"deployed_at\":\"2026-11-03T12:51:15.003442Z\",\"status\":\"complete\",\"change_summ"
+          },
+          {
+            "evidence_id": "ev-047aac-r1i06",
+            "summary": "{\"events\":[{\"timestamp\":\"2026-11-03T12:51:22Z\",\"type\":\"Normal\",\"reason\":\"Killing\",\"object\":\"pod/backend-598b5745c9-j47f2\",\"service\":\"backend\",\"message\":\"Stoppin"
+          }
+        ],
+        "unsuccessful_actions": [],
+        "successful_action": {
+          "action": "execute_rollback",
+          "target": "backend",
+          "params": {
+            "to_version": "v1.0.0"
+          },
+          "result": "recovered",
+          "at": "2026-11-03T13:13:24.214262Z",
+          "note": ""
+        },
+        "outcome": "success",
+        "verified": true,
+        "verification_source": "kind-health-oracle",
+        "provenance": {
+          "simulated": false,
+          "environment": "kind",
+          "provider": "ollama-vm:qwen3:8b",
+          "origin": "local_llm",
+          "model": "qwen3:8b",
+          "prompt_version": "prompts-v4.7",
+          "weights": "sha256:a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f",
+          "retrieval": "bm25",
+          "code_version": "525c28d1e5d9",
+          "seed": 501,
+          "config_hash": "87bbca8249a51838",
+          "fixture_hash": "80a8c22afa681a7d",
+          "origin_run_id": "run-047aac6eb0",
+          "created_by": "consolidator-v2",
+          "trace": "runs/run-047aac6eb0/events"
+        },
+        "created_at": "2026-11-03T13:13:24.385887Z",
+        "summary_method": "deterministic-extraction",
+        "trajectory": [
+          {
+            "agent": "telemetry_investigator",
+            "call": "mcp:get_service_metrics(metric=error_rate,service=frontend,window_minutes=60)",
+            "evidence_id": "ev-047aac-r1t01",
+            "kind": "tool"
+          },
+          {
+            "agent": "telemetry_investigator",
+            "call": "mcp:get_service_metrics(metric=error_rate,service=backend,window_minutes=60)",
+            "evidence_id": "ev-047aac-r1t02",
+            "kind": "tool"
+          },
+          {
+            "agent": "telemetry_investigator",
+            "call": "mcp:get_service_logs(limit=100,service=frontend,since_minutes=240)",
+            "evidence_id": "ev-047aac-r1t03",
+            "kind": "tool"
+          },
+          {
+            "agent": "telemetry_investigator",
+            "call": "mcp:get_service_logs(limit=100,service=backend,since_minutes=240)",
+            "evidence_id": "ev-047aac-r1t04",
+            "kind": "tool"
+          },
+          {
+            "agent": "infrastructure_investigator",
+            "call": "mcp:get_service_health(service=frontend)",
+            "evidence_id": "ev-047aac-r1i01",
+            "kind": "tool"
+          },
+          {
+            "agent": "infrastructure_investigator",
+            "call": "mcp:get_service_health(service=backend)",
+            "evidence_id": "ev-047aac-r1i02",
+            "kind": "tool"
+          },
+          {
+            "agent": "infrastructure_investigator",
+            "call": "mcp:get_recent_deployments(limit=5,service=frontend)",
+            "evidence_id": "ev-047aac-r1i03",
+            "kind": "tool"
+          },
+          {
+            "agent": "infrastructure_investigator",
+            "call": "mcp:get_recent_deployments(limit=5,service=backend)",
+            "evidence_id": "ev-047aac-r1i04",
+            "kind": "tool"
+          },
+          {
+            "agent": "infrastructure_investigator",
+            "call": "mcp:get_k8s_like_events(limit=10,service=frontend)",
+            "evidence_id": "ev-047aac-r1i05",
+            "kind": "tool"
+          },
+          {
+            "agent": "infrastructure_investigator",
+            "call": "mcp:get_k8s_like_events(limit=10,service=backend)",
+            "evidence_id": "ev-047aac-r1i06",
+            "kind": "tool"
+          },
+          {
+            "agent": "controller",
+            "call": "mcp:execute_rollback(service=backend,to_version=v1.0.0)",
+            "evidence_id": "ev-047aac-011",
+            "kind": "tool"
+          }
+        ],
+        "checked_claims": [
+          {
+            "mechanism": "dependency_failure",
+            "target": "frontend",
+            "status": "supported",
+            "proposers": [
+              "telemetry_investigator"
+            ],
+            "rule_ids": [
+              "V1-structural",
+              "V4-dependency",
+              "V1-grounding"
+            ],
+            "failed": [],
+            "detail": "backend"
+          },
+          {
+            "mechanism": "bad_deployment",
+            "target": "backend",
+            "status": "supported",
+            "proposers": [
+              "infrastructure_investigator"
+            ],
+            "rule_ids": [
+              "V1-structural",
+              "V2-deploy-timing",
+              "V2-upstream-dominance",
+              "V1-grounding"
+            ],
+            "failed": [],
+            "detail": "v1.1.0"
+          }
+        ],
+        "diagnosis_basis": [
+          "every cited evidence ID exists in this run (2 checked)",
+          "deployment evidence shows backend v1.1.0 deployed at the alert time",
+          "backend's error_rate is first seen above 5% 1 min after the alert",
+          "errors on backend began 1 min after v1.1.0 was deployed (allowed window -5..+30 min)",
+          "0 of 60 ERROR lines of backend blame a dependency (under 50%)",
+          "the claim cites 1 of the 3 evidence items its rules relied on"
+        ],
+        "fix_preconditions": {
+          "action": "execute_rollback",
+          "target": "backend",
+          "mechanism": "bad_deployment",
+          "bad_version": "v1.1.0",
+          "to_version": "v1.0.0"
+        },
+        "embedding": null,
+        "embedding_model": null
+      },
+      "similarity": 1.0,
+      "mechanism_match": true,
+      "outcome": "success",
+      "safe_to_reuse": true,
+      "reason": "safe to reuse: live evidence also points to bad deployment and the past fix was independently verified",
+      "signals": {
+        "lexical": 1.0
+      },
+      "supporting": [
+        "live evidence also points to bad deployment",
+        "the past fix was independently verified"
+      ],
+      "contradicting": []
+    },
+    {
+      "episode": {
+        "episode_id": "ep-9110820706",
+        "origin_run_id": "run-e4bd2821df",
+        "scenario_id": "kind-bad-release",
+        "failure_family": "bad_deployment",
+        "partition": "live",
+        "service": "frontend",
+        "symptoms": [
+          "frontend: HTTP error rate 0.30 over 10 probe requests (first failure: HTTP 502)",
+          "backend: HTTP error rate 0.20 over 10 probe requests (first failure: HTTP 500)"
+        ],
+        "failure_mechanism": "bad_deployment",
+        "mechanism_target": "backend",
+        "verified_evidence": [
+          {
+            "evidence_id": "ev-e4bd28-r1i02",
+            "summary": "{\"deployments\":[{\"service\":\"backend\",\"version\":\"v1.1.0\",\"previous_version\":\"v1.0.0\",\"deployed_at\":\"2026-11-03T10:55:45.119824Z\",\"status\":\"complete\",\"change_summ"
+          },
+          {
+            "evidence_id": "ev-e4bd28-r1i06",
+            "summary": "{\"events\":[{\"timestamp\":\"2026-11-03T10:55:51Z\",\"type\":\"Normal\",\"reason\":\"Killing\",\"object\":\"pod/backend-598b5745c9-l4ppx\",\"service\":\"backend\",\"message\":\"Stoppin"
+          }
+        ],
+        "unsuccessful_actions": [
+          {
+            "action": "execute_rollback",
+            "target": "backend",
+            "params": {
+              "to_version": "v1.0.0"
+            },
+            "result": "rejected",
+            "at": "2026-11-03T11:18:55.885758Z",
+            "note": "rejected by console-user"
+          }
+        ],
+        "successful_action": null,
+        "outcome": "blocked",
+        "verified": false,
+        "verification_source": null,
+        "provenance": {
+          "simulated": false,
+          "environment": "kind",
+          "provider": "ollama-vm:qwen3:8b",
+          "origin": "local_llm",
+          "model": "qwen3:8b",
+          "prompt_version": "prompts-v4.7",
+          "weights": "sha256:a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f",
+          "retrieval": "bm25",
+          "code_version": "fee0745b57d0",
+          "seed": 501,
+          "config_hash": "811542b8956ce457",
+          "fixture_hash": "81f333af1267b023",
+          "origin_run_id": "run-e4bd2821df",
+          "created_by": "consolidator-v2",
+          "trace": "runs/run-e4bd2821df/events"
+        },
+        "created_at": "2026-11-03T11:18:56.064723Z",
+        "summary_method": "deterministic-extraction",
+        "trajectory": [
+          {
+            "agent": "telemetry_investigator",
+            "call": "mcp:get_service_metrics(metric=error_rate,service=frontend,window_minutes=60)",
+            "evidence_id": "ev-e4bd28-r1t01",
+            "kind": "tool"
+          },
+          {
+            "agent": "telemetry_investigator",
+            "call": "mcp:get_service_metrics(metric=error_rate,service=backend,window_minutes=60)",
+            "evidence_id": "ev-e4bd28-r1t02",
+            "kind": "tool"
+          },
+          {
+            "agent": "telemetry_investigator",
+            "call": "mcp:get_service_logs(limit=100,service=frontend,since_minutes=240)",
+            "evidence_id": "ev-e4bd28-r1t03",
+            "kind": "tool"
+          },
+          {
+            "agent": "telemetry_investigator",
+            "call": "mcp:get_service_logs(limit=100,service=backend,since_minutes=240)",
+            "evidence_id": "ev-e4bd28-r1t04",
+            "kind": "tool"
+          },
+          {
+            "agent": "infrastructure_investigator",
+            "call": "mcp:get_recent_deployments(limit=5,service=frontend)",
+            "evidence_id": "ev-e4bd28-r1i01",
+            "kind": "tool"
+          },
+          {
+            "agent": "infrastructure_investigator",
+            "call": "mcp:get_recent_deployments(limit=5,service=backend)",
+            "evidence_id": "ev-e4bd28-r1i02",
+            "kind": "tool"
+          },
+          {
+            "agent": "infrastructure_investigator",
+            "call": "mcp:get_service_health(service=frontend)",
+            "evidence_id": "ev-e4bd28-r1i03",
+            "kind": "tool"
+          },
+          {
+            "agent": "infrastructure_investigator",
+            "call": "mcp:get_service_health(service=backend)",
+            "evidence_id": "ev-e4bd28-r1i04",
+            "kind": "tool"
+          },
+          {
+            "agent": "infrastructure_investigator",
+            "call": "mcp:get_k8s_like_events(limit=5,service=frontend)",
+            "evidence_id": "ev-e4bd28-r1i05",
+            "kind": "tool"
+          },
+          {
+            "agent": "infrastructure_investigator",
+            "call": "mcp:get_k8s_like_events(limit=5,service=backend)",
+            "evidence_id": "ev-e4bd28-r1i06",
+            "kind": "tool"
+          }
+        ],
+        "checked_claims": [
+          {
+            "mechanism": "dependency_failure",
+            "target": "backend",
+            "status": "insufficient",
+            "proposers": [
+              "telemetry_investigator"
+            ],
+            "rule_ids": [
+              "V1-structural"
+            ],
+            "failed": [
+              "the claim names backend as its own failing dependency"
+            ],
+            "detail": "backend"
+          },
+          {
+            "mechanism": "bad_deployment",
+            "target": "backend",
+            "status": "supported",
+            "proposers": [
+              "infrastructure_investigator"
+            ],
+            "rule_ids": [
+              "V1-structural",
+              "V2-deploy-timing",
+              "V2-upstream-dominance",
+              "V1-grounding"
+            ],
+            "failed": [],
+            "detail": "v1.1.0"
+          }
+        ],
+        "diagnosis_basis": [
+          "every cited evidence ID exists in this run (2 checked)",
+          "deployment evidence shows backend v1.1.0 deployed at the alert time",
+          "backend's error_rate is first seen above 5% 1 min after the alert",
+          "errors on backend began 1 min after v1.1.0 was deployed (allowed window -5..+30 min)",
+          "0 of 60 ERROR lines of backend blame a dependency (under 50%)",
+          "the claim cites 1 of the 3 evidence items its rules relied on"
+        ],
+        "fix_preconditions": {},
+        "embedding": null,
+        "embedding_model": null
+      },
+      "similarity": 1.0,
+      "mechanism_match": true,
+      "outcome": "blocked",
+      "safe_to_reuse": false,
+      "reason": "similar symptoms and live evidence also points to bad deployment, but the past attempt ended as blocked (a caution, not a recipe)",
+      "signals": {
+        "lexical": 1.0
+      },
+      "supporting": [
+        "live evidence also points to bad deployment"
+      ],
+      "contradicting": [
+        "the past attempt ended as blocked (a caution, not a recipe)"
+      ]
+    },
+    {
+      "episode": {
+        "episode_id": "ep-b5e1ce2709",
+        "origin_run_id": "run-9fea287988",
+        "scenario_id": "kind-bad-release",
+        "failure_family": "bad_deployment",
+        "partition": "live",
+        "service": "frontend",
+        "symptoms": [
+          "frontend: HTTP error rate 0.20 over 10 probe requests (first failure: HTTP 502)",
+          "backend: HTTP error rate 0.20 over 10 probe requests (first failure: HTTP 500)"
+        ],
+        "failure_mechanism": null,
+        "mechanism_target": null,
+        "verified_evidence": [],
+        "unsuccessful_actions": [],
+        "successful_action": null,
+        "outcome": "failed",
+        "verified": false,
+        "verification_source": null,
+        "provenance": {
+          "simulated": false,
+          "environment": "kind",
+          "provider": "ollama-vm:qwen3:8b",
+          "origin": "local_llm",
+          "model": "qwen3:8b",
+          "prompt_version": "prompts-v4.7",
+          "weights": "sha256:a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f",
+          "retrieval": "bm25",
+          "code_version": "cd18ea2c4233",
+          "seed": 501,
+          "config_hash": "811542b8956ce457",
+          "fixture_hash": "81f333af1267b023",
+          "origin_run_id": "run-9fea287988",
+          "created_by": "consolidator-v2",
+          "trace": "runs/run-9fea287988/events"
+        },
+        "created_at": "2026-11-03T12:22:24.095534Z",
+        "summary_method": "deterministic-extraction",
+        "trajectory": [
+          {
+            "agent": "infrastructure_investigator",
+            "call": "mcp:get_recent_deployments(limit=5,service=frontend)",
+            "evidence_id": "ev-9fea28-r1i01",
+            "kind": "tool"
+          },
+          {
+            "agent": "infrastructure_investigator",
+            "call": "mcp:get_recent_deployments(limit=5,service=backend)",
+            "evidence_id": "ev-9fea28-r1i02",
+            "kind": "tool"
+          },
+          {
+            "agent": "infrastructure_investigator",
+            "call": "mcp:get_k8s_like_events(limit=10,service=frontend)",
+            "evidence_id": "ev-9fea28-r1i03",
+            "kind": "tool"
+          },
+          {
+            "agent": "infrastructure_investigator",
+            "call": "mcp:get_k8s_like_events(limit=10,service=backend)",
+            "evidence_id": "ev-9fea28-r1i04",
+            "kind": "tool"
+          },
+          {
+            "agent": "infrastructure_investigator",
+            "call": "mcp:get_service_health(service=frontend)",
+            "evidence_id": "ev-9fea28-r1i05",
+            "kind": "tool"
+          },
+          {
+            "agent": "infrastructure_investigator",
+            "call": "mcp:get_service_health(service=backend)",
+            "evidence_id": "ev-9fea28-r1i06",
+            "kind": "tool"
+          },
+          {
+            "agent": "infrastructure_investigator",
+            "call": "mcp:list_services()",
+            "evidence_id": "ev-9fea28-r2i01",
+            "kind": "tool"
+          }
+        ],
+        "checked_claims": [
+          {
+            "mechanism": "bad_deployment",
+            "target": "backend",
+            "status": "insufficient",
+            "proposers": [
+              "infrastructure_investigator"
+            ],
+            "rule_ids": [
+              "V1-structural",
+              "V2-deploy-timing",
+              "V2-upstream-dominance"
+            ],
+            "failed": [
+              "no error_rate metric or '(version=v1.1.0)' errors for backend",
+              "no log evidence for backend: errors from its dependencies are not ruled out"
+            ],
+            "detail": "v1.1.0"
+          }
+        ],
+        "diagnosis_basis": [],
+        "fix_preconditions": {},
+        "embedding": null,
+        "embedding_model": null
+      },
+      "similarity": 1.0,
+      "mechanism_match": false,
+      "outcome": "failed",
+      "safe_to_reuse": false,
+      "reason": "similar symptoms, but the past episode has no verified diagnosis to compare; the past attempt ended as failed (a caution, not a recipe)",
+      "signals": {
+        "lexical": 1.0
+      },
+      "supporting": [],
+      "contradicting": [
+        "the past episode has no verified diagnosis to compare",
+        "the past attempt ended as failed (a caution, not a recipe)"
+      ]
+    }
+  ],
+  "proposals": [
+    {
+      "action": "execute_rollback",
+      "target": "backend",
+      "params": {
+        "to_version": "v1.0.0"
+      },
+      "rationale": "The verified root cause is a bad deployment of the backend service, which introduced errors causing the frontend and backend to have high error rates. The evidence shows that the error rate spiked shortly after the deployment of version v1.1.1, and the logs confirm a KeyError in the backend service. The recommended action for a bad deployment is to execute a rollback to a previous version. Based on past incidents, rolling back to version v1.0.0 has been successfully used to resolve similar issue",
+      "evidence_ids": [
+        "ev-f5b9e5-r1i04",
+        "ev-f5b9e5-r1t02",
+        "ev-f5b9e5-r1t04"
+      ],
+      "expected_health_change": "The error rate should decrease as the backend service reverts to a stable version, which should also resolve the frontend's HTTP 500 errors caused by the backend failure.",
+      "rollback_hint": "The rollback to version v1.0.0 has been verified in the past and is expected to resolve the issue.",
+      "risk_level": "reversible_write",
+      "hypothesis_claim": "The error rate increase in the frontend and backend services is due to a recent bad deployment of the backend service.",
+      "source": "llm",
+      "citations": [
+        "runbook-bad-deployment#remediation-1",
+        "ep-aa92fd4659",
+        "guide-reading-signals#error-rate-1",
+        "shop-architecture#service-level-objectives-1"
+      ],
+      "proposal_id": "prop-9b05366763",
+      "incident_id": "inc-efc6137076",
+      "created_at": "2026-11-03T16:09:10.670444Z"
+    }
+  ],
+  "safety_decisions": [
+    {
+      "verdict": "APPROVAL_REQUIRED",
+      "reasons": [
+        "reversible write: needs a human approval bound to this exact proposal"
+      ],
+      "rule_ids": [
+        "R1-tool-name-format",
+        "R2-known-tool",
+        "R3-safety-scope",
+        "R4-args-valid",
+        "R5-namespace-allowlist",
+        "R6-service-allowlist",
+        "R7-worker-read-only",
+        "R8-read-allow",
+        "R9-destructive-deny",
+        "R10-high-risk-deny",
+        "R14-remediation-catalog",
+        "R11-reversible-approval"
+      ],
+      "tool_name": "execute_rollback",
+      "risk": "reversible_write",
+      "caller": "controller",
+      "policy_version": "policy-kind-v1",
+      "decided_at": "2026-11-03T16:09:10.670875Z"
+    }
+  ],
+  "pending_approval": null,
+  "approvals": [
+    {
+      "approval_id": "apr-12c9cb3548",
+      "incident_id": "inc-efc6137076",
+      "proposal_id": "prop-9b05366763",
+      "proposal_digest": "93d13056adfbeb885bcd491794222f840270d908397864811bd06206e03ec2e7",
+      "scope": "single_action",
+      "decision": "approved",
+      "actor": "console-user",
+      "decided_at": "2026-11-03T16:18:57.115694Z",
+      "expires_at": "2026-11-03T16:24:10.702543Z",
+      "consumed_at": "2026-11-03T16:19:00.312796Z"
+    }
+  ],
+  "actions": [
+    {
+      "action": "execute_rollback",
+      "target": "backend",
+      "params": {
+        "to_version": "v1.0.0"
+      },
+      "result": "recovered",
+      "at": "2026-11-03T16:19:13.340406Z",
+      "note": ""
+    }
+  ],
+  "recovery": {
+    "healthy_before": false,
+    "healthy_after": true,
+    "observed_signals": {
+      "before": {
+        "frontend": {
+          "service": "frontend",
+          "status": "Running",
+          "ready_replicas": 2,
+          "replicas": 2,
+          "error_rate": 0.3
+        },
+        "backend": {
+          "service": "backend",
+          "status": "Running",
+          "ready_replicas": 2,
+          "replicas": 2,
+          "error_rate": 0.4
+        }
+      },
+      "after": {
+        "frontend": {
+          "service": "frontend",
+          "status": "Running",
+          "ready_replicas": 2,
+          "replicas": 2,
+          "error_rate": 0.0
+        },
+        "backend": {
+          "service": "backend",
+          "status": "Running",
+          "ready_replicas": 2,
+          "replicas": 2,
+          "error_rate": 0.0
+        }
+      }
+    },
+    "oracle_name": "kind-health-oracle",
+    "verified": true,
+    "checked_at": "2026-11-03T16:19:13.339201Z",
+    "services_checked": [
+      "frontend",
+      "backend"
+    ]
+  },
+  "episode_id": "ep-6549746813",
+  "usage": {
+    "steps": 8,
+    "tool_calls": 11,
+    "estimated_tokens": 9184,
+    "actual_input_tokens": 27968,
+    "actual_output_tokens": 1230,
+    "external_cost_usd": 0.0,
+    "is_estimate": false,
+    "unreported_calls": 0,
+    "model_requests": 8
+  },
+  "outcome_note": "oracle verified recovery (kind)",
+  "error": null,
+  "versions": {
+    "recap": "0.5.0",
+    "schema": "recap.v1",
+    "prompt_version": "prompts-v4.7",
+    "config_hash": "87bbca8249a51838",
+    "fixture_hash": "80a8c22afa681a7d",
+    "code_version": "b329b13f7ed5",
+    "policy_version": "policy-kind-v1",
+    "router": "rules-router-v1",
+    "verifier": "evidence-rule-verifier-v1",
+    "provider": "ollama-vm:qwen3:8b",
+    "provider_origin": "local_llm",
+    "recording": "data/recordings/20261103-154935-ollama-vm-241cf3.jsonl",
+    "environment": "kind",
+    "seed": 504,
+    "knowledge_overlays": [
+      "fixtures/knowledge-overlays/kubernetes"
+    ],
+    "transport": "mcp-stdio"
+  },
+  "created_at": "2026-11-03T15:50:12.223595Z",
+  "updated_at": "2026-11-03T16:19:13.663406Z"
+}

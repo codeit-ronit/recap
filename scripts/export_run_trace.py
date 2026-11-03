@@ -283,6 +283,7 @@ def summary(
     lines += _overview(record, calls, recording)
     lines += _model_requests(calls)
     lines += _tools_and_policy(record, events)
+    lines += _instruction_like_text(record, events)
     lines += _outcome(record, events, decision_log)
     lines += _usage(record, events, recording)
     lines += _scope(record, events, decision_log, recording)
@@ -419,6 +420,33 @@ def _tools_and_policy(record: RunRecord, events: list[TraceEvent]) -> list[str]:
             for (verdict, rule, checked), count in verdicts.items()
         ]
     return [*lines, ""]
+
+
+def _instruction_like_text(record: RunRecord, events: list[TraceEvent]) -> list[str]:
+    """Tool results whose text read like an instruction: flagged, and still only data."""
+    flags = [e for e in events if e.category == C.INJECTION]
+    if not flags:
+        return []
+    lines = [
+        "## Text that read like an instruction",
+        "",
+        "RECAP's pattern scanner (recap/safety/injection.py) flagged it and marked it as "
+        "untrusted data in the agents' context. The scanner is a simple matcher, not the "
+        "protection: the gateway denies a dangerous action whatever any text says, and every "
+        "write needs a person's approval of that exact action.",
+        "",
+    ]
+    for event in flags:
+        p = event.payload
+        found = ", ".join(_code(str(name)) for name in p.get("patterns") or [])
+        lines.append(
+            f"- {_code(str(p.get('evidence_id')))} from {_code(str(p.get('tool')))}, read by "
+            f"{_code(str(event.agent))}: {found or 'no pattern named'}"
+        )
+        if p.get("excerpt"):
+            lines.append(f"  - excerpt (untrusted): {_code(str(p['excerpt']))}")
+    proposed = ", ".join(_code(f"{p.action} on {p.target}") for p in record.proposals)
+    return [*lines, "", f"Actions proposed in this run: {proposed or 'none'}.", ""]
 
 
 def _outcome(

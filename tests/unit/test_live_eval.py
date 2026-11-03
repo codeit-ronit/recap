@@ -434,6 +434,7 @@ async def test_runs_on_a_real_cluster_make_a_real_kubernetes_batch(
     assert note in batch.limitations
     assert any("real Kubernetes cluster (Kind)" in line for line in batch.limitations)
     assert not any("SIMULATED shop" in line for line in batch.limitations)
+    assert any("cannot be replayed" in line for line in batch.limitations)  # refused when live
 
 
 def test_a_batch_says_whether_a_person_reviewed_its_fixes() -> None:

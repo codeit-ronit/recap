@@ -13,6 +13,10 @@ from typing import Any
 
 import pytest
 
+from recap.core.config import Settings
+from recap.core.models import IncidentState, RunConfig
+from recap.runtime import Runtime
+
 
 def load_export_script() -> Any:
     path = Path(__file__).resolve().parents[2] / "scripts" / "export_run_trace.py"
@@ -148,3 +152,34 @@ def test_each_approval_line_shows_its_own_note_and_wait() -> None:
     lines = [line for line in export._outcome(record, [], log) if "**Approval:**" in line]
     assert "answered after 1.0 s" in lines[0] and "1.0 s after the request" in lines[0]
     assert "answered after 40.0 s" in lines[1] and "40.0 s after the request" in lines[1]
+
+
+async def test_the_readme_names_text_that_read_like_an_instruction(
+    settings: Settings, tmp_path: Path
+) -> None:
+    """A planted instruction in a log is flagged in the trace; the README says where, what it
+    matched and which actions the run proposed (M5: the Kind cluster's injected-logs run).
+    Here the scripted planner obeys the planted text on purpose (a red-team scenario), and the
+    policy denies the deletion: the README still names the flag and the proposal."""
+    runtime = Runtime(settings)
+    record = await runtime.run_incident("malicious-log", RunConfig(approval_mode="auto"))
+    assert record.state == IncidentState.BLOCKED, record.outcome_note
+    out = tmp_path / "export"
+    export.export_run(settings, record.run_id, out)
+    readme = (out / "README.md").read_text(encoding="utf-8")
+
+    section = readme.split("## Text that read like an instruction")[1].split("\n## ")[0]
+    assert "`imperative-destructive`" in section
+    assert "from `get_service_logs`" in section and "excerpt (untrusted):" in section
+    proposed = [f"`{p.action} on {p.target}`" for p in record.proposals]
+    assert proposed and all(item in section for item in proposed)
+    assert "`delete_namespace on" in section  # what the compromised planner asked for
+
+
+async def test_a_run_without_flagged_text_has_no_such_section(
+    settings: Settings, tmp_path: Path
+) -> None:
+    record = await Runtime(settings).run_incident("bad-deployment", RunConfig(approval_mode="auto"))
+    out = tmp_path / "export"
+    export.export_run(settings, record.run_id, out)
+    assert "read like an instruction" not in (out / "README.md").read_text(encoding="utf-8")

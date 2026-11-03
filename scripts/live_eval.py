@@ -433,11 +433,19 @@ def sample_limitations(records: list[EvalRecord], mode: EvalMode = "real_llm") -
         f"N = {len(records)} ({counts or 'no runs'}): each run is one sample of one "
         "configuration. These are counts, not success rates, and no statistical claim is made.",
         TARGETS.get(mode, TARGETS["real_llm"]),
-        "A model's run is not exactly repeatable (random IDs in its prompts change the "
-        "input); only a replay of its recording is.",
+        REPEATS.get(mode, REPEATS["real_llm"]),
         _review_limitation(records),
     ]
 
+
+# Whether a mode's runs can be repeated (sample_limitations).
+REPEATS: dict[str, str] = {
+    "real_llm": "A model's run is not exactly repeatable (random IDs in its prompts change the "
+    "input); only a replay of its recording is.",
+    "real_kubernetes": "A model's run is not exactly repeatable (random IDs in its prompts "
+    "change the input), and a run on a real cluster cannot be replayed (a replay is refused "
+    "against a live target): each record stands for its own run.",
+}
 
 # What each mode's target is (sample_limitations).
 TARGETS: dict[str, str] = {
