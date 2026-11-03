@@ -300,7 +300,8 @@ async def test_the_catalog_never_probes_a_non_local_ollama(settings: Settings) -
     )
     ollama = next(e for e in entries if e["name"] == "ollama")
     assert ollama["status"] == "unavailable" and "local-only" in ollama["detail"]
-    assert fake.requests == []
+    # Nothing went to the remote host (the loopback ollama-vm entry is probed as it should be).
+    assert [r for r in fake.requests if r.url.host == "ollama.example.net"] == []
 
 
 async def test_the_catalog_survives_an_unexpected_answer(settings: Settings) -> None:

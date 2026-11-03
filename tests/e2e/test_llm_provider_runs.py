@@ -108,7 +108,7 @@ async def test_a_model_driven_run_resolves_through_mcp_with_an_operator_approval
         "propose_rollback",
     ]
     [summary] = events(runtime, record, C.RUN_SUMMARY)
-    assert summary.payload["cost"].startswith("$0.00 - local model on this machine")
+    assert summary.payload["cost"].startswith("$0.00 per request - self-hosted open-weight model")
 
 
 async def test_no_label_or_oracle_data_reaches_the_model_even_after_a_failed_fix(
