@@ -114,6 +114,9 @@ class ClusterEvent(Contract):
     service: str
     message: str
     count: int = 1
+    # When it first happened: an aggregated event (a crash loop's "Back-off ... x20") began
+    # long before `timestamp`, its latest occurrence. None: the source does not report it.
+    first_seen: UtcDatetime | None = None
 
 
 class EventList(Contract):

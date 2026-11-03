@@ -21,6 +21,9 @@ independently, so a mistake in the policy's heuristics is not repeated in the ch
                            any listing of it counts (the same release, log line or OOM kill
                            is often recorded twice, and the basis names every listing)
     V2-deploy-timing       bad_deployment(S, v): S's errors began -5..+30 min around its deploy
+                           (onset: S's error_rate metric, else its release-tagged ERROR lines,
+                           else, on a target without either, the first Warning event saying
+                           S's own pods fail, dated by its first occurrence)
     V2-upstream-dominance  ... and fewer than half of S's ERROR lines blame a dependency that
                            is not observed healthy
     V3-resource            resource_pressure(S): OOM kills or memory >= 90% of its limit;
@@ -135,6 +138,12 @@ SUPPORTED, CONTRADICTED = HypothesisStatus.SUPPORTED, HypothesisStatus.CONTRADIC
 INSUFFICIENT = HypothesisStatus.INSUFFICIENT
 ACTIONABLE = frozenset({FailureMechanism.BAD_DEPLOYMENT, FailureMechanism.RESOURCE_PRESSURE})
 UPSTREAM_SHARE = 0.5  # a service is a victim when at least half of its ERROR lines blame upstream
+# Warning reasons that say a service's own pods fail (V2's onset where no error_rate metric or
+# release-tagged log exists, M5: SREGym's hotel reservation): a crash loop or its back-off, a
+# failing probe, an image that cannot start. Scheduling and node events are not the service.
+POD_FAILURE_REASONS = frozenset(
+    {"CrashLoopBackOff", "BackOff", "Unhealthy", "ImagePullBackOff", "ErrImagePull"}
+)
 _MECHANISM_ORDER = {mechanism: rank for rank, mechanism in enumerate(FailureMechanism)}
 
 # The observation model behind each read tool (Evidence.data is that model, dumped as JSON).
@@ -445,6 +454,24 @@ class _Observations:
                     if eid not in lists:
                         lists.append(eid)
         return list(unique.values())
+
+    def pod_failures(self, service: str) -> list[tuple[list[str], ClusterEvent]]:
+        """(evidence IDs, event) for Warning events that say `service`'s own pods fail, each
+        event once (with every event list that holds it), the earliest to begin first."""
+        unique: dict[tuple[datetime, str, str], tuple[list[str], ClusterEvent]] = {}
+        for eid, _, listing in self.events:
+            for event in listing.events:
+                if (
+                    event.service == service
+                    and event.type == "Warning"
+                    and event.reason in POD_FAILURE_REASONS
+                    and self.fresh(service, event.timestamp)  # a fix ended the older failures
+                ):
+                    key = (event.timestamp, event.reason, event.object)
+                    lists, _ = unique.setdefault(key, ([], event))
+                    if eid not in lists:
+                        lists.append(eid)
+        return sorted(unique.values(), key=lambda item: _began(item[1]))
 
     def events_covering(self, service: str) -> list[str]:
         """IDs of event lists that include `service`: asked for it, or for the whole namespace."""
@@ -814,7 +841,14 @@ def _error_onset(
         if line.level == "ERROR" and signals.version_tag(line.message) == version
     ]
     if not tagged:
-        check.lack(V2_TIMING, f"no error_rate metric or '{tag}' errors for {service}", [service])
+        failures = observed.pod_failures(service)
+        if failures:  # a target without request metrics: the platform's own warnings
+            return _pod_failure_onset(check, service, failures, alert_time)
+        check.lack(
+            V2_TIMING,
+            f"no error_rate metric, '{tag}' errors or pod failure events for {service}",
+            [service],
+        )
         return None
     queries, first = tagged[0]
     check.ok(
@@ -823,6 +857,34 @@ def _error_onset(
         queries,
     )
     return _Onset(first.timestamp, lines[0][1].timestamp < first.timestamp, queries[:1], queries)
+
+
+def _pod_failure_onset(
+    check: _Check,
+    service: str,
+    failures: list[tuple[list[str], ClusterEvent]],
+    alert_time: datetime,
+) -> _Onset:
+    """V2 (b) on a target without request metrics or release-tagged logs: the errors began
+    when the service's own pods began to fail, from the platform's Warning events (a crash
+    loop, a back-off, a failing probe), each dated by its FIRST occurrence: an aggregated
+    "Back-off ... x20" began long before its latest one. Kubernetes writes an event when a
+    pod fails, and the run's window starts before the release, so the first warning in the
+    evidence is where the failures began; the deploy-timing window then applies unchanged."""
+    ids, first = failures[0]
+    began = _began(first)
+    check.ok(
+        V2_TIMING,
+        f"{service}'s pods first report {first.reason} {_when(began, alert_time)}",
+        ids,
+    )
+    basis = _union(*(lists for lists, _ in failures))
+    return _Onset(began, True, ids[:1], basis)
+
+
+def _began(event: ClusterEvent) -> datetime:
+    """When an event's occurrences began (its first occurrence when the source reports it)."""
+    return signals.as_utc(event.first_seen or event.timestamp)
 
 
 def _upstream_dominance(check: _Check, observed: _Observations) -> None:

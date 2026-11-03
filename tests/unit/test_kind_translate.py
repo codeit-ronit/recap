@@ -217,6 +217,20 @@ def test_events_keep_the_real_reason_count_object_and_utc_time(snapshot: dict) -
     assert series.timestamp == at("2026-11-02T09:58:00")
 
 
+def test_an_aggregated_event_keeps_when_it_first_happened(snapshot: dict) -> None:
+    """A crash loop's "Back-off ... x20" began long before its latest occurrence (M5: the
+    verifier dates a bad release's onset by it on a target without metrics)."""
+    raw = items(snapshot, "events", "Event")
+    unhealthy, series, started = (translate.cluster_event(raw[i], "backend") for i in (2, 4, 5))
+    assert unhealthy is not None and series is not None and started is not None
+    assert (unhealthy.first_seen, unhealthy.timestamp) == (
+        at("2026-11-02T09:52:00"),
+        at("2026-11-02T09:55:00"),
+    )
+    assert series.first_seen == at("2026-11-02T09:50:01.123456")  # events.k8s.io: eventTime
+    assert started.first_seen is None  # only a last time: nothing is guessed
+
+
 def test_image_pull_back_off_is_never_reported_as_back_off(snapshot: dict) -> None:
     pulling = translate.cluster_event(items(snapshot, "events", "Event")[1], "backend")
 

@@ -344,6 +344,63 @@ def test_missing_logs_leave_a_bad_deployment_insufficient() -> None:
     assert report.focus_services == ["checkout"]
 
 
+def pod_failure(service: str, first: int, last: int, count: int = 20) -> ClusterEvent:
+    """A crash loop's aggregated back-off event: it began at `first`, last seen at `last`."""
+    return ClusterEvent(
+        timestamp=at(last),
+        first_seen=at(first),
+        type="Warning",
+        reason="CrashLoopBackOff",
+        object=f"pod/{service}-6b9d4c7f8-xk2lp",
+        service=service,
+        message=f"Back-off restarting failed container hotel-reserv-{service}",
+        count=count,
+    )
+
+
+def panic_lines(minutes: range) -> dict[int, str]:
+    return dict.fromkeys(minutes, "cmd/geo/db.go:30 > no reachable servers")
+
+
+def test_without_metrics_a_crash_loop_after_the_release_dates_the_onset() -> None:
+    """M5 (SREGym): no error_rate metric and no release-tagged log line, so the platform's
+    own warnings say when the release's pods began to fail, dated by their first occurrence."""
+    run = Run()
+    deploy = run.deployments(("geo", "sha-d2c036bc", -40), ("geo", "20260912.1", -12))
+    events = run.events(pod_failure("geo", first=-11, last=-1), service="geo")
+    logs = run.logs("geo", panic_lines(range(-11, 1, 2)), start=-11)
+    claim = hypothesis(DEPLOY, "geo", deploy, events, logs, version="20260912.1")
+    check = only_check(verify(run, claim))
+
+    assert check.hypothesis.status == SUPPORTED
+    assert "geo's pods first report CrashLoopBackOff 11 min before the alert" in check.passed
+    window = "(allowed window -5..+30 min)"
+    assert f"errors on geo began 1 min after 20260912.1 was deployed {window}" in check.passed
+    assert set(check.basis_evidence_ids) >= {deploy, events}
+
+
+def test_a_crash_loop_older_than_the_release_contradicts_it() -> None:
+    run = Run()
+    deploy = run.deployments(("geo", "sha-d2c036bc", -90), ("geo", "20260912.1", -12))
+    events = run.events(pod_failure("geo", first=-60, last=-1), service="geo")
+    logs = run.logs("geo", panic_lines(range(-11, 1, 2)), start=-60)
+    claim = hypothesis(DEPLOY, "geo", deploy, events, logs, version="20260912.1")
+    check = only_check(verify(run, claim))
+
+    assert check.hypothesis.status == CONTRADICTED
+    assert any("errors on geo began 48 min before 20260912.1" in line for line in check.failed)
+
+
+def test_an_error_rate_metric_still_dates_the_onset_before_any_event() -> None:
+    run = Run()
+    ids = bad_checkout_release(run)
+    run.events(pod_failure("checkout", first=-40, last=-1), service="checkout")
+    check = only_check(verify(run, hypothesis(DEPLOY, "checkout", *ids, version="v2.4.1")))
+
+    assert check.hypothesis.status == SUPPORTED
+    assert not any("pods first report" in line for line in check.passed)
+
+
 # --- V3: resource pressure ------------------------------------------------------------------------
 
 

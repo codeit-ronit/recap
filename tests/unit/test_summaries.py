@@ -246,6 +246,22 @@ def test_events_are_grouped_with_counts_newest_group_first() -> None:
     assert lines[2].startswith("- payment Warning OOMKilled ×2, latest 09:58 (2 min before")
 
 
+def test_an_aggregated_group_says_when_it_began_when_the_source_reports_it() -> None:
+    crash = ClusterEvent(
+        timestamp=ALERT - timedelta(minutes=1),
+        first_seen=ALERT - timedelta(minutes=11),
+        type="Warning",
+        reason="CrashLoopBackOff",
+        object="pod/geo-6b9d-xk2lp",
+        service="geo",
+        message="Back-off restarting failed container",
+        count=20,
+    )
+    lines = render_for_agents(evidence("get_k8s_like_events", EventList(events=[crash])), ALERT)
+    assert "- geo Warning CrashLoopBackOff ×20, first 09:49 (11 min before" in lines
+    assert "latest 09:59 (1 min before" in lines
+
+
 # --- fallbacks and determinism ----------------------------------------------------------------
 
 

@@ -256,8 +256,10 @@ def _events(listing: EventList, alert: datetime | None, limit: int) -> list[str]
     for group in ordered[:limit]:
         latest = max(group, key=lambda event: event.timestamp)
         count = sum(event.count for event in group)
+        firsts = [event.first_seen for event in group if event.first_seen is not None]
+        began = f"first {_when(min(firsts), alert)}, " if firsts and count > 1 else ""
         out.append(
-            f"- {latest.service} {latest.type} {latest.reason} ×{count}, latest "
+            f"- {latest.service} {latest.type} {latest.reason} ×{count}, {began}latest "
             f"{_when(latest.timestamp, alert)}: {_message(latest.message)}"
         )
     if len(ordered) > limit:

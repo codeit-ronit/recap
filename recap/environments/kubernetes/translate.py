@@ -348,6 +348,20 @@ def event_time(event: Mapping[str, Any]) -> datetime | None:
     return None
 
 
+def event_first_time(event: Mapping[str, Any]) -> datetime | None:
+    """When an event first happened (an aggregated back-off's start): firstTimestamp, the
+    events.k8s.io field for it, or eventTime."""
+    for value in (
+        event.get("firstTimestamp"),
+        event.get("deprecatedFirstTimestamp"),
+        event.get("eventTime"),
+    ):
+        moment = parse_time(value)
+        if moment is not None:
+            return moment
+    return None
+
+
 def last_terminations(pods: Iterable[Mapping[str, Any]]) -> dict[str, set[str]]:
     """Pod name -> why its containers last terminated ("OOMKilled", "Error", ...)."""
     found: dict[str, set[str]] = {}
@@ -386,6 +400,7 @@ def cluster_event(
     series = _dict(event.get("series"))
     count = _int(event.get("count")) or _int(series.get("count")) or 1
     kind_type = "Warning" if event.get("type") == "Warning" else "Normal"
+    first = event_first_time(event)
     return ClusterEvent(
         timestamp=moment,
         type=kind_type,
@@ -394,6 +409,7 @@ def cluster_event(
         service=service,
         message=str(event.get("message") or event.get("note") or "")[:MAX_MESSAGE_CHARS],
         count=max(1, count),
+        first_seen=first if first is not None and first <= moment else None,
     )
 
 
