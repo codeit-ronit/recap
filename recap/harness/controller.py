@@ -313,7 +313,19 @@ class IncidentController:
             if self.lifecycle.is_terminal:
                 self._consolidate()
                 self._summarize()
+            self._end_environment_run()
         return self.record
+
+    def _end_environment_run(self) -> None:
+        """Let the target give up what it held for this run (a live target's lease). Never
+        allowed to hide the run's own outcome or a cancellation."""
+        try:
+            self.environment.end_run()
+        except Exception as exc:  # reported, never raised over the run's outcome
+            self.tracer.emit(
+                TraceCategory.RUN_ERROR,
+                {"error": f"the environment could not end the run cleanly: {type(exc).__name__}"},
+            )
 
     # ==================================================================================
     # Stages

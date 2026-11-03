@@ -731,3 +731,14 @@ def test_the_fake_seed_folder_is_labelled_synthetic() -> None:
     for name in ("cluster.json", "backend-snapshot.json"):
         assert "SYNTHETIC" in (FAKE_DATA / name).read_text()
     assert shutil.which  # the fake needs no tool at all: no kubectl, no docker
+
+
+def test_the_end_of_a_run_gives_the_namespace_lease_up(tmp_path: Path) -> None:
+    """An interrupted or finished run must not hold the namespace until its lease expires."""
+    engine = environment(tmp_path, run_id="run-one")
+    engine.lease.take(engine.namespace, "run-one", 3600)
+    other = environment(tmp_path, run_id="run-two")
+    with pytest.raises(LeaseHeld):
+        other.lease.take(other.namespace, "run-two", 3600)
+    engine.end_run()
+    other.lease.take(other.namespace, "run-two", 3600)  # free again

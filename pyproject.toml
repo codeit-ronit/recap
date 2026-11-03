@@ -50,6 +50,7 @@ files = [
     "recap/core",
     "recap/providers/protocol.py",
     "recap/providers/recordings.py",
+    "recap/providers/local_memory.py",
     "recap/providers/transport.py",
     "recap/providers/factory.py",
     "recap/providers/catalog.py",

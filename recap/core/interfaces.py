@@ -155,6 +155,12 @@ class TargetEnvironment(ABC):
     async def health_check(self) -> HealthReport:
         """Ground-truth health of every service, read directly from environment state."""
 
+    # --- end of a run (trusted; optional) --------------------------------------------------
+    def end_run(self) -> None:
+        """The run is over (resolved, failed, blocked or cancelled): give up anything held for
+        it, such as a live target's one-run-at-a-time lease. Nothing for most targets."""
+        return None
+
 
 @runtime_checkable
 class ToolTransport(Protocol):

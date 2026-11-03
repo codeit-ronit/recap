@@ -29,6 +29,13 @@ def session_usage_ledger(tmp_path_factory: pytest.TempPathFactory) -> Iterator[P
 
 
 @pytest.fixture(autouse=True)
+def no_local_model_memory_floor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The local-model memory guard (recap/providers/local_memory.py) needs 0 GB in tests: no
+    result may depend on how much memory the machine running them has free."""
+    monkeypatch.setenv("RECAP_LOCAL_MODEL_MEMORY_GB", "0")
+
+
+@pytest.fixture(autouse=True)
 def private_usage_ledger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Every test gets its own LLM usage ledger, never the user's real one (~/.local/state)."""
     path = tmp_path / "llm-usage.db"

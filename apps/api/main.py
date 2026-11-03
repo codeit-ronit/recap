@@ -76,6 +76,7 @@ from recap.core.models import (
 )
 from recap.knowledge.hints import parse_action_hints
 from recap.providers.catalog import provider_status
+from recap.providers.local_memory import check_run_memory
 from recap.runtime import Runtime
 from recap.safety.injection import injection_flags
 
@@ -236,6 +237,9 @@ def create_app(
             )
         except RunRefused as refused:
             raise HTTPException(refused.status, refused.detail) from None
+        refusal = check_run_memory(mgr.runtime.settings, config.provider)
+        if refusal:  # a local model that would push this machine into swap
+            raise HTTPException(503, refusal)
         run_id = mgr.start_run(body.scenario_id, config)
         return reader(request).run_started(run_id, body.scenario_id, config)
 

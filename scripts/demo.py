@@ -36,6 +36,7 @@ from recap.core.models import (
 )
 from recap.environments.kubernetes.kubectl import KubeError
 from recap.memory.store import MemoryAccess
+from recap.providers.local_memory import check_run_memory
 from recap.runtime import Runtime
 from recap.safety.approvals import ConsoleApprovalChannel
 from recap.telemetry.tracer import TraceCategory as C
@@ -325,6 +326,10 @@ async def main() -> int:
         + ("you decide in this terminal" if args.approve == "ask" else "simulation auto-approver")
     )
     print(LINE)
+    refusal = check_run_memory(runtime.settings, config.provider)
+    if refusal:  # a local model that would push this machine into swap
+        print(f"refused before the run started: {refusal}", file=sys.stderr)
+        return 2
 
     await ensure_prerequisites(runtime, scenario, config, provider.info, sink)
     sink.started = time.perf_counter()
@@ -346,5 +351,24 @@ async def main() -> int:
     return 0 if record.state.value == expected else 1
 
 
+def _interrupted(error: BaseException) -> bool:
+    if isinstance(error, KeyboardInterrupt):
+        return True
+    if isinstance(error, BaseExceptionGroup):
+        return error.subgroup(KeyboardInterrupt) is not None
+    return False
+
+
 if __name__ == "__main__":
-    raise SystemExit(asyncio.run(main()))
+    try:
+        raise SystemExit(asyncio.run(main()))
+    except BaseException as error:  # Ctrl-C arrives as KeyboardInterrupt, or inside a group
+        if not _interrupted(error):
+            raise
+        # The controller has already recorded the run as cancelled (a pending approval
+        # expires with it and the target's lease is given up): one line, not a traceback.
+        print(
+            "\ninterrupted (Ctrl-C): the run was cancelled and nothing more is sent",
+            file=sys.stderr,
+        )
+        raise SystemExit(130) from None

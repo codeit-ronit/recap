@@ -229,6 +229,11 @@ class KubernetesEnvironment(TargetEnvironment):
         """Give this run's namespace lease up (trusted code or an operator; not an MCP tool)."""
         return self.lease.release(self.namespace, self.run_id)
 
+    def end_run(self) -> None:
+        """The controller calls this when the run is over, however it ended: an interrupted
+        run must not hold the namespace until its lease times out."""
+        self.release_lease()
+
     # --- observe (read-only; exposed to agents as MCP tools) ----------------------------
 
     async def observe_services(self) -> ServiceList:
