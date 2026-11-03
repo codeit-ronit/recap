@@ -18,7 +18,7 @@ An evaluation **batch** is a set of runs made the same way. Every batch has exac
 | `scripted_regression` | RECAP's scripted policy (fixed playbooks, **not an LLM**) | that RECAP's own pipeline (routing, retrieval, memory, verifier, gateway, oracle) still behaves as before | anything about language models | `scripts/evaluate.py` (`evals/runner.py`) |
 | `offline_replay` | a real model's answers, **recorded** in an earlier run | that the recorded decisions still pass RECAP's current code, offline, at $0 | how a model would decide today, or how often | `scripts/eval_replay.py` |
 | `real_llm` | a real model now: local (Ollama) or a verified free plan (Groq Free) | what that model did on these incidents, one sample per run | a success rate; the result on a real system | `scripts/live_eval.py` |
-| `kubernetes_future` | a real cluster (Kind or SREGym) | nothing yet | **not implemented** (M5): no record may carry this mode | none |
+| `real_kubernetes` | a real model now, on a **real Kubernetes cluster** (the Kind demo cluster, M5), every write approved by a person | what that model did on real faults in a real cluster, judged by the cluster's own health, one sample per run | a success rate; behaviour under production traffic | `scripts/live_eval.py --from-data`, from runs made with `scripts/demo.py --approve ask` |
 
 Why keep them apart: a scripted run succeeds by design on the incidents it was written for,
 and a replay repeats a decision already made. Adding either to a real model's results would
@@ -65,8 +65,9 @@ work (`evals.categorize.model_timing` computes both). The M3 runs predate `serve
 ## 3. Modes are checked, not trusted
 
 `record_from_run` refuses a run whose decisions came from somewhere its mode does not cover:
-a scripted run is never a `real_llm` record, a replay never a live one, and no record may
-claim `kubernetes_future`. It also refuses a run whose target was not simulated.
+a scripted run is never a `real_llm` record, and a replay never a live one. The target must
+match too: a `real_kubernetes` record needs a run against a real cluster, and every other
+mode refuses one (M4 named this mode `kubernetes_future` and refused it until M5 built it).
 `make_batch` refuses to put records of two modes in one batch.
 
 ## 4. Why a run did not recover: the failure categories

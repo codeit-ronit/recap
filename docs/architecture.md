@@ -1110,4 +1110,4 @@ flowchart LR
 | Replay by manifest id | implemented | SHA-256 checked before any answer; refused unless the environment is simulated; a fresh approval; `replay_pace` changes only timing. |
 | Evaluation records | implemented | One mode per batch; success only with the oracle's verified recovery; a named failure category otherwise. |
 | Mission Control | implemented | Reads only the typed API; types generated from the response models; untrusted text escaped and labelled. |
-| Kubernetes evaluation mode | not yet built | Named in the records (`kubernetes_future`), never run; the plan is [m5-integration-plan.md](m5-integration-plan.md). |
+| Kubernetes evaluation mode | implemented (M5) | `real_kubernetes`: a real model's runs on the Kind cluster, each fix approved by a person, built from the stored runs by `scripts/live_eval.py --from-data`; never mixed with simulated results ([m5-integration-plan.md](m5-integration-plan.md)). |

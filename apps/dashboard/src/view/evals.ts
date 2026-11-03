@@ -17,7 +17,7 @@ export const NOT_RECORDED = "Not recorded";
 // --- modes ----------------------------------------------------------------------------------------
 
 /** The tabs, in the order docs/evaluation.md lists the modes. */
-export const MODE_ORDER: readonly EvalMode[] = ["scripted_regression", "offline_replay", "real_llm", "kubernetes_future"];
+export const MODE_ORDER: readonly EvalMode[] = ["scripted_regression", "offline_replay", "real_llm", "real_kubernetes"];
 
 export interface ModeGuide {
   /** The tab's label. */
@@ -57,12 +57,12 @@ export const MODE_GUIDE: Readonly<Record<EvalMode, ModeGuide>> = {
     madeBy: "scripts/live_eval.py",
     icon: "cpu",
   },
-  kubernetes_future: {
-    tab: "Kubernetes",
-    decisions: "A real cluster (Kind or SREGym)",
-    shows: "Nothing yet",
-    doesNotShow: "Any result: the mode is not implemented (M5), and no record may carry it",
-    madeBy: null,
+  real_kubernetes: {
+    tab: "Real Kubernetes",
+    decisions: "A real model now, on a real Kubernetes cluster (the Kind demo cluster), with a person approving every write",
+    shows: "What that model did on real faults in a real cluster, judged by the cluster's own health, one sample per run",
+    doesNotShow: "A success rate, or how it would do under production traffic",
+    madeBy: "scripts/live_eval.py --from-data",
     icon: "package",
   },
 };
@@ -114,7 +114,7 @@ export function pickBatch(batches: readonly BatchSummary[], requested: string | 
 /** The tab's second line: how many batches the mode has, or that it is planned. */
 export function modeTabNote(view: Pick<EvalsView, "modes" | "batches">, mode: EvalMode): string {
   const info = modeInfo(view, mode);
-  if (info?.status === "planned") return "planned · M5";
+  if (info?.status === "planned") return "planned";
   const n = batchesOf(view, mode).length;
   return `${n} ${n === 1 ? "batch" : "batches"}`;
 }
@@ -595,7 +595,7 @@ export interface CliCommand {
 }
 
 /** The exact commands that make each mode's batches, run from the repository root. */
-export const CLI_COMMANDS: Readonly<Record<Exclude<EvalMode, "kubernetes_future">, readonly CliCommand[]>> = {
+export const CLI_COMMANDS: Readonly<Record<EvalMode, readonly CliCommand[]>> = {
   scripted_regression: [
     {
       title: "Every configuration",
@@ -640,6 +640,20 @@ export const CLI_COMMANDS: Readonly<Record<Exclude<EvalMode, "kubernetes_future"
       title: "Build a batch from runs already made",
       command: ".venv/bin/python scripts/live_eval.py --from-data --data-dir DATA --out OUT [PLAN]",
       note: "No model is called: the batch is rebuilt from the stored records and traces.",
+    },
+  ],
+  real_kubernetes: [
+    {
+      title: "One run on the Kind cluster, approved by you",
+      command:
+        "RECAP_TARGET=kind-demo RECAP_DATA_DIR=$HOME/recap-kind-runs .venv/bin/python scripts/demo.py --scenario kind-bad-release --provider ollama-vm --approve ask",
+      note: "About half an hour with the model on a VM without a GPU. Needs the cluster and its tunnel (infra/aws/ec2.sh up, then tunnel). The fix waits until you type the target service's name.",
+    },
+    {
+      title: "Build the batch from those runs",
+      command:
+        "RECAP_TARGET=kind-demo .venv/bin/python scripts/live_eval.py --from-data --data-dir $HOME/recap-kind-runs --out /tmp/recap-kind-batch",
+      note: "No model is called: every finished real-model run in that folder, read with the Kind target's profile. A folder that mixes the simulator with a cluster is refused.",
     },
   ],
 };

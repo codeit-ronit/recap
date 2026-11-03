@@ -152,3 +152,11 @@ Accepted (M4, 2026-10-26). Builds on [ADR 0010](0010-label-free-views-and-a-yes-
   recorded runs are the evidence, and their records hold everything a batch needs.
 - **Categories computed in the dashboard.** Each reader would need the same rules; in Python
   next to the record they are tested once, and every reader gets the same answer.
+
+## Update (M5, 2026-11-03)
+
+The placeholder `kubernetes_future` became `real_kubernetes`: a real model's runs on the real
+Kind cluster, each fix approved by a person, built from the stored runs with
+`scripts/live_eval.py --from-data`. The rule of this decision holds: `record_from_run` puts a
+run against a real cluster in that mode only and refuses it in every other mode, and
+`make_batch` still keeps one mode per batch.

@@ -165,7 +165,7 @@ const VIEW: EvalsView = {
     { mode: "scripted_regression", status: "implemented", description: "The scripted policy on the benchmark scenarios." },
     { mode: "offline_replay", status: "implemented", description: "A recorded real-model run replayed offline." },
     { mode: "real_llm", status: "implemented", description: "A real model on simulated incidents." },
-    { mode: "kubernetes_future", status: "planned", description: "A real cluster is milestone M5 and not implemented." },
+    { mode: "real_kubernetes", status: "implemented", description: "A real model on a real Kubernetes cluster." },
   ],
   batches: [
     summary({ batch_id: "new", created_at: "2026-10-26T09:00:00Z" }),
@@ -178,15 +178,17 @@ const VIEW: EvalsView = {
 // --- modes and tabs ---------------------------------------------------------------------------------
 
 test("the four modes are tabs in the documented order, each with its own guide", () => {
-  assert.deepEqual(MODE_ORDER, ["scripted_regression", "offline_replay", "real_llm", "kubernetes_future"]);
+  assert.deepEqual(MODE_ORDER, ["scripted_regression", "offline_replay", "real_llm", "real_kubernetes"]);
   assert.equal(MODE_GUIDE.real_llm.tab, "Real LLM (exploratory)");
   assert.match(MODE_GUIDE.scripted_regression.decisions, /not an LLM/);
-  assert.equal(MODE_GUIDE.kubernetes_future.madeBy, null, "nothing makes a Kubernetes batch yet");
+  assert.match(MODE_GUIDE.real_kubernetes.decisions, /a person approving every write/);
+  assert.equal(MODE_GUIDE.real_kubernetes.madeBy, "scripts/live_eval.py --from-data");
 });
 
 test("the route's mode is kept only when it is a known mode", () => {
   assert.equal(parseMode("real_llm"), "real_llm");
-  assert.equal(parseMode("kubernetes_future"), "kubernetes_future");
+  assert.equal(parseMode("real_kubernetes"), "real_kubernetes");
+  assert.equal(parseMode("kubernetes_future"), "scripted_regression", "M4's placeholder is no mode any more");
   assert.equal(parseMode("mixed"), "scripted_regression");
   assert.equal(parseMode(null), "scripted_regression");
   assert.equal(parseMode(""), "scripted_regression");
@@ -194,10 +196,10 @@ test("the route's mode is kept only when it is a known mode", () => {
 
 test("arrow keys move between the tabs and wrap; Home and End jump; other keys do nothing", () => {
   assert.equal(nextMode("scripted_regression", "ArrowRight"), "offline_replay");
-  assert.equal(nextMode("kubernetes_future", "ArrowRight"), "scripted_regression");
-  assert.equal(nextMode("scripted_regression", "ArrowLeft"), "kubernetes_future");
+  assert.equal(nextMode("real_kubernetes", "ArrowRight"), "scripted_regression");
+  assert.equal(nextMode("scripted_regression", "ArrowLeft"), "real_kubernetes");
   assert.equal(nextMode("real_llm", "Home"), "scripted_regression");
-  assert.equal(nextMode("offline_replay", "End"), "kubernetes_future");
+  assert.equal(nextMode("offline_replay", "End"), "real_kubernetes");
   assert.equal(nextMode("real_llm", "Enter"), null);
   assert.equal(nextMode("real_llm", "a"), null);
 });
@@ -223,8 +225,10 @@ test("a tab's note counts its batches or says the mode is planned (from the serv
   assert.equal(modeTabNote(VIEW, "real_llm"), "2 batches");
   assert.equal(modeTabNote(VIEW, "scripted_regression"), "1 batch");
   assert.equal(modeTabNote(VIEW, "offline_replay"), "0 batches");
-  assert.equal(modeTabNote(VIEW, "kubernetes_future"), "planned · M5");
-  assert.equal(modeInfo(VIEW, "kubernetes_future")?.status, "planned");
+  assert.equal(modeTabNote(VIEW, "real_kubernetes"), "0 batches");
+  const planned = { ...VIEW, modes: VIEW.modes.map((m) => (m.mode === "real_kubernetes" ? { ...m, status: "planned" as const } : m)) };
+  assert.equal(modeTabNote(planned, "real_kubernetes"), "planned");
+  assert.equal(modeInfo(VIEW, "real_kubernetes")?.status, "implemented");
   assert.equal(modeInfo({ modes: [] }, "real_llm"), null);
 });
 
@@ -484,7 +488,9 @@ test("the terminal commands are the documented ones, with the free-plan consent 
   assert.ok(real.some((c) => c.includes("--from-data")));
   assert.ok(CLI_COMMANDS.scripted_regression.some((c) => c.command === ".venv/bin/python scripts/evaluate.py --no-latest"));
   assert.ok(CLI_COMMANDS.offline_replay.every((c) => c.command.startsWith(".venv/bin/python scripts/eval_replay.py")));
-  assert.equal("kubernetes_future" in CLI_COMMANDS, false, "nothing can run a Kubernetes batch");
+  const cluster = CLI_COMMANDS.real_kubernetes.map((c) => c.command);
+  assert.ok(cluster.some((c) => c.includes("scripts/demo.py") && c.includes("--approve ask")), "a person approves each run's fix");
+  assert.ok(cluster.some((c) => c.startsWith("RECAP_TARGET=kind-demo ") && c.includes("--from-data")));
   const all = Object.values(CLI_COMMANDS).flat();
   for (const c of all) {
     assert.doesNotMatch(c.command, /API_KEY=|gsk_|Bearer|token/i, c.command);

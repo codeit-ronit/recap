@@ -9,8 +9,9 @@ their numbers are never mixed:
                        proves the recorded decisions still pass RECAP's path, not a new run
   real_llm             a real model (local, or a verified free plan) on simulated incidents
                        (scripts/live_eval.py)
-  kubernetes_future    a real cluster (Kind or SREGym) is M5 and NOT implemented: no record
-                       may carry this mode; it exists so a report can say what is missing
+  real_kubernetes      a real model on a real Kubernetes cluster (M5: the Kind demo cluster),
+                       with real faults, a person's approval for every write and the
+                       cluster's own health as the oracle (scripts/live_eval.py --from-data)
 
 A record says only what the run's record and trace say. A run counts as a success only when
 the independent oracle verified the recovery; anything else carries a failure category.
@@ -34,7 +35,7 @@ from recap.core.models import Contract
 
 SCHEMA = "recap-eval-batch-v1"
 
-EvalMode = Literal["scripted_regression", "offline_replay", "real_llm", "kubernetes_future"]
+EvalMode = Literal["scripted_regression", "offline_replay", "real_llm", "real_kubernetes"]
 
 # Why a run did not end in a verified recovery ("" for a verified success).
 FailureCategory = Literal[
@@ -153,10 +154,8 @@ def make_batch(
     """A batch of ONE mode, with its providers, models and prompt versions read from its records.
 
     Refuses (ValueError) a record of another mode, so two modes can never share a batch's
-    numbers, and the kubernetes_future mode, which nothing produces yet (M5).
+    numbers.
     """
-    if mode == "kubernetes_future":
-        raise ValueError("kubernetes_future (a real cluster) is M5 and not implemented")
     kept = list(records)
     other = [r.run_id for r in kept if r.mode != mode]
     if other:

@@ -537,7 +537,7 @@ The existing `EnvironmentHealthOracle` rule then applies unchanged: healthy mean
 | No hosted model sees live cluster data | the provider factory will refuse a `free_hosted_llm` provider when the environment is not simulated; Kind runs use the scripted policy or the local model. (The threat model already says never to send real logs to a free hosted tier.) |
 | Reads are protected before anything but the demo runs | the API's reads are open on loopback today, because run data is simulated. That stays acceptable for the demo app's synthetic logs on a single-user Mac. Before any other cluster, the API must require the operator token for reads too ([ADR 0015](decisions/0015-operator-auth-and-no-wins-approvals.md) names this). |
 | A live run is labelled as one | `describe()` says "local Kind cluster, not production"; the API's environment label already follows `describe()` (`LIVE ENVIRONMENT (kind) · V1` for a non-simulated adapter), and the dashboard must keep showing it. Nothing may suggest production Kubernetes. |
-| Results are never pooled | Kind runs are recorded with environment kind `kind` and `simulated: false`, and kept out of every simulated or replay table (M4's evaluation records name a separate mode for a real cluster, `kubernetes_future`, which no record may carry until it exists). |
+| Results are never pooled | Kind runs are recorded with environment kind `kind` and `simulated: false`, and kept out of every simulated or replay table (their evaluation records have a mode of their own, `real_kubernetes`: M4's placeholder `kubernetes_future`, built in W4). |
 
 ### 4.3 The kill switch
 

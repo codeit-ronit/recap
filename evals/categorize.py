@@ -88,6 +88,9 @@ MODE_ORIGINS: dict[str, frozenset[str]] = {
     "scripted_regression": frozenset({"scripted"}),
     "offline_replay": frozenset({"replay"}),
     "real_llm": frozenset({"local_llm", "free_hosted_llm"}),
+    # A real cluster's results are about a model: the scripted policy's live runs there are
+    # acceptance tests of the adapter (tests/e2e/test_kind_live.py), not evaluation records.
+    "real_kubernetes": frozenset({"local_llm", "free_hosted_llm"}),
 }
 
 # Plain names for people (summaries, the dashboard's tabs).
@@ -95,7 +98,7 @@ MODE_LABELS: dict[str, str] = {
     "scripted_regression": "Scripted regression (the scripted policy, not an LLM)",
     "offline_replay": "Offline replay of recorded real-model runs (no model is called)",
     "real_llm": "Real model on simulated incidents",
-    "kubernetes_future": "Real cluster (Kind or SREGym): M5, not implemented",
+    "real_kubernetes": "Real model on a real Kubernetes cluster (Kind)",
 }
 
 # The controller's own note for a cancelled run (recap/harness/controller.py, run()).
@@ -148,16 +151,24 @@ def record_from_run(
     service counts as having seen it.
 
     Raises ValueError for a run of another origin than `mode` allows (a scripted run is never
-    a real-model record, a replay never a live one), for the kubernetes_future mode, which
-    nothing produces (M5), and for a run against a target that is not simulated.
+    a real-model record, a replay never a live one), and for a run whose target does not
+    match the mode: real_kubernetes holds only runs against a target that is not simulated,
+    every other mode only runs against the simulator.
     """
     info = record.provider_info
     origin = info.origin if info else str(record.versions.get("provider_origin", ""))
     check_mode(mode, origin)
-    if record.environment is not None and not record.environment.is_simulated:
+    target = record.environment
+    if target is not None and not target.is_simulated:
+        if mode != "real_kubernetes":
+            raise ValueError(
+                f"{record.run_id} ran against {target.kind!r}, not the simulated environment: "
+                "its record belongs to the real_kubernetes mode"
+            )
+    elif mode == "real_kubernetes":
         raise ValueError(
-            f"{record.run_id} ran against {record.environment.kind!r}, not the simulated "
-            "environment: a real cluster is M5 (kubernetes_future), which is not implemented"
+            f"{record.run_id} ran against the simulator: a real_kubernetes record needs a run "
+            "against a real cluster"
         )
     trace = _ordered(events, record.run_id)
     answer = dict(expected if expected is not None else (scenario.expected if scenario else {}))
@@ -223,11 +234,6 @@ def record_from_run(
 
 def check_mode(mode: str, origin: str) -> None:
     """Refuse a run whose decisions came from somewhere `mode` does not cover."""
-    if mode == "kubernetes_future":
-        raise ValueError(
-            "kubernetes_future is the M5 real-cluster mode and is not implemented: no record "
-            "may carry it"
-        )
     allowed = MODE_ORIGINS.get(mode)
     if allowed is None:
         raise ValueError(f"unknown evaluation mode {mode!r}")

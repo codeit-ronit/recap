@@ -13,7 +13,7 @@ import json
 import random
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import httpx
 import pytest
@@ -30,7 +30,7 @@ from evals.categorize import (
     record_from_run,
     run_events,
 )
-from evals.records import EvalRecord, find_batches, load_batch, make_batch
+from evals.records import EvalMode, EvalRecord, find_batches, load_batch, make_batch
 from recap.core.config import REPO_ROOT, Settings
 from recap.core.models import (
     ActionRecord,
@@ -363,8 +363,8 @@ def test_a_record_refuses_a_run_from_another_mode() -> None:
     for mode in ("real_llm", "offline_replay"):
         with pytest.raises(ValueError, match="scripted"):
             record_from_run(record, [], mode=mode)  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="M5"):
-        record_from_run(record, [], mode="kubernetes_future")
+    with pytest.raises(ValueError, match="scripted"):  # the scripted policy on a cluster
+        record_from_run(record, [], mode="real_kubernetes")  # is an acceptance test, not a model
     live = record.model_copy(
         update={
             "provider_info": ProviderInfo(name="ollama:qwen3:8b", kind="llm", origin="local_llm")
@@ -380,14 +380,30 @@ def test_a_record_refuses_a_run_from_another_mode() -> None:
         record_from_run(cluster, [], mode="scripted_regression")
 
 
-def test_a_batch_holds_one_mode_and_never_the_future_cluster_mode() -> None:
+def test_a_real_cluster_run_is_a_real_kubernetes_record_and_nothing_else() -> None:
+    """M5: a real model's run on the Kind cluster is its own mode; the simulator's runs never
+    are, and a cluster run never joins a simulated mode's numbers."""
+    model = ProviderInfo(name="ollama-vm:qwen3:8b", kind="llm", origin="local_llm")
+    simulated = run_record(S.RESOLVED).model_copy(update={"provider_info": model})
+    cluster = simulated.model_copy(
+        update={"environment": SIMULATED.model_copy(update={"kind": "kind", "is_simulated": False})}
+    )
+    evaluated = record_from_run(cluster, [], mode="real_kubernetes")
+    assert (evaluated.mode, evaluated.provider_class) == ("real_kubernetes", "local_llm")
+    with pytest.raises(ValueError, match="belongs to the real_kubernetes mode"):
+        record_from_run(cluster, [], mode="real_llm")
+    with pytest.raises(ValueError, match="needs a run against a real cluster"):
+        record_from_run(simulated, [], mode="real_kubernetes")
+
+
+def test_a_batch_holds_one_mode() -> None:
     scripted = record_from_run(run_record(S.FAILED), [], mode="scripted_regression")
     replayed = scripted.model_copy(update={"mode": "offline_replay"})
     common: dict[str, Any] = {"batch_id": "b", "title": "t", "created_at": T0}
     with pytest.raises(ValueError, match="another mode"):
         make_batch(mode="scripted_regression", records=[scripted, replayed], **common)
-    with pytest.raises(ValueError, match="M5"):
-        make_batch(mode="kubernetes_future", records=[], **common)
+    with pytest.raises(ValueError, match="another mode"):
+        make_batch(mode="real_kubernetes", records=[scripted], **common)
     batch = make_batch(mode="scripted_regression", records=[scripted], **common)
     assert (batch.n, batch.providers, batch.models) == (1, ["deterministic-scripted-policy"], [])
 
@@ -612,7 +628,7 @@ def test_the_published_batches_cover_each_implemented_mode() -> None:
     assert len(batches) == len(published())  # every file loads
     modes = {b.mode for b in batches}
     assert {"scripted_regression", "offline_replay", "real_llm"} <= modes
-    assert "kubernetes_future" not in modes  # M5: no batch may claim a real cluster
+    assert modes <= set(get_args(EvalMode))
 
 
 @pytest.mark.parametrize("path", published(), ids=lambda p: p.parent.name)

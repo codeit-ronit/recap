@@ -277,6 +277,8 @@ function emptyBatchesReason(mode: dto.EvalMode): string {
       return `${where} Replay the committed recordings with scripts/eval_replay.py (below).`;
     case "real_llm":
       return `${where} Real-model batches are made from a terminal with scripts/live_eval.py (below).`;
+    case "real_kubernetes":
+      return `${where} Real-cluster batches are built from a terminal with scripts/live_eval.py --from-data, from runs a person approved with scripts/demo.py --approve ask (below).`;
     default:
       return where;
   }
@@ -1611,7 +1613,7 @@ export function BenchmarkReportSection({ results, batchId }: { results: Pick<Pol
 
 // --- commands (terminal only for real models) --------------------------------------------------
 
-export function CommandsCard({ mode }: { mode: Exclude<dto.EvalMode, "kubernetes_future"> }) {
+export function CommandsCard({ mode }: { mode: dto.EvalMode }) {
   const commands = CLI_COMMANDS[mode];
   const head: Record<typeof mode, { title: string; subtitle: string }> = {
     scripted_regression: {
@@ -1626,6 +1628,11 @@ export function CommandsCard({ mode }: { mode: Exclude<dto.EvalMode, "kubernetes
       title: "Run a real-model batch: from a terminal only",
       subtitle:
         "The browser never starts a real-model batch. It takes minutes to hours of local compute or free-plan quota, so a person starts each batch at a terminal, with explicit consent for a hosted free plan.",
+    },
+    real_kubernetes: {
+      title: "Run on the real cluster: from a terminal, with your approval",
+      subtitle:
+        "A person starts each run at a terminal and approves its fix there; the batch is then built from the stored runs. The browser never starts a run against the cluster.",
     },
   };
   return (
@@ -1663,6 +1670,30 @@ export function CommandsCard({ mode }: { mode: Exclude<dto.EvalMode, "kubernetes
           </li>
         </ul>
       ) : null}
+      {mode === "real_kubernetes" ? (
+        <ul className="evl-guards" aria-label="What every run on the cluster is held to">
+          <li>
+            <Icon name="key" size={15} />
+            <span>
+              <strong>A person approves every write.</strong> The fix waits at the terminal until its operator types the target service's exact name; a
+              plain <Mono>y</Mono> rejects, and the approval is bound to that one proposal, single use.
+            </span>
+          </li>
+          <li>
+            <Icon name="shield" size={15} />
+            <span>
+              <strong>No hosted model sees the cluster.</strong> A paid provider is always refused on a live target, a free hosted plan unless the owner
+              allows it; the model runs on the owner's own machine or VM. Never in CI.
+            </span>
+          </li>
+          <li>
+            <Icon name="check" size={15} />
+            <span>
+              <strong>The cluster judges the recovery.</strong> The oracle reads the cluster itself (rollout, readiness, an HTTP probe), never the model.
+            </span>
+          </li>
+        </ul>
+      ) : null}
       <ul className="evl-commands">
         {commands.map((command) => (
           <li key={command.command} className="evl-command">
@@ -1686,7 +1717,7 @@ export function CommandsCard({ mode }: { mode: Exclude<dto.EvalMode, "kubernetes
   );
 }
 
-// --- Kubernetes (planned for M5) ----------------------------------------------------------------------
+// --- the environment adapters (the real cluster's tab) ----------------------------------------------------------------------
 
 function adapterTone(status: string): { tone: Tone; icon: IconName } {
   switch (status) {
@@ -1733,65 +1764,19 @@ export function AdapterTable({ adapters }: { adapters: readonly dto.AdapterStatu
   );
 }
 
-export function KubernetesView({
-  info,
-  system,
-}: {
-  info: dto.EvalModeInfo | null;
-  system: Pick<Polled<dto.SystemView>, "data" | "error" | "loading" | "refresh">;
-}) {
+export function AdaptersView({ system }: { system: Pick<Polled<dto.SystemView>, "data" | "error" | "loading" | "refresh"> }) {
   return (
-    <>
-      <Card
-        title="Kubernetes (Kind or SREGym)"
-        subtitle={info?.description ?? "The server did not describe this mode."}
-        actions={
-          info === null ? (
-            <NotRecorded />
-          ) : (
-            <StatusToken size="sm" tone="neutral" icon="clock" label="Planned for M5 · not implemented" title={`GET /evals reports this mode as ${info.status}`} />
-          )
-        }
-      >
-        <EmptyView
-          icon="package"
-          title="No results, by design"
-          reason="This mode is not implemented. The evaluation code refuses it: no batch can be made for it, and a run against a target that is not simulated never becomes an evaluation record. Nothing on this page comes from a real cluster."
-        />
-      </Card>
-      <Card title="Environment adapters on this server" subtitle="What GET /system reports for each target environment. Only an implemented adapter can be operational." flush>
-        <PolledView polled={system} loadingLabel="Loading the environment adapters…" errorTitle="Could not load GET /system">
-          {(view) => <AdapterTable adapters={view.environment_adapters} />}
-        </PolledView>
-      </Card>
-      <Card title="What M5 must add before this tab can show a result" subtitle="From docs/m5-integration-plan.md: a plan only. Nothing in it is built, installed or provisioned.">
-        <ol className="evl-m5">
-          <li>
-            <strong>A Kubernetes adapter.</strong> One new <Mono>TargetEnvironment</Mono> adapter: typed reads and only two typed writes (roll a Deployment
-            back to a named revision, or restart it). No model ever writes a <Mono>kubectl</Mono> command.
-          </li>
-          <li>
-            <strong>A real cluster.</strong> First a small local Kind cluster with two demo services and one intentionally bad release; SREGym only after its
-            version is pinned and its install and resource needs are checked.
-          </li>
-          <li>
-            <strong>An oracle that reads the cluster.</strong> Recovery judged from the cluster itself: the rollout finished, the pods are ready and an
-            independent HTTP probe succeeds.
-          </li>
-          <li>
-            <strong>The owner's approval.</strong> Nothing is installed, downloaded or provisioned without the owner's explicit yes; credentials and cluster
-            state stay outside git.
-          </li>
-        </ol>
-        <p className="evl-help">Results from a real cluster will be a mode of their own: never mixed with simulated results.</p>
-      </Card>
-    </>
+    <Card title="Environment adapters on this server" subtitle="What GET /system reports for each target environment. Only an implemented adapter can be operational." flush>
+      <PolledView polled={system} loadingLabel="Loading the environment adapters…" errorTitle="Could not load GET /system">
+        {(view) => <AdapterTable adapters={view.environment_adapters} />}
+      </PolledView>
+    </Card>
   );
 }
 
-function KubernetesPanel({ info }: { info: dto.EvalModeInfo | null }) {
+function AdaptersPanel() {
   const system = usePolling(() => api.systemView(), null, []);
-  return <KubernetesView info={info} system={system} />;
+  return <AdaptersView system={system} />;
 }
 
 // --- the page ---------------------------------------------------------------------------------------
@@ -1848,8 +1833,8 @@ export function EvalsBody({
     }
   }
 
-  // The Kubernetes tab explains what is missing while the server reports the mode as planned.
-  const plannedOnly = mode === "kubernetes_future" && info?.status !== "implemented";
+  // A mode the server reports as planned has no batch to show.
+  const plannedOnly = info?.status === "planned";
   const howId = `${panelId(mode)}-how`;
 
   return (
@@ -1857,7 +1842,9 @@ export function EvalsBody({
       <ModeTabs view={view} mode={mode} onSelect={(m) => onParams({ mode: m, batch: null, record: null })} />
       <div className="evl-panel" role="tabpanel" id={panelId(mode)} aria-labelledby={tabId(mode)}>
         {plannedOnly ? (
-          <KubernetesPanel info={info} />
+          <ModeCard mode={mode} info={info}>
+            <EmptyView icon="package" title="No results, by design" reason="The server reports this mode as planned: no batch can be made for it yet." />
+          </ModeCard>
         ) : (
           <>
             <ModeCard
@@ -1866,7 +1853,7 @@ export function EvalsBody({
               actions={
                 mode === "scripted_regression" ? (
                   <LaunchButton signedIn={signedIn} running={running} starting={starting} onClick={() => setConfirming(true)} />
-                ) : mode !== "kubernetes_future" ? (
+                ) : (
                   <button
                     type="button"
                     className="btn btn-small"
@@ -1879,7 +1866,7 @@ export function EvalsBody({
                     <Icon name="code" size={13} />
                     How to run a batch
                   </button>
-                ) : null
+                )
               }
             >
               <BatchPicker
@@ -1893,11 +1880,10 @@ export function EvalsBody({
               <EvaluationStatus results={results} startedHere={startedHere} reportBefore={reportBefore.current} note={note} startError={startError} />
             ) : null}
             {batch ? <BatchSection key={batch.batch_id} batchId={batch.batch_id} recordId={recordId} onParams={onParams} /> : null}
-            {mode !== "kubernetes_future" ? (
-              <div id={howId} className="evl-anchor">
-                <CommandsCard mode={mode} />
-              </div>
-            ) : null}
+            <div id={howId} className="evl-anchor">
+              <CommandsCard mode={mode} />
+            </div>
+            {mode === "real_kubernetes" ? <AdaptersPanel /> : null}
             {mode === "scripted_regression" ? <BenchmarkReportSection results={results} batchId={batch?.batch_id ?? null} /> : null}
             {mode === "scripted_regression" ? (
               <LaunchConfirm open={confirming} starting={starting} onCancel={() => setConfirming(false)} onConfirm={() => void start()} />

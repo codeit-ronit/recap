@@ -199,10 +199,11 @@ EVAL_MODES: list[EvalModeInfo] = [
         description="A real model (local, or a verified free plan) on simulated incidents.",
     ),
     EvalModeInfo(
-        mode="kubernetes_future",
-        status="planned",
-        description="A real cluster (Kind or SREGym) is milestone M5 and not implemented: no "
-        "result can come from it.",
+        mode="real_kubernetes",
+        status="implemented",
+        description="A real model on a real Kubernetes cluster (the Kind demo cluster, M5): "
+        "real faults, a person's approval for every write, and the cluster's own health as "
+        "the oracle.",
     ),
 ]
 

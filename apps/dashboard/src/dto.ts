@@ -5,7 +5,7 @@
 
 import type { Disagreement, EnvironmentInfo, Evidence, FailureMechanism, IncidentState, RunRecord, SourceType, StrategyMode, TrustLevel } from "./types";
 
-export type EvalMode = "scripted_regression" | "offline_replay" | "real_llm" | "kubernetes_future";
+export type EvalMode = "scripted_regression" | "offline_replay" | "real_llm" | "real_kubernetes";
 export type ProviderOrigin = "scripted" | "local_llm" | "free_hosted_llm" | "paid_llm" | "replay";
 export type ApiSchema = "recap-api-v1";
 export type ProviderClass = "scripted" | "local_llm" | "free_hosted_llm" | "paid_llm" | "replay";

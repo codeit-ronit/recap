@@ -854,7 +854,8 @@ cluster: the live Kubernetes / Kind / SREGym integration is M5, and nothing in M
 
 - One `EvalRecord` per run, built from the run's own record and trace
   (`evals/categorize.py`); batches of exactly one mode: `scripted_regression`,
-  `offline_replay`, `real_llm` (`kubernetes_future` is named, never run). A run is a
+  `offline_replay`, `real_llm` (`kubernetes_future` was named, never run; M5 built it as
+  `real_kubernetes`). A run is a
   success only when the oracle verified the recovery; every other run gets one failure
   category by fixed, generic rules, with a detail line.
 - Cost controls: a hosted free provider needs `--confirm-free-plan` per batch on top of the

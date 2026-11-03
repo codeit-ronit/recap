@@ -727,7 +727,7 @@ def test_the_system_never_calls_a_stub_operational(settings: Settings) -> None:
     assert simulated.simulation_notice and simulated.label.startswith("SIMULATED")
     assert simulated.features.writes_require_operator_token
     assert "replay" in simulated.features.per_run_providers
-    assert simulated.features.evaluation_modes["kubernetes_future"] == "planned"
+    assert simulated.features.evaluation_modes["real_kubernetes"] == "implemented"
 
     components = {c.id: c for c in stub.components}
     assert components["environment"].status == "planned"
@@ -776,7 +776,7 @@ def test_evaluation_batches_are_listed_by_source_and_read_by_id(settings: Settin
     [summary] = [b for b in view.batches if b.batch_id == "2026-10-26-local"]
     assert summary.source == "local" and summary.outcomes.successes == 1
     assert summary.outcomes.failures_by_category == {"wrong_mechanism": 1}
-    assert {m.mode: m.status for m in view.modes}["kubernetes_future"] == "planned"
+    assert {m.mode: m.status for m in view.modes}["real_kubernetes"] == "implemented"
     full = BatchView.model_validate(one.json())
     assert [r.run_id for r in full.records] == ["r1", "r2"]
     assert missing.status_code == 404

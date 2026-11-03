@@ -779,21 +779,8 @@
   gap: var(--space-2) var(--space-3);
 }
 
-/* --- Kubernetes (planned) ------------------------------------------------------------------------------- */
+/* --- environment adapters (the real cluster's tab) ------------------------------------------------------ */
 
-.evl-m5 {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  margin: 0;
-  padding-left: 20px;
-  color: var(--text-2);
-  font-size: var(--fs-md);
-  line-height: 1.5;
-}
-.evl-m5 strong {
-  color: var(--text);
-}
 .evl-adapter-detail {
   color: var(--text-2);
 }

@@ -104,7 +104,7 @@ const SYSTEM: dto.SystemView = {
     reads_require_token: false,
     per_run_providers: ["deterministic", "ollama", "replay"],
     otel: false,
-    evaluation_modes: { scripted_regression: "implemented", offline_replay: "implemented", real_llm: "implemented", kubernetes_future: "planned" },
+    evaluation_modes: { scripted_regression: "implemented", offline_replay: "implemented", real_llm: "implemented", real_kubernetes: "implemented" },
   },
   versions: {
     recap: "0.4.0",
@@ -602,7 +602,7 @@ test("M5 gaps list what the server reports as planned and link the plan", () => 
   const text = textOf(card);
   assert.match(text, /SREGym adapter Planned · M5/);
   assert.match(text, /Kind \(local Kubernetes\) adapter Planned · M5/);
-  assert.match(text, /Evaluation mode kubernetes_future Planned/);
+  assert.doesNotMatch(text, /Evaluation mode/, "every evaluation mode is implemented since M5");
   assert.match(text, /documentation only: nothing in it is built, installed or provisioned/);
   const plan = tags(card, "a").find((a) => a.attrs.href === "https://github.com/codeit-ronit/recap/blob/main/docs/m5-integration-plan.md");
   assert.ok(plan, "links docs/m5-integration-plan.md");

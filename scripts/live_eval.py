@@ -40,7 +40,14 @@ Cost controls, checked before anything runs:
 --from-data builds the batch from the finished real-model runs already in a data folder
 (oldest first) without calling any model: for runs made before batches existed, or to
 re-judge them after the categories changed. With a PLAN, only that plan's runs count
-(matched by their labels). A batch holds one model and one prompt version.
+(matched by their labels). A batch holds one model and one prompt version. Runs against a
+real cluster (M5: the Kind target, each fix approved by a person at scripts/demo.py --approve
+ask) make a `real_kubernetes` batch instead, read with that target's profile
+(RECAP_TARGET=kind-demo); a folder that mixes the simulator with a cluster is refused.
+--limitation adds what the runs' records cannot say themselves (repeatable).
+
+    RECAP_TARGET=kind-demo python scripts/live_eval.py --from-data --data-dir ~/recap-kind-runs \
+        --out /tmp/recap-kind-batch --limitation "..." --publish
 """
 
 from __future__ import annotations
@@ -70,7 +77,14 @@ from evals.categorize import (
     record_from_run,
     run_events,
 )
-from evals.records import EvalBatch, EvalRecord, make_batch, write_batch, write_batch_file
+from evals.records import (
+    EvalBatch,
+    EvalMode,
+    EvalRecord,
+    make_batch,
+    write_batch,
+    write_batch_file,
+)
 from recap.core.config import REPO_ROOT, Settings, load_settings
 from recap.core.errors import ConfigError
 from recap.core.ids import new_id, utcnow
@@ -371,17 +385,19 @@ def real_llm_batch(
     started: datetime,
     methods: list[str],
     extra_limitations: list[str],
+    mode: EvalMode = "real_llm",
 ) -> EvalBatch:
-    """One plan's real-model runs as a `real_llm` batch, with how to read it."""
+    """Real-model runs as one batch (`real_llm`, or `real_kubernetes` on a real cluster),
+    with how to read it."""
     return make_batch(
         batch_id=batch_id,
-        mode="real_llm",
+        mode=mode,
         title=title,
         records=records,
         created_at=created_at_of(records, started),
         plan=plan,
         methods=[*methods, *common_methods(records)],
-        limitations=[*sample_limitations(records), *extra_limitations],
+        limitations=[*sample_limitations(records, mode), *extra_limitations],
     )
 
 
@@ -407,7 +423,7 @@ def common_methods(records: list[EvalRecord]) -> list[str]:
     ]
 
 
-def sample_limitations(records: list[EvalRecord]) -> list[str]:
+def sample_limitations(records: list[EvalRecord], mode: EvalMode = "real_llm") -> list[str]:
     """What a small real-model batch cannot show (always shown with it)."""
     per_scenario: dict[str, int] = {}
     for record in records:
@@ -416,11 +432,21 @@ def sample_limitations(records: list[EvalRecord]) -> list[str]:
     return [
         f"N = {len(records)} ({counts or 'no runs'}): each run is one sample of one "
         "configuration. These are counts, not success rates, and no statistical claim is made.",
-        "The target is RECAP's SIMULATED shop, not a real cluster (a real cluster is M5).",
+        TARGETS.get(mode, TARGETS["real_llm"]),
         "A model's run is not exactly repeatable (random IDs in its prompts change the "
         "input); only a replay of its recording is.",
         _review_limitation(records),
     ]
+
+
+# What each mode's target is (sample_limitations).
+TARGETS: dict[str, str] = {
+    "real_llm": "The target is RECAP's SIMULATED shop, not a real cluster (runs against a real "
+    "cluster are the real_kubernetes mode).",
+    "real_kubernetes": "The target is a real Kubernetes cluster (Kind): two demo services and "
+    "the faults RECAP's scenarios inject, with real pods, real reads and real writes, but not "
+    "production traffic, and one small cluster.",
+}
 
 
 def _review_limitation(records: list[EvalRecord]) -> str:
@@ -497,6 +523,17 @@ def rebuild(args: argparse.Namespace) -> int:
     if not finished:
         print("refused: no finished real-model run to evaluate in that folder", file=sys.stderr)
         return EXIT_REFUSED
+    targets = sorted({_live_target(r) or "" for r in finished})
+    if len(targets) > 1:
+        shown = ", ".join(target or "the simulator" for target in targets)
+        print(
+            f"refused: the runs worked on more than one target ({shown}); a batch holds runs "
+            "of one",
+            file=sys.stderr,
+        )
+        return EXIT_REFUSED
+    live = targets[0]
+    mode: EvalMode = "real_kubernetes" if live else "real_llm"
     kinds = sorted({(_model(r), _prompts(r)) for r in finished})
     if len(kinds) > 1:
         shown = "; ".join(f"{model} {prompts}" for model, prompts in kinds)
@@ -507,6 +544,14 @@ def rebuild(args: argparse.Namespace) -> int:
         )
         return EXIT_REFUSED
     settings = load_settings(data_dir=data_dir)
+    if live and settings.environment.kind != live:
+        print(
+            f"refused: the runs worked on {live!r}, but this configuration targets "
+            f"{settings.environment.kind!r}: read them with that target's profile (for Kind, "
+            "RECAP_TARGET=kind-demo), or their scenarios are unknown here",
+            file=sys.stderr,
+        )
+        return EXIT_REFUSED
     environment = create_environment(settings.environment, "describe")
     scenarios = {s.id: s for s in environment.list_scenarios()}
     sink = SqliteTraceSink(database)
@@ -514,7 +559,7 @@ def rebuild(args: argparse.Namespace) -> int:
         record_from_run(
             run,
             run_events(sink, run.run_id),
-            mode="real_llm",
+            mode=mode,
             scenario=scenarios.get(run.scenario_id),
             evidence=store.evidence(run.run_id),
         )
@@ -522,7 +567,13 @@ def rebuild(args: argparse.Namespace) -> int:
     ]
     model, prompts = kinds[0]
     first = created_at_of(records, utcnow())
-    batch_id = args.batch_id or f"{first:%Y-%m-%d}-real-llm-{_slug(model)}-{_slug(prompts)}"
+    slug = mode.replace("_", "-")
+    batch_id = args.batch_id or f"{first:%Y-%m-%d}-{slug}-{_slug(model)}-{_slug(prompts)}"
+    title = (
+        f"Real model on a real Kubernetes cluster ({live}): {model}, {prompts}"
+        if live
+        else f"Real model on simulated incidents: {model}, {prompts}"
+    )
     plan_shown = _shown(args.plan) if args.plan is not None else None
     made = _how_made(finished, plan_shown)
     rebuilt = (
@@ -532,18 +583,20 @@ def rebuild(args: argparse.Namespace) -> int:
     )
     batch = real_llm_batch(
         batch_id=batch_id,
-        title=args.title or f"Real model on simulated incidents: {model}, {prompts}",
+        title=args.title or title,
         records=records,
         plan=plan_shown,
         started=first,
         methods=[made, rebuilt],
-        extra_limitations=[f"Planned but not in this folder: {', '.join(missing)}."]
-        if missing
-        else [],
+        extra_limitations=[
+            *([f"Planned but not in this folder: {', '.join(missing)}."] if missing else []),
+            *args.limitation,
+        ],
+        mode=mode,
     )
     args.out.mkdir(parents=True, exist_ok=True)
     write_outputs(batch, args.out, data_dir)
-    print(f"{batch.batch_id}: {batch.n} run{'' if batch.n == 1 else 's'}, mode real_llm")
+    print(f"{batch.batch_id}: {batch.n} run{'' if batch.n == 1 else 's'}, mode {mode}")
     return publish(batch) if args.publish else 0
 
 
@@ -590,6 +643,12 @@ async def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--batch-id", help="the batch's id (default: from its date and model)")
     parser.add_argument("--title", help="the batch's title (--from-data)")
+    parser.add_argument(
+        "--limitation",
+        action="append",
+        default=[],
+        help="a limitation the runs' records cannot state themselves (--from-data; repeatable)",
+    )
     parser.add_argument(
         "--publish", action="store_true", help="also publish the batch in evals/reports/batches/"
     )
@@ -702,6 +761,12 @@ async def main(argv: list[str] | None = None) -> int:
 def _origin(record: RunRecord) -> str:
     info = record.provider_info
     return info.origin if info else str(record.versions.get("provider_origin", ""))
+
+
+def _live_target(record: RunRecord) -> str | None:
+    """The kind of the real target a run worked on (None: the simulator)."""
+    target = record.environment
+    return target.kind if target is not None and not target.is_simulated else None
 
 
 def _model(record: RunRecord) -> str:

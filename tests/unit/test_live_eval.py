@@ -16,7 +16,7 @@ import yaml
 
 from evals.records import EvalRecord, load_batch
 from recap.core.config import REPO_ROOT, Settings
-from recap.core.models import RunConfig
+from recap.core.models import RunConfig, RunRecord
 from recap.harness.store import RunStore
 from recap.providers.factory import create_provider
 from recap.providers.protocol import PROMPT_VERSION
@@ -391,6 +391,49 @@ async def test_a_rebuild_with_a_plan_keeps_its_runs_and_names_the_missing_ones(
     assert [r.run_id for r in batch.records] == [record.run_id]
     assert batch.plan == "plan.yaml"  # outside the repository: its name, never its folder
     assert "Planned but not in this folder: second." in batch.limitations
+
+
+async def test_runs_on_a_real_cluster_make_a_real_kubernetes_batch(
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """M5: runs against the Kind target are their own mode, read with that target's profile,
+    and never share a batch with the simulator's runs."""
+    fake = FakeOllama(responder=ScriptedModel())
+    _, first = await live_run(settings, RunConfig(provider="ollama", use_memory=False), fake)
+    _, second = await live_run(settings, RunConfig(provider="ollama", use_memory=False), fake)
+    store = RunStore(settings.paths.recap_db)
+
+    def on_the_cluster(record: RunRecord) -> RunRecord:
+        assert record.environment is not None
+        cluster = record.environment.model_copy(update={"kind": "kind", "is_simulated": False})
+        return record.model_copy(update={"environment": cluster, "scenario_id": "kind-bad-release"})
+
+    out = str(tmp_path / "out")
+    data = str(settings.paths.data_dir)
+    store.save(on_the_cluster(first))
+    assert await main(["--from-data", "--data-dir", data, "--out", out]) == EXIT_REFUSED
+    assert "more than one target (the simulator, kind)" in capsys.readouterr().err
+    store.save(on_the_cluster(second))
+    assert await main(["--from-data", "--data-dir", data, "--out", out]) == EXIT_REFUSED
+    assert "RECAP_TARGET=kind-demo" in capsys.readouterr().err  # its scenarios are unknown here
+
+    monkeypatch.setenv("RECAP_TARGET", "kind-demo")
+    note = "Both runs were rehearsals."
+    assert await main(["--from-data", "--data-dir", data, "--out", out, "--limitation", note]) == 0
+    batch = load_batch(Path(out) / "batch.json")
+    assert batch.mode == "real_kubernetes"
+    assert [r.run_id for r in batch.records] == [first.run_id, second.run_id]
+    assert batch.batch_id == (
+        f"{batch.created_at:%Y-%m-%d}-real-kubernetes-qwen3-8b-{PROMPT_VERSION}"
+    )
+    assert batch.title.startswith("Real model on a real Kubernetes cluster (kind): qwen3:8b")
+    assert batch.records[0].expected["fix_params"] == {"to_version": "v1.0.0"}  # Kind's answer
+    assert note in batch.limitations
+    assert any("real Kubernetes cluster (Kind)" in line for line in batch.limitations)
+    assert not any("SIMULATED shop" in line for line in batch.limitations)
 
 
 def test_a_batch_says_whether_a_person_reviewed_its_fixes() -> None:

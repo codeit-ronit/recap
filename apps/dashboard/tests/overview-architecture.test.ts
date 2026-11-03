@@ -160,7 +160,7 @@ const SYSTEM = {
     reads_require_token: false,
     per_run_providers: ["deterministic", "ollama", "replay"],
     otel: false,
-    evaluation_modes: { scripted_regression: "implemented", offline_replay: "implemented", real_llm: "implemented", kubernetes_future: "planned" },
+    evaluation_modes: { scripted_regression: "implemented", offline_replay: "implemented", real_llm: "implemented", real_kubernetes: "implemented" },
   },
   versions: {
     recap: "0.4.0",
@@ -270,8 +270,11 @@ test("M5 gaps are exactly what the server lists as planned", () => {
   const gaps = plannedGaps(SYSTEM);
   assert.deepEqual(
     gaps.map((g) => g.id),
-    ["adapter:sregym", "adapter:kind", "eval:kubernetes_future"],
+    ["adapter:sregym", "adapter:kind"],
   );
+  // An evaluation mode the server lists as planned is a gap too (since M5 none is).
+  const planned = { ...SYSTEM.features, evaluation_modes: { ...SYSTEM.features.evaluation_modes, real_kubernetes: "planned" } };
+  assert.ok(plannedGaps({ ...SYSTEM, features: planned }).some((g) => g.id === "eval:real_kubernetes"));
   assert.equal(gaps[1].title, "Kind (local Kubernetes) adapter");
   assert.equal(gaps[1].look.label, "Planned · M5");
   assert.match(gaps[0].detail, /EnvironmentNotIntegrated/);

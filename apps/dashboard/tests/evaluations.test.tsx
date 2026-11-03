@@ -23,7 +23,7 @@ import {
   EvalsPage,
   EvaluationStatus,
   FailuresCard,
-  KubernetesView,
+  AdaptersView,
   LaunchButton,
   LaunchConfirm,
   MethodsCards,
@@ -218,7 +218,7 @@ const VIEW: EvalsView = {
     { mode: "scripted_regression", status: "implemented", description: "The scripted policy on the benchmark scenarios: a regression test of RECAP's own code, not evidence about any LLM." },
     { mode: "offline_replay", status: "implemented", description: "A recorded real-model run replayed offline." },
     { mode: "real_llm", status: "implemented", description: "A real model (local, or a verified free plan) on simulated incidents." },
-    { mode: "kubernetes_future", status: "planned", description: "A real cluster (Kind or SREGym) is milestone M5 and not implemented: no result can come from it." },
+    { mode: "real_kubernetes", status: "implemented", description: "A real model on a real Kubernetes cluster (the Kind demo cluster, M5)." },
   ],
   batches: [REAL.batch, SCRIPTED.batch],
   legacy_report: "/evals/results",
@@ -246,7 +246,7 @@ test("the modes are four tabs with one selected, named by the server's counts", 
       ["evl-tab-scripted_regression", "false", "-1"],
       ["evl-tab-offline_replay", "false", "-1"],
       ["evl-tab-real_llm", "true", "0"],
-      ["evl-tab-kubernetes_future", "false", "-1"],
+      ["evl-tab-real_kubernetes", "false", "-1"],
     ],
   );
   assert.equal(tabs[2].attrs["aria-controls"], "evl-panel-real_llm");
@@ -254,7 +254,7 @@ test("the modes are four tabs with one selected, named by the server's counts", 
   assert.match(text, /Scripted regression 1 batch/);
   assert.match(text, /Offline replay 0 batches/);
   assert.match(text, /Real LLM \(exploratory\) 1 batch/);
-  assert.match(text, /Kubernetes planned · M5/);
+  assert.match(text, /Real Kubernetes 0 batches/);
 });
 
 test("the page starts loading, with its title and the honesty strip", () => {
@@ -283,27 +283,38 @@ test("a mode's panel: its guide, its batches and, below, how to run one; the bat
   assert.doesNotMatch(text, /Scripted regression: V1 benchmark/, "another mode's batch is never listed here");
 });
 
-test("the Kubernetes tab says what is missing instead of showing results", () => {
+test("the real cluster's tab: its guide, how a person runs and approves it, and the adapters", () => {
   const html = render(
-    <EvalsBody view={VIEW} mode="kubernetes_future" requestedBatch={null} recordId={null} results={IDLE_RESULTS} signedIn onParams={() => undefined} />,
+    <EvalsBody view={VIEW} mode="real_kubernetes" requestedBatch={null} recordId={null} results={IDLE_RESULTS} signedIn onParams={() => undefined} />,
   );
   const text = textOf(html);
-  assert.match(text, /Planned for M5 · not implemented/);
-  assert.match(text, /No results, by design/);
-  assert.match(text, /What M5 must add before this tab can show a result/);
+  assert.match(text, /Decisions come from A real model now, on a real Kubernetes cluster/);
+  assert.match(text, /No real kubernetes batch yet/);
+  assert.match(text, /Run on the real cluster: from a terminal, with your approval/);
+  assert.match(text, /A person approves every write\./);
+  assert.match(text, /--approve ask/);
   assert.match(text, /Loading the environment adapters…/);
-  assert.doesNotMatch(text, /verified recoveries/);
+  assert.doesNotMatch(text, /Run scripted regression/, "only the scripted tab can start anything");
 });
 
-test("the planned mode lists the server's environment adapters", () => {
+test("a mode the server reports as planned shows no batch", () => {
+  const planned = { ...VIEW, modes: VIEW.modes.map((m) => (m.mode === "real_kubernetes" ? { ...m, status: "planned" as const } : m)) };
+  const text = textOf(
+    render(<EvalsBody view={planned} mode="real_kubernetes" requestedBatch={null} recordId={null} results={IDLE_RESULTS} signedIn onParams={() => undefined} />),
+  );
+  assert.match(text, /No results, by design/);
+  assert.doesNotMatch(text, /from a terminal, with your approval/);
+});
+
+test("the environment adapters come from the server", () => {
   const adapters: AdapterStatus[] = [
     { kind: "simulated", adapter: "SimulatedEnvironment", configured: true, status: "active", operational: true, milestone: null, detail: "deterministic local simulation of a five-service shop" },
-    { kind: "kind", adapter: null, configured: false, status: "planned", operational: false, milestone: "M5", detail: "no adapter in this repository: a local Kind cluster is the first M5 target" },
+    { kind: "sregym", adapter: null, configured: false, status: "planned", operational: false, milestone: "M5", detail: "no adapter in this repository yet" },
   ];
   const system = polled({ environment_adapters: adapters } as unknown as SystemView);
-  const text = textOf(render(<KubernetesView info={VIEW.modes[3]} system={system} />));
+  const text = textOf(render(<AdaptersView system={system} />));
   assert.match(text, /simulated SimulatedEnvironment active yes deterministic local simulation/);
-  assert.match(text, /kind None in this repository planned M5 no no adapter in this repository/);
+  assert.match(text, /sregym None in this repository planned M5 no no adapter in this repository yet/);
   assert.match(textOf(render(<AdapterTable adapters={undefined} />)), /Not recorded/);
 });
 
