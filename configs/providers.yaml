@@ -38,6 +38,22 @@ providers:
     budget: {max_elapsed_seconds: 1800}  # about a minute per decision on a 16 GB laptop
     api_selectable: true                 # local and $0: the operator may pick it per run
 
+  ollama-vm:
+    kind: llm
+    origin: local_llm                    # self-hosted open weights, $0 per request
+    api: ollama
+    description: "The same open-weight model, served by Ollama on the owner's own AWS VM (no GPU) and reached through an SSH tunnel (infra/aws/ec2.sh tunnel). Self-hosted: no third party, no per-request charge."
+    runs_on: owner_vm                    # this machine's memory guard does not apply
+    base_url: "http://127.0.0.1:11435"   # the tunnel's end on this machine's loopback
+    model: "qwen3:8b"                    # pulled on the VM; the same weights digest as locally
+    mode: tools
+    think: false
+    context_tokens: 16384
+    max_output_tokens: 1024
+    request_timeout_seconds: 300
+    budget: {max_elapsed_seconds: 2400}  # CPU inference on the VM: about a minute per decision
+    api_selectable: true
+
   groq:
     kind: llm
     origin: free_hosted_llm

@@ -67,3 +67,16 @@ def test_critical_pressure_is_read_from_the_kernel(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(local_memory, "_run", lambda argv: next(levels))
     assert local_memory.pressure_critical() is True  # critical
     assert local_memory.pressure_critical() is False  # warn is not critical
+
+
+def test_a_model_on_the_owners_vm_is_not_measured_here(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ollama-vm runs on the owner's AWS VM: this machine only sends requests through the
+    tunnel, so its memory decides nothing."""
+
+    def must_not_measure(base_url: str, model: str) -> str | None:
+        raise AssertionError("measured this machine for a model that runs elsewhere")
+
+    monkeypatch.setattr(local_memory, "check_local_model", must_not_measure)
+    settings = load_settings()
+    assert settings.providers.providers["ollama-vm"].runs_on == "owner_vm"
+    assert check_run_memory(settings, "ollama-vm") is None

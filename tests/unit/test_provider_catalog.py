@@ -43,6 +43,7 @@ async def test_every_configured_provider_is_listed_with_its_origin(settings: Set
     assert {name: entry["origin"] for name, entry in found.items()} == {
         "deterministic": "scripted",
         "ollama": "local_llm",
+        "ollama-vm": "local_llm",  # the same model on the owner's VM, through the SSH tunnel
         "groq": "free_hosted_llm",
         "replay": "replay",
         "anthropic": "paid_llm",

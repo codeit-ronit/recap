@@ -206,7 +206,7 @@ def test_describe_providers_needs_no_key_and_builds_nothing(
 ) -> None:
     monkeypatch.setitem(sys.modules, "anthropic", None)
     described = {entry["name"]: entry for entry in describe_providers(settings)}
-    assert set(described) == {"deterministic", "ollama", "groq", "replay", "anthropic"}
+    assert set(described) == {"deterministic", "ollama", "ollama-vm", "groq", "replay", "anthropic"}
     keys = {"name", "kind", "origin", "model", "mode", "description", "requires_api_key"}
     for entry in described.values():
         assert set(entry) == keys
@@ -214,6 +214,7 @@ def test_describe_providers_needs_no_key_and_builds_nothing(
     assert origins == {
         "deterministic": "scripted",
         "ollama": "local_llm",
+        "ollama-vm": "local_llm",
         "groq": "free_hosted_llm",
         "replay": "replay",
         "anthropic": "paid_llm",

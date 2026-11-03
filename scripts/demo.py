@@ -323,7 +323,17 @@ async def main() -> int:
     print(LINE)
     print(f" RECAP · {banner(runtime.environment_info())} · scenario: {scenario.id}")
     print(f" {scenario.title}")
-    print(f" provider: {provider.info.name} — {ORIGIN_TEXT[provider.info.origin]}")
+    spec = runtime.settings.providers.providers.get(
+        config.provider or runtime.settings.providers.default
+    )
+    remote = spec is not None and spec.runs_on == "owner_vm"
+    origin_text = (
+        "SELF-HOSTED LLM: real inference on the owner's AWS VM (Ollama, through the SSH "
+        "tunnel), no paid API, $0 per request"
+        if remote
+        else ORIGIN_TEXT[provider.info.origin]
+    )
+    print(f" provider: {provider.info.name} — {origin_text}")
     print(
         " approvals: "
         + ("you decide in this terminal" if args.approve == "ask" else "simulation auto-approver")
@@ -345,7 +355,7 @@ async def main() -> int:
     try:
         record = await _watched(
             runtime.run_incident(scenario.id, config, approval_channel=channel),
-            local_model=provider.info.origin == "local_llm",
+            local_model=provider.info.origin == "local_llm" and not remote,
         )
     except MemoryWatchdogStop as stop:
         print(f"stopped by the memory watchdog: {stop}", file=sys.stderr)

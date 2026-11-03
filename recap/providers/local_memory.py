@@ -128,6 +128,8 @@ def check_run_memory(settings: Any, provider_name: str | None) -> str | None:
     spec = settings.providers.providers.get(name)
     if spec is None or spec.origin != "local_llm" or spec.api != "ollama" or not spec.model:
         return None
+    if spec.runs_on != "this_machine":
+        return None  # the model runs on the owner's VM: this machine only sends requests
     return check_local_model(spec.base_url or "http://127.0.0.1:11434", spec.model)
 
 

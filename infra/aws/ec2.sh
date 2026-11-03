@@ -8,7 +8,8 @@
 #   infra/aws/ec2.sh ssh [cmd] a shell (or one command) on the VM
 #   infra/aws/ec2.sh sync      copy infra/kind/ to the VM's ~/recap/infra/kind (nothing else)
 #   infra/aws/ec2.sh tunnel    forward the cluster's loopback ports to this Mac's loopback
-#                              (API server, NodePorts 30080/30081, Prometheus 30090)
+#                              (API server, NodePorts 30080/30081, Prometheus 30090) and the
+#                              VM's Ollama (Mac 127.0.0.1:11435 -> VM 127.0.0.1:11434)
 #   infra/aws/ec2.sh stop      stop the VM: compute billing ends, the disk stays (~$0.45/day)
 #   infra/aws/ec2.sh down      terminate the VM and delete its security group and key pair
 #
@@ -160,11 +161,12 @@ cmd_tunnel() {
   api_port="$(ssh_ "kubectl config view --kubeconfig ~/.config/recap/kind/admin.kubeconfig \
     --minify -o jsonpath='{.clusters[0].cluster.server}'" | sed -E 's|.*:([0-9]+)$|\1|')"
   [[ "$api_port" =~ ^[0-9]+$ ]] || die "could not read the API server's port on the VM"
-  say "forwarding 127.0.0.1:{$api_port,30080,30081,30090} to the VM (Ctrl-C ends the tunnel)"
+  say "forwarding 127.0.0.1:{$api_port,30080,30081,30090} and the model (11435 -> 11434) to the VM (Ctrl-C ends the tunnel)"
   exec ssh -i "$KEY" -o UserKnownHostsFile="$STATE_DIR/known_hosts" -o ServerAliveInterval=30 \
     -o ExitOnForwardFailure=yes -N \
     -L "127.0.0.1:$api_port:127.0.0.1:$api_port" -L 127.0.0.1:30080:127.0.0.1:30080 \
-    -L 127.0.0.1:30081:127.0.0.1:30081 -L 127.0.0.1:30090:127.0.0.1:30090 "ubuntu@$(public_ip)"
+    -L 127.0.0.1:30081:127.0.0.1:30081 -L 127.0.0.1:30090:127.0.0.1:30090 \
+    -L 127.0.0.1:11435:127.0.0.1:11434 "ubuntu@$(public_ip)"
 }
 
 cmd_stop() {

@@ -217,6 +217,9 @@ class ProviderSettings(Contract):
     # always selectable, a replay needs a committed recording instead, and a paid provider
     # never is (refused below, and again by the API).
     api_selectable: bool = False
+    # Where a self-hosted model runs: this machine, or the owner's own VM reached through an SSH
+    # tunnel (still self-hosted and $0 per request; only this machine's memory guard differs).
+    runs_on: Literal["this_machine", "owner_vm"] = "this_machine"
 
     @model_validator(mode="after")
     def _consistent(self) -> ProviderSettings:
