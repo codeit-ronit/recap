@@ -704,10 +704,15 @@ def outcome_counts(records: Sequence[EvalRecord]) -> dict[str, int]:
 def batch_markdown(batch: EvalBatch) -> str:
     """A readable digest of one batch. Every number is a count of its records, never a rate."""
     records = batch.records
+    target = (
+        "REAL target: a Kubernetes cluster, not production"
+        if batch.mode == "real_kubernetes"
+        else "SIMULATED target environment"
+    )
     lines = [
         f"# {batch.title}",
         "",
-        f"> **{MODE_LABELS.get(batch.mode, batch.mode)}. SIMULATED target environment.** "
+        f"> **{MODE_LABELS.get(batch.mode, batch.mode)}. {target}.** "
         f"N = {batch.n}: counts, not rates; no statistical claim.",
         "",
         f"- Batch `{batch.batch_id}` (mode `{batch.mode}`), created {batch.created_at.isoformat()}",

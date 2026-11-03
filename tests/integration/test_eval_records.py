@@ -380,6 +380,23 @@ def test_a_record_refuses_a_run_from_another_mode() -> None:
         record_from_run(cluster, [], mode="scripted_regression")
 
 
+def test_a_real_cluster_batch_never_calls_its_target_simulated() -> None:
+    model = ProviderInfo(name="ollama-vm:qwen3:8b", kind="llm", origin="local_llm")
+    cluster = run_record(S.RESOLVED).model_copy(
+        update={
+            "provider_info": model,
+            "environment": SIMULATED.model_copy(update={"kind": "kind", "is_simulated": False}),
+        }
+    )
+    record = record_from_run(cluster, [], mode="real_kubernetes")
+    batch = make_batch(
+        batch_id="b", title="t", created_at=T0, mode="real_kubernetes", records=[record]
+    )
+    text = batch_markdown(batch)
+    assert "REAL target: a Kubernetes cluster, not production." in text
+    assert "SIMULATED" not in text
+
+
 def test_a_real_cluster_run_is_a_real_kubernetes_record_and_nothing_else() -> None:
     """M5: a real model's run on the Kind cluster is its own mode; the simulator's runs never
     are, and a cluster run never joins a simulated mode's numbers."""
@@ -636,7 +653,11 @@ def test_a_published_batch_keeps_its_promises(path: Path) -> None:
     batch = load_batch(path)
     assert batch.batch_id == path.parent.name
     assert batch.records and batch.methods and batch.limitations
-    assert any("SIMULATED" in line or "simulated" in line for line in batch.limitations)
+    # Each batch says what its target was: a real cluster, or the simulator.
+    if batch.mode == "real_kubernetes":
+        assert any("real Kubernetes cluster" in line for line in batch.limitations)
+    else:
+        assert any("SIMULATED" in line or "simulated" in line for line in batch.limitations)
     for record in batch.records:
         assert record.mode == batch.mode
         assert record.success == (record.final_state == "RESOLVED" and record.oracle_verified), (
