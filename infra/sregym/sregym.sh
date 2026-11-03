@@ -105,6 +105,25 @@ fingerprint() { # the lowercase hex SHA-256 of the CA certificate (DER), as RECA
   printf '%s' "$1" | openssl base64 -d -A | openssl x509 -outform der | sha256sum | cut -d' ' -f1
 }
 
+start_sregym() {
+  # Kind's node containers do not start by themselves after the VM was stopped (the VM's idle
+  # guard stops it): start them, and wait until SREGym's API server answers.
+  local nodes
+  nodes="$(docker ps -a --filter label=io.x-k8s.kind.cluster=kind --format '{{.Names}}')"
+  [[ -n "$nodes" ]] || return 0
+  if [[ -n "$(docker ps -a --filter label=io.x-k8s.kind.cluster=kind --filter status=exited --format '{{.Names}}')" ]]; then
+    # shellcheck disable=SC2086
+    docker start $nodes >/dev/null
+    say "SREGym's nodes started again"
+  fi
+  local tries=0
+  until kubectl --context "$CONTEXT" get --raw=/readyz >/dev/null 2>&1; do
+    tries=$((tries + 1))
+    [[ $tries -le 60 ]] || die "SREGym's API server did not come back: run teardown, then setup"
+    sleep 3
+  done
+}
+
 require_sregym() {
   local current server
   current="$(kubectl config current-context 2>/dev/null || true)"
@@ -143,6 +162,7 @@ cmd_deploy() {
   local problem
   problem="$(problem_arg "${1:-}")"
   stop_demo
+  start_sregym
   require_sregym
   say "SREGym's harness deploys the app and injects $problem (this takes several minutes)"
   (cd "$SREGYM_DIR" && uv run main.py --problem "$problem" --use-external-harness)
@@ -150,6 +170,7 @@ cmd_deploy() {
 }
 
 cmd_grant() {
+  start_sregym
   require_sregym
   kubectl get namespace "$NAMESPACE" >/dev/null 2>&1 || die "no $NAMESPACE namespace: deploy a problem first"
   kubectl apply -f "$HERE/recap-rbac.yaml" >/dev/null
@@ -193,11 +214,13 @@ EOF
 cmd_grade() {
   local problem
   problem="$(problem_arg "${1:-}")"
+  start_sregym
   require_sregym
   (cd "$SREGYM_DIR" && uv run python run-oracle.py --problem "$problem")
 }
 
 cmd_status() {
+  start_sregym
   require_sregym
   kubectl get nodes
   kubectl --namespace "$NAMESPACE" get deployments,pods 2>/dev/null || say "no $NAMESPACE namespace yet"

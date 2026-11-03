@@ -136,6 +136,18 @@ async def test_health_says_what_is_not_measured(tmp_path: Path) -> None:
     assert {h.error_rate for h in report.services.values()} == {None}  # no probe: no number
 
 
+async def test_a_crash_looping_pods_lines_are_read_once(tmp_path: Path) -> None:
+    """A container waiting to restart answers the plain read with its last run's lines, which
+    the --previous read returns too (seen on SREGym's geo): each of the pod's lines once."""
+    env, _ = await ready(tmp_path)
+    logs = await env.observe_logs("geo", 100, 60)
+
+    keys = [(line.timestamp, line.level, line.message) for line in logs.lines]
+    assert logs.lines and len(keys) == len(set(keys)) and logs.total_matched == len(keys)
+    reads = [c["argv"] for c in env.state.commands() if c["op"] == "pod_logs"]
+    assert any("--previous" in argv for argv in reads)  # both reads were made
+
+
 # --- the write: a release tag selects a revision of the Deployment's own history --------------
 
 

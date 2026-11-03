@@ -314,18 +314,26 @@ class KubernetesEnvironment(TargetEnvironment):
         every_pod = await reader.list_pods(translate.selector_of(deployment))
         pods = every_pod[:MAX_LOG_PODS]
         start = max(utcnow() - timedelta(minutes=since_minutes), info.observation_start)
-        reads = []
+        reads, owners = [], []
         for pod in pods:
             restarted = translate.restart_count([pod]) > 0
             for previous in (False, True) if restarted else (False,):
                 reads.append(
                     self._pod_lines(reader, service, pod, container, start, limit, previous)
                 )
+                owners.append(translate.name_of(pod))
         results = await asyncio.gather(*reads)
-        lines = sorted(
-            (line for found, _ in results for line in found if line.timestamp >= start),
-            key=lambda line: line.timestamp,
-        )
+        # A container waiting to restart (CrashLoopBackOff) answers the plain read with its last
+        # run's lines, which the --previous read returns too: one pod's line is kept once.
+        seen: set[tuple[str, datetime, str, str]] = set()
+        unique = []
+        for pod_name, (found, _) in zip(owners, results, strict=True):
+            for line in found:
+                key = (pod_name, line.timestamp, line.level, line.message)
+                if line.timestamp >= start and key not in seen:
+                    seen.add(key)
+                    unique.append(line)
+        lines = sorted(unique, key=lambda line: line.timestamp)
         kept = lines[max(0, len(lines) - limit) :]
         # Honest about what was not read: kubectl's --tail per container, or pods left out.
         cut = any(full for _, full in results) or len(every_pod) > len(pods)
