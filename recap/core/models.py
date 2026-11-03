@@ -1086,6 +1086,12 @@ class ProposalRequest(Contract):
     allowed_actions: list[ToolSpecView] = Field(default_factory=list)  # trusted remediation tools
     memory_hits: ProviderMemoryHits = Field(default_factory=list)
     failed_actions: list[ActionRecord] = Field(default_factory=list)  # earlier attempts this run
+    # The releases this run's evidence names as restore points for the diagnosed service, as
+    # RECAP's verifier reads them (VP4). A release argument named by an image tag is chosen
+    # from these in the proposal's schema: such tags are opaque (dates, commit hashes), so a
+    # model cannot tell the earlier one from its shape (M5: the first SREGym run named the bad
+    # release itself). A vX.Y.Z argument stays free text, as the recorded runs sent it.
+    restore_points: list[str] = Field(default_factory=list)
 
 
 class ProposalDecision(Contract):

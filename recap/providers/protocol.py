@@ -330,8 +330,13 @@ def proposal_schema(request: ProposalRequest) -> dict[str, Any]:
     }
     for tool in tools:  # the actions' other arguments, e.g. to_version (null if unused)
         for arg, rule in tool.args.items():
-            if not _is_target(rule):
-                properties.setdefault(arg, _nullable(_arg_schema(rule)))
+            if _is_target(rule):
+                continue
+            schema = _arg_schema(rule)
+            if rule.get("type") == "release" and request.restore_points:
+                # Opaque image tags: only a restore point the evidence names (VP4 checks it too).
+                schema = _enum(request.restore_points) | {"description": RELEASE_ARGUMENT}
+            properties.setdefault(arg, _nullable(schema))
     properties |= {
         "evidence_ids": _array(
             _ids(sorted(request.evidence)), "Evidence IDs that justify the action.", 8
@@ -504,7 +509,15 @@ def _arg_schema(rule: dict[str, Any]) -> dict[str, Any]:
                 "The release to roll back to, exactly as the deployment evidence names it."
             ),
         }
+    if rule.get("type") == "release":  # an image tag; listed when the evidence names some
+        return {"type": "string", "description": RELEASE_ARGUMENT}
     return {"type": "string"}
+
+
+RELEASE_ARGUMENT = (
+    "The release to roll back to: an earlier release the deployment evidence names, never the "
+    "one the diagnosis blames."
+)
 
 
 def _is_target(rule: dict[str, Any]) -> bool:

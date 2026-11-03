@@ -629,6 +629,11 @@ class IncidentController:
             allowed_actions=self.deps.registry.remediation_views(),
             memory_hits=memories,
             failed_actions=failed_actions,
+            restore_points=(
+                self.deps.verifier.restore_points(best.target_service, report, self.evidence)
+                if best.target_service
+                else []
+            ),
         )
         try:
             decision = await self._before_deadline(

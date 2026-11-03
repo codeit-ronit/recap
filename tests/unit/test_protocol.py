@@ -12,7 +12,7 @@ import re
 import pytest
 
 from recap.context.evidence import tool_source_ref
-from recap.core.config import Settings
+from recap.core.config import ArgRule, Settings
 from recap.core.models import (
     ActionRecord,
     AgentRole,
@@ -139,6 +139,43 @@ def test_every_object_in_the_schema_is_closed_and_fully_required(settings: Setti
         for node in objects(schema):
             assert node["additionalProperties"] is False
             assert set(node["required"]) == set(node["properties"])
+
+
+def tagged_releases(settings: Settings) -> Settings:
+    """The policies with execute_rollback's version as an image-tag release (the SREGym
+    profile's configs/targets/sregym-hotel/policies.yaml)."""
+    tools = dict(settings.policies.tools)
+    rollback = tools["execute_rollback"]
+    args = {**rollback.args, "to_version": ArgRule(type="release")}
+    tools["execute_rollback"] = rollback.model_copy(update={"args": args})
+    return settings.model_copy(
+        update={"policies": settings.policies.model_copy(update={"tools": tools})}
+    )
+
+
+def test_an_image_tag_release_is_chosen_from_the_restore_points(settings: Settings) -> None:
+    """M5 (SREGym): image tags are opaque, so a release argument lists the restore points the
+    run's evidence names. The first SREGym run, without this, named the bad release itself."""
+    request = proposal_request(tagged_releases(settings), [DEPLOYS])
+    free = protocol.proposal_schema(request)["properties"]["to_version"]
+    listed = protocol.proposal_schema(
+        request.model_copy(update={"restore_points": ["sha-d2c036bc"]})
+    )["properties"]["to_version"]
+
+    release = {"type": "string", "enum": ["sha-d2c036bc"], "description": protocol.RELEASE_ARGUMENT}
+    assert listed == {"anyOf": [release, {"type": "null"}]}
+    assert free == {
+        "anyOf": [{"type": "string", "description": protocol.RELEASE_ARGUMENT}, {"type": "null"}]
+    }
+
+
+def test_a_version_argument_is_unchanged_by_restore_points(settings: Settings) -> None:
+    """vX.Y.Z releases stay free text: every recorded run's request, and so its replay, is
+    byte-identical with or without restore points."""
+    request = proposal_request(settings, [DEPLOYS])
+    with_points = request.model_copy(update={"restore_points": ["v2.4.0"]})
+    assert protocol.proposal_schema(with_points) == protocol.proposal_schema(request)
+    assert protocol.proposal_messages(with_points) == protocol.proposal_messages(request)
 
 
 def test_the_last_step_cannot_ask_for_tools(settings: Settings) -> None:

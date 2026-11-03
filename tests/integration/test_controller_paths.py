@@ -360,3 +360,23 @@ async def test_a_run_with_unreported_llm_usage_never_claims_a_fully_reported_cos
         e for e in runtime.events.list_events(record.run_id) if e.category == C.RUN_SUMMARY
     )
     assert "not fully reported" in summary.payload["cost"]
+
+
+async def test_the_proposal_gets_the_restore_points_the_evidence_names(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The controller hands the provider the verifier's restore points for the diagnosed
+    service (a release named by an image tag is chosen from them, M5)."""
+    seen: list[list[str]] = []
+    original = DeterministicProvider.propose_mitigation
+
+    async def spy(self: DeterministicProvider, request: ProposalRequest) -> ProposalDecision:
+        seen.append(list(request.restore_points))
+        return await original(self, request)
+
+    monkeypatch.setattr(DeterministicProvider, "propose_mitigation", spy)
+    record = await Runtime(settings).run_incident(
+        "bad-deployment", RunConfig(approval_mode="auto", memory_write=False)
+    )
+    assert record.state == IncidentState.RESOLVED, record.outcome_note
+    assert seen == [[record.proposals[0].params["to_version"]]]  # the release it restored
