@@ -33,6 +33,7 @@ Rules that keep it local, honest and safe:
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -49,6 +50,10 @@ from recap.providers.transport import HttpExchange, ModelTransport
 
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 DEFAULT_CONTEXT_TOKENS = 8192
+# One process's own context window, over configs/providers.yaml (a run on a machine short of
+# memory: the window's key-value cache is the part of the model's memory that scales). Never
+# changes the committed configuration, so the recorded replays keep matching.
+CONTEXT_ENV = "RECAP_OLLAMA_CONTEXT_TOKENS"
 KEEP_ALIVE = "10m"  # keep the model in memory between the steps of a run
 # Conservative characters per token for the "does the prompt fit?" check. RECAP's prompts
 # are full of JSON and IDs, which tokenize more densely than prose (about 3 chars/token).
@@ -107,7 +112,9 @@ class OllamaProvider(HttpLLMProvider):
     ) -> None:
         check_local_settings(settings)
         super().__init__(name, settings, transport, **kwargs)
-        self.context_tokens = settings.context_tokens or DEFAULT_CONTEXT_TOKENS
+        self.context_tokens = (
+            _context_override() or settings.context_tokens or DEFAULT_CONTEXT_TOKENS
+        )
         self.ledger = ledger  # counts local requests too, for the dashboard (no caps apply)
         # What the server and model can do; filled by the first readiness check.
         self.capabilities: dict[str, Any] | None = None
@@ -379,3 +386,13 @@ def _server_ms(data: dict[str, Any]) -> float | None:
     """Ollama's total_duration (nanoseconds) in milliseconds; None when it reported none."""
     nanoseconds = _int(data.get("total_duration"))
     return round(nanoseconds / 1e6, 1) if nanoseconds is not None and nanoseconds >= 0 else None
+
+
+def _context_override() -> int | None:
+    """RECAP_OLLAMA_CONTEXT_TOKENS, when set to a sane window (2,048 to 131,072 tokens)."""
+    raw = os.environ.get(CONTEXT_ENV, "").strip()
+    if not raw:
+        return None
+    if not raw.isdigit() or not 2048 <= int(raw) <= 131072:
+        raise ConfigError(f"{CONTEXT_ENV} must be a whole number from 2048 to 131072")
+    return int(raw)

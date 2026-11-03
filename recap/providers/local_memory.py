@@ -129,3 +129,24 @@ def check_run_memory(settings: Any, provider_name: str | None) -> str | None:
     if spec is None or spec.origin != "local_llm" or spec.api != "ollama" or not spec.model:
         return None
     return check_local_model(spec.base_url or "http://127.0.0.1:11434", spec.model)
+
+
+def pressure_critical() -> bool | None:
+    """Whether the system is short of memory right now (None: cannot tell).
+
+    macOS: the kernel's memory-pressure level is critical (4): it is compressing and swapping
+    hard, the state in which the whole machine stops responding. Linux: less than 5% of memory
+    is available.
+    """
+    level = _run(["sysctl", "-n", "kern.memorystatus_vm_pressure_level"])
+    if level and level.strip().isdigit():
+        return int(level.strip()) >= 4
+    try:
+        text = Path("/proc/meminfo").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    total = re.search(r"^MemTotal:\s+(\d+) kB", text, re.MULTILINE)
+    free = re.search(r"^MemAvailable:\s+(\d+) kB", text, re.MULTILINE)
+    if not (total and free):
+        return None
+    return int(free.group(1)) < 0.05 * int(total.group(1))

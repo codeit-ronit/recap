@@ -356,3 +356,21 @@ async def test_parallel_first_steps_share_one_readiness_check(settings: Settings
     paths = [r.url.path for r in fake.requests]
     assert paths.count("/api/version") == 1 and paths.count("/api/show") == 1
     assert paths.count("/api/chat") == 2
+
+
+def test_one_process_may_ask_for_a_smaller_context_window(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RECAP_OLLAMA_CONTEXT_TOKENS: less memory for the model on a machine short of it; the
+    committed configuration (and so the recorded replays) stays as it is."""
+    fake = FakeOllama()
+    monkeypatch.setenv("RECAP_OLLAMA_CONTEXT_TOKENS", "8192")
+    assert ollama(settings, fake).context_tokens == 8192
+    monkeypatch.setenv("RECAP_OLLAMA_CONTEXT_TOKENS", "100")
+    with pytest.raises(ConfigError, match="RECAP_OLLAMA_CONTEXT_TOKENS"):
+        ollama(settings, fake)
+    monkeypatch.delenv("RECAP_OLLAMA_CONTEXT_TOKENS")
+    assert (
+        ollama(settings, fake).context_tokens
+        == settings.providers.providers["ollama"].context_tokens
+    )

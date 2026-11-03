@@ -18,9 +18,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import sys
 import time
+from collections.abc import Coroutine
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # allow running without install
 
@@ -36,7 +39,7 @@ from recap.core.models import (
 )
 from recap.environments.kubernetes.kubectl import KubeError
 from recap.memory.store import MemoryAccess
-from recap.providers.local_memory import check_run_memory
+from recap.providers.local_memory import check_run_memory, pressure_critical
 from recap.runtime import Runtime
 from recap.safety.approvals import ConsoleApprovalChannel
 from recap.telemetry.tracer import TraceCategory as C
@@ -340,7 +343,13 @@ async def main() -> int:
         else None
     )
     try:
-        record = await runtime.run_incident(scenario.id, config, approval_channel=channel)
+        record = await _watched(
+            runtime.run_incident(scenario.id, config, approval_channel=channel),
+            local_model=provider.info.origin == "local_llm",
+        )
+    except MemoryWatchdogStop as stop:
+        print(f"stopped by the memory watchdog: {stop}", file=sys.stderr)
+        return 3
     except (ConfigError, KubeError, RuntimeError) as exc:
         # Refused before the run started (a target's preflight or reset, the safety scope):
         # nothing was changed, so say why in one line instead of a traceback.
@@ -349,6 +358,39 @@ async def main() -> int:
     expected = expected_state(scenario, record.config)
     print_summary(record, expected, runtime, sink.cost)
     return 0 if record.state.value == expected else 1
+
+
+class MemoryWatchdogStop(Exception):
+    """The run was cancelled because the machine reached critical memory pressure."""
+
+
+WATCH_SECONDS = 5.0  # how often the watchdog looks
+CRITICAL_STRIKES = 2  # this many looks in a row at critical pressure stop the run
+
+
+async def _watched(run: Coroutine[Any, Any, RunRecord], *, local_model: bool) -> RunRecord:
+    """Run, and with a local model watch the machine's memory: at critical pressure (macOS
+    compresses and swaps hard, and stops responding soon after) cancel the run before the
+    computer hangs. A cancelled run is recorded as such; nothing reaches the target without
+    an approval, and a pending approval expires with the run."""
+    task = asyncio.ensure_future(run)
+    if not local_model:
+        return await task
+    strikes = 0
+    while True:
+        done, _ = await asyncio.wait({task}, timeout=WATCH_SECONDS)
+        if done:
+            return task.result()
+        strikes = strikes + 1 if pressure_critical() else 0
+        if strikes >= CRITICAL_STRIKES:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, BaseExceptionGroup):
+                await task
+            raise MemoryWatchdogStop(
+                f"memory pressure stayed critical for {strikes * WATCH_SECONDS:.0f} s, so the "
+                "run was cancelled before this computer could hang; close applications and "
+                "run it again"
+            )
 
 
 def _interrupted(error: BaseException) -> bool:

@@ -60,3 +60,10 @@ def test_only_a_local_ollama_provider_is_measured(monkeypatch: pytest.MonkeyPatc
     assert check_run_memory(settings, "deterministic") is None  # the scripted policy
     assert check_run_memory(settings, "ollama") == "no room"
     assert asked == [("http://127.0.0.1:11434", "qwen3:8b")]
+
+
+def test_critical_pressure_is_read_from_the_kernel(monkeypatch: pytest.MonkeyPatch) -> None:
+    levels = iter(["4\n", "2\n"])
+    monkeypatch.setattr(local_memory, "_run", lambda argv: next(levels))
+    assert local_memory.pressure_critical() is True  # critical
+    assert local_memory.pressure_critical() is False  # warn is not critical
