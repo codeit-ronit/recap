@@ -85,7 +85,7 @@ test("costLabel always prefers the backend's own cost line", () => {
 
 test("costLabel falls back to $0.00 only for providers that cannot be billed", () => {
   assert.equal(costLabel(undefined, SCRIPTED), "$0.00 external API charged (deterministic mode)");
-  assert.equal(costLabel(undefined, LOCAL), "$0.00 - local model on this machine");
+  assert.equal(costLabel(undefined, LOCAL), "$0.00 per request - self-hosted model (this machine or the owner's own VM)");
   assert.equal(costLabel(undefined, REPLAY), "$0.00 - replayed recording: no model was called");
   // A free plan is $0 only if every response passed the tripwire: the backend line says so.
   assert.equal(costLabel(undefined, HOSTED), UNKNOWN_COST);

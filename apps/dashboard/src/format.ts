@@ -362,7 +362,11 @@ export function originBadge(provider: Partial<ProviderInfo> | null | undefined):
     case "scripted":
       return { label: "SCRIPTED", tone: "neutral", title: "Scripted baseline policy: fixed playbooks, NOT an LLM." };
     case "local_llm":
-      return { label: "LOCAL LLM", tone: "accent", title: "Real inference by a model on this machine (Ollama). No paid or remote API, $0." };
+      return {
+        label: "LOCAL LLM",
+        tone: "accent",
+        title: "Real inference by a self-hosted open-weight model (Ollama, on this machine or the owner's own VM). No paid API, $0 per request.",
+      };
     case "free_hosted_llm":
       return { label: "FREE HOSTED LLM", tone: "accent", title: "Real inference on a free plan, checked before every request." };
     case "replay":
@@ -393,7 +397,7 @@ export function costLabel(summaryCost: string | null | undefined, provider: Part
     case "SCRIPTED":
       return "$0.00 external API charged (deterministic mode)";
     case "LOCAL LLM":
-      return "$0.00 - local model on this machine";
+      return "$0.00 per request - self-hosted model (this machine or the owner's own VM)";
     case "REPLAY":
       return "$0.00 - replayed recording: no model was called";
     default:

@@ -342,7 +342,7 @@ test("scripted, live local and unknown sources are told apart, and a live target
   assert.equal(runBanner({ kind: "scripted" }, SIMULATED).decisions, "SCRIPTED BASELINE (NOT AN LLM)");
   const local = runBanner({ origin: "local_llm", kind: "llm", model: "qwen3:8b" }, SIMULATED);
   assert.equal(local.label, "LIVE LOCAL LLM · SIMULATED TARGET");
-  assert.match(local.explanation, /qwen3:8b running on this machine/);
+  assert.match(local.explanation, /qwen3:8b, self-hosted \(this machine or the owner's own VM\)/);
   assert.equal(runBanner(null, null).label, "SOURCE NOT RECORDED · TARGET NOT RECORDED");
   // A model's name never decides the label.
   assert.equal(runBanner({ kind: "llm", model: "replay-of-something" }, SIMULATED).decisions, "SOURCE NOT RECORDED");

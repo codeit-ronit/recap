@@ -66,7 +66,7 @@ export function describeSource(provider: SourceFields | null | undefined): Sourc
         detail: model,
         tone: "accent",
         icon: "cpu",
-        title: "Real inference by a model running on this machine (Ollama). No paid or remote API.",
+        title: "Real inference by a self-hosted open-weight model (Ollama, on this machine or the owner's own VM). No paid API.",
       };
     case "free_hosted_llm":
       return {

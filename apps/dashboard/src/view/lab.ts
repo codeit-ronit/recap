@@ -320,7 +320,7 @@ export function runBanner(
       decisions = "LIVE LOCAL LLM";
       tone = "accent";
       icon = "cpu";
-      why = `${model || "A model"} running on this machine makes the decisions now.`;
+      why = `${model || "A model"}, self-hosted (this machine or the owner's own VM), makes the decisions now.`;
       break;
     case "free_hosted_llm":
       decisions = "LIVE FREE HOSTED LLM";
