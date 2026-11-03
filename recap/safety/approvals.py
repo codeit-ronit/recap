@@ -581,6 +581,8 @@ class AutoApprovalChannel:
 
 # A console answer quicker than this cannot have followed reading the proposal (logged as such).
 FAST_ANSWER_SECONDS = 1.0
+# On a live target an empty line is not an answer: the prompt is shown again, this many times.
+EMPTY_LINES_ASKED_AGAIN = 3
 
 
 class ConsoleApprovalChannel:
@@ -588,9 +590,10 @@ class ConsoleApprovalChannel:
 
     On a simulated target (or when the caller names no environment) "y" or "yes" approves.
     On a target that is not simulated, such as the local Kind cluster, there is no anonymous
-    "y": the operator must type the target service's exact name, and the decision log keeps
-    this machine's login name as local evidence (M5 plan, section 4.2). Callers on a live
-    target pass its `EnvironmentInfo` (`environment=runtime.environment_info()`).
+    "y": the operator must type the target service's exact name (the prompt names it), and
+    the decision log keeps this machine's login name as local evidence (M5 plan, section
+    4.2). Callers on a live target pass its `EnvironmentInfo`
+    (`environment=runtime.environment_info()`).
     """
 
     name = "console"
@@ -624,10 +627,12 @@ class ConsoleApprovalChannel:
         The real prompt needs an interactive terminal: when input is piped in (or missing),
         nobody can be reading the proposal, so the request is rejected without reading it.
         Anything typed before the prompt appeared is discarded, so the answer is typed after
-        the proposal was shown. The decision log records how the answer came: "interactive
-        terminal; answered after N s", flagged when it came faster than a person reads.
-        This proves a terminal and a timing, not a person: a program driving a terminal can
-        still answer.
+        the proposal was shown; on a live target the terminal's bell rings when it appears.
+        The decision log records how the answer came: "interactive terminal; answered after
+        N s", flagged when it came faster than a person reads, and on a live target why an
+        answer did not approve (never the typed text: a password typed into the wrong window
+        must not reach a log). This proves a terminal and a timing, not a person: a program
+        driving a terminal can still answer.
         """
         for line in _describe(request, self.environment if self.live else None):
             self._output(line)
@@ -649,22 +654,23 @@ class ConsoleApprovalChannel:
         else:
             if real_prompt:
                 _discard_typed_ahead()
+                if self.live:
+                    _ring_bell()
             started = time.monotonic()
-            try:
-                # input() blocks, so it runs in a thread and the event loop keeps running.
-                answer = await asyncio.to_thread(self._input, self._prompt())
-            except EOFError:  # input ended: treat as "no"
-                answer = ""
-            approved = self._approves(str(answer), request)
+            answer, empty_lines = await self._ask(request)
+            approved = answer is not None and self._approves(answer, request)
             waited = time.monotonic() - started
             where = "interactive terminal; " if real_prompt else ""
             typed = ""
             if self.live:
                 typed = (
-                    "typed the target service's name; "
+                    "typed the target service's name"
                     if approved
-                    else "did not type the target service's name; "
+                    else f"did not type the target service's name ({_why_not(answer)})"
                 )
+                if empty_lines and (answer is None or answer.strip()):
+                    typed += f" after {empty_lines} empty line{'s' if empty_lines > 1 else ''}"
+                typed += "; "
             note = f"{where}{typed}answered after {waited:.1f} s"
             if waited < FAST_ANSWER_SECONDS:
                 note += " (faster than a person can read the proposal)"
@@ -679,13 +685,41 @@ class ConsoleApprovalChannel:
             local_login=login,
         )
 
-    def _prompt(self) -> str:
+    async def _ask(self, request: ApprovalRequest) -> tuple[str | None, int]:
+        """The typed answer (None: input ended) and how many empty lines came before it.
+
+        On a live target an empty line is not an answer: at the end of a long investigation
+        an Enter pressed alone is no decision to act on (two real M5 runs ended rejected that
+        way), so the prompt is shown again, up to EMPTY_LINES_ASKED_AGAIN times and only
+        while the request is open. On a simulated target Enter still means "no" ([y/N]).
+        """
+        prompt = self._prompt(request)
+        empty = 0
+        while True:
+            try:
+                # input() blocks, so it runs in a thread and the event loop keeps running.
+                answer = str(await asyncio.to_thread(self._input, prompt))
+            except EOFError:  # input ended: treat as "no"
+                return None, empty
+            if (
+                answer.strip()
+                or not self.live
+                or empty >= EMPTY_LINES_ASKED_AGAIN
+                or utcnow() >= request.expires_at
+            ):
+                return answer, empty
+            empty += 1
+            target = _printable(request.proposal.target, 64)
+            self._output(f"Nothing was typed: type {target} to approve, or no to reject.")
+
+    def _prompt(self, request: ApprovalRequest) -> str:
         if not self.live:
             return self.SIMULATED_PROMPT
         kind = _printable(self.environment.kind if self.environment else "", 40)
+        target = _printable(request.proposal.target, 64)
         return (
-            f"LIVE target ({kind}): type the target service's name to approve this exact "
-            "action (anything else rejects): "
+            f"LIVE target ({kind}): to approve this exact action, type {target} and press "
+            "Enter (anything else rejects): "
         )
 
     def _approves(self, answer: str, request: ApprovalRequest) -> bool:
@@ -704,6 +738,27 @@ def _os_login() -> str:
     except (OSError, KeyError, ImportError):  # no login variable and no password entry
         return ""
     return _printable(str(login), limit=64).strip()
+
+
+def _why_not(answer: str | None) -> str:
+    """Why a live answer did not approve, in a few words (never the typed text itself)."""
+    if answer is None:
+        return "input ended"
+    typed = answer.strip()
+    if not typed:
+        return "only empty lines"
+    if typed.lower() in {"y", "yes"}:
+        return "answered y, which approves only a simulation"
+    return "typed something else"
+
+
+def _ring_bell() -> None:
+    """The terminal's bell: a run that waited half an hour for its model now waits for you."""
+    try:
+        sys.stdout.write("\a")
+        sys.stdout.flush()
+    except (OSError, ValueError, AttributeError):  # no usable standard output
+        pass
 
 
 def _discard_typed_ahead() -> None:

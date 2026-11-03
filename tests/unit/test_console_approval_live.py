@@ -1,7 +1,8 @@
 """The console approval on a live target (M5 plan, section 4.2: no anonymous approval).
 
 On a target that is not simulated, such as the local Kind cluster, a plain "y" is a
-rejection: the operator must type the target service's exact name. The decision stays bound
+rejection: the operator must type the target service's exact name, which the prompt names
+(an Enter alone asks again). The decision stays bound
 to the exact proposal digest, and the decision log keeps this machine's login name
 (getpass.getuser()) as local evidence, in a table of its own that no trace, API response or
 export reads. The simulator keeps "y" / "yes", exactly as before.
@@ -20,6 +21,7 @@ import io
 import re
 import sqlite3
 import sys
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -52,9 +54,10 @@ SIM = EnvironmentInfo(kind="simulated", name="test simulator", namespace="shop",
 LOGIN = "opsrunner"  # one word: the export gate would not see it outside a path
 ANSWERED = r"answered after \d+\.\d s( \(faster than a person can read the proposal\))?"
 LIVE_PROMPT = (
-    "LIVE target (kind): type the target service's name to approve this exact action "
+    "LIVE target (kind): to approve this exact action, type api and press Enter "
     "(anything else rejects): "
 )
+NOT_TYPED = "did not type the target service's name"
 
 
 @pytest.fixture(autouse=True)
@@ -82,18 +85,20 @@ def make_proposal(target: str = "api", **params: object) -> MitigationProposal:
 
 
 class Answers:
-    """A console: the proposal lines it printed, the prompts it showed, one typed answer."""
+    """A console: the proposal lines it printed, the prompts it showed, the typed answers
+    (one per prompt; the last one again for every later prompt, None: input ended)."""
 
-    def __init__(self, answer: str | None) -> None:
-        self.answer = answer
+    def __init__(self, *answers: str | None) -> None:
+        self.answers = list(answers)
         self.prompts: list[str] = []
         self.printed: list[str] = []
 
     def input(self, prompt: str) -> str:
         self.prompts.append(prompt)
-        if self.answer is None:
+        answer = self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
+        if answer is None:
             raise EOFError
-        return self.answer
+        return answer
 
     def channel(
         self, store: ApprovalStore, environment: EnvironmentInfo | None = KIND
@@ -105,14 +110,14 @@ class Answers:
 
 async def decide_at_console(
     store: ApprovalStore,
-    answer: str | None,
+    *answers: str | None,
     environment: EnvironmentInfo | None = KIND,
     request: ApprovalRequest | None = None,
 ) -> Answers:
     """Open a request for make_proposal() (unless one is given) and answer it at the console."""
     if request is None:
         request = store.create_request(make_proposal(), run_id="run-1", ttl_seconds=900)
-    console = Answers(answer)
+    console = Answers(*answers)
     await console.channel(store, environment).notify(request)
     return console
 
@@ -151,29 +156,83 @@ async def test_typing_the_target_services_name_approves_the_exact_proposal(
         store.consume(approval.approval_id)
 
 
+Y = "answered y, which approves only a simulation"
+ELSE = "typed something else"
+
+
 @pytest.mark.parametrize(
-    "answer",
+    ("answer", "why"),
     [
-        "y",
-        "yes",
-        " YES ",
-        "",
-        "Api",  # the name, but not exactly
-        "web",  # another service
-        "api please",
-        "execute_rollback",
-        None,  # input ended (EOF)
+        ("y", Y),
+        ("yes", Y),
+        (" YES ", Y),
+        ("", "only empty lines"),  # an Enter alone, every time it was asked
+        ("Api", ELSE),  # the name, but not exactly
+        ("web", ELSE),  # another service
+        ("api please", ELSE),
+        ("execute_rollback", ELSE),
+        (None, "input ended"),  # EOF
     ],
 )
 async def test_anything_but_the_exact_name_rejects_on_a_live_target(
-    store: ApprovalStore, answer: str | None
+    store: ApprovalStore, answer: str | None, why: str
 ) -> None:
     await decide_at_console(store, answer)
 
     [approval] = store.approvals_for("inc-1")
     assert (approval.decision, approval.actor) == ("rejected", "console-user")
     assert store.get_request("prop-1").status == ApprovalStatus.REJECTED
-    assert decision_note(store).startswith("did not type the target service's name; answered")
+    assert decision_note(store).startswith(f"{NOT_TYPED} ({why}); answered")
+    # The log says why, never what was typed (it could be a password typed in the wrong window).
+    if answer and answer.strip().lower() not in {"y", "yes"}:
+        assert answer.strip() not in decision_note(store)
+
+
+# --- an Enter alone is not an answer on a live target -----------------------------------------
+
+
+async def test_an_empty_line_asks_again_and_the_name_typed_next_approves(
+    store: ApprovalStore,
+) -> None:
+    """Two real runs (M5, qwen3:8b on the owner's VM) ended rejected by an Enter alone."""
+    console = await decide_at_console(store, "", "api")
+
+    assert store.approvals_for("inc-1")[0].decision == "approved"
+    assert console.prompts == [LIVE_PROMPT, LIVE_PROMPT]
+    assert "Nothing was typed: type api to approve, or no to reject." in console.printed
+    assert re.fullmatch(
+        r"typed the target service's name after 1 empty line; "
+        + ANSWERED
+        + "; login name kept in the local decision log",
+        decision_note(store),
+    )
+
+
+async def test_only_empty_lines_reject_after_a_few_prompts(store: ApprovalStore) -> None:
+    console = await decide_at_console(store, "")
+
+    assert len(console.prompts) == 1 + approvals.EMPTY_LINES_ASKED_AGAIN
+    assert store.approvals_for("inc-1")[0].decision == "rejected"
+
+
+async def test_a_no_after_an_empty_line_rejects_and_says_why(store: ApprovalStore) -> None:
+    await decide_at_console(store, "", "no")
+
+    assert store.approvals_for("inc-1")[0].decision == "rejected"
+    assert decision_note(store).startswith(f"{NOT_TYPED} ({ELSE}) after 1 empty line; answered")
+
+
+async def test_an_expired_request_is_not_asked_again(
+    store: ApprovalStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = store.create_request(make_proposal(), run_id="run-1", ttl_seconds=900)
+    late = request.expires_at + timedelta(seconds=1)
+    monkeypatch.setattr(approvals, "utcnow", lambda: late)
+
+    with pytest.raises(ApprovalError, match="expired"):
+        await decide_at_console(store, "", "api", request=request)  # "api" is never read
+
+    assert store.get_request("prop-1").status == ApprovalStatus.EXPIRED
 
 
 async def test_spaces_around_the_name_are_not_part_of_it(store: ApprovalStore) -> None:
@@ -401,7 +460,13 @@ async def test_input_typed_before_the_prompt_is_discarded(
 @pytest.mark.parametrize("environment", [SIM, None], ids=["simulated", "not-given"])
 @pytest.mark.parametrize(
     ("answer", "decision"),
-    [("y", "approved"), (" YES ", "approved"), ("api", "rejected"), ("n", "rejected")],
+    [
+        ("y", "approved"),
+        (" YES ", "approved"),
+        ("api", "rejected"),
+        ("n", "rejected"),
+        ("", "rejected"),  # [y/N]: Enter is "no", asked once
+    ],
 )
 async def test_the_simulator_keeps_y_or_yes(
     store: ApprovalStore, environment: EnvironmentInfo | None, answer: str, decision: str
@@ -464,7 +529,9 @@ async def test_an_export_of_a_live_run_approved_at_the_console_holds_no_login_na
     )
 
     assert record.state == IncidentState.RESOLVED, record.outcome_note
-    assert console.prompts and console.prompts[0].startswith("LIVE target (live): type")
+    assert console.prompts and console.prompts[0].startswith(
+        "LIVE target (live): to approve this exact action, type checkout and press Enter"
+    )
     [approval] = record.approvals
     assert approval.actor == "console-user"
     assert list(runtime.approvals.local_logins(approval.proposal_id).values()) == [login]
