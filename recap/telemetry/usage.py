@@ -48,7 +48,12 @@ def cost_label(usage: Usage, origin: str, *, free_status_lost: str | None = None
     if origin == "replay":
         return REPLAY_COST_LABEL
     if origin == "local_llm":
-        return f"$0.00 - local model on this machine, no paid or remote API; {_tokens(usage)}"
+        # Self-hosted: on this machine, or on the owner's own VM through a tunnel (M5); never
+        # a third party's API.
+        return (
+            "$0.00 per request - self-hosted open-weight model (this machine or the owner's "
+            f"own VM), no paid API; {_tokens(usage)}"
+        )
     if origin == "free_hosted_llm":
         return (
             "$0.00 - free plan (owner-confirmed; every response's limit header matched the "
