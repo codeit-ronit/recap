@@ -10,9 +10,9 @@ that need care on a real cluster (the M5 audit's gotchas) live here, each next t
 * "BackOff" keeps its meaning in RECAP's conventions (recap/core/signals.py counts it as
   memory evidence, because in the simulator it always follows an out-of-memory kill).
   Kubernetes uses that one reason for every back-off, so a pod that cannot pull its image
-  becomes "ImagePullBackOff", and a crash loop whose container last ended for a reason other
-  than OOMKilled (an error at start-up, say) becomes "CrashLoopBackOff". A back-off after an
-  OOMKilled termination, or one whose pod is gone (nothing left to tell), stays "BackOff";
+  becomes "ImagePullBackOff", only a back-off after an OOMKilled termination stays
+  "BackOff", and every other back-off, whether its container last ended with an error at
+  start-up or its pod is gone and nothing is left to tell, becomes "CrashLoopBackOff";
 * "OOMKilled" is not an Event reason: it lives in a container's last termination state. The
   adapter reports it as a ClusterEvent whose message says it was read from pod status, so
   nothing is presented as an event the API never stored;
@@ -384,9 +384,12 @@ def event_reason(event: Mapping[str, Any], terminated: Collection[str] = ()) -> 
         event.get("message") or ""
     ):
         return "ImagePullBackOff"
-    if terminated and "OOMKilled" not in terminated:
-        return "CrashLoopBackOff"
-    return reason
+    if "OOMKilled" in terminated:
+        return reason  # RECAP's convention: a back-off after an out-of-memory kill
+    # Any other back-off restarts a crashing container: a crash loop, whose cause is not known
+    # to be memory (its pod may be gone, with nothing left to tell). It is never reported as
+    # memory evidence that nothing shows (M5: SREGym's start-up back-offs were).
+    return "CrashLoopBackOff"
 
 
 def cluster_event(

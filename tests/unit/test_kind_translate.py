@@ -253,7 +253,10 @@ def test_a_crash_loop_after_an_error_is_not_memory_evidence_but_one_after_oom_is
 
     assert after_error is not None and after_error.reason == "CrashLoopBackOff"
     assert after_oom is not None and after_oom.reason == "BackOff"
-    assert unknown is not None and unknown.reason == "BackOff"  # the pod is gone: as reported
+    # The pod is gone, so the cause is unknown: a crash loop, never invented memory evidence
+    # (M5: the start-up back-offs of SREGym's old pods made a healthy service look out of memory).
+    assert unknown is not None and unknown.reason == "CrashLoopBackOff"
+    assert unknown.reason not in OOM_EVENT_REASONS
 
 
 def test_oom_kills_are_read_from_pod_status_and_say_so(snapshot: dict) -> None:

@@ -217,6 +217,7 @@ def releases(
                 service=service,
                 version=version,
                 previous_version=(entry.previous_version if entry else None) or previous,
+                replicaset=revision.replicaset,
                 deployed_at=deployed_at,
                 status=status,
                 change_summary=revision.change_cause,

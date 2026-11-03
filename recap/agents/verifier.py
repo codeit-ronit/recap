@@ -791,7 +791,7 @@ def _deploy_timing(
         f"deployment evidence shows {service} {record.version} deployed {when}",
         listings,
     )
-    onset = _error_onset(check, observed, record.version, alert_time)
+    onset = _error_onset(check, observed, record.version, alert_time, record.replicaset)
     if onset is None:
         return
     low, high = signals.DEPLOY_ERROR_WINDOW_MINUTES
@@ -812,7 +812,11 @@ def _deploy_timing(
 
 
 def _error_onset(
-    check: _Check, observed: _Observations, version: str, alert_time: datetime
+    check: _Check,
+    observed: _Observations,
+    version: str,
+    alert_time: datetime,
+    replicaset: str | None = None,
 ) -> _Onset | None:
     """V2 (b): when S's errors began, from the error_rate metric, else from '(version=v)' logs."""
     service = check.target
@@ -842,6 +846,8 @@ def _error_onset(
     ]
     if not tagged:
         failures = observed.pod_failures(service)
+        if replicaset:  # only the release's own pods: an older release's crash is not its onset
+            failures = [f for f in failures if f[1].object.startswith(f"pod/{replicaset}-")]
         if failures:  # a target without request metrics: the platform's own warnings
             return _pod_failure_onset(check, service, failures, alert_time)
         check.lack(

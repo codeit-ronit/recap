@@ -379,6 +379,37 @@ def test_without_metrics_a_crash_loop_after_the_release_dates_the_onset() -> Non
     assert set(check.basis_evidence_ids) >= {deploy, events}
 
 
+def test_an_older_releases_start_up_crash_does_not_date_the_new_releases_onset() -> None:
+    """Seen on SREGym: the app's Go services crash at start-up until their database answers,
+    minutes before the fault. With the release's ReplicaSet named, only its own pods count."""
+    run = Run()
+    old, new = "geo-766c64f6b4", "geo-57b8f86d7d"
+    records = [
+        DeploymentRecord(
+            service="geo", version="sha-d2c036bc", deployed_at=at(-40), replicaset=old
+        ),
+        DeploymentRecord(
+            service="geo",
+            version="20260912.1",
+            previous_version="sha-d2c036bc",
+            deployed_at=at(-12),
+            replicaset=new,
+        ),
+    ]
+    deploy = run.observe("get_recent_deployments", DeploymentList(deployments=records[::-1]))
+    startup = pod_failure("geo", first=-39, last=-39, count=1).model_copy(
+        update={"object": f"pod/{old}-cbk9t", "reason": "BackOff"}
+    )
+    crash = pod_failure("geo", first=-11, last=-1).model_copy(update={"object": f"pod/{new}-rr6gg"})
+    events = run.events(startup, crash, service="geo")
+    logs = run.logs("geo", panic_lines(range(-11, 1, 2)), start=-11)
+    claim = hypothesis(DEPLOY, "geo", deploy, events, logs, version="20260912.1")
+    check = only_check(verify(run, claim))
+
+    assert check.hypothesis.status == SUPPORTED  # not "already failing 27 min before"
+    assert "geo's pods first report CrashLoopBackOff 11 min before the alert" in check.passed
+
+
 def test_a_crash_loop_older_than_the_release_contradicts_it() -> None:
     run = Run()
     deploy = run.deployments(("geo", "sha-d2c036bc", -90), ("geo", "20260912.1", -12))

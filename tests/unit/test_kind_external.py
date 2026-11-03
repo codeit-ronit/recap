@@ -98,6 +98,7 @@ async def test_the_harness_fault_is_a_release_with_its_restore_point(tmp_path: P
 
     [release] = (await env.observe_deployments("geo", 5)).deployments
     assert (release.version, release.previous_version) == (BAD, GOOD)
+    assert release.replicaset is not None and release.replicaset.startswith("geo-")
     assert release.deployed_at > env.state.info().baseline_at  # minutes after the app's deploy
     plan = await env.plan_rollback("geo")
     assert (plan.possible, plan.current_version, plan.target_version) == (True, BAD, GOOD)

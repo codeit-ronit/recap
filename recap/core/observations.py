@@ -95,6 +95,9 @@ class DeploymentRecord(Contract):
     service: str
     version: str
     previous_version: str | None = None
+    # The ReplicaSet that runs this release (Kubernetes), so a pod's events can be tied to the
+    # release they belong to; None where the target has no such thing (the simulator).
+    replicaset: str | None = None
     deployed_at: UtcDatetime
     status: Literal["complete", "rollback"] = "complete"
     change_summary: str = ""
