@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
-# RECAP's M5 cluster host on AWS: one EC2 VM that runs the Kind cluster (and later SREGym),
-# while RECAP and the local model stay on the Mac and reach the cluster through an SSH tunnel.
+# RECAP's M5 cluster host on AWS: one EC2 VM that runs the Kind demo cluster, SREGym's own
+# cluster (infra/sregym/) and the model (Ollama), while RECAP stays on the Mac and reaches them
+# through an SSH tunnel.
 #
 #   infra/aws/ec2.sh up        create the VM (key pair, security group for your IP, encrypted
 #                              disk, IMDSv2), or start it if it is stopped; waits for SSH
 #   infra/aws/ec2.sh status    the VM's state and the hourly price it is paying for
 #   infra/aws/ec2.sh ssh [cmd] a shell (or one command) on the VM
-#   infra/aws/ec2.sh sync      copy infra/kind/ to the VM's ~/recap/infra/kind (nothing else)
-#   infra/aws/ec2.sh tunnel    forward the cluster's loopback ports to this Mac's loopback
-#                              (API server, NodePorts 30080/30081, Prometheus 30090) and the
+#   infra/aws/ec2.sh sync      copy infra/kind/ and infra/sregym/ to the VM's ~/recap/infra/
+#                              (nothing else of the repository)
+#   infra/aws/ec2.sh tunnel    forward the clusters' loopback ports to this Mac's loopback
+#                              (the Kind demo's API server, NodePorts 30080/30081, Prometheus
+#                              30090; SREGym's API server when its cluster exists) and the
 #                              VM's Ollama (Mac 127.0.0.1:11435 -> VM 127.0.0.1:11434)
+#   infra/aws/ec2.sh creds kind|sregym
+#                              copy RECAP's identity kubeconfigs and ca.sha256 for that cluster
+#                              from the VM to this Mac's private ~/.config/recap/<cluster>/
 #   infra/aws/ec2.sh stop      stop the VM: compute billing ends, the disk stays (~$0.45/day)
 #   infra/aws/ec2.sh down      terminate the VM and delete its security group and key pair
 #
@@ -17,7 +23,9 @@
 # RECAP_EC2_TYPE (default m6a.2xlarge), RECAP_EC2_DISK_GB (default 150).
 # State outside git: ~/.config/recap/aws/recap-m5.env (instance and group ids) and
 # ~/.ssh/recap-m5.pem (the private key, mode 400). Only port 22 is open, to this Mac's
-# public IP; the cluster's ports are never exposed.
+# public IP; the cluster's ports are never exposed. `up` also installs the VM's own idle
+# guard (infra/aws/idle-guard.sh): it stops the VM after 45 minutes without a model request,
+# a command or an ec2.sh call, even while this Mac sleeps.
 set -euo pipefail
 
 PROFILE="${AWS_PROFILE:-amlc-personal}"
@@ -48,8 +56,13 @@ public_ip() {
     --query 'Reservations[0].Instances[0].PublicIpAddress' --output text
 }
 ssh_() {
+  # Every command marks the VM as in use for the idle guard (an interactive login counts by
+  # itself while it lasts).
+  local keepalive=()
+  [[ $# -gt 0 ]] && keepalive=("touch ~/.recap-keepalive 2>/dev/null;")
   ssh -i "$KEY" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$STATE_DIR/known_hosts" \
-    -o ServerAliveInterval=30 -o ConnectTimeout=10 "ubuntu@$(public_ip)" "$@"
+    -o ServerAliveInterval=30 -o ConnectTimeout=10 "ubuntu@$(public_ip)" \
+    ${keepalive[@]+"${keepalive[@]}"} "$@"  # (bash 3.2: an empty array is "unbound" under set -u)
 }
 
 ensure_key() {
@@ -130,6 +143,7 @@ cmd_up() {
     sleep 10
   done
   say "ready: $(ssh_ 'docker --version; kind version; kubectl version --client | head -1' | tr '\n' ' ')"
+  install_idle_guard
   # Kind's node container restarts only on failure, so a stopped VM brings the cluster back
   # down: start it again and wait until the API server answers.
   if ssh_ "docker inspect recap-m5-control-plane >/dev/null 2>&1"; then
@@ -138,6 +152,32 @@ cmd_up() {
       && exit 0; sleep 3; done; exit 1" && say "cluster recap-m5 is up" \
       || die "the cluster did not come back; rebuild it with infra/kind/scripts/setup.sh on the VM"
   fi
+}
+
+install_idle_guard() {
+  # The guard and a systemd timer that runs it every 5 minutes (first 15 minutes after boot).
+  ssh_ "sudo install -m 0755 /dev/stdin /usr/local/sbin/recap-idle-guard" <"$HERE/idle-guard.sh"
+  ssh_ "sudo tee /etc/systemd/system/recap-idle-guard.service >/dev/null" <<'EOF'
+[Unit]
+Description=Stop this VM when RECAP does not use it (infra/aws/idle-guard.sh)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/recap-idle-guard
+EOF
+  ssh_ "sudo tee /etc/systemd/system/recap-idle-guard.timer >/dev/null" <<'EOF'
+[Unit]
+Description=Check every 5 minutes whether RECAP uses this VM
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+EOF
+  ssh_ "sudo systemctl daemon-reload && sudo systemctl enable --now recap-idle-guard.timer >/dev/null 2>&1"
+  say "idle guard on: the VM stops itself after 45 minutes unused"
 }
 
 cmd_status() {
@@ -151,8 +191,8 @@ cmd_sync() {
   # there and keep the credentials folder (~/.config/recap/kind) outside it.
   ssh_ "mkdir -p recap/infra && rm -rf recap-infra"
   rsync -az --delete -e "ssh -i $KEY -o UserKnownHostsFile=$STATE_DIR/known_hosts" \
-    "$REPO_ROOT/infra/kind" "ubuntu@$(public_ip):recap/infra/"
-  say "infra/kind copied to ~/recap/infra/kind on the VM"
+    "$REPO_ROOT/infra/kind" "$REPO_ROOT/infra/sregym" "ubuntu@$(public_ip):recap/infra/"
+  say "infra/kind and infra/sregym copied to ~/recap/infra/ on the VM"
 }
 
 cmd_tunnel() {
@@ -161,12 +201,36 @@ cmd_tunnel() {
   api_port="$(ssh_ "kubectl config view --kubeconfig ~/.config/recap/kind/admin.kubeconfig \
     --minify -o jsonpath='{.clusters[0].cluster.server}'" | sed -E 's|.*:([0-9]+)$|\1|')"
   [[ "$api_port" =~ ^[0-9]+$ ]] || die "could not read the API server's port on the VM"
-  say "forwarding 127.0.0.1:{$api_port,30080,30081,30090} and the model (11435 -> 11434) to the VM (Ctrl-C ends the tunnel)"
+  local forwards=(-L "127.0.0.1:$api_port:127.0.0.1:$api_port")
+  forwards+=(-L 127.0.0.1:30080:127.0.0.1:30080 -L 127.0.0.1:30081:127.0.0.1:30081)
+  forwards+=(-L 127.0.0.1:30090:127.0.0.1:30090 -L 127.0.0.1:11435:127.0.0.1:11434)
+  # SREGym's own cluster (infra/sregym/), when it exists: its API server on the VM's loopback.
+  local sregym_port
+  sregym_port="$(ssh_ "kubectl config view --context kind-kind --minify \
+    -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null" | sed -E 's|.*:([0-9]+)$|\1|' || true)"
+  if [[ "$sregym_port" =~ ^[0-9]+$ ]]; then
+    forwards+=(-L "127.0.0.1:$sregym_port:127.0.0.1:$sregym_port")
+    say "SREGym's API server: 127.0.0.1:$sregym_port"
+  fi
+  say "forwarding the clusters' ports and the model (11435 -> 11434) to the VM (Ctrl-C ends the tunnel)"
   exec ssh -i "$KEY" -o UserKnownHostsFile="$STATE_DIR/known_hosts" -o ServerAliveInterval=30 \
-    -o ExitOnForwardFailure=yes -N \
-    -L "127.0.0.1:$api_port:127.0.0.1:$api_port" -L 127.0.0.1:30080:127.0.0.1:30080 \
-    -L 127.0.0.1:30081:127.0.0.1:30081 -L 127.0.0.1:30090:127.0.0.1:30090 \
-    -L 127.0.0.1:11435:127.0.0.1:11434 "ubuntu@$(public_ip)"
+    -o ExitOnForwardFailure=yes -N "${forwards[@]}" "ubuntu@$(public_ip)"
+}
+
+cmd_creds() {
+  # RECAP's identity kubeconfigs (short-lived tokens) and the CA fingerprint, VM -> this Mac,
+  # as one tar stream over SSH: no token on a command line, files mode 600 in a 700 folder.
+  local cluster="${1:-}" files
+  case "$cluster" in
+    kind) files="recap-reader.kubeconfig recap-writer.kubeconfig recap-oracle.kubeconfig recap-scenario.kubeconfig ca.sha256" ;;
+    sregym) files="recap-reader.kubeconfig recap-writer.kubeconfig recap-oracle.kubeconfig ca.sha256" ;;
+    *) die "usage: ec2.sh creds kind|sregym" ;;
+  esac
+  local dest="$HOME/.config/recap/$cluster"
+  (umask 077 && mkdir -p "$dest")
+  load
+  ssh_ "tar -C ~/.config/recap/$cluster -cf - $files" | (umask 077 && tar -C "$dest" -xf -)
+  say "copied RECAP's $cluster identities to ~/.config/recap/$cluster"
 }
 
 cmd_stop() {
@@ -194,8 +258,9 @@ case "${1:-}" in
   status) cmd_status ;;
   ssh) shift; load; ssh_ "$@" ;;
   sync) cmd_sync ;;
+  creds) shift; cmd_creds "${1:-}" ;;
   tunnel) cmd_tunnel ;;
   stop) cmd_stop ;;
   down) cmd_down ;;
-  *) sed -n '2,20p' "$0"; exit 2 ;;
+  *) sed -n '2,27p' "$0"; exit 2 ;;
 esac

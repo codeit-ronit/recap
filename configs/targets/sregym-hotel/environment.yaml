@@ -13,8 +13,9 @@ kind: sregym
 options:
   scenarios_dir: fixtures/sregym-scenarios
   client: kubectl
-  # Absolute (a launchd PATH may not include it); ~ is expanded. Edit to where kubectl lives.
-  kubectl: /opt/homebrew/bin/kubectl
+  # kubectl v1.32.1, within one minor version of SREGym's Kubernetes 1.32.1 (RECAP's preflight
+  # refuses a wider skew): infra/sregym/get-kubectl.sh puts it here. Absolute; ~ is expanded.
+  kubectl: ~/.config/recap/sregym/bin/kubectl
   credentials_dir: ~/.config/recap/sregym
   # SREGym's cluster (kind's default name) and the app's namespace: every reset and every
   # process's first call checks the context, a loopback API server and the CA fingerprint.

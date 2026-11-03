@@ -1,0 +1,117 @@
+# RECAP's own identities in SREGym's Kind cluster (M5 W5; applied by infra/sregym/sregym.sh).
+#
+# RECAP never uses SREGym's administrator credential or its agent tools (a kubectl passthrough
+# and a shell, both cluster-wide). It reads and writes through three ServiceAccounts with the
+# least the Kubernetes adapter needs, in the app's namespace only, exactly as on the Kind demo
+# (infra/kind/manifests/10-recap-rbac.yaml). There is no recap-scenario: SREGym injects the
+# fault itself.
+#
+# Where they live: the ServiceAccounts in "default", a namespace SREGym's reconcile-to-baseline
+# never deletes; the Roles and RoleBindings in hotel-reservation, which SREGym deploys afresh for
+# every problem, so `sregym.sh grant` creates them again after each deploy. Namespaced only:
+# SREGym deletes ClusterRoles and ClusterRoleBindings it did not create.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: recap-reader
+  namespace: default
+  labels: {app.kubernetes.io/part-of: recap-sregym}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: recap-writer
+  namespace: default
+  labels: {app.kubernetes.io/part-of: recap-sregym}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: recap-oracle
+  namespace: default
+  labels: {app.kubernetes.io/part-of: recap-sregym}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: recap-reader
+  namespace: hotel-reservation
+  labels: {app.kubernetes.io/part-of: recap-sregym}
+rules:
+  - apiGroups: [""]
+    resources: [pods, events]
+    verbs: [get, list]
+  - apiGroups: [events.k8s.io]
+    resources: [events]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: recap-writer
+  namespace: hotel-reservation
+  labels: {app.kubernetes.io/part-of: recap-sregym}
+rules:
+  # The two writes (a rollback to a named revision, a rolling restart) patch a Deployment of
+  # the app's allowlist (configs/targets/sregym-hotel/policies.yaml) and nothing else.
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [frontend, search, geo, rate, profile, recommendation, reservation, user,
+                    mongodb-geo, mongodb-rate, mongodb-profile, mongodb-recommendation,
+                    mongodb-reservation, mongodb-user, memcached-rate, memcached-profile,
+                    memcached-reserve, consul, jaeger]
+    verbs: [get, patch]
+  # `kubectl rollout undo` lists the Deployment's ReplicaSets to find the revision to restore.
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: recap-oracle
+  namespace: hotel-reservation
+  labels: {app.kubernetes.io/part-of: recap-sregym}
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: recap-reader
+  namespace: hotel-reservation
+  labels: {app.kubernetes.io/part-of: recap-sregym}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: recap-reader}
+subjects:
+  - {kind: ServiceAccount, name: recap-reader, namespace: default}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: recap-writer
+  namespace: hotel-reservation
+  labels: {app.kubernetes.io/part-of: recap-sregym}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: recap-writer}
+subjects:
+  - {kind: ServiceAccount, name: recap-writer, namespace: default}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: recap-oracle
+  namespace: hotel-reservation
+  labels: {app.kubernetes.io/part-of: recap-sregym}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: recap-oracle}
+subjects:
+  - {kind: ServiceAccount, name: recap-oracle, namespace: default}
