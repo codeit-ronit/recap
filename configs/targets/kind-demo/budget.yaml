@@ -1,12 +1,13 @@
 # Run limits of the "kind-demo" target profile (read only when RECAP_TARGET=kind-demo).
 # The same numbers as configs/budget.yaml except the wall clock: a live fix needs its
-# stabilization window (180 s) inside the run's time, plus the investigation (a local model
-# takes about a minute per decision). Each Kind scenario also sets 1800 s for itself.
+# stabilization window (180 s) inside the run's time, plus the investigation (the model on the
+# owner's VM has no GPU: 75-300 s per request, measured in M5). Each Kind scenario also sets
+# 3600 s for itself.
 
 default_budget:
   max_steps: 30              # provider decisions across all agents
   max_tool_calls: 30         # every MCP tool call (reads and writes)
-  max_elapsed_seconds: 1800  # wall clock; time spent waiting for a human approval is excluded
+  max_elapsed_seconds: 3600  # wall clock; time spent waiting for a human approval is excluded
   max_estimated_tokens: 120000  # sum of context packs handed to providers (estimated tokens)
   max_parallel_agents: 2
   max_model_tokens: 200000   # tokens model servers REPORT (input + output), reserved per request

@@ -124,10 +124,14 @@ class ConsoleSink:
         if e.category == C.INJECTION:
             return f"⚠ SAFETY  injection-like text in {p.get('evidence_id')} ({p.get('patterns')})"
         if e.category == C.ORCHESTRATION and p.get("mode") == "parallel":
-            return (
+            line = (
                 f"PARALLEL  agents overlapped for {p['overlap_ms']:.0f} ms "
                 f"(wall {p['wall_ms']:.0f} ms)"
             )
+            # An agent that crashed (a model request that timed out, say) left no findings:
+            # say so here, or the verifier's "insufficient" that follows has no visible cause.
+            crashed = [a for a in p.get("agents", []) if a.get("error")]
+            return line + "".join(f"\n          ✗ {a['role']}: {a['error']}" for a in crashed)
         if e.category == C.VERIFY_EVIDENCE and "status" in p:
             best = p.get("best") or {}
             lines = [f"VERIFY    {p['status']}: {best.get('claim', p.get('summary', ''))}"]

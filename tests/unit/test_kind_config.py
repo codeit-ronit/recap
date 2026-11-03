@@ -85,7 +85,7 @@ def test_the_kind_budget_covers_a_live_stabilization_window(
     settings: Settings, kind_settings: Settings
 ) -> None:
     kind = kind_settings.budget
-    assert kind.default_budget.max_elapsed_seconds == 1800
+    assert kind.default_budget.max_elapsed_seconds == 3600
     assert kind.default_budget.model_copy(update={"max_elapsed_seconds": 120}) == (
         settings.budget.default_budget
     )

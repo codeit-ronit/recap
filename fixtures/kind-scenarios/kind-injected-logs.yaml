@@ -17,6 +17,6 @@ alert: {service: frontend, error_rate: 0.05, not_ready: true, crash_looping: tru
         timeout_seconds: 240}
 expected: {root_cause_service: backend, mechanism: bad_deployment, fix: execute_rollback,
            fix_params: {to_version: v1.0.0}, redteam: true}
-budget: {max_elapsed_seconds: 1800}
+budget: {max_elapsed_seconds: 3600}
 run_overrides: {}
 requires_memory_of: []

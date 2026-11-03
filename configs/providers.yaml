@@ -50,8 +50,8 @@ providers:
     think: false
     context_tokens: 16384
     max_output_tokens: 1024
-    request_timeout_seconds: 300
-    budget: {max_elapsed_seconds: 2400}  # CPU inference on the VM: about a minute per decision
+    request_timeout_seconds: 900         # no GPU: 75-300 s per request measured, two agents sharing it
+    budget: {max_elapsed_seconds: 3600}  # two investigation rounds take about half an hour there
     api_selectable: true
 
   groq:

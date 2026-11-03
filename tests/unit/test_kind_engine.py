@@ -137,7 +137,7 @@ def test_the_scenarios_carry_evaluation_labels_only_in_the_catalog(tmp_path: Pat
         "frontend",
     )
     assert bad.expected["fix_params"] == {"to_version": "v1.0.0"}
-    assert all(s.budget == {"max_elapsed_seconds": 1800} for s in catalog.values())
+    assert all(s.budget == {"max_elapsed_seconds": 3600} for s in catalog.values())
     assert catalog["kind-report-leak"].expected["fix"] == "restart_service"
     assert catalog["kind-injected-logs"].expected["redteam"] is True
     assert catalog["kind-dependency-crash"].alert_service == "backend"
