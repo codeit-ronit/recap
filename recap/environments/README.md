@@ -18,7 +18,7 @@ map its logs to those conventions (or use an LLM provider) and update allowlists
 |---|---|---|
 | `SimulatedEnvironment` (`kind: simulated`) | `recap/environments/simulated/` | V1 default: deterministic local simulation |
 | `KubernetesEnvironment` (`kind: kind`) | `recap/environments/kubernetes/` | M5: a local Kind cluster through typed `kubectl` operations, chosen with `RECAP_TARGET=kind-demo`. Built and tested offline against a fake cluster; **not yet run against a real cluster** |
-| `SREGymEnvironment` (`kind: sregym`) | `integrations/sregym/` | Interface only, **not integrated**: every operation raises `EnvironmentNotIntegrated` |
+| `SREGymEnvironment` (`kind: sregym`) | `integrations/sregym/` | A SREGym 1.1 problem on SREGym's own Kind cluster, in its external-harness mode: RECAP's Kubernetes adapter with image-tag releases and no probe or metrics (M5, ADR 0031; `RECAP_TARGET=sregym-hotel`) |
 | `FakeEnvironment` (`kind: tests.fakes:FakeEnvironment`) | `tests/fakes.py` | A tiny second adapter used by tests to prove the interface is swappable |
 
 ## The contract and the trust boundary

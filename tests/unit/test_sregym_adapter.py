@@ -1,85 +1,110 @@
-"""Tests for the SREGym adapter stub (integrations/sregym).
+"""The SREGym adapter (integrations/sregym, M5 W5) and its target profile (sregym-hotel).
 
-The stub must be honest: it says it is not simulated and not integrated, lists no
-scenarios, and refuses every operation, so no result can ever be attributed to SREGym by
-accident. The recovery oracle must refuse too instead of inventing a health verdict.
+SREGymEnvironment is RECAP's Kubernetes adapter in the mode a benchmark's own cluster needs
+(ADR 0031): SREGym's harness owns the fault, a release is an image tag, and there is no probe
+or metric. These tests cover what is specific to it, offline: its self-description, the profile
+and scenario as RECAP_TARGET=sregym-hotel loads them, and that nothing about the problem's
+answer can reach an agent. The adapter's behaviour over a fake cluster is
+tests/unit/test_kind_external.py; the live cluster is infra/sregym/ and docs/m5-progress.md.
 """
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
 
 from integrations.sregym import SREGymEnvironment
-from recap.core.config import REPO_ROOT, EnvironmentConfig
-from recap.core.errors import EnvironmentNotIntegrated
+from recap.core.config import REPO_ROOT, load_settings
+from recap.core.errors import ConfigError
 from recap.core.interfaces import TargetEnvironment
-from recap.core.observations import AuthorizedAction
-from recap.verification.oracle import EnvironmentHealthOracle
+from recap.environments.kubernetes import KubernetesEnvironment
+from recap.environments.registry import create_environment
+from recap.runtime import ENVIRONMENT_ADAPTERS, LIVE_ADAPTERS
+from tests.unit.test_kind_external import options as fake_options
 
-SAMPLE_CONFIG = REPO_ROOT / "integrations" / "sregym" / "sample_config.yaml"
-
-OPERATIONS: dict[str, Callable[[SREGymEnvironment], Awaitable[Any]]] = {
-    "reset": lambda env: env.reset("any-problem", 1),
-    "observe_services": lambda env: env.observe_services(),
-    "observe_health": lambda env: env.observe_health("checkout"),
-    "observe_logs": lambda env: env.observe_logs("checkout", 10, 60),
-    "observe_metrics": lambda env: env.observe_metrics("checkout", "error_rate", 60),
-    "observe_deployments": lambda env: env.observe_deployments(None, 10),
-    "observe_events": lambda env: env.observe_events(None, 10),
-    "plan_rollback": lambda env: env.plan_rollback("checkout"),
-    "execute_authorized": lambda env: env.execute_authorized(
-        AuthorizedAction(action="restart", target="checkout")
-    ),
-    "health_check": lambda env: env.health_check(),
-}
+SCENARIO = "sregym-misconfig-app-hotel-res"
+# What the problem's answer and SREGym's own wording are: never in what an agent can read.
+ANSWER = ("geo", "27777", "misconfig", "sha-d2c036bc3d11", "20260912.1", "mongodb")
 
 
-def test_describe_says_plainly_that_nothing_is_connected() -> None:
-    info = SREGymEnvironment(run_id="run-1").describe()
-    assert (info.kind, info.name, info.namespace) == (
+@pytest.fixture
+def profile(tmp_path: Path) -> Any:
+    return load_settings(data_dir=tmp_path / "data", target="sregym-hotel")
+
+
+def test_it_is_the_kubernetes_adapter_in_external_harness_mode(tmp_path: Path) -> None:
+    env = SREGymEnvironment("run-sregym01", **fake_options(tmp_path, harness="external"))
+    assert isinstance(env, KubernetesEnvironment) and isinstance(env, TargetEnvironment)
+    assert (env.kind, env.options.harness, env.options.release_format) == (
         "sregym",
-        "SREGym (not integrated)",
-        "default",
+        "external",
+        "tag",
     )
-    assert info.is_simulated is False and info.supported_actions == []
-    assert "no connection" in info.description.lower()
+    with pytest.raises(ConfigError, match="only in external-harness mode"):
+        SREGymEnvironment("run-sregym01", **fake_options(tmp_path, harness="recap"))
 
 
-def test_namespace_comes_from_the_options() -> None:
-    assert SREGymEnvironment(run_id="run-1", namespace="hotel").describe().namespace == "hotel"
+def test_describe_says_what_it_is_and_nothing_about_the_problem(tmp_path: Path) -> None:
+    info = SREGymEnvironment("run-sregym01", **fake_options(tmp_path)).describe()
+    assert (info.kind, info.is_simulated, info.supported_actions) == (
+        "sregym",
+        False,
+        ["rollback", "restart"],
+    )
+    assert info.name == "SREGym on Kind cluster recap-m5 (offline fake)"
+    assert info.description.startswith("OFFLINE FAKE of a SREGym target")
+    assert "SREGym's own oracle grades the result" in info.description
+    text = f"{info.name} {info.description}".lower()
+    assert not any(word in text for word in ANSWER)
+    assert "/" not in info.description.replace("rollback to a named revision", "")  # no path
 
 
-def test_binding_an_executor_key_is_refused_too() -> None:
-    """Nothing can be authorized against a target that is not connected."""
-    with pytest.raises(EnvironmentNotIntegrated):
-        SREGymEnvironment(run_id="run-1").bind_executor("any-public-key")
+def test_the_profile_selects_the_sregym_adapter_with_its_own_allowlists(profile: Any) -> None:
+    assert profile.environment.kind == "sregym"
+    options = profile.environment.options
+    services = options["services"]
+    assert len(services) == 19 and options["namespace"] == "hotel-reservation"
+    assert (options["harness"], options["release_format"], options["prometheus_url"]) == (
+        "external",
+        "tag",
+        None,
+    )
+    policies = profile.policies
+    assert policies.allowed_namespaces == ["hotel-reservation"]
+    assert sorted(policies.allowed_services) == sorted(services)
+    assert policies.tools["execute_rollback"].args["to_version"].type == "release"
+    assert policies.tools["delete_namespace"].risk.value == "destructive"
+    assert all(
+        set(called) <= set(services) for called in options["dependencies"].values()
+    )  # the documented call graph stays inside the allowlist
+    assert profile.budget.default_budget.max_elapsed_seconds == 3600
 
 
-def test_it_is_a_target_environment_with_no_scenarios() -> None:
-    env = SREGymEnvironment(run_id="run-1")
-    assert isinstance(env, TargetEnvironment) and env.kind == "sregym"
-    assert env.list_scenarios() == []
+def test_the_profile_builds_offline_and_lists_its_scenario(profile: Any) -> None:
+    env = create_environment(profile.environment, "describe")  # never contacts the cluster
+    assert isinstance(env, SREGymEnvironment)
+    [scenario] = env.list_scenarios()
+    assert scenario.id == SCENARIO and scenario.partition.value == "test"  # held out
+    assert scenario.expected["fix"] == "execute_rollback"  # evaluation only
+    info = env.describe()
+    assert info.namespace == "hotel-reservation" and info.name == "SREGym on Kind cluster kind"
 
 
-@pytest.mark.parametrize("operation", sorted(OPERATIONS))
-async def test_every_operation_raises_not_integrated(operation: str) -> None:
-    with pytest.raises(EnvironmentNotIntegrated, match="integrations/sregym/README.md"):
-        await OPERATIONS[operation](SREGymEnvironment(run_id="run-1"))
+def test_nothing_an_agent_reads_names_the_answer(profile: Any) -> None:
+    """The scenario's labels are evaluation-only; the agents see the measured alert, the
+    environment kind and their tools' results. Neither the profile's description nor its
+    runbooks (checked by tests/unit/test_k8s_runbooks.py) holds the answer."""
+    env = create_environment(profile.environment, "describe")
+    text = f"{env.describe().description} {env.describe().name}".lower()
+    assert not any(word in text for word in ANSWER)
+    [scenario] = env.list_scenarios()
+    assert scenario.alert_service == "frontend"  # the alert rule's preferred name: not the cause
 
 
-async def test_the_oracle_refuses_instead_of_inventing_health() -> None:
-    oracle = EnvironmentHealthOracle(SREGymEnvironment(run_id="run-1"))
-    assert oracle.name == "sregym-health-oracle"
-    with pytest.raises(EnvironmentNotIntegrated):
-        await oracle.probe()
-
-
-def test_the_sample_config_builds_the_stub() -> None:
-    config = EnvironmentConfig.model_validate(yaml.safe_load(SAMPLE_CONFIG.read_text("utf-8")))
-    assert config.kind == "sregym"
-    env = SREGymEnvironment(run_id="run-1", **config.options)
-    assert env.describe().namespace == config.options["namespace"]
+def test_get_system_reports_the_adapter_as_implemented_and_live() -> None:
+    adapter, implemented, detail = ENVIRONMENT_ADAPTERS["sregym"]
+    assert (adapter, implemented) == ("SREGymEnvironment", True)
+    assert "sregym" in LIVE_ADAPTERS and "RECAP_TARGET=sregym-hotel" in detail
+    assert (REPO_ROOT / "configs" / "targets" / "sregym-hotel" / "environment.yaml").is_file()

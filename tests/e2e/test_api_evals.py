@@ -210,6 +210,13 @@ def test_the_health_label_says_simulated_only_for_a_simulated_environment(
 ) -> None:
     with TestClient(create_app(Runtime(settings)), headers=OPERATOR_HEADERS) as client:
         assert client.get("/health").json()["label"] == "SIMULATED LOCAL ENVIRONMENT · V1"
-    sregym = settings.model_copy(update={"environment": EnvironmentConfig(kind="sregym")})
-    with TestClient(create_app(Runtime(sregym)), headers=OPERATOR_HEADERS) as client:
-        assert client.get("/health").json()["label"] == "LIVE ENVIRONMENT (sregym) · V1"
+    live = settings.model_copy(
+        update={
+            "environment": EnvironmentConfig(
+                kind="tests.unit.test_console_approval_live:LiveLookingEnvironment",
+                options={"state_dir": str(settings.paths.data_dir / "live")},
+            )
+        }
+    )
+    with TestClient(create_app(Runtime(live)), headers=OPERATOR_HEADERS) as client:
+        assert client.get("/health").json()["label"] == "LIVE ENVIRONMENT (live) · V1"

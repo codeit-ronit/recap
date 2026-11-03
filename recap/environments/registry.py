@@ -12,7 +12,8 @@ as log conventions, allowlists and runbooks must still match the new target.)
     simulated                  SimulatedEnvironment - deterministic local sandbox (V1 default)
     kind                       KubernetesEnvironment - a local Kind cluster through typed
                                kubectl operations (M5; configs/targets/kind-demo/)
-    sregym                     SREGymEnvironment - interface only, NOT integrated in V1
+    sregym                     SREGymEnvironment - a SREGym problem on SREGym's own Kind
+                               cluster, external-harness mode (M5; configs/targets/sregym-hotel/)
     package.module:ClassName   any importable TargetEnvironment subclass
                                (the tests use "tests.fakes:FakeEnvironment")
 
@@ -50,7 +51,7 @@ def _kind(**options: Any) -> TargetEnvironment:
 
 
 def _sregym(**options: Any) -> TargetEnvironment:
-    """Build the SREGym adapter (an interface only in V1; it reports that it is not integrated)."""
+    """Build the SREGym adapter (M5): the Kubernetes adapter for a SREGym problem."""
     from integrations.sregym.adapter import SREGymEnvironment
 
     return SREGymEnvironment(**options)

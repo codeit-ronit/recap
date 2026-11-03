@@ -255,15 +255,23 @@ DEMO_SCENARIOS = {
     "kind-injected-logs",
     "kind-report-leak",
 }
+# The SREGym target's scenario (fixtures/sregym-scenarios/, M5 W5): the runbooks are shared
+# with it, so they must not hold its answer either: its releases (the bad one is SREGym's
+# misconfigured image), the problem's own wording and its port.
+SREGYM_RELEASES = {"20260912.1", "sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a"}
+SREGYM_DETAILS = {"misconfig", "27777", "hotel-reservation", "mongodb-geo"}
+SCENARIO_FOLDERS = ("kind-scenarios", "sregym-scenarios")
 
 
 def demo_labels() -> tuple[set[str], set[str], set[str]]:
-    """(services, versions, other identifiers) of the Kind demo scenarios."""
-    services, versions = set(DEMO_SERVICES), set(DEMO_VERSIONS)
-    details = DEMO_DETAILS | DEMO_SCENARIOS
-    for path in sorted((REPO_ROOT / "fixtures" / "kind-scenarios").glob("*.yaml")):
+    """(services, versions, other identifiers) of the Kind and SREGym scenarios."""
+    services, versions = set(DEMO_SERVICES), DEMO_VERSIONS | SREGYM_RELEASES
+    details = DEMO_DETAILS | DEMO_SCENARIOS | SREGYM_DETAILS
+    paths = [p for f in SCENARIO_FOLDERS for p in (REPO_ROOT / "fixtures" / f).glob("*.yaml")]
+    for path in sorted(paths):
         spec = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         details.add(str(spec.get("id", path.stem)))
+        details.add(str((spec.get("external") or {}).get("problem", "")))
         services |= set((spec.get("baseline") or {}).keys())
         versions |= {str(v) for v in (spec.get("baseline") or {}).values()}
         for fault in spec.get("faults") or []:

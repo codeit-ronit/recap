@@ -1,4 +1,4 @@
-"""SREGym integration: an interface-only adapter. NOT INTEGRATED in V1 (see README.md)."""
+"""SREGym integration (M5 W5): RECAP's Kubernetes adapter for a SREGym problem (README.md)."""
 
 from __future__ import annotations
 

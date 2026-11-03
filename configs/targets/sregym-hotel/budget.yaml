@@ -1,0 +1,33 @@
+# Run limits of the "sregym-hotel" target profile (read only when RECAP_TARGET=sregym-hotel):
+# the Kind demo's, since the same model on the same VM investigates; copied from
+# configs/targets/kind-demo/budget.yaml.
+#
+# The same numbers as configs/budget.yaml except the wall clock: a live fix needs its
+# stabilization window (180 s) inside the run's time, plus the investigation (the model on the
+# owner's VM has no GPU: 75-300 s per request, measured in M5). Each Kind scenario also sets
+# 3600 s for itself.
+
+default_budget:
+  max_steps: 30              # provider decisions across all agents
+  max_tool_calls: 30         # every MCP tool call (reads and writes)
+  max_elapsed_seconds: 3600  # wall clock; time spent waiting for a human approval is excluded
+  max_estimated_tokens: 120000  # sum of context packs handed to providers (estimated tokens)
+  max_parallel_agents: 2
+  max_model_tokens: 200000   # tokens model servers REPORT (input + output), reserved per request
+
+context:
+  pack_tokens: 3000       # max estimated tokens in one context pack
+  max_item_tokens: 400    # longer items are compacted (with a pointer to the full evidence)
+
+routing:
+  parallel_min_tool_calls: 10   # do not start parallel specialists with fewer calls left
+  familiar_similarity: 0.6      # memory similarity that counts as "we have seen this before"
+  conflict_similarity: 0.45     # similar episodes above this that disagree -> conflict
+  parallel_agent_time_share: 0.7  # a parallel agent may use at most this share of the time left
+
+retries:
+  max_investigation_rounds: 2   # re-investigate (escalating) when evidence is insufficient
+  max_mitigation_attempts: 2    # try another fix if the oracle says the first did not work
+
+approvals:
+  ttl_seconds: 900              # an approval request expires after 15 minutes

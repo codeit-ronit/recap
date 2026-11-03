@@ -49,7 +49,7 @@ from apps.api.main import create_app
 from apps.api.service import RunRefused, check_run_request
 from apps.api.views import CONCURRENCY_NOTE, REPLAY_NOTE, SCRIPTED_NOTE
 from evals.records import EvalBatch, EvalRecord, write_batch
-from recap.core.config import EnvironmentConfig, Settings
+from recap.core.config import Settings
 from recap.core.models import EnvironmentInfo, IncidentState, ProviderInfo, RunConfig, RunRecord
 from recap.providers.factory import REPLAY_ENV, create_provider
 from recap.providers.recordings import MANIFEST, list_fixtures
@@ -706,35 +706,21 @@ def test_providers_show_classes_limits_and_who_may_pick_them(
     assert all(p.limitations for p in providers.values())
 
 
-def test_the_system_never_calls_a_stub_operational(settings: Settings) -> None:
-    sregym = settings.model_copy(update={"environment": EnvironmentConfig(kind="sregym")})
+def test_a_live_adapter_is_operational_only_while_it_is_configured(settings: Settings) -> None:
     with client_for(Runtime(settings)) as client:
         simulated = SystemView.model_validate(client.get("/system").json())
-    with client_for(Runtime(sregym)) as client:
-        stub = SystemView.model_validate(client.get("/system").json())
-        refused = client.post("/incidents/run", json={"scenario_id": "bad-deployment"})
 
     adapters = {a.kind: a for a in simulated.environment_adapters}
     assert adapters["simulated"].status == "active" and adapters["simulated"].operational
-    assert adapters["sregym"].status == "planned" and not adapters["sregym"].operational
-    assert adapters["sregym"].milestone == "M5"
-    # The Kind adapter is built (M5), but it needs its live cluster: never operational unless
-    # it is the configured adapter (GET /system never contacts a cluster).
-    assert adapters["kind"].status == "available" and not adapters["kind"].operational
-    assert (
-        adapters["kind"].adapter == "KubernetesEnvironment" and adapters["kind"].milestone is None
-    )
+    # The Kind and SREGym adapters are built (M5), but each needs its live cluster: never
+    # operational unless it is the configured adapter (GET /system never contacts a cluster).
+    for kind, adapter in (("kind", "KubernetesEnvironment"), ("sregym", "SREGymEnvironment")):
+        assert adapters[kind].status == "available" and not adapters[kind].operational
+        assert adapters[kind].adapter == adapter and adapters[kind].milestone is None
     assert simulated.simulation_notice and simulated.label.startswith("SIMULATED")
     assert simulated.features.writes_require_operator_token
     assert "replay" in simulated.features.per_run_providers
     assert simulated.features.evaluation_modes["real_kubernetes"] == "implemented"
-
-    components = {c.id: c for c in stub.components}
-    assert components["environment"].status == "planned"
-    assert components["oracle"].status == "planned"
-    assert not any(a.operational for a in stub.environment_adapters if a.kind != "simulated")
-    assert stub.simulation_notice is None and stub.label == "LIVE ENVIRONMENT (sregym) · V1"
-    assert refused.status_code == 404  # the stub lists no scenario: nothing can run on it
 
 
 def test_replays_list_the_committed_recordings_with_their_checks(settings: Settings) -> None:

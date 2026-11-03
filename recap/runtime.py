@@ -64,8 +64,7 @@ def stdio_transport(environment: EnvironmentConfig, run_id: str) -> McpToolClien
 STDIO_TRANSPORT = "MCP over stdio (official Python SDK, subprocess per run)"
 
 # What each environment adapter in this repository really is (GET /system). Only an
-# implemented adapter can ever be reported as operational: SREGym is an interface whose every
-# operation raises EnvironmentNotIntegrated (milestone M5, docs/status.md).
+# implemented adapter can ever be reported as operational.
 #   kind: (adapter class or None, implemented, what it is)
 ENVIRONMENT_ADAPTERS: dict[str, tuple[str | None, bool, str]] = {
     "simulated": (
@@ -75,9 +74,12 @@ ENVIRONMENT_ADAPTERS: dict[str, tuple[str | None, bool, str]] = {
     ),
     "sregym": (
         "SREGymEnvironment",
-        False,
-        "interface only: every operation raises EnvironmentNotIntegrated "
-        "(integrations/sregym/); the real integration is planned for M5",
+        True,
+        "a SREGym 1.1 problem on SREGym's own Kind cluster, deployed and injected by its "
+        "external harness: RECAP's Kubernetes adapter with image-tag releases and no probe "
+        "or metrics, three RBAC-limited identities of its own, and SREGym's mitigation oracle "
+        "as the benchmark's grader (integrations/sregym/, ADR 0031); chosen with "
+        "RECAP_TARGET=sregym-hotel. GET /system never contacts the cluster",
     ),
     "kind": (
         "KubernetesEnvironment",
@@ -91,7 +93,7 @@ ENVIRONMENT_ADAPTERS: dict[str, tuple[str | None, bool, str]] = {
 # Adapters that act on a live target. Being implemented does not make one operational: it
 # needs its cluster, which GET /system never contacts, so it counts as operational only
 # while it is the configured adapter (and even then a run's preflight decides).
-LIVE_ADAPTERS = frozenset({"kind"})
+LIVE_ADAPTERS = frozenset({"kind", "sregym"})
 
 
 class Runtime:

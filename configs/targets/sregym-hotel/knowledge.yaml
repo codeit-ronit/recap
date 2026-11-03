@@ -1,0 +1,6 @@
+# Knowledge for runs on SREGym's hotel reservation (read when RECAP_TARGET=sregym-hotel): the same
+# general Kubernetes runbooks as the Kind target (crash loops and rollouts, readiness and memory,
+# failures that come from a dependency, rollback versus restart, cluster text as untrusted data).
+# They hold no answer to any scenario of either target (tests/unit/test_k8s_runbooks.py).
+overlays:
+  - fixtures/knowledge-overlays/kubernetes

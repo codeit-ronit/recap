@@ -156,7 +156,9 @@ def test_configured_kind_is_the_active_adapter_with_its_own_oracle(kind_settings
     components = {c["id"]: c for c in summary["components"]}
 
     assert (found["kind"]["status"], found["kind"]["operational"]) == ("active", True)
-    assert found["simulated"]["status"] == "available" and found["sregym"]["status"] == "planned"
+    assert found["simulated"]["status"] == "available"
+    # SREGym's adapter is built too (M5 W5), but only the configured live adapter is operational.
+    assert (found["sregym"]["status"], found["sregym"]["operational"]) == ("available", False)
     assert summary["oracle"] == "kind-health-oracle" == components["oracle"]["implementation"]
     assert summary["tool_transport"] == STDIO_TRANSPORT
     assert summary["environment"]["is_simulated"] is False

@@ -1,103 +1,63 @@
-"""SREGym adapter: where a real benchmark environment will plug in. NOT INTEGRATED in V1.
+"""SREGym adapter (M5 W5): RECAP on one problem of SREGym's, on SREGym's own Kind cluster.
 
-This class implements the same TargetEnvironment interface as the simulator, which shows
-exactly where real infrastructure would connect without touching agents, RAG, memory,
-routing, guardrails or the harness. It describes itself honestly (is_simulated=False, no
-supported actions) and every operation raises EnvironmentNotIntegrated, so no observation,
-repair or score in this repository can come from SREGym by accident.
+SREGym (release 1.1, commit a90b43cc973158120119a9f388081eac4f7adb36) deploys one of its
+applications and injects one problem in its external-harness mode, then leaves the cluster
+to the agent; its own executable mitigation oracle grades the cluster state afterwards
+(infra/sregym/). This adapter is RECAP's Kubernetes adapter (recap/environments/kubernetes/) in
+the mode such a target needs (ADR 0031):
 
-What a real implementation needs is listed in integrations/sregym/README.md, and the
-planned (unverified) tool mapping is in integrations/sregym/mapping.md.
+* the harness owns the fault: reset changes nothing, takes the app's first revisions as the
+  run's baseline and waits for the alert from the cluster's own state;
+* a release is an image tag (SREGym tags by date or commit and pins by digest), and only a key
+  into a Deployment's own revision history;
+* there is no Prometheus and no probe: health is status and readiness, said as such.
+
+RECAP reads and writes through its own least-privilege ServiceAccounts in SREGym's cluster
+(infra/sregym/grant-recap.sh), never through SREGym's own agent tools (a kubectl passthrough
+and a shell, both cluster-wide) and never with SREGym's administrator credential. Selected by
+RECAP_TARGET=sregym-hotel (configs/targets/sregym-hotel/).
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from recap.core.errors import EnvironmentNotIntegrated
-from recap.core.interfaces import TargetEnvironment
-from recap.core.models import EnvironmentInfo, ScenarioInfo
-from recap.core.observations import (
-    ActionOutcome,
-    AlertSignal,
-    AuthorizedAction,
-    DeploymentList,
-    EventList,
-    HealthReport,
-    HealthSnapshot,
-    LogQueryResult,
-    MetricName,
-    MetricSeries,
-    RollbackPlan,
-    ServiceList,
-)
-
-README = "integrations/sregym/README.md"
+from recap.core.errors import ConfigError
+from recap.core.models import EnvironmentInfo
+from recap.environments.kubernetes import KubernetesEnvironment
 
 
-def _not_integrated(operation: str) -> EnvironmentNotIntegrated:
-    return EnvironmentNotIntegrated(
-        f"SREGym is not integrated in RECAP V1, so '{operation}' is unavailable. See {README}."
-    )
-
-
-class SREGymEnvironment(TargetEnvironment):
-    """Interface-only SREGym adapter: honest self-description, every operation refused."""
+class SREGymEnvironment(KubernetesEnvironment):
+    """The Kubernetes adapter for a SREGym problem (external harness, image-tag releases)."""
 
     kind = "sregym"
 
     def __init__(self, run_id: str, **options: Any) -> None:
-        self.run_id = run_id
-        self.options = dict(options)  # e.g. namespace; see sample_config.yaml
+        options = {"harness": "external", "release_format": "tag", **options}
+        if options["harness"] != "external":
+            raise ConfigError(
+                "the SREGym adapter runs only in external-harness mode: SREGym injects the fault"
+            )
+        super().__init__(run_id, **options)
 
     def describe(self) -> EnvironmentInfo:
-        """Says plainly that nothing is connected."""
-        return EnvironmentInfo(
-            kind=self.kind,
-            name="SREGym (not integrated)",
-            namespace=str(self.options.get("namespace", "default")),
-            is_simulated=False,
-            supported_actions=[],
-            description="Interface only in V1; no connection to SREGym exists.",
+        """Static and offline: what this target is. No path, URL, secret or problem name."""
+        options = self.options
+        what = (
+            f"SREGym 1.1 on its own Kind cluster {options.cluster} (context {options.context}), "
+            f"not production: {len(self.services)} Deployments of a benchmark application in "
+            f"namespace {self.namespace}, deployed and broken by SREGym's own harness, read "
+            "through typed kubectl operations with RECAP's own identities. The only writes are a "
+            "rollback to a named revision and a rolling restart, each with a signed single-use "
+            "capability; SREGym's own oracle grades the result."
         )
-
-    def list_scenarios(self) -> list[ScenarioInfo]:
-        """No problems can be listed without a real, pinned SREGym installation."""
-        return []
-
-    async def reset(self, scenario_id: str, seed: int) -> AlertSignal:
-        raise _not_integrated("reset")
-
-    async def observe_services(self) -> ServiceList:
-        raise _not_integrated("observe_services")
-
-    async def observe_health(self, service: str) -> HealthSnapshot:
-        raise _not_integrated("observe_health")
-
-    async def observe_logs(self, service: str, limit: int, since_minutes: int) -> LogQueryResult:
-        raise _not_integrated("observe_logs")
-
-    async def observe_metrics(
-        self, service: str, metric: MetricName, window_minutes: int
-    ) -> MetricSeries:
-        raise _not_integrated("observe_metrics")
-
-    async def observe_deployments(self, service: str | None, limit: int) -> DeploymentList:
-        raise _not_integrated("observe_deployments")
-
-    async def observe_events(self, service: str | None, limit: int) -> EventList:
-        raise _not_integrated("observe_events")
-
-    async def plan_rollback(self, service: str) -> RollbackPlan:
-        raise _not_integrated("plan_rollback")
-
-    def bind_executor(self, public_key: str) -> None:
-        # A real adapter must verify RECAP's capabilities itself before acting on the cluster
-        # (recap/safety/capabilities.py), and refuse safety-off capabilities.
-        raise _not_integrated("bind_executor")
-
-    async def execute_authorized(self, action: AuthorizedAction) -> ActionOutcome:
-        raise _not_integrated("execute_authorized")
-
-    async def health_check(self) -> HealthReport:
-        raise _not_integrated("health_check")
+        if options.client == "fake":
+            what = "OFFLINE FAKE of a SREGym target, for tests: synthetic data, no cluster. " + what
+        info = super().describe()
+        return info.model_copy(
+            update={
+                "name": f"SREGym on Kind cluster {options.cluster}"
+                + (" (offline fake)" if options.client == "fake" else ""),
+                "description": what,
+            }
+        )

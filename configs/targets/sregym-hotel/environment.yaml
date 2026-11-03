@@ -1,0 +1,45 @@
+# Target profile "sregym-hotel" (M5 W5): a SREGym 1.1 problem on SREGym's own Kind cluster.
+#
+# SREGym (release 1.1, commit a90b43cc973158120119a9f388081eac4f7adb36) deploys its hotel-reservation
+# app and injects one problem in its external-harness mode (infra/sregym/), then leaves the
+# cluster to RECAP; SREGym's own mitigation oracle grades the result afterwards (ADR 0031).
+# Read only when RECAP_TARGET=sregym-hotel is set.
+#
+# No secret lives here. The credentials folder (outside git, mode 700) holds the kubeconfigs of
+# RECAP's three ServiceAccounts in SREGym's cluster (recap-reader, recap-writer, recap-oracle;
+# short-lived tokens, mode 600; there is no recap-scenario: SREGym owns the fault) and ca.sha256,
+# that cluster CA's SHA-256 fingerprint. RECAP never uses SREGym's administrator credential.
+kind: sregym
+options:
+  scenarios_dir: fixtures/sregym-scenarios
+  client: kubectl
+  # Absolute (a launchd PATH may not include it); ~ is expanded. Edit to where kubectl lives.
+  kubectl: /opt/homebrew/bin/kubectl
+  credentials_dir: ~/.config/recap/sregym
+  # SREGym's cluster (kind's default name) and the app's namespace: every reset and every
+  # process's first call checks the context, a loopback API server and the CA fingerprint.
+  cluster: kind
+  context: kind-kind
+  namespace: hotel-reservation
+  services: [frontend, search, geo, rate, profile, recommendation, reservation, user, mongodb-geo, mongodb-rate, mongodb-profile, mongodb-recommendation, mongodb-reservation, mongodb-user, memcached-rate, memcached-profile, memcached-reserve, consul, jaeger]
+  # One image for the Go services, tagged by date or commit and pinned by digest.
+  image_repository: ghcr.io/sregym/hotel-reservation
+  release_format: tag
+  harness: external
+  # The app exports no request metrics and exposes no NodePort: health is status and readiness.
+  service_urls: {}
+  probe_paths: {}
+  prometheus_url: null
+  # The app's published call graph (DeathStarBench hotelReservation); its manifests carry no
+  # depends-on annotation. The architecture only: nothing here describes any fault.
+  dependencies:
+    frontend: [search, profile, recommendation, reservation, user]
+    search: [geo, rate]
+    geo: [mongodb-geo]
+    rate: [mongodb-rate, memcached-rate]
+    profile: [mongodb-profile, memcached-profile]
+    recommendation: [mongodb-recommendation]
+    reservation: [mongodb-reservation, memcached-reserve]
+    user: [mongodb-user]
+  stabilization_timeout_seconds: 240
+  stabilization_poll_seconds: 5

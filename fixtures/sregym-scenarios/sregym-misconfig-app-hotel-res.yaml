@@ -1,0 +1,24 @@
+# SREGym target (M5 W5): one genuine SREGym 1.1 problem, deployed and injected by SREGym's own
+# external harness (infra/sregym/deploy-problem.sh); RECAP changes nothing at reset and finds
+# the incident from the cluster's own state. Graded twice, never merged: RECAP's oracle (rollout,
+# readiness) for RECAP's RESOLVED, and SREGym's mitigation oracle (run-oracle.py) for the
+# benchmark. Everything below except `alert` is evaluation-only: nothing of it reaches an agent
+# (the incident holds only the measured alert), and the profile's runbooks hold none of it.
+id: sregym-misconfig-app-hotel-res
+title: "SREGym 1.1 problem misconfig_app_hotel_res (hotel reservation)"
+description: "SREGym's harness deployed the hotel-reservation app and injected this problem; the expected answer is SREGym's own root cause and fix for it."
+family: bad_deployment
+partition: test   # held out: RECAP was never built or tuned on it, and it writes no memory
+seed: 0           # recorded with the run; neither the cluster nor the model is deterministic
+tags: [sregym, benchmark, external]
+external: {harness: sregym, release: "1.1", commit: a90b43cc973158120119a9f388081eac4f7adb36,
+           problem: misconfig_app_hotel_res}
+# Any allowlisted service crash-looping or unready fires the alert; it names what failed.
+alert: {service: frontend, not_ready: true, crash_looping: true, rounds: 2, timeout_seconds: 300}
+# SREGym's root cause (sregym/conductor/problems/misconfig_app.py at the pinned commit): geo was
+# moved to a release configured for the wrong database port; the fix restores its image.
+expected: {root_cause_service: geo, mechanism: bad_deployment, fix: execute_rollback,
+           fix_params: {to_version: sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a}}
+budget: {max_elapsed_seconds: 3600}
+run_overrides: {}
+requires_memory_of: []
