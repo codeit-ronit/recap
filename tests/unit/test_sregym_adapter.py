@@ -86,7 +86,7 @@ def test_the_profile_builds_offline_and_lists_its_scenario(profile: Any) -> None
     env = create_environment(profile.environment, "describe")  # never contacts the cluster
     assert isinstance(env, SREGymEnvironment)
     [scenario] = env.list_scenarios()
-    assert scenario.id == SCENARIO and scenario.partition.value == "test"  # held out
+    assert scenario.id == SCENARIO and scenario.partition.value == "demo"  # not held out
     assert scenario.expected["fix"] == "execute_rollback"  # evaluation only
     info = env.describe()
     assert info.namespace == "hotel-reservation" and info.name == "SREGym on Kind cluster kind"

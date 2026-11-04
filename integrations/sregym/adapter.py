@@ -10,12 +10,14 @@ the mode such a target needs (ADR 0031):
   run's baseline and waits for the alert from the cluster's own state;
 * a release is an image tag (SREGym tags by date or commit and pins by digest), and only a key
   into a Deployment's own revision history;
-* there is no Prometheus and no probe: health is status and readiness, said as such.
+* there is no Prometheus and no probe: health is status, readiness and containers that stay
+  up, said as such.
 
 RECAP reads and writes through its own least-privilege ServiceAccounts in SREGym's cluster
-(infra/sregym/grant-recap.sh), never through SREGym's own agent tools (a kubectl passthrough
-and a shell, both cluster-wide) and never with SREGym's administrator credential. Selected by
-RECAP_TARGET=sregym-hotel (configs/targets/sregym-hotel/).
+(infra/sregym/recap-rbac.yaml, granted by `infra/sregym/sregym.sh grant`), never through
+SREGym's own agent tools (a kubectl passthrough and a shell, both cluster-wide) and never with
+SREGym's administrator credential. Selected by RECAP_TARGET=sregym-hotel
+(configs/targets/sregym-hotel/).
 """
 
 from __future__ import annotations

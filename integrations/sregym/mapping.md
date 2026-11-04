@@ -1,8 +1,10 @@
 # Planned mapping: RECAP tools to SREGym / Kubernetes capabilities
 
-> **Planned and unverified: pin an SREGym commit and verify its actual tool names before
-> implementing.** This table names *kinds of capabilities* (standard Kubernetes and
-> Prometheus-style operations), not SREGym APIs. Nothing here has been run.
+> **Historical: the plan written before M5, kept for the record.** The adapter that exists
+> is RECAP's Kubernetes adapter in external-harness mode ([README.md](README.md),
+> [ADR 0031](../../docs/decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md)).
+> Where this table differs from the code and the ADR, they are right. It named *kinds of
+> capabilities* (standard Kubernetes and Prometheus-style operations), not SREGym APIs.
 
 This mapping is step 5 of the benchmark plan in
 [`docs/benchmark-plan.md`](../../docs/benchmark-plan.md).

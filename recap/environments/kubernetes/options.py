@@ -130,6 +130,12 @@ class KindOptions(Contract):
     write_deadline_seconds: float = Field(8.0, gt=0, le=9.5)  # dry run + write + read-back
     stabilization_timeout_seconds: float = Field(180.0, ge=0)
     stabilization_poll_seconds: float = Field(5.0, gt=0)
+    # A service without a probe URL is healthy only once each of its containers has run this
+    # long and none exited within the exit window: a crash-looping container is Running, and
+    # Ready without a readiness probe, for the seconds each start lasts. (The kubelet caps its
+    # crash back-off at 5 minutes, so a crash loop always has an exit that recent.)
+    unprobed_min_running_seconds: float = Field(60.0, ge=0, le=600)
+    unprobed_exit_window_seconds: float = Field(300.0, ge=0, le=3600)
     probe_requests: int = Field(10, ge=1, le=50)
     probe_timeout_seconds: float = Field(1.0, gt=0, le=10)
     probe_round_gap_seconds: float = Field(2.0, ge=0, le=30)

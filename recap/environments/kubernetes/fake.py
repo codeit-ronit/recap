@@ -13,7 +13,8 @@ What it imitates, and how honestly:
   REUSES its ReplicaSet and renumbers it (with a revision-history annotation), a rolling
   restart is a new revision with the same image, a server-side dry run changes nothing.
 * The demo app: how each image behaves (error share, latency, memory, a crash at start-up,
-  the log lines it writes) comes from the seed folder (tests/fixtures/kind/cluster.json),
+  how long each start of a crashing image runs, the log lines it writes) comes from the seed
+  folder (tests/fixtures/kind/cluster.json),
   not from code. The frontend fails when its dependency fails or cannot be reached.
 * Prometheus and the services' NodePorts: an httpx mock transport that answers the
   adapter's fixed PromQL queries (matched exactly, so a changed template fails loudly) and
@@ -63,6 +64,7 @@ LOG_INTERVAL_SECONDS = 2
 LOG_HORIZON_MINUTES = 10  # older lines are not generated (kubectl's --tail cuts them anyway)
 _WINDOW = re.compile(r"\[([0-9]+[sm])\]")
 _NOW_SLACK = timedelta(seconds=1)
+CRASH_BACKOFF_SECONDS = 40  # the wait between a crashed container's starts (the kubelet's grows)
 
 
 class _KubectlFailure(Exception):
@@ -332,20 +334,21 @@ class FakeCluster:
         # pods crash-loop. Through a write it never takes over (the rollout stays stuck).
         rs = state["replicasets"][serving]
         broken = bool(self._behaviour(_image_of_rs(rs)).get("crash"))
-        pods = [
-            self._pod(state, rs, i, ready=not full and not broken, crash=broken)
-            for i in range(replicas)
-        ]
+        pods = [self._pod(state, rs, i, now, ready=not full, crash=broken) for i in range(replicas)]
         if in_progress:
             rs = state["replicasets"][current]
             crash = bool(self._behaviour(_image_of_rs(rs)).get("crash"))
-            pods.append(self._pod(state, rs, 0, ready=False, crash=crash))
+            pods.append(self._pod(state, rs, 0, now, ready=False, crash=crash))
         return pods
 
     def _ready_pods(self, state: State, service: str, now: datetime) -> int:
         return sum(1 for pod in self._pods(state, service, now) if _ready(pod))
 
-    def _pod(self, state: State, rs: State, index: int, *, ready: bool, crash: bool) -> State:
+    def _pod(
+        self, state: State, rs: State, index: int, now: datetime, *, ready: bool, crash: bool
+    ) -> State:
+        """A pod of `rs`. A crashing one is not ready, except while a start of an image with
+        `crash_after_seconds` runs: these Deployments have no readiness probe."""
         rs_name = _name(rs)
         activated = state["activations"].get(rs_name) or rs["metadata"]["creationTimestamp"]
         suffix = _digest(rs_name, activated, index, length=5)
@@ -355,16 +358,8 @@ class FakeCluster:
         restarts = 0
         current: State = {"running": {"startedAt": _iso(started)}}
         if crash:
-            current = {"waiting": {"reason": "CrashLoopBackOff", "message": "back-off 40s"}}
-            last = {
-                "terminated": {
-                    "reason": "Error",
-                    "exitCode": 1,
-                    "startedAt": _iso(started),
-                    "finishedAt": _iso(started + timedelta(seconds=2)),
-                }
-            }
-            restarts = 4
+            current, last, restarts = self._crash_loop(rs, started, now)
+            ready = ready and "running" in current
         return {
             "apiVersion": "v1",
             "kind": "Pod",
@@ -395,6 +390,23 @@ class FakeCluster:
                 "startTime": _iso(started),
             },
         }
+
+    def _crash_loop(self, rs: State, started: datetime, now: datetime) -> tuple[State, State, int]:
+        """A crash-looping container's (state, lastState, restartCount) at `now`. By default
+        it is waiting to restart. An image with `crash_after_seconds` runs that long after each
+        start (a dependency dial that times out) and waits CRASH_BACKOFF_SECONDS between starts."""
+        lasts = self._behaviour(_image_of_rs(rs)).get("crash_after_seconds")
+        waiting = {"waiting": {"reason": "CrashLoopBackOff", "message": "back-off 40s"}}
+        if lasts is None:
+            return waiting, _terminated(started, started + timedelta(seconds=2)), 4
+        run = timedelta(seconds=float(lasts))
+        cycle = run + timedelta(seconds=CRASH_BACKOFF_SECONDS)
+        starts = max(int((now - started) / cycle), 0)  # completed cycles before `now`
+        latest = started + starts * cycle
+        if now - latest < run:  # this start still runs
+            previous = _terminated(latest - cycle, latest - cycle + run) if starts else {}
+            return {"running": {"startedAt": _iso(latest)}}, previous, starts
+        return waiting, _terminated(latest, latest + run), starts + 1
 
     def _deployment_view(
         self, state: State, service: str, now: datetime, *, dry_run: bool = False
@@ -672,6 +684,17 @@ class FakeKubeClient(KubeClient):
 
 def _iso(moment: datetime) -> str:
     return moment.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _terminated(started: datetime, finished: datetime) -> State:
+    return {
+        "terminated": {
+            "reason": "Error",
+            "exitCode": 1,
+            "startedAt": _iso(started),
+            "finishedAt": _iso(finished),
+        }
+    }
 
 
 def _time(text: str) -> datetime:

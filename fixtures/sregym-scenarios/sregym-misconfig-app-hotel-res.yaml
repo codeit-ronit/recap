@@ -1,5 +1,5 @@
 # SREGym target (M5 W5): one genuine SREGym 1.1 problem, deployed and injected by SREGym's own
-# external harness (infra/sregym/deploy-problem.sh); RECAP changes nothing at reset and finds
+# external harness (`infra/sregym/sregym.sh deploy`); RECAP changes nothing at reset and finds
 # the incident from the cluster's own state. Graded twice, never merged: RECAP's oracle (rollout,
 # readiness) for RECAP's RESOLVED, and SREGym's mitigation oracle (run-oracle.py) for the
 # benchmark. Everything below except `alert` is evaluation-only: nothing of it reaches an agent
@@ -8,7 +8,10 @@ id: sregym-misconfig-app-hotel-res
 title: "SREGym 1.1 problem misconfig_app_hotel_res (hotel reservation)"
 description: "SREGym's harness deployed the hotel-reservation app and injected this problem; the expected answer is SREGym's own root cause and fix for it."
 family: bad_deployment
-partition: test   # held out: RECAP was never built or tuned on it, and it writes no memory
+# NOT held out: W5's adapter and verifier were fixed on rehearsals and a first run of this very
+# problem (docs/m5-progress.md). It is a development problem; a benchmark claim needs a SREGym
+# problem RECAP was never run on.
+partition: demo
 seed: 0           # recorded with the run; neither the cluster nor the model is deterministic
 tags: [sregym, benchmark, external]
 external: {harness: sregym, release: "1.1", commit: a90b43cc973158120119a9f388081eac4f7adb36,

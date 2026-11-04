@@ -1,8 +1,8 @@
 """What a target environment returns when RECAP observes or changes it.
 
-These models are the *adapter contract*: the simulator produces them today, and a
-future SREGym/Kubernetes adapter must translate real cluster data into the same
-shapes. Because agents, the verifier and the oracle only ever see these models,
+These models are the *adapter contract*: the simulator produces them, and the Kubernetes
+adapter (the Kind demo and SREGym's cluster, M5) translates real cluster data into the
+same shapes. Because agents, the verifier and the oracle only ever see these models,
 swapping the infrastructure does not require touching any of them.
 """
 
@@ -95,9 +95,11 @@ class DeploymentRecord(Contract):
     service: str
     version: str
     previous_version: str | None = None
-    # The ReplicaSet that runs this release (Kubernetes), so a pod's events can be tied to the
-    # release they belong to; None where the target has no such thing (the simulator).
+    # The ReplicaSet that introduced this release (Kubernetes), and those of its later restarts
+    # (same image, new pod template), so a pod's events can be tied to the release they belong
+    # to; None and [] where the target has no such thing (the simulator).
     replicaset: str | None = None
+    restart_replicasets: list[str] = Field(default_factory=list)
     deployed_at: UtcDatetime
     status: Literal["complete", "rollback"] = "complete"
     change_summary: str = ""

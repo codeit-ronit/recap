@@ -3,9 +3,9 @@
 # configs/targets/kind-demo/budget.yaml.
 #
 # The same numbers as configs/budget.yaml except the wall clock: a live fix needs its
-# stabilization window (180 s) inside the run's time, plus the investigation (the model on the
-# owner's VM has no GPU: 75-300 s per request, measured in M5). Each Kind scenario also sets
-# 3600 s for itself.
+# stabilization window (240 s, environment.yaml) inside the run's time, plus the investigation
+# (the model on the owner's VM has no GPU: 75-300 s per request, measured in M5). Each Kind
+# scenario also sets 3600 s for itself.
 
 default_budget:
   max_steps: 30              # provider decisions across all agents

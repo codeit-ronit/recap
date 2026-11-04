@@ -112,7 +112,7 @@ from recap.safety.capabilities import CapabilityIssuer
 from recap.telemetry.tracer import TraceCategory, Tracer
 from recap.telemetry.usage import cost_label
 from recap.tools.gateway import ToolGateway
-from recap.tools.registry import ToolRegistry
+from recap.tools.registry import ToolRegistry, is_release
 from recap.verification.oracle import EnvironmentHealthOracle, recovery_result
 
 # The owner's explicit permission for a free hosted model to see a live target
@@ -629,11 +629,15 @@ class IncidentController:
             allowed_actions=self.deps.registry.remediation_views(),
             memory_hits=memories,
             failed_actions=failed_actions,
-            restore_points=(
-                self.deps.verifier.restore_points(best.target_service, report, self.evidence)
-                if best.target_service
-                else []
-            ),
+            restore_points=[
+                point  # read from tool output, bound for the trusted schema: a tag's shape only
+                for point in (
+                    self.deps.verifier.restore_points(best.target_service, report, self.evidence)
+                    if best.target_service
+                    else []
+                )
+                if is_release(point)
+            ],
         )
         try:
             decision = await self._before_deadline(

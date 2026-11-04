@@ -1,75 +1,61 @@
 # SREGym adapter
 
-**Status: NOT INTEGRATED.** RECAP V1 has no connection to SREGym, has never run against
-it, and has no SREGym results.
+**Status: implemented in M5 (W5); development runs only, no benchmark results.** RECAP has run
+on one SREGym problem, `misconfig_app_hotel_res`, on SREGym's own cluster on the owner's VM,
+with the owner approving the fix at the terminal. Those runs shaped the adapter, so that
+problem is not held out ([docs/m5-progress.md](../../docs/m5-progress.md)).
 
-The step-by-step plan for a future benchmark run (goals, metrics, leakage controls,
-experiment protocol, AWS cost safeguards and reporting rules) is in
-[`docs/benchmark-plan.md`](../../docs/benchmark-plan.md). Nothing in it has been run.
+## What it is
 
-## What exists today
+`adapter.py` holds `SREGymEnvironment`: RECAP's Kubernetes adapter
+([recap/environments/kubernetes/](../../recap/environments/kubernetes/)) in the mode a
+benchmark's own cluster needs ([ADR 0031](../../docs/decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md)):
 
-`adapter.py` contains `SREGymEnvironment`, a class that implements the same
-`TargetEnvironment` interface (`recap/core/interfaces.py`) as the simulator:
+- **SREGym's harness owns the fault.** SREGym (release 1.1, commit
+  `a90b43cc973158120119a9f388081eac4f7adb36`) deploys the app and injects the problem in its
+  external-harness mode. RECAP's reset changes nothing: it takes the app's first revisions as
+  the baseline and waits for the alert from the cluster's own state.
+- **A release is an image tag**, used only as a key into a Deployment's own revision history.
+  An approved rollback restores exactly the image that revision ran, digest included.
+- **No probe and no metrics.** Health is a complete rollout, readiness, and containers that
+  stay up (a crash loop is Running and Ready for the seconds each start lasts). Whatever this
+  target cannot measure is reported as not measured, never estimated.
 
-| Method | Behaviour in V1 |
-|---|---|
-| `describe()` | `kind="sregym"`, `name="SREGym (not integrated)"`, `is_simulated=False`, no supported actions |
-| `list_scenarios()` | returns `[]` |
-| every other method | raises `EnvironmentNotIntegrated` pointing to this file |
+Agents keep the same MCP tools, gateway, approval and capability as on every other target.
+RECAP works through three ServiceAccounts of its own (reader, writer, oracle; see
+[infra/sregym/recap-rbac.yaml](../../infra/sregym/recap-rbac.yaml)), never through SREGym's
+agent tools (a kubectl passthrough and a shell, cluster-wide), and never with SREGym's
+administrator credential.
 
-Selecting it is a one-line config change (`kind: sregym` in `configs/environment.yaml`;
-see `sample_config.yaml`). A run started that way fails immediately and honestly instead of
-producing fake observations. `tests/unit/test_sregym_adapter.py` locks this behaviour in,
-including that the recovery oracle refuses to report health through this adapter.
+## How to use it
 
-The point of the stub is architectural: it shows exactly where real infrastructure plugs
-in. Agents, RAG, memory, routing, guardrails and the harness only ever see the observation
-models in `recap/core/observations.py`. So swapping the infrastructure means one
-`TargetEnvironment` adapter plus `configs/environment.yaml`, and the controller, gateway,
-RAG, memory, router and orchestrator *code* stays unchanged. What is still
-simulator-specific is *data*, not code: the log conventions that the scripted policy and the
-evidence verifier parse (`recap/core/signals.py`), the namespace and service allowlists
-(`configs/policies.yaml`) and the runbooks. A real target must adapt those (or use an LLM
-provider for its logs). `tests/e2e/test_environment_swap.py` proves the wiring only: its
-fake adapter reuses the simulator's conventions.
+`RECAP_TARGET=sregym-hotel` selects the profile in
+[configs/targets/sregym-hotel/](../../configs/targets/sregym-hotel/) (the environment, the
+allowlists, the budget and the Kubernetes runbooks). The scenario is
+[fixtures/sregym-scenarios/sregym-misconfig-app-hotel-res.yaml](../../fixtures/sregym-scenarios/sregym-misconfig-app-hotel-res.yaml).
+Setting up SREGym on the VM, granting RECAP's identities, the run and the grading are in
+[infra/sregym/README.md](../../infra/sregym/README.md).
 
-## What is needed to integrate
+## Grading
 
-1. **Pin an SREGym commit.** Read its license, problem inventory, benchmark rules and
-   evaluation stages at that commit. Verify the real tool and API names; do not assume
-   they match RECAP's simulator tools.
-2. **A cluster.** SREGym problems target live applications on Kubernetes (confirm the exact
-   requirements at the pinned commit). Check whether the chosen problems need privileged
-   (root) access and whether one VM running Kind (Kubernetes in Docker) is enough.
-   Provision one only with the owner's explicit consent, with quotas and costs checked
-   first. Budget alerts are not hard spending caps. Keep the benchmark cluster separate
-   from RECAP's code and SQLite data (see `infra/README.md`).
-3. **The mapping.** Implement each `TargetEnvironment` method by translating real cluster
-   data into the observation models. `mapping.md` lists the planned (unverified) mapping
-   and the two ways to connect (RECAP's own tools, or the benchmark's tools).
-4. **The oracle.** Decide what "recovered" means for each problem (prefer the benchmark's
-   own mitigation check where one exists) and implement `health_check()` from ground truth
-   that agents cannot reach or influence. The controller probes the oracle as soon as a
-   write returns, so a real write must wait for its rollout to finish and settle (or the
-   oracle needs a polling rule).
-5. **Parsers.** The scripted (non-LLM) policy and the evidence verifier parse the
-   simulator's log templates (`recap/core/signals.py`). Real logs need real parsers, or an
-   LLM provider that reads free text.
-6. **Safety.** Extend the policy for real writes (Kubernetes RBAC, namespace allowlist,
-   exact approvals). Until `allowed_namespaces` in `configs/policies.yaml` names the
-   benchmark namespace, the controller refuses every run before its first tool call. The
-   "safety off" ablation is simulation-only and must never run against a live environment.
-   The simulation auto-approver is refused outside a simulated environment too, so every
-   live write needs a human approval (console or dashboard).
-7. **Tests.** Contract tests for every method against a recorded or live environment,
-   including a check that read tools never change cluster state.
-8. **Leakage controls.** Before the first scored run, commit a train/test split by failure
-   mechanism, keep evaluation memory partitioned the way `evals/runner.py` does, and freeze
-   the runbooks. Never write runbooks for test faults.
+Each run gets two verdicts, never merged. RECAP's oracle decides RECAP's RESOLVED. SREGym's
+mitigation oracle (`run-oracle.py`, exit 0 means pass) is the benchmark's verdict. A person
+approves every write, so these runs are human-in-the-loop and not comparable with SREGym's
+leaderboard.
+
+## Tests
+
+- [tests/unit/test_sregym_adapter.py](../../tests/unit/test_sregym_adapter.py): the adapter's
+  self-description, the profile and scenario as `RECAP_TARGET=sregym-hotel` loads them, and
+  that nothing about the problem's answer reaches an agent.
+- [tests/unit/test_kind_external.py](../../tests/unit/test_kind_external.py): external-harness
+  mode over the offline fake cluster (synthetic seed in `tests/fixtures/sregym/`). It covers
+  reset, reads without monitoring, a tagged rollback, and a crash loop that never reads as
+  recovered.
 
 ## The rule
 
-**Never report SREGym results from this repository until this adapter is real**:
-implemented, pinned to a specific SREGym commit, and tested. Every V1 number comes from
-the local simulator and is labeled simulated.
+Never report SREGym benchmark results from these runs. The problem they used is a development
+problem; a benchmark claim needs SREGym problems RECAP was never run on, a pre-committed split
+([docs/benchmark-plan.md](../../docs/benchmark-plan.md)), and runs that are not tuned in
+between.

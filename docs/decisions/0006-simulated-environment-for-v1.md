@@ -84,8 +84,8 @@ V1 provisions nothing: any cluster needs the owner's explicit consent and a cost
 ## Alternatives considered
 
 - **SREGym or Kubernetes from the start.** It needs a cluster, cost checks, the owner's
-  explicit consent and a pinned benchmark version. It is deferred: the adapter exists only
-  as an interface stub ([integrations/sregym/README.md](../../integrations/sregym/README.md)).
+  explicit consent and a pinned benchmark version. It is deferred: in V1 the adapter exists only
+  as an interface stub (M5 connected it: [ADR 0031](0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md)).
 - **A containerized demo application with real fault injection.** Heavier and slower, harder
   to make deterministic, and Docker packaging is not built in V1.
 - **Replaying recorded incidents.** Recordings cannot react to an action, so the oracle could

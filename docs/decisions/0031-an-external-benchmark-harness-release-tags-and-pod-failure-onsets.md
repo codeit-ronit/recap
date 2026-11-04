@@ -53,12 +53,19 @@ four of RECAP's assumptions did not hold:
    image's tag, also behind a digest, checked by the tag grammar. It is still only a key: an
    approved rollback restores the image that the named revision ran, and the read-back confirms
    exactly that image, digest included. The demo cluster keeps `vX.Y.Z`. Trusted text that
-   repeats a release (the verifier's open questions) still repeats only `vX.Y.Z` shapes; a tag
-   appears in the untrusted tool data, where the model reads it.
+   repeats a release (the verifier's open questions) still repeats only `vX.Y.Z` shapes. One
+   place puts tags read from tool data into trusted text: the remediation proposal's schema,
+   whose `to_version` is an enum of the restore points the evidence names (VP4's own list). A
+   value enters that enum only if it passes the tag grammar, as the registry would require of
+   the argument anyway.
 3. **What is not measured is said so.** `HealthSnapshot.error_rate` and `latency_p95_ms`, and
    the oracle's `GroundTruthHealth.error_rate`, may be None: "not measured on this target". The
-   verifier and the oracle then judge by status and readiness alone, a metric RECAP cannot read
-   is refused with that reason, and nothing is estimated in its place.
+   verifier then judges by status and readiness alone, a metric RECAP cannot read is refused
+   with that reason, and nothing is estimated in its place. The oracle asks one thing more of a
+   service it cannot probe: every container has run a minute, and none exited in the last five
+   (the kubelet's longest crash back-off). Without a readiness probe, a crash-looping container
+   is Running and Ready for the seconds each start lasts, and status and readiness alone would
+   call that a recovery.
 4. **Pod failures can date a bad release's onset.** When a service has no `error_rate` metric
    and no release-tagged ERROR line, V2 takes the first Warning event that says its own pods
    fail (CrashLoopBackOff, BackOff, Unhealthy, ImagePullBackOff, ErrImagePull), dated by its
@@ -73,9 +80,12 @@ four of RECAP's assumptions did not hold:
   exit 0 = pass) is the benchmark's verdict, recorded next to it. No LLM judge is used.
 - A person approves every write, as on the demo cluster, so these runs are human-in-the-loop
   and not comparable with SREGym's leaderboard; they say so.
-- A commit tag is long (`sha-` and 40 hex digits). The model must copy it from the deployment
-  evidence; VP4 refuses a proposal whose version the evidence does not name, so a garbled tag
-  blocks the run safely instead of rolling back to the wrong revision.
+- A commit tag is long (`sha-` and 40 hex digits), and the release the diagnosis blames is a
+  tag the evidence names too. The first SREGym run proposed rolling geo back to the very release
+  that broke it, and VP4 blocked it (run-e08c17d46e, docs/m5-progress.md). Since then the
+  proposal schema offers only the restore points the evidence names, so the model picks one
+  instead of copying a tag. VP4 still checks the answer, and a garbled tag blocks the run safely
+  instead of rolling back to the wrong revision.
 - The fake cluster seeds such a target offline (`tests/fixtures/sregym`, synthetic): a crashing
   image that a harness rolled out serves with crash-looping pods, as without a readiness probe.
 

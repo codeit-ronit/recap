@@ -7,7 +7,9 @@
 # policies.yaml and the runbooks must match it too (data, not code).
 #
 #   kind: simulated              -> deterministic local sandbox (V1, default)
-#   kind: sregym                 -> adapter interface only; raises "not integrated" (V2)
+#   kind: kind                   -> a real Kubernetes cluster (M5; RECAP_TARGET=kind-demo)
+#   kind: sregym                 -> SREGym's own cluster, its harness owns the fault (M5;
+#                                   RECAP_TARGET=sregym-hotel)
 #   kind: some.module:ClassName  -> any class implementing recap.core.interfaces.TargetEnvironment
 kind: simulated
 options:

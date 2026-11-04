@@ -299,6 +299,25 @@ def restart_count(pods: Iterable[Mapping[str, Any]]) -> int:
     )
 
 
+def settled(
+    pods: Iterable[Mapping[str, Any]], now: datetime, min_running: float, exit_window: float
+) -> bool:
+    """Has every container run at least `min_running` seconds, with no exit in the last
+    `exit_window` seconds? What shows recovery where no probe can: a crash-looping container
+    is Running, and Ready without a readiness probe, for the seconds each start lasts."""
+    for pod in pods:
+        for status in container_statuses(pod):
+            running = _dict(_dict(status.get("state")).get("running"))
+            started = parse_time(running.get("startedAt"))
+            if started is not None and (now - started).total_seconds() < min_running:
+                return False
+            terminated = _dict(_dict(status.get("lastState")).get("terminated"))
+            exited = parse_time(terminated.get("finishedAt"))
+            if exited is not None and (now - exited).total_seconds() < exit_window:
+                return False
+    return True
+
+
 def agent_status(
     deployment: Mapping[str, Any] | None, pods: list[dict[str, Any]], stuck: bool
 ) -> ServiceStatus:

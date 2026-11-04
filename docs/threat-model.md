@@ -69,8 +69,12 @@ operator can approve through the API.
 
 ### Out of scope for V1
 
-- **Real infrastructure.** The SREGym adapter is *adapter only*: every operation raises
-  `EnvironmentNotIntegrated`. Nothing in this document protects a real cluster yet.
+- **Real infrastructure, until M5.** V1 ran only against the simulator. Since M5, RECAP also
+  works on two real Kubernetes clusters on the owner's VM: the Kind demo, and SREGym's own
+  cluster, through the Kubernetes adapter in external-harness mode (ADR 0031). Their controls
+  are listed under "Before a real Kubernetes target" below and in the M5 documents
+  ([m5-integration-plan.md](m5-integration-plan.md), [m5-progress.md](m5-progress.md));
+  production clusters remain out of scope.
 - **Networked or multi-user use.** Since M1 the API has a single local operator token, not
   user accounts, and serves only loopback host names. It is meant to listen on localhost
   (uvicorn's default host is `127.0.0.1`).
@@ -323,7 +327,7 @@ are under [tests/](../tests/). To run one:
 | A paid API is used by accident | The Claude adapter is selected without the owner meaning to, for example by an API client asking for `provider: "anthropic"`, or just because `ANTHROPIC_API_KEY` happens to be set | Since M2 the paid adapter needs `RECAP_ALLOW_PAID_LLM=1` on top of the SDK and a key (this project's budget is $0), and never falls back silently (`recap/providers/factory.py`). The API refuses (400) a per-run `provider` other than the server's default: which provider runs is server configuration. Free hosted providers have their own guard (section G). | `tests/unit/test_provider_factory.py::test_anthropic_is_refused_without_the_paid_opt_in_even_with_a_key`, `tests/unit/test_provider_factory.py::test_deterministic_scripted_policy_is_the_default`, `tests/unit/test_provider_factory.py::test_anthropic_without_an_api_key_is_refused`, `tests/e2e/test_api.py::test_api_refuses_to_switch_the_provider` |
 | Path traversal through an ID | Run ID `../outside`, scenario ID `../../configs/policies` | Run IDs and scenario IDs must match plain-ID patterns before they become file names (`recap/environments/simulated/engine.py`, `recap/telemetry/sinks.py`, `recap/environments/simulated/scenario.py`). | `tests/unit/test_simulator.py::test_run_id_cannot_escape_the_state_dir`, `tests/unit/test_trace_sinks.py::test_jsonl_sink_refuses_run_ids_that_are_not_plain_file_names`, `tests/unit/test_scenarios.py::test_unknown_or_unsafe_scenario_ids_are_rejected` |
 | Evidence is edited after a claim cites it | Someone changes what a log said | `Evidence` is a frozen model with run-unique IDs such as `ev-abc123-001`. | `tests/unit/test_core_contracts.py::test_evidence_ids_are_run_unique_and_records_are_immutable` |
-| Results are reported from an adapter that is not connected | A run "on SREGym" | `SREGymEnvironment` raises `EnvironmentNotIntegrated` for every operation, and the oracle refuses to report health through it. | `tests/unit/test_sregym_adapter.py::test_every_operation_raises_not_integrated`, `tests/unit/test_sregym_adapter.py::test_the_oracle_refuses_instead_of_inventing_health` |
+| Results are reported from a cluster RECAP did not really reach, or SREGym's verdict is mixed with RECAP's | A run "on SREGym" | `SREGymEnvironment` is the Kubernetes adapter in external-harness mode (ADR 0031). Every reset pins the cluster before anything runs (each kubeconfig's server and CA fingerprint, the version skew), the administrator's credential is never accepted, and health comes only from the oracle's own reads, never estimated where nothing is measured. SREGym's own mitigation oracle grades the benchmark separately; the two verdicts are recorded side by side and never merged. | `tests/unit/test_kind_engine.py::test_preflight_pins_the_cluster_before_anything_runs`, `tests/unit/test_kind_engine.py::test_the_administrators_credential_is_never_accepted`, `tests/unit/test_kind_external.py::test_reset_writes_nothing_and_alerts_on_the_crash_loop`, `tests/unit/test_kind_external.py::test_a_crash_loop_never_reads_as_recovered_while_a_start_runs`, `tests/unit/test_sregym_adapter.py::test_nothing_an_agent_reads_names_the_answer` |
 
 ### G. Real models and free quotas (M2)
 

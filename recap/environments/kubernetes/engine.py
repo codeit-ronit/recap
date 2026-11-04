@@ -15,7 +15,8 @@ The rest of RECAP does not change: agents keep the same ten MCP tools, every cal
 the same gateway, every write the same approval and capability (ADR 0007, ADR 0014). This
 class only translates (docs/m5-integration-plan.md, sections 3 and 4):
 
-* reset: preflight (cluster pinning, version skew, Prometheus and its clock), the namespace
+* reset: preflight (cluster pinning, version skew, Prometheus and its clock where the target
+  has one; an external harness's target has none, and its clock goes unchecked), the namespace
   lease, the baseline images restored and healthy, a calm baseline, the scenario's typed
   fault steps, then a bounded wait for the measured alert. Nothing about the fault leaves.
 * reads: the agents' view as RECAP's observation models, limited to this run's window
@@ -23,8 +24,9 @@ class only translates (docs/m5-integration-plan.md, sections 3 and 4):
 * the single write path: rollback or restart only, the write switch, the capability
   verified and its nonce COMMITTED before the cluster is touched, the target checked again,
   a server-side dry run, the write, a read-back, an audit row: inside the 10 s tool limit.
-* health_check: rollout-complete status, readiness, and the oracle's own HTTP probe in two
-  rounds, for exactly the allowlisted services, bounded in time.
+* health_check: rollout-complete status, readiness, and the oracle's own HTTP probe (without
+  one: containers that stayed up) in two rounds, for exactly the allowlisted services, bounded
+  in time.
 
 The constructor, describe() and list_scenarios() never touch the cluster or create a file:
 the runtime builds an adapter for every GET /system and every run start.
@@ -37,6 +39,7 @@ import math
 import os
 import re
 import time
+from collections import Counter
 from collections.abc import Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -213,7 +216,10 @@ class KubernetesEnvironment(TargetEnvironment):
         return alert
 
     async def preflight(self) -> None:
-        """Prove this is the pinned cluster, and that its clocks and versions line up."""
+        """Prove this is the pinned cluster and that its versions line up, and its clock where
+        a Prometheus can tell it. A target without one (an external harness's) goes unchecked:
+        a skew between this machine and the cluster would then shift the run's window and the
+        alert time against events and deploys, unseen."""
         self._pinned.clear()  # every reset checks the kubeconfigs again
         for identity in self._identities():
             self._pin(identity)
@@ -321,18 +327,26 @@ class KubernetesEnvironment(TargetEnvironment):
                 reads.append(
                     self._pod_lines(reader, service, pod, container, start, limit, previous)
                 )
-                owners.append(translate.name_of(pod))
+                owners.append((translate.name_of(pod), previous))
         results = await asyncio.gather(*reads)
         # A container waiting to restart (CrashLoopBackOff) answers the plain read with its last
-        # run's lines, which the --previous read returns too: one pod's line is kept once.
-        seen: set[tuple[str, datetime, str, str]] = set()
+        # run's lines, which the --previous read returns too. A pod's --previous lines that its
+        # plain read already holds are left out, each as often as it holds them: lines that
+        # repeat within one read are all kept.
+        held: dict[str, Counter[tuple[datetime, str, str]]] = {}
         unique = []
-        for pod_name, (found, _) in zip(owners, results, strict=True):
+        for (pod_name, previous), (found, _) in zip(owners, results, strict=True):
+            plain = held.setdefault(pod_name, Counter())
             for line in found:
-                key = (pod_name, line.timestamp, line.level, line.message)
-                if line.timestamp >= start and key not in seen:
-                    seen.add(key)
-                    unique.append(line)
+                if line.timestamp < start:
+                    continue
+                key = (line.timestamp, line.level, line.message)
+                if not previous:
+                    plain[key] += 1
+                elif plain[key] > 0:
+                    plain[key] -= 1
+                    continue
+                unique.append(line)
         lines = sorted(unique, key=lambda line: line.timestamp)
         kept = lines[max(0, len(lines) - limit) :]
         # Honest about what was not read: kubectl's --tail per container, or pods left out.
@@ -527,7 +541,8 @@ class KubernetesEnvironment(TargetEnvironment):
 
     async def health_check(self) -> HealthReport:
         """Ground truth for exactly the allowlisted services, from two rounds a few seconds
-        apart: rollout complete, readiness, and the oracle's own HTTP probe."""
+        apart: rollout complete, readiness, and the oracle's own HTTP probe (a service without
+        one: containers that stayed up, translate.settled)."""
         first = await self._ground_truth()
         await asyncio.sleep(self.options.probe_round_gap_seconds)
         second = await self._ground_truth()
@@ -946,13 +961,26 @@ class KubernetesEnvironment(TargetEnvironment):
     async def _ground_truth(self) -> dict[str, GroundTruthHealth]:
         view = await self._view("oracle")
         probes = await self._probe_round()
+        now, options = utcnow(), self.options
         found: dict[str, GroundTruthHealth] = {}
         for service in self.services:
             deployment, pods = view[service]
             complete = rollout.rollout_state(deployment)[0] if deployment else False
+            status = translate.ground_status(deployment, pods, complete)
+            if (
+                status == "Running"
+                and service not in probes
+                and not translate.settled(
+                    pods,
+                    now,
+                    options.unprobed_min_running_seconds,
+                    options.unprobed_exit_window_seconds,
+                )
+            ):
+                status = "Unknown"  # no probe: only containers that stay up show a recovery
             found[service] = GroundTruthHealth(
                 service=service,
-                status=translate.ground_status(deployment, pods, complete),
+                status=status,
                 ready_replicas=translate.ready_replicas(deployment) if deployment else 0,
                 replicas=translate.desired_replicas(deployment) if deployment else 0,
                 error_rate=probes[service].error_rate if service in probes else None,

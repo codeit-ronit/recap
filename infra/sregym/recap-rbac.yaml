@@ -2,9 +2,13 @@
 #
 # RECAP never uses SREGym's administrator credential or its agent tools (a kubectl passthrough
 # and a shell, both cluster-wide). It reads and writes through three ServiceAccounts with the
-# least the Kubernetes adapter needs, in the app's namespace only, exactly as on the Kind demo
+# least the Kubernetes adapter needs, in the app's namespace only, as on the Kind demo
 # (infra/kind/manifests/10-recap-rbac.yaml). There is no recap-scenario: SREGym injects the
-# fault itself.
+# fault itself. One difference: on the demo an admission policy also checks the shape of every
+# patch the writer sends (20-recap-admission-policy.yaml); SREGym's cluster has none, so here
+# the writer is limited by RBAC only. Its patch on the 19 named Deployments could change any
+# field of their pod templates. The token lives 8 hours, mode 600 on the owner's Mac, and RECAP
+# writes only through its typed operations, after an approval of that exact action.
 #
 # Where they live: the ServiceAccounts in "default", a namespace SREGym's reconcile-to-baseline
 # never deletes; the Roles and RoleBindings in hotel-reservation, which SREGym deploys afresh for

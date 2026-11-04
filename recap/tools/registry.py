@@ -148,7 +148,7 @@ class ToolRegistry:
                 return None
             return f"{arg}: {_preview(value)} is not a version like v1.2.3"
         if rule.type == "release":
-            if isinstance(value, str) and _RELEASE_RE.fullmatch(value):
+            if is_release(value):
                 return None
             return f"{arg}: {_preview(value)} is not a release (an image tag)"
         if rule.type == "int":
@@ -242,6 +242,11 @@ class ToolRegistry:
             return params  # unknown tool (the policy denies it) or nothing to fill
         params.pop(target_arg, None)
         return {target_arg: proposal.target, **params}
+
+
+def is_release(value: object) -> bool:
+    """Is `value` shaped like a release (a container image tag)?"""
+    return isinstance(value, str) and _RELEASE_RE.fullmatch(value) is not None
 
 
 def _check_int(arg: str, rule: ArgRule, value: Any) -> str | None:

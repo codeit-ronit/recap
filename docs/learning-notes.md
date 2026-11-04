@@ -69,7 +69,7 @@ remembers the episode for next time. In V1 all of this runs on your laptop again
 | The target system: a five-service shop (`frontend`, `checkout`, `payment`, `inventory`, `cart`) in namespace `shop`, and its faults | **simulated** | A deterministic local simulator. No real cluster is ever touched. |
 | The decision "brain" (the provider) | **implemented** as a scripted policy | The default provider is a scripted, deterministic policy. It is **not an LLM** (large language model). |
 | Claude provider adapter | **adapter only** | Opt-in. It uses your own Anthropic API key and billing, is tested only with a fake client, and is never called in tests or demos. |
-| SREGym benchmark | **adapter only** | An interface stub: every operation raises `EnvironmentNotIntegrated`. There are no SREGym results. |
+| SREGym benchmark | **implemented (M5), no benchmark results** | The Kubernetes adapter on SREGym's own cluster ([ADR 0031](decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md)): development runs on one problem, each write approved by the owner. |
 | The human approver in `--approve auto` demos and in evaluations | **simulated** | A simulation-only auto-approver. With `--approve ask` the demo asks you. |
 | Model training or fine-tuning | **not yet built** | Nothing is trained. `TrainingPipeline` in `recap/core/interfaces.py` is an explicit placeholder. |
 | Evaluation | **implemented** harness, synthetic results | 6 test scenarios and 1 red-team scenario on the simulator. N is tiny and no statistical claims are made. |
@@ -1089,9 +1089,9 @@ models as a planned provider. None of this exists yet.
 
 ### 5. Replaceable environment adapter and simulator
 
-**Status:** the simulator is simulated (a deterministic local five-service shop). The SREGym
-adapter is adapter only: it raises `EnvironmentNotIntegrated`. Real Kubernetes integration is not
-yet built.
+**Status:** the simulator is simulated (a deterministic local five-service shop). Since M5 a
+Kubernetes adapter ([recap/environments/kubernetes/](../recap/environments/kubernetes/)) runs on
+real clusters, and the SREGym adapter is that adapter on SREGym's own cluster ([ADR 0031](decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md)).
 
 #### Why it exists
 
@@ -1201,10 +1201,10 @@ adapter, by changing only the environment config. The run ends RESOLVED over tra
 with the oracle named `fake-health-oracle`. This proves the wiring, not real-world parsing: the
 fake reuses the simulator's log conventions and the `shop` namespace.
 
-**The SREGym stub.** `describe()` is honest (`is_simulated=False`, no supported actions),
-`list_scenarios()` returns `[]`, and every other method raises `EnvironmentNotIntegrated`. The
-planned, unverified tool mapping is in
-[`integrations/sregym/mapping.md`](../integrations/sregym/mapping.md).
+**The SREGym adapter.** In V1 it was a stub that refused every operation. Since M5 it is the
+Kubernetes adapter in external-harness mode: SREGym deploys the app and injects the problem,
+RECAP investigates and fixes it with its own identities ([integrations/sregym/README.md](../integrations/sregym/README.md),
+[ADR 0031](decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md)).
 
 #### Key files and functions
 
@@ -3967,7 +3967,7 @@ The Evals page renders this report ([evals screenshot](screenshots/evals.png)).
   - replica-set and pod names
   - the events `ScalingReplicaSet`, `OOMKilled`, `BackOff`, `Unhealthy`, `Killing` and `Started`
 - **How agents read them:** through the MCP tool `get_k8s_like_events`, named "k8s-like" on purpose.
-- **Where real Kubernetes would plug in:** a `TargetEnvironment` adapter. The `SREGymEnvironment` stub ([integrations/sregym/adapter.py](../integrations/sregym/adapter.py)) is that slot (adapter only); every method raises `EnvironmentNotIntegrated`. The planned, unverified mapping is in [integrations/sregym/mapping.md](../integrations/sregym/mapping.md). A real policy would also need Kubernetes RBAC (role-based access control), which is not yet built.
+- **Where real Kubernetes plugs in:** a `TargetEnvironment` adapter. Since M5 that is the Kubernetes adapter ([recap/environments/kubernetes/](../recap/environments/kubernetes/)): it reads real cluster events into the same models, through RECAP's own least-privilege identities (Kubernetes RBAC, role-based access control), and `SREGymEnvironment` is the same adapter on SREGym's cluster.
 
 **Input → output example:** In the memory-caution scenario, `get_k8s_like_events(service=payment)` returns events like this one:
 

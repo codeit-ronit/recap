@@ -17,9 +17,9 @@ infrastructure with a real one.
 > ([section 13](#13-the-read-side-typed-views-replays-and-evaluation-records-m4)).
 >
 > **Scope of V1.** RECAP V1 runs only against a **simulated** five-service shop. The default
-> decision provider is a **scripted deterministic policy, not an LLM**. The SREGym adapter is an
-> **interface stub**: it says it is not integrated, lists no scenarios and refuses every other
-> operation. No model is trained. The evaluation N is tiny
+> decision provider is a **scripted deterministic policy, not an LLM**. The SREGym adapter was an
+> **interface stub** in V1; since M5 it is the Kubernetes adapter on SREGym's own cluster
+> ([ADR 0031](decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md)), with development runs only and no benchmark results. No model is trained. The evaluation N is tiny
 > and synthetic. Token counts are **estimates** (about 4 characters per token), and external API
 > cost is **$0** in the default deterministic mode.
 
@@ -620,7 +620,7 @@ All interfaces live in [`recap/core/interfaces.py`](../recap/core/interfaces.py)
 
 | Interface | V1 implementation | File | Status | Planned upgrade |
 |---|---|---|---|---|
-| `TargetEnvironment` | `SimulatedEnvironment` (default). `SREGymEnvironment` stub: describes itself as not integrated, lists no scenarios and raises `EnvironmentNotIntegrated` from every other method. `FakeEnvironment` (tests only). | [`recap/environments/simulated/engine.py`](../recap/environments/simulated/engine.py), [`integrations/sregym/adapter.py`](../integrations/sregym/adapter.py), [`tests/fakes.py`](../tests/fakes.py) | simulated; SREGym: adapter only | Real SREGym or Kubernetes adapter (not yet built) |
+| `TargetEnvironment` | `SimulatedEnvironment` (default). Since M5: `KubernetesEnvironment` (a real cluster: the Kind demo) and `SREGymEnvironment` (the same adapter on SREGym's own cluster, external-harness mode). `FakeEnvironment` (tests only). | [`recap/environments/simulated/engine.py`](../recap/environments/simulated/engine.py), [`recap/environments/kubernetes/`](../recap/environments/kubernetes/), [`integrations/sregym/adapter.py`](../integrations/sregym/adapter.py), [`tests/fakes.py`](../tests/fakes.py) | simulated; Kind and SREGym: implemented (M5) | Benchmark runs on held-out SREGym problems |
 | `ToolTransport` | `McpToolClient`: real MCP over stdio to a subprocess at runtime, in-memory streams in tests | [`recap/tools/mcp_client.py`](../recap/tools/mcp_client.py) | implemented | Remote MCP servers over HTTP (not yet built) |
 | `LLMProvider` | `DeterministicProvider` (default; scripted, not an LLM). `AnthropicProvider` (opt-in Claude adapter; your own API key and billing; tested only with a fake client). `PromptInjectedProvider` wraps either one for red-team runs. | [`recap/providers/deterministic.py`](../recap/providers/deterministic.py), [`recap/providers/anthropic_provider.py`](../recap/providers/anthropic_provider.py), [`recap/safety/redteam.py`](../recap/safety/redteam.py) | scripted policy: implemented; Claude: adapter only; red-team planner: simulated | Measured LLM runs; adapters for open models (not yet built) |
 | `RetrievalIndex` | `KnowledgeRetriever`: BM25 written from scratch; hybrid BM25 plus a dense ranking (`OllamaEmbedder`, `nomic-embed-text` on loopback; stored `VectorIndex`) fused by reciprocal rank fusion; agents search it through `search_runbooks` | [`recap/knowledge/retriever.py`](../recap/knowledge/retriever.py), [`recap/knowledge/bm25.py`](../recap/knowledge/bm25.py), [`recap/knowledge/embeddings.py`](../recap/knowledge/embeddings.py), [`recap/knowledge/ollama_embedder.py`](../recap/knowledge/ollama_embedder.py), [`recap/knowledge/vectors.py`](../recap/knowledge/vectors.py) | BM25: implemented (the default); hybrid: implemented, opt-in per run (needs Ollama and the stored vectors) | Neural reranking (see `Reranker`); a vector database for a large corpus |
@@ -659,7 +659,8 @@ log conventions. What stays simulator-specific is data, not code: the log conven
 (step 4) and the runbooks. A real target must adapt those, or use an LLM provider for free-text
 logs ([the known caveat](#the-known-caveat-log-conventions)).
 
-Today RECAP has **no** SREGym or Kubernetes integration. These are the steps to build one. The
+Since M5 RECAP has a Kubernetes adapter and runs on SREGym's own cluster ([ADR 0031](decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md)).
+These were the steps to build one, kept as a guide for another target. The
 plan for an actual SREGym benchmark, including hosting and cost rules, is in the
 [benchmark plan](benchmark-plan.md).
 
@@ -777,8 +778,8 @@ options:
   kubeconfig: /absolute/path/to/kubeconfig
 ```
 
-[`integrations/sregym/sample_config.yaml`](../integrations/sregym/sample_config.yaml) shows the same
-idea for the SREGym stub. Note that the test suite and the demos load the same `configs/` files: once
+[`configs/targets/sregym-hotel/environment.yaml`](../configs/targets/sregym-hotel/environment.yaml)
+is the real one for SREGym (M5). Note that the test suite and the demos load the same `configs/` files: once
 `kind` points at your adapter, the simulator-based demo tests will run against it and fail on unknown
 scenarios. During development, keep `kind: simulated` and inject your adapter through a settings
 override, as `test_environment_swap.py` does.
@@ -1055,8 +1056,9 @@ were produced from identical configuration and fixtures.
 
 ## 12. Known limitations of this architecture
 
-- **The target is simulated.** Every result comes from the local simulator and is labeled so. There
-  is no SREGym or Kubernetes integration, and no SREGym results exist.
+- **The target is simulated by default.** Every V1 result comes from the local simulator and is
+  labeled so. Since M5 RECAP also runs on real Kubernetes clusters (the Kind demo and SREGym's
+  own cluster), each write approved by a person; no SREGym benchmark results exist.
 - **The default brain is scripted.** It understands the simulator's log conventions
   ([`signals.py`](../recap/core/signals.py)); real logs would need real parsers or an LLM provider.
   The Claude adapter is opt-in and has not been measured.

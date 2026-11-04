@@ -5,10 +5,12 @@
 # The owner's rule is that the VM must not run idle. A check on the Mac cannot keep that rule:
 # a sleeping Mac checks nothing. This one runs on the VM itself. The VM is busy while any of
 # these holds, and idle otherwise:
-#   - the model is loaded in Ollama (a run asked it within Ollama's 30-minute keep-alive);
+#   - the model is loaded in Ollama (RECAP asks Ollama to keep it 10 minutes after a request);
 #   - an SSH session runs a command or a shell (`ec2.sh ssh ...`, a login; the tunnel alone,
 #     `ssh -N`, runs nothing and does not count);
-#   - an ec2.sh command touched ~ubuntu/.recap-keepalive in the last 45 minutes.
+#   - an ec2.sh command touched ~ubuntu/.recap-keepalive in the last 45 minutes (`ec2.sh hold`
+#     does every 10 minutes while a run lasts: its approval wait and recovery window use neither
+#     the model nor a command here).
 # Idle means shut down. The instance's shutdown behaviour is "stop" (ec2.sh sets it at launch),
 # so its disk and both clusters are kept, compute billing ends, and `ec2.sh up` starts it again.
 set -u

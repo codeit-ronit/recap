@@ -16,6 +16,8 @@
 #   infra/aws/ec2.sh creds kind|sregym
 #                              copy RECAP's identity kubeconfigs and ca.sha256 for that cluster
 #                              from the VM to this Mac's private ~/.config/recap/<cluster>/
+#   infra/aws/ec2.sh hold CMD  run CMD on this Mac (a RECAP run), kept awake, with the VM marked
+#                              in use until CMD ends (an approval wait uses nothing on the VM)
 #   infra/aws/ec2.sh stop      stop the VM: compute billing ends, the disk stays (~$0.45/day)
 #   infra/aws/ec2.sh down      terminate the VM and delete its security group and key pair
 #
@@ -24,8 +26,9 @@
 # State outside git: ~/.config/recap/aws/recap-m5.env (instance and group ids) and
 # ~/.ssh/recap-m5.pem (the private key, mode 400). Only port 22 is open, to this Mac's
 # public IP; the cluster's ports are never exposed. `up` also installs the VM's own idle
-# guard (infra/aws/idle-guard.sh): it stops the VM after 45 minutes without a model request,
-# a command or an ec2.sh call, even while this Mac sleeps.
+# guard (infra/aws/idle-guard.sh), which stops the VM even while this Mac sleeps: once the model
+# is unloaded (10 minutes after RECAP's last request), no command runs there and no ec2.sh call
+# (`hold` makes one every 10 minutes) touched it for 45 minutes.
 set -euo pipefail
 
 PROFILE="${AWS_PROFILE:-amlc-personal}"
@@ -145,8 +148,11 @@ cmd_up() {
   say "ready: $(ssh_ 'docker --version; kind version; kubectl version --client | head -1' | tr '\n' ' ')"
   install_idle_guard
   # Kind's node container restarts only on failure, so a stopped VM brings the cluster back
-  # down: start it again and wait until the API server answers.
-  if ssh_ "docker inspect recap-m5-control-plane >/dev/null 2>&1"; then
+  # down: start it again and wait until the API server answers. Not while SREGym's cluster
+  # exists (infra/sregym): one cluster at a time, and its teardown starts the demo again.
+  if ssh_ "docker ps -aq --filter label=io.x-k8s.kind.cluster=kind | grep -q ."; then
+    say "SREGym's cluster exists: RECAP's demo cluster stays stopped (sregym.sh teardown starts it)"
+  elif ssh_ "docker inspect recap-m5-control-plane >/dev/null 2>&1"; then
     ssh_ "docker start recap-m5-control-plane >/dev/null && for i in \$(seq 1 60); do \
       kubectl --kubeconfig ~/.config/recap/kind/admin.kubeconfig get --raw=/readyz >/dev/null 2>&1 \
       && exit 0; sleep 3; done; exit 1" && say "cluster recap-m5 is up" \
@@ -233,6 +239,21 @@ cmd_creds() {
   say "copied RECAP's $cluster identities to ~/.config/recap/$cluster"
 }
 
+HOLD_SECONDS=600  # well inside the idle guard's 45 minutes
+
+cmd_hold() {
+  # A run's approval wait and recovery window use neither the model nor a command on the VM:
+  # without this, the idle guard could stop the VM under a run.
+  [[ $# -gt 0 ]] || die "usage: ec2.sh hold COMMAND [ARGS...]"
+  load
+  ssh_ true </dev/null || die "the VM is not reachable (ec2.sh up)"
+  (while sleep "$HOLD_SECONDS"; do ssh_ true </dev/null >/dev/null 2>&1 || true; done) 2>/dev/null &
+  TOUCHER=$!  # global: the EXIT trap runs after this function has returned
+  trap 'pkill -P "$TOUCHER" 2>/dev/null; kill "$TOUCHER" 2>/dev/null || true' EXIT
+  command -v caffeinate >/dev/null && set -- caffeinate -i "$@"  # macOS: no sleep mid-run
+  "$@"
+}
+
 cmd_stop() {
   load
   [[ "$(instance_state)" == "running" ]] || { say "not running"; return; }
@@ -260,7 +281,8 @@ case "${1:-}" in
   sync) cmd_sync ;;
   creds) shift; cmd_creds "${1:-}" ;;
   tunnel) cmd_tunnel ;;
+  hold) shift; cmd_hold "$@" ;;
   stop) cmd_stop ;;
   down) cmd_down ;;
-  *) sed -n '2,27p' "$0"; exit 2 ;;
+  *) sed -n '2,31p' "$0"; exit 2 ;;
 esac

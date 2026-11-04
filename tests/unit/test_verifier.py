@@ -410,6 +410,42 @@ def test_an_older_releases_start_up_crash_does_not_date_the_new_releases_onset()
     assert "geo's pods first report CrashLoopBackOff 11 min before the alert" in check.passed
 
 
+def test_a_restarted_release_keeps_its_pods_and_its_onset() -> None:
+    """A restart puts the same release on a new ReplicaSet. After a restart that did not cure
+    it, the pods of both ReplicaSets are the release's own, and its onset is still where its
+    failures began, before that fix."""
+    run = Run()
+    old, new, restarted = "geo-766c64f6b4", "geo-57b8f86d7d", "geo-6d9f7c5b8a"
+    records = [
+        DeploymentRecord(
+            service="geo", version="sha-d2c036bc", deployed_at=at(-40), replicaset=old
+        ),
+        DeploymentRecord(
+            service="geo",
+            version="20260912.1",
+            previous_version="sha-d2c036bc",
+            deployed_at=at(-12),
+            replicaset=new,
+            restart_replicasets=[restarted],
+        ),
+    ]
+    deploy = run.observe("get_recent_deployments", DeploymentList(deployments=records[::-1]))
+    before = pod_failure("geo", first=-11, last=-3).model_copy(update={"object": f"pod/{new}-rr6g"})
+    after = pod_failure("geo", first=-1, last=0, count=3).model_copy(
+        update={"object": f"pod/{restarted}-x2k4p"}
+    )
+    events = run.events(before, after, service="geo")
+    logs = run.logs("geo", panic_lines(range(-11, 1, 2)), start=-11)
+    claim = hypothesis(DEPLOY, "geo", deploy, events, logs, version="20260912.1")
+    report = EvidenceVerifier().verify(
+        [finding(claim)], run.registry, run.incident, remediated={"geo": at(-2)}
+    )
+    check = only_check(report)
+
+    assert check.hypothesis.status == SUPPORTED
+    assert "geo's pods first report CrashLoopBackOff 11 min before the alert" in check.passed
+
+
 def test_a_crash_loop_older_than_the_release_contradicts_it() -> None:
     run = Run()
     deploy = run.deployments(("geo", "sha-d2c036bc", -90), ("geo", "20260912.1", -12))

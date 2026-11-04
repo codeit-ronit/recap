@@ -14,8 +14,8 @@
 # Safety: SREGym's harness acts as cluster-admin on the CURRENT kube context and resets the whole
 # cluster to its baseline. Every command that reaches a cluster first checks that the current
 # context is SREGym's own (kind-kind), on 127.0.0.1, with the CA recorded at setup. RECAP's demo
-# cluster keeps its credentials in a private file SREGym never reads, and is stopped while SREGym
-# runs. No token is ever printed or passed on a command line: kubectl prints it into a variable,
+# cluster keeps its credentials in a private file SREGym never reads, and every command stops it
+# while SREGym's cluster exists (teardown starts it again). No token is ever printed or passed on a command line: kubectl prints it into a variable,
 # which a here-document writes under umask 077.
 set -euo pipefail
 set +x # never trace this script: a trace would print the tokens
@@ -111,6 +111,7 @@ start_sregym() {
   local nodes
   nodes="$(docker ps -a --filter label=io.x-k8s.kind.cluster=kind --format '{{.Names}}')"
   [[ -n "$nodes" ]] || return 0
+  stop_demo # one cluster at a time, whoever started the demo again
   if [[ -n "$(docker ps -a --filter label=io.x-k8s.kind.cluster=kind --filter status=exited --format '{{.Names}}')" ]]; then
     # shellcheck disable=SC2086
     docker start $nodes >/dev/null
@@ -122,6 +123,11 @@ start_sregym() {
     [[ $tries -le 60 ]] || die "SREGym's API server did not come back: run teardown, then setup"
     sleep 3
   done
+  # A four-node Kind cluster does not always survive a stopped VM (nodes stay NotReady, and a
+  # deploy then waits for ever on a namespace that cannot be deleted): refuse, and say how to
+  # recreate it (its images are cached, so setup takes minutes).
+  kubectl --context "$CONTEXT" wait --for=condition=Ready nodes --all --timeout=180s >/dev/null 2>&1 \
+    || die "SREGym's nodes did not all become Ready after the VM restart: run teardown, then setup"
 }
 
 require_sregym() {

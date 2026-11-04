@@ -7,7 +7,7 @@
 
 An incident-response agent that investigates through real MCP (Model Context Protocol) tools, asks a human to approve one exact fix, checks recovery with an independent oracle, and remembers only what was verified.
 
-To be clear: the default decision-maker is still a scripted, deterministic policy, **not an LLM**; real models are opt-in (`--provider ollama`, `--provider groq`) and every run shows which one decided (a SCRIPTED / LOCAL LLM / FREE HOSTED LLM / REPLAY badge). The real-model runs so far are a handful on one simulated scenario, two of them approved by the owner at the terminal: they show the path works, not how often a model is right. The adapter for SREGym (a reliability benchmark that runs on Kubernetes) is an interface stub. No model is trained, the evaluation is tiny, synthetic and scripted, scripted token counts are estimates (real models report exact counts), and the external API cost is $0.
+To be clear: the default decision-maker is still a scripted, deterministic policy, **not an LLM**; real models are opt-in (`--provider ollama`, `--provider groq`) and every run shows which one decided (a SCRIPTED / LOCAL LLM / FREE HOSTED LLM / REPLAY badge). The real-model runs so far are a handful on one simulated scenario, two of them approved by the owner at the terminal: they show the path works, not how often a model is right. In M5 RECAP also works on real Kubernetes clusters, with the owner approving each write: a Kind demo cluster and SREGym's own cluster (SREGym is a reliability benchmark), on the owner's VM. The SREGym runs are development runs on one problem, not benchmark results ([docs/m5-progress.md](docs/m5-progress.md)). No model is trained, the evaluation is tiny, synthetic and scripted, scripted token counts are estimates (real models report exact counts), and the external API cost is $0.
 
 ## What it does
 
@@ -33,7 +33,8 @@ Everything that knows *what the target system is* sits behind one interface, `Ta
 | `kind` | Adapter | Status |
 |---|---|---|
 | `simulated` | `SimulatedEnvironment` ([engine.py](recap/environments/simulated/engine.py)) | V1 default: deterministic local simulation |
-| `sregym` | `SREGymEnvironment` ([adapter.py](integrations/sregym/adapter.py)) | interface stub: every call raises `EnvironmentNotIntegrated` |
+| `kind` | `KubernetesEnvironment` ([recap/environments/kubernetes/](recap/environments/kubernetes/)) | M5: a real Kubernetes cluster (Kind on the owner's VM), real faults, reads and writes, each write approved by a person (`RECAP_TARGET=kind-demo`) |
+| `sregym` | `SREGymEnvironment` ([adapter.py](integrations/sregym/adapter.py)) | M5: the Kubernetes adapter on SREGym's own cluster; SREGym deploys and injects the problem ([ADR 0031](docs/decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md), `RECAP_TARGET=sregym-hotel`) |
 | `tests.fakes:FakeEnvironment` | `FakeEnvironment` ([tests/fakes.py](tests/fakes.py)) | a tiny second adapter used only by tests |
 
 Agents never import an environment: they reach it only through MCP tools. The oracle reads it through its own instance (`health_check`, never an MCP tool). So moving to SREGym or another Kubernetes target means writing one new `TargetEnvironment` adapter and changing `configs/environment.yaml`: the code of the controller, gateway, RAG, memory, router and orchestrator stays unchanged. [tests/e2e/test_environment_swap.py](tests/e2e/test_environment_swap.py) proves it: the whole pipeline (controller, agents, real MCP subprocess, gateway, verifier, oracle, memory) runs against `FakeEnvironment` and ends `RESOLVED`.
@@ -276,7 +277,7 @@ Status words: **implemented** (works and is tested, against the simulator), **si
 | Target system and its faults | simulated | [recap/environments/simulated/](recap/environments/simulated/) | Seeded, deterministic shop; state in a per-run SQLite file |
 | The "human" in evals and auto runs | simulated | [recap/safety/approvals.py](recap/safety/approvals.py) (`AutoApprovalChannel`) | Refuses to run outside a simulated environment |
 | Compromised red-team planner | simulated | [recap/safety/redteam.py](recap/safety/redteam.py) | Obeys injected instructions on purpose |
-| SREGym adapter | adapter only | [integrations/sregym/adapter.py](integrations/sregym/adapter.py) | Interface stub; never connected or run |
+| SREGym adapter | implemented (M5) | [integrations/sregym/adapter.py](integrations/sregym/adapter.py) | The Kubernetes adapter in external-harness mode; development runs on one SREGym problem, approved by the owner and graded by SREGym's own oracle; no benchmark results |
 | Anthropic Claude provider | adapter only | [recap/providers/anthropic_provider.py](recap/providers/anthropic_provider.py) | **Paid; disabled** for this $0 project (needs `RECAP_ALLOW_PAID_LLM=1`); tested only with a fake client |
 | Hybrid retrieval (BM25 + embeddings) | implemented, opt-in | [recap/knowledge/ollama_embedder.py](recap/knowledge/ollama_embedder.py), [vectors.py](recap/knowledge/vectors.py) | `nomic-embed-text` on the local Ollama, stored runbook vectors, rank fusion; BM25 stays the default because hybrid found the right runbook less often on alert queries (7 vs 9 of 15) ([ADR 0022](docs/decisions/0022-hybrid-retrieval-with-a-local-embedder-and-agent-search.md)) |
 | OpenTelemetry console bridge | adapter only | [recap/telemetry/otel.py](recap/telemetry/otel.py) | Optional `otel` extra; console spans, no collector |

@@ -11,6 +11,8 @@ rollback restores exactly the image of the revision its tag names. The seed
 
 from __future__ import annotations
 
+import json
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -18,8 +20,9 @@ import pytest
 
 from recap.core.config import REPO_ROOT
 from recap.core.errors import ConfigError
-from recap.core.observations import AlertSignal, AuthorizedAction
-from recap.environments.kubernetes import KubernetesEnvironment
+from recap.core.ids import utcnow
+from recap.core.observations import AlertSignal, AuthorizedAction, LogLine
+from recap.environments.kubernetes import KubernetesEnvironment, engine
 from recap.environments.kubernetes.metrics import MetricsUnavailable
 from tests.helpers import issuer_for, sign
 from tests.unit.test_kind_engine import kind_options
@@ -149,6 +152,23 @@ async def test_a_crash_looping_pods_lines_are_read_once(tmp_path: Path) -> None:
     assert any("--previous" in argv for argv in reads)  # both reads were made
 
 
+async def test_lines_repeated_within_one_read_are_all_kept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only what the --previous read repeats from the plain read goes: a threaded app can log
+    the same line twice in one millisecond, and both are lines."""
+    env, _ = await ready(tmp_path)
+    line = LogLine(timestamp=utcnow(), level="ERROR", service="geo", message="dial failed")
+
+    async def reads(*args: Any) -> tuple[list[LogLine], bool]:
+        previous = args[-1]
+        return ([line] * 3 if previous else [line] * 2), False
+
+    monkeypatch.setattr(env, "_pod_lines", reads)
+    logs = await env.observe_logs("geo", 100, 60)
+    assert len(logs.lines) == logs.total_matched == 3  # the plain read's two, one more before
+
+
 # --- the write: a release tag selects a revision of the Deployment's own history --------------
 
 
@@ -180,6 +200,50 @@ async def test_a_rollback_to_anything_else_is_refused(
     outcome = await env.execute_authorized(sign(issuer_for(env), rollback(version)))
     assert not outcome.ok and why in outcome.message
     assert not [c for c in env.state.commands() if c["op"] in WRITES]
+
+
+# --- the oracle without a probe --------------------------------------------------------------
+
+
+def crash_lasting(tmp_path: Path, seconds: int) -> Path:
+    """The seed with each start of geo's bad image running `seconds` before it crashes."""
+    folder = tmp_path / "fake-data"
+    folder.mkdir()
+    spec = json.loads((DATA / "cluster.json").read_text())
+    [bad] = [image for image, behaviour in spec["images"].items() if behaviour.get("crash")]
+    spec["images"][bad]["crash_after_seconds"] = seconds
+    (folder / "cluster.json").write_text(json.dumps(spec))
+    return folder
+
+
+async def test_a_crash_loop_never_reads_as_recovered_while_a_start_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without a probe the oracle has status and readiness, and a crash-looping container with
+    no readiness probe is Running and Ready while each start lasts (SREGym's geo: until its
+    database dial gives up). Healthy needs containers that ran a minute, none exiting in five."""
+    clock = [utcnow()]
+    monkeypatch.setattr(engine, "utcnow", lambda: clock[0])
+    env = environment(tmp_path, fake_data_dir=str(crash_lasting(tmp_path, 10)))
+    env.fake_cluster().clock = lambda: clock[0]
+    env.fake_cluster().state()  # seeded: geo's release started 6 crash cycles (50 s) ago
+    seeded = clock[0]
+
+    def at(seconds: int) -> None:
+        clock[0] = seeded + timedelta(seconds=seconds)
+
+    at(20)  # waiting to restart
+    await env.reset("test-external-geo", 11)
+    at(55)  # 5 s into a start: Running and Ready, the rollout complete
+    assert (await env.observe_health("geo")).status == "Running"  # what a dashboard shows
+    assert (await env.health_check()).services["geo"].status == "Unknown"
+
+    at(60)
+    assert (await env.execute_authorized(sign(issuer_for(env), rollback(GOOD)))).ok
+    assert (await env.health_check()).services["geo"].status == "Unknown"  # its pod just started
+    at(60 + 61)
+    report = await env.health_check()
+    assert {h.status for h in report.services.values()} == {"Running"}
 
 
 # --- options ---------------------------------------------------------------------------------

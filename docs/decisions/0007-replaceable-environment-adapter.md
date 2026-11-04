@@ -48,7 +48,7 @@ is read by `create_environment` in
 | `kind` | Adapter | Status |
 |---|---|---|
 | `simulated` | `SimulatedEnvironment` in [recap/environments/simulated/engine.py](../../recap/environments/simulated/engine.py) | implemented (V1 default) |
-| `sregym` | `SREGymEnvironment` in [integrations/sregym/adapter.py](../../integrations/sregym/adapter.py) | adapter only: it describes itself as not integrated (`is_simulated=False`) and raises `EnvironmentNotIntegrated` for every operation |
+| `sregym` | `SREGymEnvironment` in [integrations/sregym/adapter.py](../../integrations/sregym/adapter.py) | adapter only in V1: it described itself as not integrated (`is_simulated=False`) and raised `EnvironmentNotIntegrated` for every operation. M5 update: the Kubernetes adapter in external-harness mode ([ADR 0031](0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md)) |
 | `package.module:ClassName` | any `TargetEnvironment` subclass, for example `tests.fakes:FakeEnvironment` | used by the tests |
 
 `register_environment` can add more named kinds.
@@ -166,7 +166,7 @@ Supporting tests:
   until it settles.
 - `kind: package.module:ClassName` imports whatever code the config names, so the config
   file must be trusted.
-- SREGym is not integrated, and there are no SREGym results.
+- In V1 SREGym was not integrated (M5 connected it, [ADR 0031](0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md)); there are no SREGym benchmark results.
   [integrations/sregym/README.md](../../integrations/sregym/README.md) lists what integration
   needs, and [integrations/sregym/mapping.md](../../integrations/sregym/mapping.md) has the
   planned, unverified tool mapping.

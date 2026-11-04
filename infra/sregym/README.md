@@ -17,8 +17,9 @@ bash infra/aws/ec2.sh creds sregym             # RECAP's three identities to ~/.
 bash infra/sregym/get-kubectl.sh               # kubectl v1.32.1 for this target (once)
 bash infra/aws/ec2.sh tunnel                   # in its own terminal: SREGym's API port too
 
-# The run (a person approves the fix at the terminal)
-RECAP_TARGET=sregym-hotel RECAP_DATA_DIR=$HOME/recap-sregym-runs \
+# The run (a person approves the fix at the terminal). `hold` keeps the Mac awake and the VM
+# marked in use until it ends: the approval wait uses neither the model nor a command there.
+bash infra/aws/ec2.sh hold env RECAP_TARGET=sregym-hotel RECAP_DATA_DIR=$HOME/recap-sregym-runs \
   .venv/bin/python scripts/demo.py --scenario sregym-misconfig-app-hotel-res \
   --provider ollama-vm --approve ask
 
@@ -29,6 +30,10 @@ bash infra/aws/ec2.sh ssh 'cd ~/recap && bash infra/sregym/sregym.sh grade misco
 bash infra/aws/ec2.sh ssh 'cd ~/recap && bash infra/sregym/sregym.sh teardown'
 bash infra/aws/ec2.sh stop
 ```
+
+After the VM was stopped (by hand, or by its idle guard), SREGym's four-node Kind cluster may
+not come back: `sregym.sh` then refuses to deploy because nodes stay NotReady. Recreate it with
+`teardown` then `setup` (its images are cached, so this takes minutes), then `deploy` again.
 
 ## What it installs, and where
 
@@ -45,11 +50,13 @@ identity kubeconfigs next to it. Nothing goes into the repository.
   cluster to its baseline. Every `sregym.sh` command that reaches a cluster first checks that
   the context is SREGym's own `kind-kind`, on 127.0.0.1, with the CA recorded at setup. RECAP's
   demo cluster keeps its credentials in a private file SREGym never reads, and is stopped while
-  SREGym runs (`teardown` starts it again).
+  SREGym's cluster exists: every `sregym.sh` command stops it, `ec2.sh up` leaves it stopped,
+  and `teardown` starts it again.
 - RECAP never uses SREGym's administrator credential or its agent tools (a kubectl passthrough
   and a shell, cluster-wide). It works through three ServiceAccounts of its own
   ([recap-rbac.yaml](recap-rbac.yaml)): read-only reader and oracle, and a writer that may only
-  patch the app's Deployments, in the app's namespace only. The approval rules are the Kind
+  patch the app's Deployments, in the app's namespace only. Unlike the Kind demo, no admission
+  policy checks the shape of the writer's patches here: RBAC alone limits it. The approval rules are the Kind
   demo's: a person types the target service's name, for that one action, once.
 - SREGym's conductor API and MCP port-forward listen on the VM only; the VM's security group
   opens nothing but SSH, to the owner's IP.

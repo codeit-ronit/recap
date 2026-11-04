@@ -124,6 +124,29 @@ def test_releases_since_the_baseline_fold_restarts_and_skip_older_runs(snapshot:
     assert release.change_summary == "release v1.1.0"
 
 
+def test_a_restart_runs_the_same_release_on_a_new_replicaset(snapshot: dict) -> None:
+    """Revision 4 restarted v1.0.0: not a release, but its pods run v1.0.0 (the verifier ties
+    their events to that release)."""
+    revisions = {revision.number: revision for revision in found(snapshot)}
+    log = [
+        ReleaseEntry(NOW - timedelta(minutes=50), "backend", "v1.2.0", "v1.0.0", "release"),
+        ReleaseEntry(NOW - timedelta(minutes=40), "backend", "v1.0.0", "v1.2.0", "rollback"),
+    ]
+
+    records = rollout.releases(
+        "backend",
+        list(revisions.values()),
+        baseline=Baseline(version="v1.0.0", revision=1),
+        baseline_at=NOW - timedelta(hours=2),
+        log=log,
+    )
+
+    [undo] = [record for record in records if record.version == "v1.0.0"]
+    assert undo.replicaset == revisions[3].replicaset
+    assert undo.restart_replicasets == [revisions[4].replicaset]
+    assert all(not r.restart_replicasets for r in records if r.version != "v1.0.0")
+
+
 def test_a_reused_replicaset_never_dates_a_release_by_its_old_creation_time(snapshot: dict) -> None:
     # The audit's case: run 2 releases v1.1.0 again; Kubernetes reuses run 1's ReplicaSet,
     # whose creation time is a day old. The release must be dated by run 2's own record.

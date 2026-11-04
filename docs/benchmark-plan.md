@@ -1,8 +1,9 @@
 # Benchmark plan: RECAP on SREGym
 
-> **Plan only. Nothing in this document has been run.** RECAP V1 has never connected to
-> SREGym and has no SREGym results. The SREGym adapter is an interface stub that refuses
-> every operation. The only benchmark that exists today is the small synthetic evaluation
+> **Plan only: the benchmark itself has not been run.** Since M5 RECAP connects to SREGym's
+> own cluster ([ADR 0031](decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md)) and has made development runs on one problem
+> ([m5-progress.md](m5-progress.md)); that problem is not held out, and no benchmark results
+> exist. The only benchmark that exists today is the small synthetic evaluation
 > on RECAP's own simulator ([latest report](../evals/reports/latest/summary.md)).
 
 ## In short
@@ -56,7 +57,7 @@ Status words used in this plan:
 | The target system and its faults | simulated | [`recap/environments/README.md`](../recap/environments/README.md) |
 | Swappable environment interface (`TargetEnvironment`), chosen by `kind` in the config | implemented; an end-to-end test runs the whole pipeline on a second, fake adapter | [`recap/core/interfaces.py`](../recap/core/interfaces.py), [`recap/environments/registry.py`](../recap/environments/registry.py), [`tests/e2e/test_environment_swap.py`](../tests/e2e/test_environment_swap.py) |
 | Independent recovery oracle | implemented (judges simulator ground truth) | [`recap/verification/oracle.py`](../recap/verification/oracle.py) |
-| `SREGymEnvironment` | adapter only: every operation raises `EnvironmentNotIntegrated` | [`integrations/sregym/adapter.py`](../integrations/sregym/adapter.py), [`tests/unit/test_sregym_adapter.py`](../tests/unit/test_sregym_adapter.py) |
+| `SREGymEnvironment` | implemented (M5): the Kubernetes adapter in external-harness mode ([ADR 0031](decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md)) | [`integrations/sregym/adapter.py`](../integrations/sregym/adapter.py), [`tests/unit/test_sregym_adapter.py`](../tests/unit/test_sregym_adapter.py) |
 | Mapping of RECAP tools to Kubernetes capabilities | not yet built (a planned, unverified table) | [`integrations/sregym/mapping.md`](../integrations/sregym/mapping.md) |
 | Optional Claude provider, an LLM that could read real, free-text logs | adapter only: opt-in, your own API key and billing, tested only with a fake client | [`recap/providers/anthropic_provider.py`](../recap/providers/anthropic_provider.py) |
 | Human approvals through the console or the dashboard | implemented (the approver's identity is a label, not authenticated) | [`recap/safety/approvals.py`](../recap/safety/approvals.py) |
@@ -616,10 +617,10 @@ The hosting rules live in [`infra/README.md`](../infra/README.md). In checklist 
 
 - [`integrations/sregym/README.md`](../integrations/sregym/README.md): adapter status and the
   integration checklist
-- [`integrations/sregym/mapping.md`](../integrations/sregym/mapping.md): the planned tool
-  mapping, in detail
-- [`integrations/sregym/sample_config.yaml`](../integrations/sregym/sample_config.yaml):
-  what the environment config would look like
+- [`integrations/sregym/mapping.md`](../integrations/sregym/mapping.md): the tool mapping
+  planned before M5 (historical)
+- [`configs/targets/sregym-hotel/environment.yaml`](../configs/targets/sregym-hotel/environment.yaml):
+  the SREGym target's environment config (M5)
 - [`infra/README.md`](../infra/README.md): how V1 runs locally and the hosting rules for a
   benchmark host
 - [`evals/runner.py`](../evals/runner.py) and

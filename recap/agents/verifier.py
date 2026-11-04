@@ -457,7 +457,8 @@ class _Observations:
 
     def pod_failures(self, service: str) -> list[tuple[list[str], ClusterEvent]]:
         """(evidence IDs, event) for Warning events that say `service`'s own pods fail, each
-        event once (with every event list that holds it), the earliest to begin first."""
+        event once (with every event list that holds it), the earliest to begin first. The
+        whole history, fixes included, as series() and lines(): an onset is where it began."""
         unique: dict[tuple[datetime, str, str], tuple[list[str], ClusterEvent]] = {}
         for eid, _, listing in self.events:
             for event in listing.events:
@@ -465,7 +466,6 @@ class _Observations:
                     event.service == service
                     and event.type == "Warning"
                     and event.reason in POD_FAILURE_REASONS
-                    and self.fresh(service, event.timestamp)  # a fix ended the older failures
                 ):
                     key = (event.timestamp, event.reason, event.object)
                     lists, _ = unique.setdefault(key, ([], event))
@@ -791,7 +791,8 @@ def _deploy_timing(
         f"deployment evidence shows {service} {record.version} deployed {when}",
         listings,
     )
-    onset = _error_onset(check, observed, record.version, alert_time, record.replicaset)
+    replicasets = [record.replicaset, *record.restart_replicasets] if record.replicaset else []
+    onset = _error_onset(check, observed, record.version, alert_time, replicasets)
     if onset is None:
         return
     low, high = signals.DEPLOY_ERROR_WINDOW_MINUTES
@@ -816,7 +817,7 @@ def _error_onset(
     observed: _Observations,
     version: str,
     alert_time: datetime,
-    replicaset: str | None = None,
+    replicasets: Sequence[str] = (),
 ) -> _Onset | None:
     """V2 (b): when S's errors began, from the error_rate metric, else from '(version=v)' logs."""
     service = check.target
@@ -846,8 +847,9 @@ def _error_onset(
     ]
     if not tagged:
         failures = observed.pod_failures(service)
-        if replicaset:  # only the release's own pods: an older release's crash is not its onset
-            failures = [f for f in failures if f[1].object.startswith(f"pod/{replicaset}-")]
+        if replicasets:  # only the release's own pods: an older release's crash is not its onset
+            own = tuple(f"pod/{replicaset}-" for replicaset in replicasets)
+            failures = [f for f in failures if f[1].object.startswith(own)]
         if failures:  # a target without request metrics: the platform's own warnings
             return _pod_failure_onset(check, service, failures, alert_time)
         check.lack(

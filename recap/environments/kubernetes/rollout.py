@@ -188,7 +188,8 @@ def releases(
     """The image changes of `service` since this run's baseline, newest first.
 
     Revisions up to the baseline revision are history from earlier runs and are left out; a
-    restart-only revision (same image as the one before it) is not a release. deployed_at is
+    restart-only revision (same image as the one before it) is not a release, but its
+    ReplicaSet runs the release (restart_replicasets). deployed_at is
     the time the run's release log recorded the change; without such an entry (a change made
     outside RECAP), the ReplicaSet's creation time if it was never reused, else the earliest
     creation time of its pods, never earlier than the baseline.
@@ -199,8 +200,10 @@ def releases(
     records: list[DeploymentRecord] = []
     for revision in after:
         version = revision.version or UNKNOWN_VERSION
-        if version == previous:
-            continue  # a rolling restart: the same release, restarted
+        if version == previous:  # a rolling restart: the same release, on a new ReplicaSet
+            if records and records[-1].version == version:
+                records[-1].restart_replicasets.append(revision.replicaset)
+            continue
         entry = next((e for e in unused if e.version == version), None)
         if entry is not None:
             unused.remove(entry)
