@@ -104,7 +104,7 @@ class SimulatedEnvironment(TargetEnvironment):
             supported_actions=list(SUPPORTED_ACTIONS),
             description=(
                 "Deterministic local simulation of a five-service shop (state in a per-run "
-                "SQLite file). No real cluster is involved."
+                "SQLite file). A run on it changes no real system."
             ),
             # A fix takes effect the moment it is applied (the clock jumps 5 minutes), so
             # there is nothing to wait for before the oracle's verdict.
