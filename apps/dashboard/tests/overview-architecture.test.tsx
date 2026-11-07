@@ -582,6 +582,8 @@ function between(html: string, start: string, end: string): string {
 }
 
 const hrefs = (html: string) => tags(html, "a").map((a) => a.attrs.href ?? "");
+/** The System readiness card (under Technical details). */
+const readinessOf = (html: string) => between(html, "System readiness</h2>", "Outcomes by data source</h2>");
 const github = (path: string) => `https://github.com/codeit-ronit/recap/${path.endsWith("/") ? "tree" : "blob"}/main/${path.replace(/\/$/, "")}`;
 
 // --- Overview ---------------------------------------------------------------------------------
@@ -623,7 +625,12 @@ test("the demo starts from the golden recording, labelled as a replay of a real 
   const text = textOf(html);
   assert.equal(demoFixture(REPLAYS)?.id, "qwen3-8b-unfamiliar-parallel");
   assert.equal(demoHref("qwen3-8b-unfamiliar-parallel"), "#/live?panel=replay&fixture=qwen3-8b-unfamiliar-parallel");
-  assert.equal(count(html, 'href="#/live?panel=replay&amp;fixture=qwen3-8b-unfamiliar-parallel"'), 2, "header button and card button");
+  assert.equal(count(html, 'href="#/live?panel=replay&amp;fixture=qwen3-8b-unfamiliar-parallel"'), 1, "the recording card's button, under Technical details");
+  // The way in is the guided demo, from the hero: plain, interview mode, and the technology.
+  const hero = between(html, '<section class="ov-hero"', "</section>");
+  assert.match(textOf(hero), /RECAP is an AI reliability engineer that investigates incidents, proposes safe fixes and verifies recovery\./);
+  assert.match(textOf(hero), /Try the guided demo Interview mode Explore the technology/);
+  assert.deepEqual(hrefs(hero), ["#/demo", "#/demo?mode=interview", "#/architecture"]);
   const card = between(html, "Start the demo</h2>", "System readiness");
   const cardText = textOf(card);
   assert.match(cardText, /REPLAY · RECORDED REAL-LLM RUN qwen3:8b \/ SIMULATED TARGET/);
@@ -651,11 +658,11 @@ test("when no recording can be replayed the demo card says why, and still links 
   assert.match(textOf(none), /No recording to replay fixtures\/recordings\/MANIFEST\.json lists no committed recording\./);
 });
 
-test("recent runs: the ten newest, each opening the Trace Explorer, with its data source and duration", () => {
+test("recent runs: the five newest, each opening the Trace Explorer, with its data source and duration", () => {
   const html = overview();
-  assert.equal(RECENT_RUNS, 10);
-  assert.equal(count(html, 'class="ov-run"'), 10);
-  assert.match(textOf(html), /The 10 newest of 11 runs\./);
+  assert.equal(RECENT_RUNS, 5);
+  assert.equal(count(html, 'class="ov-run"'), 5);
+  assert.match(textOf(html), /The 5 newest of 11 runs\./);
   assert.ok(hrefs(html).includes("#/timeline?run=run-69960d199f"));
   assert.ok(!hrefs(html).includes("#/timeline?run=run-0ldest0001"), "the eleventh run is not listed");
   const first = textOf(between(html, 'href="#/timeline?run=run-69960d199f"', 'href="#/timeline?run=run-f9395a4471"'));
@@ -664,11 +671,12 @@ test("recent runs: the ten newest, each opening the Trace Explorer, with its dat
   assert.match(first, /Outcome: Resolved/);
   assert.match(first, /REPLAY · RECORDED REAL-LLM RUN qwen3:8b \/ SIMULATED TARGET/);
   assert.match(first, /Duration: 842 ms/);
-  const scripted = textOf(between(html, 'href="#/timeline?run=run-6539891f82"', 'href="#/timeline?run=run-debd9efab6"'));
-  assert.match(scripted, /Safety blocked/);
+  const scripted = textOf(between(html, 'href="#/timeline?run=run-a4f9926bef"', "</li>"));
+  assert.match(scripted, /Budget exhausted/);
   assert.match(scripted, /SCRIPTED BASELINE \/ SIMULATED TARGET/);
+  assert.ok(!hrefs(html).includes("#/timeline?run=run-6539891f82"), "the sixth run is not listed");
   // Every run in the list carries a simulated-target label: nothing suggests a real system.
-  assert.equal(count(between(html, 'class="ov-runs-list"', "</ol>"), "SIMULATED TARGET"), 10);
+  assert.equal(count(between(html, 'class="ov-runs-list"', "</ol>"), "SIMULATED TARGET"), 5);
 });
 
 test("outcomes are counted per data source: no blended success rate, no percentage", () => {
@@ -728,10 +736,35 @@ test("a run that recorded no source, target or wall time reads Not recorded", ()
   assert.match(card, /These runs did not record which environment they ran against\./);
 });
 
+test("at a glance: the environment, its readiness, and how the newest runs ended, with sources counted together said plainly", () => {
+  const html = overview();
+  const card = textOf(between(html, "At a glance</h2>", "Recent runs</h2>"));
+  assert.match(card, /Environment Simulation RECAP simulated shop · namespace shop Operational/);
+  assert.match(card, /Resolved 9 The independent oracle verified the recovery\. Blocked 1 .* Failed 1 .* Active 0 Not finished yet\./);
+  assert.doesNotMatch(card, /Cancelled or deferred/, "the fifth group only when it has runs");
+  assert.match(card, /All 11 runs on this server\. Scripted, replayed and live-model runs are counted together here; Technical details below splits them by data source\./);
+  assert.doesNotMatch(card, /%/);
+  const empty = textOf(overview({ runs: polled(page([], 0)) }));
+  assert.match(empty, /No incident has run on this server yet Try the guided demo to see RECAP handle one, step by step\./);
+  const kind = textOf(between(clusterOverview(KIND_SYSTEM), "At a glance</h2>", "Recent runs</h2>"));
+  assert.match(kind, /Environment Real cluster · Kind \(local Kubernetes\) Kind cluster recap-m5 · namespace recap-demo Operational/);
+});
+
+test("the Overview keeps every card, the technical ones in a closed Technical details section", () => {
+  const html = overview();
+  // The section is the page's last element (the cards inside have <details> of their own).
+  const details = html.slice(html.indexOf('<details class="ov-more"'));
+  assert.ok(!/<details class="ov-more"[^>]*\sopen/.test(html), "closed by default");
+  for (const title of ["Start the demo", "System readiness", "Outcomes by data source", "Active environment", "Access", "Decision providers"]) {
+    assert.ok(details.includes(`${title}</h2>`), title);
+  }
+  assert.match(textOf(details), /^Technical details System readiness, the demo recording, the environment check, outcomes by data source, access and model providers/);
+});
+
 test("the breakdown says when it counted only the newest runs", () => {
   const html = overview({ runs: polled(page(RUNS, 1234)) });
   assert.match(textOf(html), /Counted over the newest 11 of 1,234 runs\./);
-  assert.match(textOf(html), /The 10 newest of 1,234 runs\./);
+  assert.match(textOf(html), /The 5 newest of 1,234 runs\./);
 });
 
 test("active incidents: listed first, with their state, liveness and a link to the Incident Lab", () => {
@@ -752,7 +785,7 @@ test("active incidents: listed first, with their state, liveness and a link to t
   const html = overview({ runs: polled(page([live, ...RUNS], 12)) });
   const text = textOf(html);
   assert.match(text, /1 incident in progress · 1 awaiting approval/);
-  const card = between(html, 'id="ov-active"', "Start the demo</h2>");
+  const card = between(html, 'id="ov-active"', "Recent runs</h2>");
   const cardText = textOf(card);
   assert.match(cardText, /Active incidents 1/);
   assert.match(cardText, /Awaiting approval Running in this server REPLAY · RECORDED REAL-LLM RUN qwen3:8b \/ SIMULATED TARGET/);
@@ -831,12 +864,13 @@ test("on a Kind server: a live notice, a real-cluster call to action instead of 
   // Never presented as simulated; the notice names the target.
   assert.match(text, /Live environment: Kind \(local Kubernetes\) Kind cluster recap-m5, namespace recap-demo: not simulated\. An approved action changes this real system; nothing on this page changes it\./);
   assert.doesNotMatch(text, /this page only reads|SIMULATED TARGET|SIMULATED ENVIRONMENT/);
-  // No simulated demo: the header and the first card lead to a real-cluster run.
-  assert.doesNotMatch(text, /Start the demo|Open the replay panel/);
-  assert.ok(!hrefs(html).some((href) => href.includes("panel=replay")));
-  const header = between(html, '<header class="page-header"', "</header>");
-  assert.match(textOf(header), /Run a real-cluster incident/);
-  assert.ok(hrefs(header).includes("#/live"));
+  // No simulated demo: the hero and the first card lead to a real-cluster run.
+  assert.doesNotMatch(text, /Start the demo|Open the replay panel|Try the guided demo|Interview mode/);
+  assert.ok(!hrefs(html).some((href) => href.includes("panel=replay") || href.startsWith("#/demo")));
+  const hero = between(html, '<section class="ov-hero"', "</section>");
+  assert.match(textOf(hero), /Run a real-cluster incident/);
+  assert.match(textOf(hero), /replays are refused/);
+  assert.ok(hrefs(hero).includes("#/live"));
   const card = between(html, "Run a real-cluster incident</h2>", "System readiness");
   const cardText = textOf(card);
   assert.match(cardText, /Kind cluster recap-m5 · namespace recap-demo · not a simulation/);
@@ -848,10 +882,11 @@ test("on a Kind server: a live notice, a real-cluster call to action instead of 
   assert.ok(hrefs(card).includes("#/live"));
   assert.ok(hrefs(card).includes(github("infra/kind/README.md")));
   // Readiness: Kind is the configured, operational adapter; the simulator and SREGym are not.
-  assert.match(textOf(between(html, "Kind (local Kubernetes)</span>", "</li>")), /configured Active Operational/);
-  assert.match(textOf(between(html, ">Simulated shop</span>", "</li>")), /Available Not operational/);
-  assert.match(textOf(between(html, ">SREGym</span>", "</li>")), /Available Not operational/);
-  const operational = tags(between(html, "Kind (local Kubernetes)</span>", "</li>"), "span").find((s) => (s.attrs.title ?? "").includes("does not contact the cluster"));
+  const readiness = readinessOf(html);
+  assert.match(textOf(between(readiness, "Kind (local Kubernetes)</span>", "</li>")), /configured Active Operational/);
+  assert.match(textOf(between(readiness, ">Simulated shop</span>", "</li>")), /Available Not operational/);
+  assert.match(textOf(between(readiness, ">SREGym</span>", "</li>")), /Available Not operational/);
+  const operational = tags(between(readiness, "Kind (local Kubernetes)</span>", "</li>"), "span").find((s) => (s.attrs.title ?? "").includes("does not contact the cluster"));
   assert.ok(operational, "Operational says GET /system did not contact the cluster");
 });
 
@@ -899,8 +934,9 @@ test("on a SREGym server: SREGym's harness owns the problem and its grader is se
   assert.match(environment, /Adapter SREGymEnvironment \(kind sregym \)/);
   assert.match(environment, /Scenarios 1 scenario sregym-misconfig-app-hotel-res/);
   assert.match(environment, /Safety policy policy-sregym-hotel-v2 Recovery oracle sregym-health-oracle Time a fix may take to settle up to 240 s/);
-  assert.match(textOf(between(html, ">SREGym</span>", "</li>")), /configured Active Operational/);
-  assert.match(textOf(between(html, "Kind (local Kubernetes)</span>", "</li>")), /Available Not operational/);
+  const readiness = readinessOf(html);
+  assert.match(textOf(between(readiness, ">SREGym</span>", "</li>")), /configured Active Operational/);
+  assert.match(textOf(between(readiness, "Kind (local Kubernetes)</span>", "</li>")), /Available Not operational/);
 });
 
 // --- the Check now button ---------------------------------------------------------------------

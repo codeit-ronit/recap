@@ -10,6 +10,7 @@ import { AgentTimelinePage } from "./pages/AgentTimeline";
 import { ArchitecturePage } from "./pages/Architecture";
 import { EvalsPage } from "./pages/Evals";
 import { EvidencePage } from "./pages/Evidence";
+import { GuidedDemoPage } from "./pages/GuidedDemo";
 import { KnowledgePage } from "./pages/Knowledge";
 import { LiveRunPage } from "./pages/LiveRun";
 import { MemoryPage } from "./pages/Memory";
@@ -21,6 +22,8 @@ function renderPage(page: PageId, props: PageProps): ReactNode {
   switch (page) {
     case "overview":
       return <OverviewPage {...props} />;
+    case "demo":
+      return <GuidedDemoPage {...props} />;
     case "live":
       return <LiveRunPage {...props} />;
     case "timeline":
@@ -64,12 +67,12 @@ export default function App() {
   const runParam = route.params.get("run");
   useEffect(() => {
     if (!runParam) return;
-    if (RUN_SCOPED_PAGES.has(route.page) || route.page === "live") setLastRun(runParam);
+    if (RUN_SCOPED_PAGES.has(route.page) || route.page === "live" || route.page === "demo") setLastRun(runParam);
     if (route.page === "live") setLiveRun(runParam);
   }, [route.page, runParam]);
 
   // The run whose data source the top bar shows: the one a run-scoped page (or the lab) has open.
-  const selectedRun = runParam && (RUN_SCOPED_PAGES.has(route.page) || route.page === "live") ? runParam : null;
+  const selectedRun = runParam && (RUN_SCOPED_PAGES.has(route.page) || route.page === "live" || route.page === "demo") ? runParam : null;
   const runDetail = usePolling(selectedRun ? () => api.run(selectedRun) : null, runDetailInterval, [selectedRun]);
 
   // A recovered API should refresh the wiring right away.

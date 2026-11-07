@@ -9,7 +9,7 @@ import { test } from "node:test";
 import { ApiError } from "../src/api";
 import { AppShell, NAV, PRODUCT_NAME } from "../src/components/Shell";
 import type { AppShellProps } from "../src/components/Shell";
-import { PAGES, PAGE_LABELS, RUN_SCOPED_PAGES, hrefFor, parseHash } from "../src/hooks";
+import { NAV_GROUPS, PAGES, PAGE_LABELS, RUN_SCOPED_PAGES, hrefFor, parseHash } from "../src/hooks";
 import type { PageId } from "../src/hooks";
 import type { EnvironmentInfo, HealthResponse, ProviderInfo, RunDetail, RunRecord, SystemSummary } from "../src/types";
 import { count, polled, render, tags, textOf, withAttr } from "./support/render";
@@ -103,21 +103,22 @@ function shell(overrides: Partial<AppShellProps> = {}): string {
 
 // --- routes ------------------------------------------------------------------------------------
 
-test("nine routes in the agreed order, each with its Mission Control label", () => {
+test("ten routes in the agreed order, each with its Mission Control label", () => {
   assert.deepEqual(
     [...PAGES],
-    ["overview", "live", "timeline", "evidence", "knowledge", "memory", "safety", "evals", "architecture"],
+    ["overview", "demo", "live", "timeline", "evidence", "safety", "knowledge", "memory", "evals", "architecture"],
   );
   assert.deepEqual(
     PAGES.map((p) => PAGE_LABELS[p]),
     [
       "Overview",
+      "Guided Demo",
       "Incident Lab",
       "Trace Explorer",
       "Evidence & Decisions",
+      "Safety & Approvals",
       "Knowledge",
       "Experience Memory",
-      "Safety & Approvals",
       "Evaluations",
       "Architecture & Learning",
     ],
@@ -126,6 +127,23 @@ test("nine routes in the agreed order, each with its Mission Control label", () 
     NAV.map((n) => n.page),
     [...PAGES],
   );
+});
+
+test("the navigation's three groups cover every route once, in route order", () => {
+  assert.deepEqual(
+    NAV_GROUPS.map((g) => g.label),
+    ["Start here", "Investigate", "Learn & measure"],
+  );
+  assert.deepEqual(
+    NAV_GROUPS.flatMap((g) => g.pages),
+    [...PAGES],
+  );
+  const html = shell();
+  const headings = tags(html, "h2").filter((h) => h.attrs.class === "nav-section-label");
+  assert.equal(headings.length, 3);
+  // Each group's list is named by its heading.
+  for (const heading of headings) assert.equal(withAttr(html, "aria-labelledby", heading.attrs.id).length, 1);
+  assert.match(textOf(html), /Start here Overview Guided Demo Investigate Incident Lab Trace Explorer Evidence & Decisions Safety & Approvals Learn & measure Knowledge/);
 });
 
 test("hash routes keep working: deep links, the run parameter, the new knowledge route, unknown paths", () => {
@@ -142,10 +160,10 @@ test("hash routes keep working: deep links, the run parameter, the new knowledge
 
 // --- navigation and landmarks ------------------------------------------------------------------
 
-test("the navigation lists the nine pages in order, and only the current one has aria-current", () => {
+test("the navigation lists the ten pages in order, and only the current one has aria-current", () => {
   const html = shell({ page: "knowledge" });
   const links = tags(html, "a").filter((a) => (a.attrs.class ?? "").split(" ").includes("nav-item"));
-  assert.equal(links.length, 9);
+  assert.equal(links.length, 10);
   assert.deepEqual(
     links.map((a) => a.attrs.href),
     PAGES.map((p) => `#/${p}`),

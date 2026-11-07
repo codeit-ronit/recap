@@ -399,6 +399,20 @@ h3 {
 .sidebar .nav-toggle {
   display: none;
 }
+.nav-sections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.nav-section-label {
+  margin: 0 0 var(--space-1);
+  padding: 0 10px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
 .nav-list {
   display: flex;
   flex-direction: column;
@@ -1066,6 +1080,11 @@ select:focus {
   flex: none;
   margin-top: 2px;
   color: var(--tone-text);
+}
+/* A long identifier (a tool call, an evidence ID) wraps instead of widening the page. */
+.notice > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .notice-title {
   font-weight: 600;
@@ -3097,10 +3116,10 @@ select:focus {
   .sidebar .nav-toggle {
     display: inline-flex;
   }
-  .nav-list {
+  .nav-sections {
     display: none;
   }
-  .sidebar.nav-open .nav-list {
+  .sidebar.nav-open .nav-sections {
     position: absolute;
     top: 100%;
     left: 0;

@@ -514,6 +514,35 @@ export function activeRuns<T extends Pick<RunSummary, "terminal">>(runs: readonl
   return runs.filter((run) => !run.terminal);
 }
 
+/** The Overview's at-a-glance groups of how runs ended (RunSummary.outcome), across every data source. */
+export type GlanceKey = "resolved" | "blocked" | "failed" | "active" | "other";
+
+export const GLANCE_GROUPS: readonly { key: GlanceKey; label: string; tone: Tone; hint: string }[] = [
+  { key: "resolved", label: "Resolved", tone: "ok", hint: "The independent oracle verified the recovery." },
+  { key: "blocked", label: "Blocked", tone: "warn", hint: "The safety policy, the evidence gate or a person stopped the fix, or its approval expired." },
+  { key: "failed", label: "Failed", tone: "bad", hint: "No verified recovery: the evidence stayed insufficient, an error, or a run limit." },
+  { key: "active", label: "Active", tone: "accent", hint: "Not finished yet." },
+  { key: "other", label: "Cancelled or deferred", tone: "neutral", hint: "Someone cancelled the run, or a free model's quota deferred it." },
+];
+
+const GLANCE_OF: Readonly<Record<string, GlanceKey>> = {
+  resolved: "resolved",
+  safety_blocked: "blocked",
+  approval_rejected: "blocked",
+  approval_expired: "blocked",
+  failed: "failed",
+  error: "failed",
+  budget_exhausted: "failed",
+  in_progress: "active",
+};
+
+/** How many runs fall in each at-a-glance group; an unfinished run is active whatever it reports. */
+export function glanceCounts(runs: readonly Pick<RunSummary, "outcome" | "terminal">[]): Record<GlanceKey, number> {
+  const counts: Record<GlanceKey, number> = { resolved: 0, blocked: 0, failed: 0, active: 0, other: 0 };
+  for (const run of runs) counts[run.terminal ? (GLANCE_OF[run.outcome] ?? "other") : "active"] += 1;
+  return counts;
+}
+
 /** Whether THIS server can follow an unfinished run live (RunSummary.status). */
 export function livenessLook(status: RunStatus | string): StatusLook {
   switch (status) {

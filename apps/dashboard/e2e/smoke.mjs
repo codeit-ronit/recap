@@ -8,18 +8,24 @@
  *   node e2e/smoke.mjs --base http://127.0.0.1:8000 --token <operator token>
  *
  * What it checks, as a person would see it:
- *   1. Pages: the nine routes at 1440 x 900 and at a 390 x 844 phone, the run-scoped ones for a
- *      replay of the golden recording, a scripted run, a BLOCKED run and a BUDGET_EXHAUSTED run
- *      (whichever the data folder has). Each page must load (its heading, no error panel, nothing
- *      still loading), print nothing to the console (no error, no warning, no exception), never
- *      scroll sideways (also with every <details> opened), show the SIMULATED ENVIRONMENT strip
- *      and the selected run's data source, and never put the operator token or injected markup
- *      in the DOM.
+ *   1. Pages: the ten routes at 1440 x 900 and at a 390 x 844 phone, the run-scoped ones (and the
+ *      Guided Demo's view of a run) for a replay of the golden recording, a scripted run, a
+ *      BLOCKED run and a BUDGET_EXHAUSTED run (whichever the data folder has). Each page must load
+ *      (its heading, no error panel, nothing still loading), print nothing to the console (no
+ *      error, no warning, no exception), never scroll sideways (also with every <details> opened),
+ *      show the SIMULATED ENVIRONMENT strip and the selected run's data source, never put the
+ *      operator token or injected markup in the DOM, and pass a lightweight accessibility probe
+ *      (every control named, every field labelled, no duplicate or dangling ids, one main, one h1).
  *   2. The live demo (needs the token): sign in through the top bar, open the Incident Lab,
  *      replay the golden recording at the watchable pace, watch the stage stepper and the event
  *      feed advance, approve the exact action in the modal, and see RESOLVED with the oracle's
  *      verdict; the API must agree (RESOLVED, oracle verified, approved by the operator). Then
  *      the run's Trace Explorer, Evidence, Knowledge, Memory and Safety pages are checked too.
+ *   3. The guided demo (needs the token): the start screen with its provenance label, a replay
+ *      started from it, the stepper advancing with replayed model activity, the decision card,
+ *      approval in the same dialog and RESOLVED with the API agreeing; the steps from the keyboard;
+ *      then Restart (a new run) and Reject (BLOCKED, the fix and recovery steps skipped, the API
+ *      agreeing); and the finished demo at 390 px.
  *
  * The demo starts one real replay run on that server: point it at a demo data folder
  * (scripts/seed_demo.py), not at the data you care about. A replay calls no model.
@@ -46,6 +52,7 @@ import { parseArgs } from "node:util";
 const PRODUCT = "RECAP Mission Control";
 const LABELS = {
   overview: "Overview",
+  demo: "Guided Demo",
   live: "Incident Lab",
   timeline: "Trace Explorer",
   evidence: "Evidence & Decisions",
@@ -55,8 +62,10 @@ const LABELS = {
   evals: "Evaluations",
   architecture: "Architecture & Learning",
 };
-const GLOBAL_PAGES = ["overview", "evals", "architecture"];
-const RUN_PAGES = ["live", "timeline", "evidence", "knowledge", "memory", "safety"];
+const GLOBAL_PAGES = ["overview", "demo", "evals", "architecture"];
+const RUN_PAGES = ["live", "demo", "timeline", "evidence", "knowledge", "memory", "safety"];
+// The Guided Demo's label for a replay (src/view/demo.ts DEMO_PROVENANCE).
+const PROVENANCE = "Recorded real-model execution — replayed locally";
 const DESKTOP = { width: 1440, height: 900 };
 const PHONE = { width: 390, height: 844 };
 const SOURCE_LABELS = {
@@ -376,6 +385,59 @@ function domHtml() {
   return document.documentElement.outerHTML;
 }
 
+/** Lightweight accessibility checks, no library: names, labels, ids, landmarks, headings. */
+function a11yProbe() {
+  const problems = [];
+  const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  const nameOf = (el) => {
+    const labelledBy = (el.getAttribute("aria-labelledby") ?? "")
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((id) => document.getElementById(id)?.textContent ?? "")
+      .join(" ");
+    return (el.getAttribute("aria-label") ?? "").trim() || labelledBy.trim() || (el.textContent ?? "").trim() || (el.getAttribute("title") ?? "").trim();
+  };
+  for (const el of document.querySelectorAll('button, a[href], [role="button"], [role="radio"], [role="tab"]')) {
+    if (visible(el) && !nameOf(el)) problems.push(`unnamed ${el.tagName.toLowerCase()}${el.className ? `.${String(el.className).split(" ")[0]}` : ""}`);
+  }
+  for (const el of document.querySelectorAll("input, select, textarea")) {
+    if (el.type === "hidden" || !visible(el)) continue;
+    if (!el.labels?.length && !el.getAttribute("aria-label") && !el.getAttribute("aria-labelledby")) problems.push(`unlabelled ${el.tagName.toLowerCase()}#${el.id || "?"}`);
+  }
+  const ids = new Map();
+  for (const el of document.querySelectorAll("[id]")) ids.set(el.id, (ids.get(el.id) ?? 0) + 1);
+  for (const [id, n] of ids) if (n > 1) problems.push(`duplicate id #${id}`);
+  for (const attr of ["aria-labelledby", "aria-controls", "aria-describedby"]) {
+    for (const el of document.querySelectorAll(`[${attr}]`)) {
+      for (const id of el.getAttribute(attr).split(/\s+/).filter(Boolean)) if (!document.getElementById(id)) problems.push(`${attr} points at missing #${id}`);
+    }
+  }
+  const mains = document.querySelectorAll("main").length;
+  if (mains !== 1) problems.push(`${mains} main landmarks`);
+  const h1s = document.querySelectorAll("main h1").length;
+  if (h1s !== 1) problems.push(`${h1s} h1 headings in main`);
+  for (const img of document.querySelectorAll("img")) if (!img.hasAttribute("alt")) problems.push("an img without alt");
+  return [...new Set(problems)].slice(0, 6);
+}
+
+/** Where the Guided Demo stands, as its page shows it. */
+function demoState() {
+  const dialog = document.querySelector('[role="dialog"]');
+  const title = (el) => (el?.textContent ?? "").replace(/^Step \d+: /, "").trim();
+  return {
+    hash: location.hash,
+    current: title(document.querySelector('.demo-step[aria-current="step"] .demo-step-title')) || null,
+    done: document.querySelectorAll(".demo-step.status-done").length,
+    skipped: [...document.querySelectorAll(".demo-step.status-skipped .demo-step-title")].map(title),
+    provenance: document.querySelector(".demo-provenance-label")?.textContent?.trim() ?? null,
+    replayedModel: [...document.querySelectorAll(".demo-act-kind")].some((e) => e.textContent.includes("Model · replayed")),
+    decision: document.querySelector(".demo-decision")?.innerText ?? null,
+    dialog: dialog ? dialog.innerText : null,
+    outcome: document.querySelector(".lab-outcome")?.innerText ?? null,
+    facts: document.querySelector(".lab-outcome-grid")?.innerText ?? null,
+  };
+}
+
 /** Click the first element matching `selector` whose text contains `text` (if given). */
 function clickProbe({ selector, text }) {
   const el = [...document.querySelectorAll(selector)].find((e) => !text || (e.textContent ?? "").includes(text));
@@ -455,6 +517,8 @@ async function checkPage(page, { run = null, source = null, viewport, name }) {
   }
   const expanded = await browser.run(expandedWidth);
   if (expanded.sideways) problems.push(`scrolls sideways when expanded: ${expanded.sideways}`);
+  const a11y = await browser.run(a11yProbe);
+  if (a11y.length) problems.push(`accessibility: ${a11y.join(", ")}`);
   if (TOKEN) {
     const html = await browser.run(domHtml);
     if (html.includes(TOKEN)) problems.push("the operator token is in the DOM");
@@ -504,6 +568,171 @@ async function checkPages(runs) {
   }
 }
 
+/** Sign in through the top bar, once per tab (the token stays in this tab's session storage). */
+async function signIn() {
+  const already = await browser.run(() => !!document.querySelector(".operator.signed-in"));
+  if (!already) {
+    await browser.run(clickProbe, { selector: ".operator button", text: "Sign in" });
+    await browser.waitFor(() => !!document.querySelector("#operator-token"), null, 5_000);
+    await browser.run(typeProbe, { selector: "#operator-token", value: TOKEN });
+    await browser.run(clickProbe, { selector: ".operator-form button[type=submit]" });
+  }
+  const signedIn = await browser.waitFor(() => document.querySelector(".operator.signed-in")?.textContent ?? null, null, 10_000);
+  return signedIn.ok;
+}
+
+/** Follow a guided demo run until its approval dialog opens; the steps and labels seen meanwhile. */
+async function watchDemo(timeoutMs) {
+  const steps = [];
+  let replayed = false;
+  let labelled = true;
+  let state = null;
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    state = await browser.run(demoState);
+    if (state.current && steps[steps.length - 1] !== state.current) steps.push(state.current);
+    replayed ||= state.replayedModel;
+    if (state.provenance !== PROVENANCE) labelled = false;
+    if (state.dialog && state.dialog.includes("Approve this exact action")) break;
+    if (state.outcome) break;
+    await sleep(400);
+  }
+  return { steps, replayed, labelled, state, seconds: ((Date.now() - t0) / 1000).toFixed(1) };
+}
+
+/** The API's view of a demo run: its final state, the oracle, and who decided. */
+async function demoRunFacts(runId) {
+  const detail = await apiGet(`/runs/${encodeURIComponent(runId)}`);
+  const summary = detail.summary ?? {};
+  const approvals = detail.record?.approvals ?? [];
+  return { summary, decision: approvals[approvals.length - 1] ?? null };
+}
+
+/**
+ * The guided demo, as a first-time visitor would take it: the start screen, a replay started
+ * there, the steps, the decision, approve; the steps from the keyboard; Restart, then Reject.
+ */
+async function guidedDemoFlow() {
+  await browser.viewport(DESKTOP);
+  browser.console.length = 0;
+  await browser.goto(`${BASE}/#/demo`);
+  const page = await browser.waitFor(settledProbe, { label: LABELS.demo }, 25_000, 300);
+  if (!page.ok || !(await signIn())) {
+    record(false, "Guided Demo opens, signed in", "the page did not load or the sign-in failed");
+    return null;
+  }
+  const start = await browser.run(() => ({
+    label: document.querySelector(".demo-provenance-label")?.textContent?.trim() ?? null,
+    steps: document.querySelectorAll("ol.demo-preview > li").length,
+    ready: [...document.querySelectorAll("main button")].some((b) => b.textContent.includes("Start the guided demo") && !b.disabled),
+  }));
+  record(start.label === PROVENANCE && start.steps === 10 && start.ready, "Guided demo: the start screen shows the provenance label and the ten steps, ready to start", `${JSON.stringify(start.label)}, ${start.steps} steps, ${start.ready ? "ready" : "not ready"}`);
+  await shoot("guided-demo.png", null);
+
+  const paceText = args.pace === "instant" ? "Instant" : "Quick";
+  await browser.run(clickProbe, { selector: '[role="radiogroup"][aria-label="Pace"] [role="radio"]', text: paceText });
+  await sleep(300);
+  const before = await browser.run(() => location.hash);
+  await browser.run(clickProbe, { selector: "main button", text: "Start the guided demo" });
+  const started = await browser.waitFor((prev) => (location.hash !== prev && /run=run-/.test(location.hash) ? location.hash : null), before, 15_000);
+  const runId = started.ok ? /run=(run-[\w-]+)/.exec(started.value)[1] : null;
+  record(!!runId, `Guided demo: Start begins a replay (${paceText} pace) and the page follows it`, runId ?? "no run id in the address after 15 s");
+  if (!runId) return null;
+
+  const watched = await watchDemo(180_000);
+  record(watched.labelled, `Guided demo: labelled "${PROVENANCE}" throughout`);
+  record(watched.steps.length >= 3 && watched.steps.includes("You approve or reject the fix"), "Guided demo: the stepper advances to the decision", watched.steps.join(" → "));
+  record(watched.replayed, "Guided demo: model activity is marked as replayed, never live");
+  const decision = watched.state?.decision ?? "";
+  const dialogOk = (watched.state?.dialog ?? "").includes("Approve this exact action");
+  record(dialogOk && /If you approve/.test(decision) && /If you reject/.test(decision), "Guided demo: the decision card says what happens either way, and the approval dialog opens", `after ${watched.seconds} s`);
+  if (!dialogOk) return runId;
+  await sleep(1200);
+  await shoot("guided-demo-approval.png");
+
+  await browser.run(clickProbe, { selector: '[role="dialog"] button', text: "Approve this exact action" });
+  const approved = await browser.waitFor(() => (document.querySelector('[role="dialog"]')?.innerText ?? "").includes("Approved by"), null, 15_000);
+  await browser.run(clickProbe, { selector: '[role="dialog"] button', text: "Close and watch the run" });
+  const done = await browser.waitFor(
+    () => {
+      const outcome = document.querySelector(".lab-outcome")?.innerText ?? "";
+      return outcome && document.querySelectorAll(".demo-step.status-done").length === 10 ? outcome : null;
+    },
+    null,
+    90_000,
+  );
+  const resolved = approved.ok && done.ok && done.value.includes("Resolved");
+  record(resolved, "Guided demo: approved in the dialog, every step done, RESOLVED", done.ok ? done.value.split("\n")[0] : "no outcome after 90 s");
+  try {
+    const { summary, decision: approval } = await demoRunFacts(runId);
+    const ok = summary.state === "RESOLVED" && summary.oracle?.verified === true && summary.provider_class === "replay" && approval?.decision === "approved" && String(approval.actor).startsWith("operator:");
+    record(ok, "Guided demo: the API agrees (RESOLVED, oracle verified, a replay, approved by the operator)", `${summary.state}, ${summary.provider_class}, ${approval?.decision ?? "no decision"} by ${approval?.actor ?? "nobody"}`);
+  } catch (err) {
+    record(false, "Guided demo: the API agrees", err.message);
+  }
+  await shoot("guided-demo-resolved.png", null);
+
+  // The steps from the keyboard: Enter on a step's button shows it; Tab moves on to the next control.
+  const focused = await browser.run(() => {
+    const button = document.querySelectorAll(".demo-step-button")[2];
+    button?.focus();
+    return document.activeElement === button;
+  });
+  for (const type of ["keyDown", "keyUp"]) {
+    await browser.send("Input.dispatchKeyEvent", { type, key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, ...(type === "keyDown" ? { text: "\r" } : {}) });
+  }
+  await sleep(300);
+  for (const type of ["keyDown", "keyUp"]) await browser.send("Input.dispatchKeyEvent", { type, key: "Tab", code: "Tab", windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 });
+  await sleep(200);
+  const keyboard = await browser.run(() => ({
+    heading: document.getElementById("demo-step-heading")?.textContent?.trim() ?? null,
+    moved: document.activeElement !== document.body && document.activeElement?.classList.contains("demo-step-button"),
+  }));
+  record(focused && keyboard.heading === "An investigation strategy is chosen" && keyboard.moved, "Guided demo: the steps work from the keyboard (Enter shows a step, Tab moves on)", JSON.stringify(keyboard));
+
+  // Restart: a new replay run of the same recording, then reject its fix.
+  const first = await browser.run(() => location.hash);
+  await browser.run(clickProbe, { selector: "main button", text: "Restart" });
+  const again = await browser.waitFor((prev) => (location.hash !== prev && /run=run-/.test(location.hash) ? location.hash : null), first, 15_000);
+  const second = again.ok ? /run=(run-[\w-]+)/.exec(again.value)[1] : null;
+  record(!!second && second !== runId, "Guided demo: Restart starts a new replay run, no cleanup needed", second ?? "no new run after 15 s");
+  if (!second) return runId;
+  const rewatched = await watchDemo(180_000);
+  if (!(rewatched.state?.dialog ?? "").includes("Approve this exact action")) {
+    record(false, "Guided demo: Reject", `no approval dialog after ${rewatched.seconds} s`);
+    return runId;
+  }
+  await sleep(800);
+  await browser.run(clickProbe, { selector: '[role="dialog"] button', text: "Reject" });
+  const rejected = await browser.waitFor(() => (document.querySelector('[role="dialog"]')?.innerText ?? "").includes("Rejected by"), null, 15_000);
+  await browser.run(clickProbe, { selector: '[role="dialog"] button', text: "Close and watch the run" });
+  const blocked = await browser.waitFor(() => {
+    const state = document.querySelector(".lab-outcome")?.innerText ?? "";
+    const skipped = [...document.querySelectorAll(".demo-step.status-skipped .demo-step-title")].map((e) => e.textContent.replace(/^Step \d+: /, "").trim());
+    return state && skipped.length ? { state, skipped } : null;
+  }, null, 60_000);
+  const skippedOk = blocked.ok && blocked.value.skipped.includes("The approved fix runs") && blocked.value.skipped.includes("An independent check verifies recovery");
+  record(rejected.ok && skippedOk && blocked.value.state.includes("Blocked"), "Guided demo: Reject means nothing runs: BLOCKED, the fix and the recovery check skipped", blocked.ok ? `${blocked.value.state.split("\n")[0]}; skipped: ${blocked.value.skipped.join(", ")}` : "no outcome after 60 s");
+  try {
+    const { summary, decision: rejection } = await demoRunFacts(second);
+    const ok = summary.state === "BLOCKED" && summary.outcome === "approval_rejected" && rejection?.decision === "rejected" && String(rejection.actor).startsWith("operator:");
+    record(ok, "Guided demo: the API agrees (BLOCKED, rejected by the operator, no fix ran)", `${summary.state} / ${summary.outcome}, ${rejection?.decision ?? "no decision"} by ${rejection?.actor ?? "nobody"}`);
+  } catch (err) {
+    record(false, "Guided demo: the API agrees about the rejection", err.message);
+  }
+  if (browser.console.length) record(false, "No console output during the guided demo", browser.console.slice(0, 4).join(" | "));
+  else record(true, "No console output during the guided demo");
+
+  // The finished demo on a phone and on a desktop, with the page checks (width, labels, token, accessibility).
+  const summary = (await demoRunFacts(runId)).summary;
+  await browser.viewport(PHONE);
+  await checkPage("demo", { run: runId, source: sourceLabels(summary), viewport: PHONE, name: `Guided Demo · the approved demo run ${runId} @ 390x844` });
+  await shoot("phone-guided-demo.png", null);
+  await browser.viewport(DESKTOP);
+  await checkPage("demo", { run: second, source: sourceLabels(summary), viewport: DESKTOP, name: `Guided Demo · the rejected demo run ${second} @ 1440x900` });
+  return runId;
+}
+
 /** The live demo: sign in, replay the golden recording, approve in the modal, see RESOLVED. */
 async function demoFlow(golden) {
   await browser.viewport(DESKTOP);
@@ -516,17 +745,10 @@ async function demoFlow(golden) {
   }
 
   // Sign in through the top bar, as a presenter would.
-  const signedInAlready = await browser.run(() => !!document.querySelector(".operator.signed-in"));
-  if (!signedInAlready) {
-    await browser.run(clickProbe, { selector: ".operator button", text: "Sign in" });
-    await browser.waitFor(() => !!document.querySelector("#operator-token"), null, 5_000);
-    await browser.run(typeProbe, { selector: "#operator-token", value: TOKEN });
-    await browser.run(clickProbe, { selector: ".operator-form button[type=submit]" });
-  }
-  const signedIn = await browser.waitFor(() => document.querySelector(".operator.signed-in")?.textContent ?? null, null, 10_000);
+  const signedIn = await signIn();
   const session = await apiGet("/auth/session", TOKEN).catch(() => null);
-  record(signedIn.ok, "Sign in with the operator token", signedIn.ok ? `signed in as ${session?.operator ?? "the operator"}` : "the top bar never showed a signed-in operator (wrong token?)");
-  if (!signedIn.ok) return null;
+  record(signedIn, "Sign in with the operator token", signedIn ? `signed in as ${session?.operator ?? "the operator"}` : "the top bar never showed a signed-in operator (wrong token?)");
+  if (!signedIn) return null;
 
   // The pace, then the golden recording's Replay button.
   const paceText = args.pace === "instant" ? "Instant" : "Watchable";
@@ -674,6 +896,7 @@ async function main() {
       record(false, "Live demo", "GET /replays lists no recording this server can replay");
     } else {
       demoRun = await demoFlow(golden);
+      await guidedDemoFlow();
     }
 
     // The demo run's pages (or, without one, the seeded golden replay's) for the screenshots.

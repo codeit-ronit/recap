@@ -18,6 +18,7 @@ import {
   targetFacts,
 } from "../view/lab";
 import type { DecisionChoice, TargetFacts, TargetFields } from "../view/lab";
+import { ruleTitle } from "../view/explain";
 import "../styles/incident-lab.css";
 import { Chip, Mono } from "./Badge";
 import { KeyValues } from "./Card";
@@ -778,7 +779,7 @@ export function ApprovalModal({
                   {policy.rule_ids.length ? (
                     <>
                       {" "}
-                      Deciding rule <Mono>{policy.rule_ids[policy.rule_ids.length - 1]}</Mono>.
+                      Deciding rule <Mono title={ruleTitle(policy.rule_ids[policy.rule_ids.length - 1])}>{policy.rule_ids[policy.rule_ids.length - 1]}</Mono>.
                     </>
                   ) : null}
                 </span>

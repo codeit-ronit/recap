@@ -64,6 +64,7 @@ import {
   trustClassLabel,
 } from "../view/verification";
 import type { ChainAgent, ChainClaim, ChainRound, DisagreementEntry, EvidenceKindKey, RegistryUse } from "../view/verification";
+import { ruleTitle } from "../view/explain";
 import "../styles/evidence-m3.css";
 
 /**
@@ -288,7 +289,7 @@ function RuleChips({ ids, deciding }: { ids: readonly string[]; deciding?: strin
   return (
     <span className="chip-row ed-rule-ids">
       {ids.map((id, i) => (
-        <Chip key={`${id}-${i}`} mono tone={id === deciding ? "accent" : "neutral"} title={anyRuleNote(id) ?? id}>
+        <Chip key={`${id}-${i}`} mono tone={id === deciding ? "accent" : "neutral"} title={anyRuleNote(id) ?? ruleTitle(id)}>
           {id}
           {id === deciding ? <span className="ed-chip-note">deciding</span> : null}
         </Chip>

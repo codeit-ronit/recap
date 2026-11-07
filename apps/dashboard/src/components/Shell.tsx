@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { FocusEvent, KeyboardEvent, MouseEvent, ReactNode } from "react";
 import type { ApiError } from "../api";
-import { PAGES, PAGE_LABELS } from "../hooks";
+import { NAV_GROUPS, PAGES, PAGE_LABELS } from "../hooks";
 import type { PageId, Polled } from "../hooks";
 import type { HealthResponse, RunDetail, SystemSummary } from "../types";
 import { DataSourceBadge } from "./DataSourceBadge";
@@ -25,6 +25,7 @@ export const PRODUCT_NAME = "RECAP Mission Control";
 
 const NAV_ICONS: Readonly<Record<PageId, IconName>> = {
   overview: "overview",
+  demo: "play",
   live: "live",
   timeline: "timeline",
   evidence: "evidence",
@@ -43,6 +44,12 @@ export interface NavItem {
 
 /** The navigation, in route order (PAGES), labeled with PAGE_LABELS. */
 export const NAV: readonly NavItem[] = PAGES.map((page) => ({ page, label: PAGE_LABELS[page], icon: NAV_ICONS[page] }));
+
+/** The navigation in its groups (NAV_GROUPS). */
+export const NAV_SECTIONS: readonly { label: string; items: readonly NavItem[] }[] = NAV_GROUPS.map((group) => ({
+  label: group.label,
+  items: group.pages.map((page) => NAV.find((item) => item.page === page) as NavItem),
+}));
 
 /** A server answer as usePolling gives it (refresh is not needed here). */
 export type Loaded<T> = Pick<Polled<T>, "data" | "error" | "loading">;
@@ -243,25 +250,34 @@ export function AppShell({
             Menu
           </button>
         </div>
-        <ul id="primary-nav-list" className="nav-list">
-          {NAV.map((item) => {
-            const current = item.page === page;
-            return (
-              <li key={item.page}>
-                <a className={current ? "nav-item active" : "nav-item"} href={navHref(item.page)} aria-current={current ? "page" : undefined}>
-                  <Icon name={item.icon} size={17} />
-                  <span className="nav-label">{item.label}</span>
-                  {item.page === "safety" && waitingApprovals > 0 ? (
-                    <span className="nav-badge" title={waitingText}>
-                      <span aria-hidden="true">{waitingApprovals}</span>
-                      <span className="sr-only">, {waitingText}</span>
-                    </span>
-                  ) : null}
-                </a>
-              </li>
-            );
-          })}
-        </ul>
+        <div id="primary-nav-list" className="nav-sections">
+          {NAV_SECTIONS.map((section, index) => (
+            <div key={section.label} className="nav-section">
+              <h2 className="nav-section-label" id={`nav-section-${index}`}>
+                {section.label}
+              </h2>
+              <ul className="nav-list" aria-labelledby={`nav-section-${index}`}>
+                {section.items.map((item) => {
+                  const current = item.page === page;
+                  return (
+                    <li key={item.page}>
+                      <a className={current ? "nav-item active" : "nav-item"} href={navHref(item.page)} aria-current={current ? "page" : undefined}>
+                        <Icon name={item.icon} size={17} />
+                        <span className="nav-label">{item.label}</span>
+                        {item.page === "safety" && waitingApprovals > 0 ? (
+                          <span className="nav-badge" title={waitingText}>
+                            <span aria-hidden="true">{waitingApprovals}</span>
+                            <span className="sr-only">, {waitingText}</span>
+                          </span>
+                        ) : null}
+                      </a>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ))}
+        </div>
         <div className="sidebar-foot">
           <div>
             {PRODUCT_NAME}

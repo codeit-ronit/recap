@@ -1,0 +1,466 @@
+/* Guided Demo (pages/GuidedDemo.tsx): the provenance label, the ten-step stepper, one step
+   explained at a time, the decision, and the activity list. Colors come from the tone classes
+   (.tone-ok etc. set --tone-text, --tone-soft and --tone-line in styles.css). */
+
+.demo {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+/* --- provenance ---------------------------------------------------------------------------- */
+
+.demo-provenance {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--info-line);
+  border-left-width: 4px;
+  border-radius: 10px;
+  background: var(--info-soft);
+}
+.demo-provenance > .icon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--info-text);
+}
+.demo-provenance-label {
+  color: var(--info-text);
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.demo-provenance-text {
+  margin: 4px 0 0;
+  color: var(--text-2);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+
+/* --- toolbar ------------------------------------------------------------------------------- */
+
+.demo-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+}
+.demo-toolbar-spacer {
+  flex: 1;
+}
+.demo-status {
+  min-width: 0;
+  font-size: var(--fs-lg);
+  overflow-wrap: anywhere;
+}
+
+/* --- layout -------------------------------------------------------------------------------- */
+
+.demo-layout {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+.demo-aside {
+  position: sticky;
+  top: calc(var(--sticky-top) + var(--space-3));
+}
+.demo-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+/* --- the stepper --------------------------------------------------------------------------- */
+
+.demo-steps {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.demo-step-button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.demo-step-button:hover {
+  background: var(--panel);
+  color: var(--text);
+}
+.demo-step.shown .demo-step-button {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.demo-step-mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--tone-line);
+  border-radius: 50%;
+  background: var(--tone-soft);
+  color: var(--tone-text);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+}
+.demo-step-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.35;
+}
+.demo-step-title {
+  font-size: var(--fs-md);
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+.demo-step.status-current .demo-step-title,
+.demo-step.status-waiting .demo-step-title {
+  color: var(--text);
+  font-weight: 700;
+}
+.demo-step-status {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+.demo-step.status-waiting .demo-step-status {
+  color: var(--warn-text);
+  font-weight: 600;
+}
+.demo-step.status-skipped .demo-step-title,
+.demo-step.status-upcoming .demo-step-title {
+  color: var(--muted);
+}
+
+/* --- one step ------------------------------------------------------------------------------ */
+
+.demo-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+  min-width: 0;
+}
+.demo-panel-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+.demo-eyebrow {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.demo-follow {
+  margin-left: auto;
+}
+.demo-step-heading {
+  margin: 0;
+  font-size: var(--fs-2xl);
+  line-height: 1.25;
+}
+.demo-about {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-lg);
+  line-height: 1.55;
+}
+.demo-talk {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--accent-line);
+  border-radius: 10px;
+  background: var(--accent-soft);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+.demo-talk > .icon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent-text);
+}
+.demo-facts {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.demo-fact {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  line-height: 1.5;
+}
+.demo-fact > .icon {
+  flex: none;
+  margin-top: 3px;
+  color: var(--tone-text);
+}
+.demo-fact-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.demo-fact-author {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.demo-rules {
+  margin-top: 4px;
+  font-size: var(--fs-sm);
+}
+.demo-rules summary {
+  color: var(--accent-text);
+  cursor: pointer;
+}
+.demo-rules ul {
+  display: grid;
+  gap: 4px;
+  margin: 6px 0 0;
+  padding-left: var(--space-4);
+}
+
+/* --- who is working ------------------------------------------------------------------------ */
+
+.demo-actors {
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+.demo-subhead {
+  margin: 0 0 var(--space-2);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.demo-actors ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.demo-actor {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+.demo-actor > .icon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent-text);
+}
+.demo-actor > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.demo-actor-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-weight: 650;
+}
+.demo-actor-doing {
+  margin-top: 4px;
+}
+.demo-tag {
+  padding: 1px 7px;
+  border: 1px solid var(--border-2);
+  border-radius: 999px;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+}
+
+/* --- the decision -------------------------------------------------------------------------- */
+
+.demo-decision-headline {
+  margin: 0 0 var(--space-3);
+  font-size: var(--fs-xl);
+  font-weight: 700;
+}
+.demo-decision {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+}
+.demo-decision dt {
+  font-size: var(--fs-sm);
+  font-weight: 650;
+}
+.demo-decision dd {
+  margin: 2px 0 0;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
+/* --- activity and notices ------------------------------------------------------------------ */
+
+.demo-notices {
+  display: grid;
+  gap: var(--space-3);
+}
+.demo-activity {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.demo-act {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--tone-line);
+  background: var(--panel-2);
+  border-radius: 0 8px 8px 0;
+}
+.demo-act-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.demo-act-text {
+  overflow-wrap: anywhere;
+}
+.demo-act-meta {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+.demo-tech {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+
+/* --- the start screen ---------------------------------------------------------------------- */
+
+.demo-start-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+.demo-recording {
+  display: grid;
+  gap: 6px;
+  margin-bottom: var(--space-4);
+}
+.demo-recording-title {
+  font-size: var(--fs-lg);
+  font-weight: 650;
+}
+.demo-recording-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+.demo-recording p {
+  margin: 0;
+}
+.demo-options {
+  display: grid;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+.demo-option-hint {
+  margin: 6px 0 0;
+}
+.demo-start-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin-top: var(--space-3);
+}
+.demo-preview {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding-left: 22px;
+}
+.demo-preview li {
+  padding-left: 4px;
+}
+.demo-preview li span {
+  display: block;
+}
+.demo-preview-title {
+  font-weight: 600;
+}
+.demo-previous {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.demo-previous li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+
+@media (max-width: 1100px) {
+  .demo-layout {
+    grid-template-columns: 250px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 920px) {
+  .demo-layout,
+  .demo-start-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .demo-aside {
+    position: static;
+  }
+  .demo-step-button {
+    padding: 6px 8px;
+  }
+}

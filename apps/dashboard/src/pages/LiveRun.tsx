@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { api, openRunStream, toApiError } from "../api";
 import type { ApiError } from "../api";
 import { ApprovalCountdown, ApprovalModal } from "../components/ApprovalCard";
@@ -97,7 +97,7 @@ import {
   trustedRiskOf,
   withOverrides,
 } from "../view/lab";
-import type { LabTransport, RunBanner, SignalRow, TargetFacts, TargetFields } from "../view/lab";
+import type { ApprovalPhase, LabTransport, RunBanner, SignalRow, TargetFacts, TargetFields } from "../view/lab";
 import { knowledgeOverlays } from "../view/retrieval";
 import {
   checkDetail,
@@ -165,7 +165,7 @@ export function SignInPrompt({ what = "start runs and decide approvals" }: { wha
 // Live events: SSE that resumes after the last event, then polling as a fallback
 // ======================================================================================
 
-interface LabRunEvents {
+export interface LabRunEvents {
   events: TraceEvent[];
   /** run.summary arrived, or the run is no longer running. */
   finished: boolean;
@@ -187,7 +187,7 @@ const NO_EVENTS: LabRunEvents = { events: [], finished: false, transport: "idle"
  * then GET /runs/{id}/events?after_seq= is polled every second. Events are merged by seq, so none
  * is shown twice, and React updates are batched (a replay can deliver hundreds in a burst).
  */
-function useLabRunEvents(runId: string): LabRunEvents {
+export function useLabRunEvents(runId: string): LabRunEvents {
   const [state, setState] = useState<LabRunEvents>(NO_EVENTS);
 
   useEffect(() => {
@@ -1521,7 +1521,7 @@ function LiveFacts({
 }
 
 /** Time since the run's first event, ticking while it runs (its own clock, so the page does not re-render). */
-function Elapsed({ startIso, endIso, live }: { startIso: string | null; endIso: string | null; live: boolean }) {
+export function Elapsed({ startIso, endIso, live }: { startIso: string | null; endIso: string | null; live: boolean }) {
   const now = useNow(1000);
   const start = tsMs(startIso);
   if (!Number.isFinite(start)) return null;
@@ -1531,7 +1531,7 @@ function Elapsed({ startIso, endIso, live }: { startIso: string | null; endIso: 
 }
 
 /** POST /runs/{id}/cancel (operator only). A pending approval request expires with it. */
-function StopRunButton({ runId, signedIn }: { runId: string; signedIn: boolean }) {
+export function StopRunButton({ runId, signedIn }: { runId: string; signedIn: boolean }) {
   const [state, setState] = useState<"idle" | "sending" | "sent">("idle");
   const [error, setError] = useState<string | null>(null);
   async function cancel() {
@@ -1610,46 +1610,7 @@ function RunPanel({
   const decideTarget = targetFacts(decideOn);
 
   // --- approval ----------------------------------------------------------------------------
-  const phase = approvalPhase(events);
-  const waitingManual = live && phase.kind === "waiting" && !phase.auto;
-  const pending = usePolling(() => api.pendingApprovals(), waitingManual ? 1500 : null, [runId]);
-  const request = waitingManual
-    ? (pending.data?.find((r) => r.run_id === runId && (!phase.proposalId || r.proposal_id === phase.proposalId)) ?? null)
-    : null;
-  const [shown, setShown] = useState<ApprovalRequest | null>(null);
-  const [openId, setOpenId] = useState<string | null>(null);
-  const [decidedHere, setDecidedHere] = useState<Record<string, Approval>>({});
-  const autoOpened = useRef(new Set<string>());
-  useEffect(() => {
-    if (!request) return;
-    setShown(request);
-    // A new request opens the dialog once; after "Decide later" it reopens only on request.
-    if (!autoOpened.current.has(request.proposal_id)) {
-      autoOpened.current.add(request.proposal_id);
-      setOpenId(request.proposal_id);
-    }
-  }, [request?.proposal_id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const shownId = shown?.proposal_id ?? null;
-  const evidence = usePolling(shownId ? () => api.evidenceView(runId) : null, null, [runId, shownId]);
-  const proposalView = evidence.data?.proposals.find((p) => p.proposal_id === shownId) ?? null;
-  const policy = shown
-    ? ([...(evidence.data?.policy_verdicts ?? [])].reverse().find((v) => v.tool === shown.proposal.action && v.verdict === "APPROVAL_REQUIRED") ?? null)
-    : null;
-  const check = shown ? ([...(evidence.data?.proposal_checks ?? [])].reverse().find((c) => c.proposal_id === shownId) ?? null) : null;
-
-  let closedReason: string | null = null;
-  if (shown && !decidedHere[shown.proposal_id]) {
-    if (phase.kind === "decided" && (!phase.proposalId || phase.proposalId === shown.proposal_id)) {
-      closedReason =
-        phase.decision === "expired"
-          ? "This request expired before anyone decided, so the fix will not run."
-          : `The server recorded “${phase.decision}”${phase.actor ? ` by ${phase.actor}` : ""} for this request, outside this dialog.`;
-    } else if (finished) {
-      closedReason = `The run ended (${stateLabel(current)}) before a decision was made here.`;
-    }
-  }
-  const reviewable = waitingManual && !!shown && shown.proposal_id === phase.proposalId && openId !== shown.proposal_id;
+  const { phase, waitingManual, shown, setOpenId, reviewable, modal } = useRunApproval({ runId, events, live, finished, current, provider, decideOn });
 
   const summaryEvent = lastOf(events, "run.summary")?.payload as RunSummaryPayload | undefined;
   const transport = transportView(stream.transport, stream.resumes, stream.lastSeq, finished, events.length, !!stream.error);
@@ -1719,7 +1680,7 @@ function RunPanel({
         </Card>
         <div className="run-side">
           {waitingManual ? (
-            shown && shown.proposal_id === phase.proposalId ? (
+            shown && phase.kind === "waiting" && shown.proposal_id === phase.proposalId ? (
               <Card tone={decideTarget.state === "live" ? "bad" : "warn"} title="Your approval is needed" subtitle="The run is paused until a person decides">
                 {decideTarget.state === "live" ? (
                   <div className="lab-approval-live">
@@ -1787,30 +1748,115 @@ function RunPanel({
         </div>
       </div>
 
-      {shown ? (
-        <ApprovalModal
-          key={shown.proposal_id}
-          request={shown}
-          open={openId === shown.proposal_id}
-          onDefer={() => setOpenId(null)}
-          onDecided={(approval) => {
-            setDecidedHere((d) => ({ ...d, [shown.proposal_id]: approval }));
-            pending.refresh();
-          }}
-          trustedRisk={trustedRiskOf(events, shown.proposal_id)}
-          policy={policy}
-          check={check}
-          author={rationaleAuthor(proposalView?.author, provider)}
-          evidence={{
-            registry: evidence.data?.registry ?? null,
-            note: evidence.error ? `Could not load the run's evidence: ${evidence.error.message}` : undefined,
-          }}
-          closedReason={closedReason}
-          environment={decideOn}
-        />
-      ) : null}
+      {modal ? <ApprovalModal key={modal.request.proposal_id} {...modal} /> : null}
     </div>
   );
+}
+
+/** What the approval dialog of a run needs: the request it shows and the evidence behind it. */
+export type RunApprovalModal = ComponentProps<typeof ApprovalModal>;
+
+export interface RunApproval {
+  phase: ApprovalPhase;
+  /** The run (followed live) waits for a person: not the simulation auto-approver. */
+  waitingManual: boolean;
+  /** The request in the dialog; kept after it closes, so the dialog can say why. */
+  shown: ApprovalRequest | null;
+  setOpenId: (proposalId: string | null) => void;
+  /** The dialog was put aside ("Decide later") and can be reopened. */
+  reviewable: boolean;
+  /** The dialog's props, once there is a request to show. */
+  modal: RunApprovalModal | null;
+}
+
+/**
+ * The approval of a run followed live, as the Incident Lab and the Guided Demo both decide it:
+ * while the trace says a person is asked, GET /approvals/pending is polled for the run's request;
+ * the dialog opens once by itself (after "Decide later" only on request), with the policy verdict,
+ * the evidence gate's check and the cited evidence (GET /runs/{id}/evidence). A request decided
+ * elsewhere, expired or outlived by its run says so instead of offering a decision.
+ */
+export function useRunApproval({
+  runId,
+  events,
+  live,
+  finished,
+  current,
+  provider,
+  decideOn,
+}: {
+  runId: string;
+  events: TraceEvent[];
+  live: boolean;
+  finished: boolean;
+  current: string | null;
+  provider: Partial<ProviderInfo> | null;
+  /** The target a decision acts on (approvalTarget). */
+  decideOn: TargetFields | null;
+}): RunApproval {
+  const phase = approvalPhase(events);
+  const waitingManual = live && phase.kind === "waiting" && !phase.auto;
+  const pending = usePolling(() => api.pendingApprovals(), waitingManual ? 1500 : null, [runId]);
+  const request = waitingManual
+    ? (pending.data?.find((r) => r.run_id === runId && (!phase.proposalId || r.proposal_id === phase.proposalId)) ?? null)
+    : null;
+  const [shown, setShown] = useState<ApprovalRequest | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [decidedHere, setDecidedHere] = useState<Record<string, Approval>>({});
+  const autoOpened = useRef(new Set<string>());
+  useEffect(() => {
+    if (!request) return;
+    setShown(request);
+    // A new request opens the dialog once; after "Decide later" it reopens only on request.
+    if (!autoOpened.current.has(request.proposal_id)) {
+      autoOpened.current.add(request.proposal_id);
+      setOpenId(request.proposal_id);
+    }
+  }, [request?.proposal_id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const shownId = shown?.proposal_id ?? null;
+  const evidence = usePolling(shownId ? () => api.evidenceView(runId) : null, null, [runId, shownId]);
+  const proposalView = evidence.data?.proposals.find((p) => p.proposal_id === shownId) ?? null;
+  const policy = shown
+    ? ([...(evidence.data?.policy_verdicts ?? [])].reverse().find((v) => v.tool === shown.proposal.action && v.verdict === "APPROVAL_REQUIRED") ?? null)
+    : null;
+  const check = shown ? ([...(evidence.data?.proposal_checks ?? [])].reverse().find((c) => c.proposal_id === shownId) ?? null) : null;
+
+  let closedReason: string | null = null;
+  if (shown && !decidedHere[shown.proposal_id]) {
+    if (phase.kind === "decided" && (!phase.proposalId || phase.proposalId === shown.proposal_id)) {
+      closedReason =
+        phase.decision === "expired"
+          ? "This request expired before anyone decided, so the fix will not run."
+          : `The server recorded “${phase.decision}”${phase.actor ? ` by ${phase.actor}` : ""} for this request, outside this dialog.`;
+    } else if (finished) {
+      closedReason = `The run ended (${stateLabel(current)}) before a decision was made here.`;
+    }
+  }
+  const reviewable = waitingManual && !!shown && shown.proposal_id === phase.proposalId && openId !== shown.proposal_id;
+
+  const modal: RunApprovalModal | null = shown
+    ? {
+        request: shown,
+        open: openId === shown.proposal_id,
+        onDefer: () => setOpenId(null),
+        onDecided: (approval) => {
+          setDecidedHere((d) => ({ ...d, [shown.proposal_id]: approval }));
+          pending.refresh();
+        },
+        trustedRisk: trustedRiskOf(events, shown.proposal_id),
+        policy,
+        check,
+        author: rationaleAuthor(proposalView?.author, provider),
+        evidence: {
+          registry: evidence.data?.registry ?? null,
+          note: evidence.error ? `Could not load the run's evidence: ${evidence.error.message}` : undefined,
+        },
+        closedReason,
+        environment: decideOn,
+      }
+    : null;
+  return { phase, waitingManual, shown, setOpenId, reviewable, modal };
 }
 
 // ======================================================================================
