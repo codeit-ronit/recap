@@ -49,8 +49,10 @@ terminal line where the API printed it.
 
 ## Start the replay
 
-**In the dashboard:** on **Overview** click **Start the demo**, or open the **Incident Lab**.
-Its "Replay a recorded incident" panel lists the committed recordings with their integrity
+**In the dashboard:** on **Overview** click **Try the guided demo** for the narrated version:
+one Start button, then ten plain-language steps read from the run's trace, with the same
+approval dialog (since M6; **Interview mode** adds a presenter note at each step). For the
+engineer's view, open the **Incident Lab**. Its "Replay a recorded incident" panel lists the committed recordings with their integrity
 check (intact, altered or missing). Pick the two-agent recording, keep the pace on
 **Watchable** (each recorded answer waits 5% of its original time, at most 15 s, so the run
 takes about half a minute; **Instant** answers at once) and click **Replay**. The button
