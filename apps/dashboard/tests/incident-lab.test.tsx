@@ -11,19 +11,31 @@
  * namespace recap-demo) and the SREGym run (geo, namespace hotel-reservation). A server render
  * cannot type, so the typed-name gate is checked through approveGate and namesTarget (the pure
  * rules the components use) and the first render; the request a decision sends goes through
- * sendDecision with a stubbed fetch.
+ * sendDecision with a stubbed fetch. On Safety & Approvals the card's target comes from the
+ * request's own run and its own GET /system (askedTarget, serverEnvironmentOf), checked the same way.
  */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ApiError } from "../src/api";
 import { setToken } from "../src/auth";
-import { ApprovalCard, ApprovalModal, ConfirmTargetField, DecisionResult, approveNeedsName, sendDecision } from "../src/components/ApprovalCard";
-import type { CitedEvidence } from "../src/components/ApprovalCard";
+import {
+  ApprovalCard,
+  ApprovalModal,
+  ConfirmTargetField,
+  DecisionResult,
+  UnknownTargetNotice,
+  approveNeedsName,
+  askedTarget,
+  runTargetOf,
+  sendDecision,
+} from "../src/components/ApprovalCard";
+import type { CitedEvidence, RunTarget } from "../src/components/ApprovalCard";
 import { EventFeed } from "../src/components/EventFeed";
 import { StateStepper } from "../src/components/StateStepper";
 import type * as dto from "../src/dto";
-import { parseHash } from "../src/hooks";
+import { parseHash, serverEnvironmentOf } from "../src/hooks";
+import type { ServerEnvironment } from "../src/hooks";
 import {
   BackendChoice,
   InspectLinks,
@@ -37,7 +49,7 @@ import {
   TargetToken,
 } from "../src/pages/LiveRun";
 import type { ApprovalRequest, EnvironmentInfo, RunRecord, SystemSummary, TraceEvent } from "../src/types";
-import { recoverySignals, runBanner, targetFacts } from "../src/view/lab";
+import { approveGate, recoverySignals, runBanner, targetFacts } from "../src/view/lab";
 import { count, polled, render, tags, textOf, withAttr } from "./support/render";
 
 const noop = () => undefined;
@@ -948,6 +960,124 @@ test("the inline card asks GET /system for the target when the page names none, 
   assert.equal(buttonNamed(html, /^Reject$/)?.disabled, false);
   assert.equal(buttonNamed(html, /Test binding/), null, "the binding test is offered on the simulated shop only");
   assert.doesNotMatch(textOf(html), /LIVE TARGET/);
+});
+
+// ===============================================================================================
+// Safety & Approvals: the request's own run and this card's own GET /system, both answered first
+// ===============================================================================================
+
+/** The request's run as the page read it (GET /runs/{run_id}), and this card's GET /system, as askedTarget takes them. */
+const runSaid = (environment: EnvironmentInfo | null, error: string | null = null): RunTarget => ({ environment, loading: false, error });
+const RUN_ASKED: RunTarget = { environment: null, loading: true, error: null };
+const serverSaid = (environment: EnvironmentInfo | null, error: ApiError | null = null): ServerEnvironment => ({ environment, error, loading: false });
+const SERVER_ASKED: ServerEnvironment = { environment: null, error: null, loading: true };
+const SERVER_DOWN = new ApiError("Failed to fetch", 0, "/system", null, true);
+const KIND_RUN = "run-047aac6eb0";
+
+test("only this card's own GET /system counts: nothing before its answer, and nothing after a failed ask", () => {
+  // Asked, not answered: no environment, whatever another card or an earlier page heard.
+  assert.deepEqual(serverEnvironmentOf({ data: undefined, error: null, loading: true }), SERVER_ASKED);
+  assert.deepEqual(serverEnvironmentOf({ data: ENVIRONMENT, error: null, loading: false }), serverSaid(ENVIRONMENT));
+  assert.deepEqual(serverEnvironmentOf({ data: null, error: null, loading: false }), serverSaid(null), "a server that reports none");
+  // A later ask failed (the API restarting, perhaps on a live target): unknown, never the earlier "simulated".
+  assert.deepEqual(serverEnvironmentOf({ data: ENVIRONMENT, error: SERVER_DOWN, loading: false }), serverSaid(null, SERVER_DOWN));
+  const state = askedTarget("run-26c5fb3c51", runSaid(ENVIRONMENT), serverEnvironmentOf({ data: ENVIRONMENT, error: SERVER_DOWN, loading: false }));
+  assert.deepEqual([state.target.state, state.checking, approveNeedsName(state)], ["unknown", false, true]);
+  // The page named the target: nothing is asked.
+  assert.deepEqual(serverEnvironmentOf(null), serverSaid(null));
+});
+
+test("a live run's request on a server configured for the simulator is live: the name is asked, as the server asks it", () => {
+  // Two servers on one data folder: the Kind run's request is listed by the simulated one too.
+  const state = askedTarget(KIND_RUN, runSaid(KIND), serverSaid(ENVIRONMENT));
+  assert.deepEqual([state.target.state, state.target.name, state.target.namespace, state.checking], ["live", "Kind cluster recap-m5", "recap-demo", false]);
+  assert.equal(approveNeedsName(state), true);
+  // Live wins at once, from either side, answered or not on the other.
+  assert.equal(askedTarget(KIND_RUN, runSaid(KIND), SERVER_ASKED).target.state, "live");
+  assert.equal(askedTarget(KIND_RUN, runSaid(KIND), serverSaid(null, SERVER_DOWN)).target.state, "live");
+  assert.equal(askedTarget(KIND_RUN, RUN_ASKED, serverSaid(SREGYM)).target.kind, "sregym");
+  assert.equal(askedTarget(KIND_RUN, runSaid(ENVIRONMENT), serverSaid(KIND)).target.state, "live");
+});
+
+test("one click only when the request's run and this server both answered simulated; until then Approve waits", () => {
+  const both = askedTarget(KIND_RUN, runSaid(ENVIRONMENT), serverSaid(ENVIRONMENT));
+  assert.deepEqual([both.target.state, both.checking, both.error], ["simulated", false, null]);
+  assert.equal(approveNeedsName(both), false);
+  // Either still asked: Approve waits and says for what; no target is shown yet, not even a known "simulated".
+  const waiting: [RunTarget, ServerEnvironment, string][] = [
+    [RUN_ASKED, SERVER_ASKED, `GET /system and GET /runs/${KIND_RUN}`],
+    [runSaid(ENVIRONMENT), SERVER_ASKED, "GET /system"],
+    [RUN_ASKED, serverSaid(ENVIRONMENT), `GET /runs/${KIND_RUN}`],
+  ];
+  for (const [run, server, asking] of waiting) {
+    const state = askedTarget(KIND_RUN, run, server);
+    assert.deepEqual([state.target.state, state.checking, state.asking], ["unknown", true, asking]);
+    assert.equal(approveNeedsName(state), false);
+    assert.equal(approveGate({ canDecide: true, checking: state.checking, needsName: false, typed: "", service: "backend" }).blocked, true);
+  }
+});
+
+test("a source that failed or reported no target leaves it unknown, which asks for the name, and says why", () => {
+  const cases: [RunTarget | undefined, ServerEnvironment, string][] = [
+    [runSaid(ENVIRONMENT), serverSaid(null, SERVER_DOWN), "GET /system failed (Failed to fetch)"],
+    [runSaid(ENVIRONMENT), serverSaid(null), "GET /system reported no environment"],
+    [runSaid(null, `unknown run '${KIND_RUN}'`), serverSaid(ENVIRONMENT), `GET /runs/${KIND_RUN} failed (unknown run '${KIND_RUN}')`],
+    [runSaid(null), serverSaid(ENVIRONMENT), `run ${KIND_RUN} records no target`],
+    [undefined, serverSaid(ENVIRONMENT), "the request's run was not read"],
+    [runSaid(null, "boom"), serverSaid(null, SERVER_DOWN), `GET /system failed (Failed to fetch); GET /runs/${KIND_RUN} failed (boom)`],
+  ];
+  for (const [run, server, why] of cases) {
+    const state = askedTarget(KIND_RUN, run, server);
+    assert.deepEqual([state.target.state, state.checking, state.error], ["unknown", false, why]);
+    assert.equal(approveNeedsName(state), true, why);
+  }
+  // The card says it as a sentence: why, then what approving takes.
+  const notice = textOf(render(<UnknownTargetNotice error={`run ${KIND_RUN} records no target`} />));
+  assert.equal(
+    notice,
+    `Target not reported. Run ${KIND_RUN} records no target, so approving takes the target service's name, as a live target requires. Reject needs no name.`,
+  );
+});
+
+test("the request's run is read from GET /runs/{run_id}: its record's target, else its summary's; the live one if they differ", () => {
+  const detail = (over: Partial<dto.RunDetail>): dto.RunDetail =>
+    ({ schema_version: "recap-api-v1", status: "external", summary: null, record: null, evidence: [], error: null, ...over }) as dto.RunDetail;
+  const kindRecord = { environment: KIND } as unknown as RunRecord;
+  const kindSummary = { environment_kind: "kind", environment_simulated: false } as dto.RunSummary;
+  assert.deepEqual(runTargetOf(polled(detail({ record: kindRecord }))), { environment: KIND, loading: false, error: null });
+  assert.deepEqual(runTargetOf(polled(detail({ summary: kindSummary }))).environment, { is_simulated: false, kind: "kind" });
+  assert.equal(runTargetOf(polled(detail({ record: { environment: ENVIRONMENT } as unknown as RunRecord, summary: kindSummary }))).environment?.is_simulated, false);
+  assert.equal(runTargetOf(polled(detail({}))).environment, null, "neither names a target");
+  assert.deepEqual(runTargetOf(polled<dto.RunDetail>(undefined)), RUN_ASKED);
+  const missing = new ApiError(`unknown run '${KIND_RUN}'`, 404, `/runs/${KIND_RUN}`, null, false);
+  assert.deepEqual(runTargetOf(polled<dto.RunDetail>(undefined, missing)), runSaid(null, `unknown run '${KIND_RUN}'`));
+});
+
+test("on Safety & Approvals a live run's request shows its cluster and asks for the name, before GET /system answers", () => {
+  // The page read the run (Kind); this card's own GET /system is still asked (a server render runs no effect).
+  const html = signedIn(() => render(<ApprovalCard request={liveRequest()} run={runSaid(KIND)} />));
+  const text = textOf(html);
+  assert.equal(withAttr(html, "aria-label", "Live target").length, 1);
+  assert.match(text, /LIVE TARGET · kind Kind cluster recap-m5 namespace recap-demo Not a simulation/);
+  assert.match(text, /Type backend to approve/);
+  const approve = tags(html, "button").find((b) => b.attrs.class === "btn btn-approve");
+  assert.ok(approve && "disabled" in approve.attrs);
+  assert.equal(approve.attrs.title, "Type backend above to enable Approve");
+  assert.equal(buttonNamed(html, /Test binding/), null);
+});
+
+test("a simulated run's request still waits for this card's own GET /system: no one-click Approve, no binding test", () => {
+  const html = signedIn(() => render(<ApprovalCard request={request()} run={runSaid(ENVIRONMENT)} />));
+  const approve = tags(html, "button").find((b) => b.attrs.class === "btn btn-approve");
+  assert.ok(approve && "disabled" in approve.attrs);
+  assert.equal(approve.attrs.title, "Checking which environment this approval acts on (GET /system)…");
+  assert.equal(buttonNamed(html, /Test binding/), null);
+  assert.equal(tags(html, "input").length, 0, "nothing to type yet");
+  assert.doesNotMatch(textOf(html), /LIVE TARGET|Target not reported/);
+  // Both still asked: Approve says it waits for both.
+  const both = signedIn(() => render(<ApprovalCard request={request()} run={RUN_ASKED} />));
+  const waiting = tags(both, "button").find((b) => b.attrs.class === "btn btn-approve");
+  assert.equal(waiting?.attrs.title, "Checking which environment this approval acts on (GET /system and GET /runs/run-26c5fb3c51)…");
 });
 
 // ===============================================================================================

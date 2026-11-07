@@ -589,7 +589,7 @@ const LEARN: readonly { path: string; title: string; about: string }[] = [
 function chainScope(system: dto.SystemView): string {
   const env = system.environment;
   if (env.is_simulated) {
-    return `This server's target is simulated (${env.name}): a proposal, the verifier's checks, a person's approval and a signed capability apply there too, then the simulator's own write boundary changes only its own state.`;
+    return `This server's target is simulated (${env.name}): a proposal, the verifier's checks, a person's approval (or, in a simulation only, the auto-approver when a run asks for it) and a signed capability apply there too, then the simulator's own write boundary changes only its own state.`;
   }
   if (targetGuide(system.environment_kind)) {
     return `This server's target is a real cluster (${env.name}, namespace ${env.namespace}): every approved write on it passes each step below.`;

@@ -2,9 +2,11 @@
 
 > **Run on a real cluster in M5.** It ran first on the owner's Mac, in a dedicated colima
 > profile (W2, W3), then on the owner's AWS VM ([infra/aws/ec2.sh](../aws/ec2.sh)), where the
-> model runs too (W4 onward). All six live acceptance tests passed
-> (`tests/e2e/test_kind_live.py`, `RECAP_LIVE_KIND=1`), and the owner approved two real-model
-> recoveries ([evals/live/](../../evals/live/README.md)). What happened is in
+> model runs too (W4 onward). All six live acceptance tests passed in W3, on the Mac
+> (`tests/e2e/test_kind_live.py`, `RECAP_LIVE_KIND=1`; not run since), and the owner approved
+> three real-model recoveries on the VM, one of them in Mission Control
+> ([evals/live/](../../evals/live/README.md)). The `dependency-crash` fault has never run on
+> the cluster (below). What happened is in
 > [docs/m5-progress.md](../../docs/m5-progress.md), measured figures included (the node
 > container used 742 MiB). Timings and memory figures below were written before the first
 > run. Offline checks: the demo program's behaviour in `tests/unit/test_kind_demo_app.py`,
@@ -213,6 +215,9 @@ Checked (W2 and W3, [docs/m5-progress.md](../../docs/m5-progress.md)):
   that command makes.
 
 Still to check:
-- How long `dependency-crash` takes to show on the cluster: the kubelet's crash-loop back-off
-  and the 60 s progress deadline.
+- `dependency-crash` on the cluster at all: it is tested offline only and has never run on
+  the cluster, so how long it takes to show (the kubelet's crash-loop back-off against the
+  60 s progress deadline) is unknown.
+- The restart path and the live acceptance tests again: they last ran in W3, and later
+  commits changed the adapter (the real-model runs since used only reads and rollbacks).
 - Every figure marked as an estimate above.

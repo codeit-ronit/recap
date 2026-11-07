@@ -22,7 +22,7 @@ jobs:
         run: |
           ruff check .
           ruff format --check .
-      - name: Type check (mypy, scoped to the core interfaces and the M4 modules, see tool.mypy in pyproject.toml)
+      - name: Type check (mypy, scoped to the core interfaces, the M4 modules and the M5 Kubernetes adapter, see tool.mypy in pyproject.toml)
         run: mypy
       - name: Secret scan (tracked files and every blob in the git history; prints no values)
         run: python scripts/secret_scan.py

@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { api } from "../api";
 import { Chip, HypothesisChip, Mono } from "../components/Badge";
 import { Card, KeyValues, Meter, Notice, PageHeader } from "../components/Card";
-import { DataSourceBadge, summarySource } from "../components/DataSourceBadge";
+import { DataSourceBadge, describeTarget, summarySource } from "../components/DataSourceBadge";
 import { Icon } from "../components/Icon";
 import { JsonView } from "../components/JsonView";
 import { Pager, paginate } from "../components/Pager";
@@ -31,10 +31,14 @@ import {
   episodeOutcome,
   episodePartitionBadge,
   episodeSummary,
+  episodeTarget,
+  episodeTargetNote,
+  episodesByTarget,
   groupEpisodes,
   hitOrder,
   isPlanted,
   legacyDecider,
+  memoryIntro,
   partitionBadge,
   plantedNote,
   runHits,
@@ -46,12 +50,15 @@ import "../styles/memory-m3.css";
 
 /**
  * Experience Memory: what RECAP remembers (GET /memory, grouped by partition), the rules that
- * keep kinds of runs apart (GET /system features.memory_access), and for one run what it read,
- * what it found and RECAP's reuse verdict on each match (GET /runs/{id}/retrieval).
+ * keep kinds of runs and kinds of target apart (GET /system features.memory_access), and for one
+ * run what it read, what it found and RECAP's reuse verdict on each match (GET
+ * /runs/{id}/retrieval).
  *
- * An episode is the record of one past simulated run, written by RECAP's own extraction: it is
- * shown as that run's result, never as a general claim about a model. Alert text and tool output
- * inside an episode are untrusted data.
+ * An episode is the record of one past run, written by RECAP's own extraction: it is shown as
+ * that run's result, never as a general claim about a model. It names the target its run acted
+ * on (the simulated shop or a live cluster), and that comes from the episode's own provenance,
+ * never from this server's target: GET /memory lists every episode in the data folder. Alert
+ * text and tool output inside an episode are untrusted data.
  */
 
 export const NOT_RECORDED = "Not recorded";
@@ -158,6 +165,18 @@ export function EpisodeSource({ episode }: { episode: ExperienceEpisode }) {
   );
 }
 
+/**
+ * The target an episode's run acted on, looking like a run's target in its data-source badge,
+ * from the episode's own provenance (episodeTarget): never this server's target.
+ */
+export function EpisodeTargetToken({ episode }: { episode: ExperienceEpisode }) {
+  const target = episodeTarget(episode);
+  const note = episodeTargetNote(target);
+  if (!target.recorded) return <StatusToken tone="neutral" icon="minus" size="sm" label="TARGET NOT RECORDED" title={note} />;
+  const look = describeTarget({ is_simulated: target.simulated, kind: target.kind });
+  return <StatusToken tone={look.tone} icon={look.icon} size="sm" label={look.label} title={note} />;
+}
+
 /** The run that wrote an episode: a link to its Trace Explorer when this server has it. */
 export function SourceRunLink({ episode, known }: { episode: ExperienceEpisode; known: KnownRuns | null }) {
   const source = sourceRun(episode, known);
@@ -198,6 +217,7 @@ function OutcomeToken({ outcome, verified, planted }: { outcome: string | null |
 
 const PROTECTIONS: readonly string[] = [
   "Scripted and real-model experience never mix: each kind of run reads and writes its own partitions.",
+  "Each kind of target keeps its own experience: a run finds only episodes from runs on its own kind of target (the simulated shop, the Kind demo cluster or SREGym's cluster), whatever partition they are in and however alike they read.",
   "Evaluation runs read the train partition only, and scored test runs write nothing, so a test never sees its own answer.",
   "A replay reads memory as it was when its recording began and writes nothing: it is not new experience.",
   "Similar is not safe: a remembered fix is reused only when the new run's own evidence passes every reuse condition.",
@@ -605,6 +625,11 @@ export function EpisodeDetail({ episode, known }: { episode: ExperienceEpisode; 
         <div className="mem-side">
           <h4 className="mini-title">Who made the decisions</h4>
           <DecisionProvenance episode={episode} />
+          <h4 className="mini-title">Where its run acted</h4>
+          <span className="cell-stack">
+            <EpisodeTargetToken episode={episode} />
+            <span className="muted small">{episodeTargetNote(episodeTarget(episode))}</span>
+          </span>
           <h4 className="mini-title">Source run</h4>
           <SourceRunLink episode={episode} known={known} />
           <details className="mem-raw">
@@ -642,11 +667,12 @@ function EpisodeTable({ episodes, known }: { episodes: ExperienceEpisode[]; know
         },
         {
           key: "incident",
-          header: "Incident",
+          header: "Incident and target",
           render: (e) => (
             <span className="cell-stack">
               <Mono>{e.scenario_id}</Mono>
               <span className="muted small">alert on {e.service || "an unnamed service"}</span>
+              <EpisodeTargetToken episode={e} />
             </span>
           ),
         },
@@ -725,8 +751,15 @@ export function EpisodeGroups({
 }) {
   const groups = groupEpisodes(episodes, partitions);
   const plants = episodes.filter(isPlanted).length;
+  const targets = episodesByTarget(episodes);
   return (
     <div className="mem-groups">
+      {targets.length ? (
+        <p className="mem-targets">
+          Filed by target: {targets.map((t) => `${fmtInt(t.count)} under ${t.words}`).join(", ")}. A run finds only the episodes filed
+          under its own kind of target.
+        </p>
+      ) : null}
       {plants ? (
         <div className="mem-plant">
           <Notice tone="bad" icon="alert" title={`${plants} red-team ${plants === 1 ? "plant" : "plants"} in memory`}>
@@ -754,7 +787,7 @@ function EpisodesCard({
   return (
     <Card
       title={`Episodes in memory${episodes.data ? ` (${fmtInt(episodes.data.length)})` : ""}`}
-      subtitle="GET /memory, grouped by partition. Each episode is RECAP's own record of what one simulated run did; no model wrote it. Expand a row for its evidence and reuse conditions."
+      subtitle="GET /memory, grouped by partition. Each episode is RECAP's own record of what one past run did, and names the target that run acted on; no model wrote it. Expand a row for its evidence and reuse conditions."
     >
       <PolledView
         polled={episodes}
@@ -1175,17 +1208,14 @@ function RunMemory({
 
 // --- the page ------------------------------------------------------------------------------------------
 
-export function MemoryPage({ route }: PageProps) {
+export function MemoryPage({ route, system: shell }: PageProps) {
   const selection = useRunSelection(route);
   const system = usePolling(() => api.systemView(), 30000, []);
   const episodes = usePolling(() => api.memory(), 10000, []);
   const known = useMemo(() => knownRuns(selection.runs.data), [selection.runs.data]);
   return (
     <>
-      <PageHeader
-        title="Experience Memory"
-        description="What RECAP remembers from finished runs on the simulated shop, and how a run used it. An episode is the record of one past run, never an instruction: its fix is reused only when the new run's own evidence passes every reuse condition."
-      />
+      <PageHeader title="Experience Memory" description={memoryIntro(shell.data?.environment ?? system.data?.environment)} />
       <MemoryGuards system={system} episodes={episodes.data} />
       <EpisodesCard episodes={episodes} partitions={system.data?.features?.memory_partitions} known={known} />
       <div className="section-head">

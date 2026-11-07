@@ -1292,12 +1292,16 @@ test("how a real Kubernetes action is authorized: each step in order, with its c
   for (const path of ["recap/environments/kubernetes/engine.py", "recap/safety/approvals.py", "recap/safety/capabilities.py", "infra/kind/manifests/", "infra/sregym/recap-rbac.yaml"]) {
     assert.ok(links.includes(github(path)), `links ${path}`);
   }
-  // On the simulator the card says which steps apply there; without /system it claims nothing.
+  // On the simulator the card says which steps apply there, the simulation's auto-approver included
+  // (a run there may ask for it); without /system it claims nothing.
   const simulated = textOf(between(architecture("alert"), "How a real Kubernetes action is authorized</h2>", "Live wiring</h2>"));
   assert.match(
     simulated,
-    /This server's target is simulated \(RECAP simulated shop\): a proposal, the verifier's checks, a person's approval and a signed capability apply there too, then the simulator's own write boundary changes only its own state\./,
+    /This server's target is simulated \(RECAP simulated shop\): a proposal, the verifier's checks, a person's approval \(or, in a simulation only, the auto-approver when a run asks for it\) and a signed capability apply there too, then the simulator's own write boundary changes only its own state\./,
   );
+  assert.doesNotMatch(simulated, /every write gets a person's approval|a person's approval and a signed capability/);
+  // A real cluster never has the auto-approver: its sentence does not offer it.
+  assert.doesNotMatch(text, /auto-approver/);
   const unknown = textOf(between(architecture("alert", polled(undefined)), "How a real Kubernetes action is authorized</h2>", "Live wiring</h2>"));
   assert.doesNotMatch(unknown, /This server's target/);
   assert.match(unknown, /One exact proposal/);

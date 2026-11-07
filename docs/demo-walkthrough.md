@@ -59,7 +59,7 @@ sends the request below with your operator token, and the run plays on the same 
 **The same request by hand** (useful to see exactly what the button does):
 
 ```bash
-TOKEN=$(cat data/operator-token)
+TOKEN=$(cat ~/recap-demo/operator-token)          # the server's data folder holds its token
 curl -s http://127.0.0.1:8000/replays            # the committed recordings, and whether each can run
 
 curl -s -X POST http://127.0.0.1:8000/incidents/run \
@@ -167,8 +167,35 @@ never makes up a number. For this run:
    run, not live inference".
 4. Stop with the stop button in the menu bar (or **Control-Command-Esc**). Trim it in
    QuickTime Player (**Edit > Trim**).
-5. Before sharing, watch it once: no token, no `data/operator-token`, no terminal with a
+5. Before sharing, watch it once: no token, no `operator-token` file, no terminal with a
    home folder path, no other windows. Keep the video out of the repository.
+
+## A live run on a real cluster (M5)
+
+The replay above runs against the simulated shop and needs nothing but this repository.
+Since M5 the same dashboard can also run an incident on a real Kubernetes cluster: RECAP's
+Kind demo cluster on the owner's AWS VM, with `qwen3:8b` served there. That is not a
+quickstart: it needs the owner's VM, the cluster, RECAP's identities on it and the SSH
+tunnel, and a run takes 15 to 30 minutes. The steps are the reproduction rows of the M5
+report ([m5-report.md, section 11](m5-report.md#11-reproduction)): "The VM", "The VM's model
+server" and "A Kind run from Mission Control". What differs on screen:
+
+- the strip reads LIVE ENVIRONMENT · kind, and each run is labelled a live target, not a
+  simulation;
+- on **Overview**, **Check now** asks the server to reach the cluster as a run would, and
+  changes nothing;
+- in the **Incident Lab** a run is a new sample from the model, never a replay (a replay is
+  refused against a live target), and approval is manual only;
+- the approval dialog shows a red LIVE block naming the cluster and the namespace, and
+  **Approve** stays disabled until you type the target service's exact name (`backend` for
+  `kind-bad-release`); a rejection needs no name;
+- the oracle reads the cluster with its own identity, so RESOLVED means the cluster itself
+  recovered.
+
+M5's acceptance run, `run-34a3580d2f`, went this way: started and approved in the dashboard,
+RESOLVED, the recovery verified by the oracle
+([its export](../evals/live/2026-11-07-qwen3-8b-kind-dashboard-approved-prompts-v4.7/README.md)).
+It is one run, not a success rate.
 
 ## Limits of this demo
 
@@ -177,4 +204,5 @@ never makes up a number. For this run:
   cross-service incident (see [docs/status.md](status.md)).
 - The recording replays only with the prompts it was recorded with (`prompts-v4.7`). After a
   prompt change the replay stops with `ReplayMismatch` and the run must be recorded again.
-- Nothing here touches Kubernetes or any real system. A live cluster is milestone M5.
+- The replay touches no Kubernetes cluster or other real system: it always runs against the
+  simulated shop. A run on a real cluster is the section above, on the owner's setup.

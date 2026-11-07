@@ -863,7 +863,7 @@ export const ARCH_NODES: readonly ArchNode[] = [
     components: ["approvals"],
     parts: [],
     what: [
-      "The provider drafts one fix for the best supported claim. The safety policy judges it from trusted configuration (the proposer's own risk label is ignored): destructive actions are always denied, and a reversible fix needs a person's approval.",
+      "The provider drafts one fix for the best supported claim. The safety policy judges it from trusted configuration (the proposer's own risk label is ignored): destructive actions are always denied, and a reversible fix needs a person's approval (in a simulation, also the auto-approver when a run asks for it; on a real target, only a person who types the service's name).",
       "An approval is bound to the proposal's digest (action, target and parameters), expires and is used once. A rejection wins until the approval is used. Through the API and this dashboard, deciding needs the operator token.",
     ],
     onTarget: {

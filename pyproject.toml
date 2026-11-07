@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "recap"
 version = "0.6.0"
-description = "RECAP — Experience-Learning Autonomous Reliability Agent (Prototype). V1 runs on a simulated local environment."
+description = "RECAP — Experience-Learning Autonomous Reliability Agent (Prototype). Simulated by default; real Kubernetes targets since M5."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -40,9 +40,10 @@ markers = [
 ]
 
 [tool.mypy]
-# Type checking is scoped (M4): the core interfaces (recap/core, the provider protocol, the
-# recordings) and the modules M4 added (the typed API, the evaluation records and their
-# categorizer, the demo and type-generation scripts). Code outside this list is not retyped.
+# Type checking is scoped (M4, M5): the core interfaces (recap/core, the provider protocol, the
+# recordings), the modules M4 added (the typed API, the evaluation records and their
+# categorizer, the demo and type-generation scripts) and M5's Kubernetes adapter and API load
+# test. Code outside this list is not retyped.
 # CI runs `mypy` with exactly this list.
 python_version = "3.11"
 plugins = ["pydantic.mypy"]

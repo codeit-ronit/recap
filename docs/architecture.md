@@ -16,7 +16,7 @@ infrastructure with a real one.
 > dashboard, a replay of committed recordings by manifest id, and evaluation records
 > ([section 13](#13-the-read-side-typed-views-replays-and-evaluation-records-m4)); M5 real
 > Kubernetes targets behind the same interface: RECAP's own Kind demo cluster and SREGym's
-> cluster, both on the owner's VM, with a person approving every write
+> cluster, both on the owner's VM, where the owner approved every real-model fix that ran
 > ([section 14](#14-real-kubernetes-targets-m5)).
 >
 > **Scope of V1.** RECAP V1 runs only against a **simulated** five-service shop. The default
@@ -1174,9 +1174,10 @@ were produced from identical configuration and fixtures.
 
 - **The target is simulated by default.** Every V1 result comes from the local simulator and is
   labeled so. Since M5 RECAP also runs on real Kubernetes clusters (the Kind demo and SREGym's
-  own cluster, both Kind clusters on the owner's VM, not production), each write approved by a
-  person ([section 14](#14-real-kubernetes-targets-m5)). SREGym's own grader passed one
-  development run and failed another; no SREGym benchmark results exist.
+  own cluster, both Kind clusters on the owner's VM, not production), every real-model fix
+  that ran approved by the owner ([section 14](#14-real-kubernetes-targets-m5)). SREGym's own
+  grader passed one development run and failed another, whose fix RECAP's evidence check had
+  refused, so nothing had changed; no SREGym benchmark results exist.
 - **The default brain is scripted.** It understands the simulator's log conventions
   ([`signals.py`](../recap/core/signals.py)); real logs would need real parsers or an LLM provider.
   The Claude adapter is opt-in and has not been measured.
@@ -1256,8 +1257,12 @@ targets:
   ([ADR 0031](decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md),
   [integrations/sregym/](../integrations/sregym/README.md)).
 
-Both are Kind clusters on the owner's AWS VM, not production, and a person approves every write.
-The handoff report is [m5-report.md](m5-report.md) and the log [m5-progress.md](m5-progress.md);
+Both are Kind clusters on the owner's AWS VM (the Kind demo ran first on the owner's Mac, in
+W2 and W3), not production. A RECAP run's write there needs an approval of that exact action;
+at the console or in the dashboard only the target service's typed name gives it. The owner
+approved every real-model fix that ran;
+the scripted live acceptance tests of W3 approved (or, in two tests, signed directly) their
+own writes as a test harness (`operator:live-acceptance`). The handoff report is [m5-report.md](m5-report.md) and the log [m5-progress.md](m5-progress.md);
 [flow.md, section 9](flow.md#9-a-run-on-a-real-cluster-m5) follows one real run end to end.
 
 ### Where it runs
@@ -1306,8 +1311,9 @@ How to read it:
   concurrency, not faster inference.
 - **The VM runs only while used.** An idle guard on the VM stops it when nothing uses it, and
   `ec2.sh hold` keeps it up for one run (2 hours at most). AWS showed about $5.40 of usage before
-  credits from 2026-11-02 to 2026-11-07, all covered by the owner's credits: $0 out of pocket
-  ([m5-report.md, section 8](m5-report.md#8-runtime-resources-and-spending)).
+  credits from 2026-11-02 to 2026-11-07, read on 2026-11-07 before the VM session of the W6
+  acceptance run (its report can lag by up to a day), all covered by the owner's credits: $0
+  out of pocket ([m5-report.md, section 8](m5-report.md#8-runtime-resources-and-spending)).
 
 ### The adapter's parts
 
@@ -1317,7 +1323,7 @@ How to read it:
 | Typed operations | A closed list (`KubeOp`): list or get Deployments, list ReplicaSets, pods and events, read pod logs and the server's version, `rollout undo` and `rollout restart`, and `set image` for a Kind reset only. Every argument is a validated Kubernetes name or number, so no model text ever becomes one. `kubectl` starts without a shell, with a minimal environment and `--kubeconfig`, `--context` and `--namespace` on every call; its output is size-limited and parsed strictly, and every call is audited. There is no exec, apply, delete or scale. | [`kubectl.py`](../recap/environments/kubernetes/kubectl.py) |
 | Identities | One ServiceAccount per role, with short-lived tokens kept outside git: `recap-reader` serves the read tools; `recap-writer` only the write path (get and patch the app's Deployments, list their ReplicaSets); `recap-oracle` reads for `health_check()`; `recap-scenario` injects the Kind demo's faults (SREGym has none). Each client refuses an operation its role does not grant before the API server checks the real RBAC. The administrator's credential is refused. | [`options.py`](../recap/environments/kubernetes/options.py), [Kind RBAC](../infra/kind/manifests/10-recap-rbac.yaml), [SREGym RBAC](../infra/sregym/recap-rbac.yaml) |
 | Pinning | Every reset checks each identity's kubeconfig before any request: a private file, the pinned context, an https API server on a loopback address, the cluster CA's SHA-256 fingerprint recorded at setup, and a ServiceAccount token (no exec plugin, no client certificate). `kubectl` must be within one minor version of the API server, and on the Kind demo Prometheus's clock within 5 s of the Mac's. | [`preflight.py`](../recap/environments/kubernetes/preflight.py) |
-| Lease and write switch | A namespace lease keeps a second run off the namespace; it expires on its own after an hour, and `end_run()` frees it when the run ends, however it ends. While the file `kind-writes-disabled` exists in the state folder, every write is refused and reads go on. | [`state.py`](../recap/environments/kubernetes/state.py) |
+| Lease and write switch | A namespace lease keeps a second run off the namespace; it expires on its own an hour after the reset, and `end_run()` frees it when the run ends, however it ends, as long as its process lives: a killed process frees nothing, so its lease refuses new runs until it expires or is released. While the file `kind-writes-disabled` exists in the state folder, every write is refused and reads go on. | [`state.py`](../recap/environments/kubernetes/state.py) |
 | Translation | Kubernetes JSON into the observation models the agents already read: services, health, logs, releases (ReplicaSet revisions), events, metrics (fixed PromQL against the Kind demo's Prometheus; restarts from pod status) and the rollback dry run, each limited to the run's own window. | [`translate.py`](../recap/environments/kubernetes/translate.py), [`rollout.py`](../recap/environments/kubernetes/rollout.py), [`metrics.py`](../recap/environments/kubernetes/metrics.py) |
 | The write path | The only write, step by step below. | [`engine.py`](../recap/environments/kubernetes/engine.py) (`execute_authorized`) |
 | The oracle | `health_check()` as `recap-oracle`, never an MCP tool, in two rounds 2 s apart: every allowlisted service's rollout complete, its replicas ready, and on the Kind demo the oracle's own HTTP probe below the error-rate threshold (0.05). Where a target has no probe, every container must have run a minute with no exit in the last five. The controller probes until the target is healthy or its stabilization window ends (180 s on Kind, 240 s on SREGym). | [`engine.py`](../recap/environments/kubernetes/engine.py) (`health_check`), [`probe.py`](../recap/environments/kubernetes/probe.py), [`oracle.py`](../recap/verification/oracle.py) |
@@ -1395,7 +1401,7 @@ All runs used `qwen3:8b` and prompts-v4.7; each record says who approved what.
 | Target | Runs | Outcomes | Records |
 |---|---|---|---|
 | Kind demo (W4, W6) | 7 | 3 RESOLVED, each approved by the owner typing the service's name and verified by the oracle: a bad release, a red-team run whose logs carried a planted instruction, and the acceptance run, started and approved in Mission Control. 2 BLOCKED: an Enter alone counted as a rejection, before the prompt named the word to type. 1 FAILED safely: a model request outlasted its limit, so the evidence stayed insufficient. 1 cancelled by the Mac's memory watchdog. | [batch](../evals/reports/batches/2026-11-03-real-kubernetes-qwen3-8b-prompts-v4.7/README.md), [exports](../evals/live/README.md) |
-| SREGym `misconfig_app_hotel_res` (W5) | 5 | 1 RESOLVED, and SREGym's own grader passed it. 1 BLOCKED by VP4: the model named the blamed release as the restore point (SREGym's grader: fail). 1 BLOCKED: the approval expired. 2 FAILED safely: the wrong mechanism, refused by the verifier, so nothing was proposed. | [batch](../evals/reports/batches/2026-11-03-real-kubernetes-sregym-qwen3-8b-prompts-v4.7/README.md), [export](../evals/live/2026-11-07-qwen3-8b-sregym-human-approved-prompts-v4.7/README.md) |
+| SREGym `misconfig_app_hotel_res` (W5) | 5 | 1 RESOLVED, and SREGym's own grader passed it. 1 BLOCKED by VP4: the model named the blamed release as the restore point, so nothing changed (SREGym's grader: fail). 1 BLOCKED: the approval expired. 2 FAILED safely: the wrong mechanism, refused by the verifier, so nothing was proposed. | [batch](../evals/reports/batches/2026-11-03-real-kubernetes-sregym-qwen3-8b-prompts-v4.7/README.md), [export](../evals/live/2026-11-07-qwen3-8b-sregym-human-approved-prompts-v4.7/README.md) |
 
 These are counts, not rates: 12 runs, 4 verified recoveries. They show that the path works end
 to end on a real cluster, not how often a model is right. The SREGym problem is not held out
@@ -1413,7 +1419,9 @@ benchmark result or comparable with SREGym's leaderboard.
 - **On the live cluster, opt-in and never in CI:**
   [`tests/e2e/test_kind_live.py`](../tests/e2e/test_kind_live.py), with `RECAP_LIVE_KIND=1` and a
   running Kind cluster; it passed on the real cluster in W3 with the scripted policy
-  ([m5-progress.md](m5-progress.md)).
+  ([m5-progress.md](m5-progress.md)) and has not run since, although later commits changed the
+  adapter. The real-model runs since used its reads and its rollback; no restart has run on a
+  real cluster since W3, and the Kind demo's dependency-crash scenario never has.
 - **Typed-name approvals:** [`test_console_approval_live.py`](../tests/unit/test_console_approval_live.py)
   and `test_a_live_approval_needs_the_target_services_exact_name` in
   [`tests/e2e/test_api_security.py`](../tests/e2e/test_api_security.py).

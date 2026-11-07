@@ -45,7 +45,7 @@ real cluster (M5: the Kind demo or SREGym's cluster, each fix approved by a pers
 console or in the dashboard) make a `real_kubernetes` batch instead, read with that target's
 profile (RECAP_TARGET=kind-demo or sregym-hotel); a folder that mixes targets is refused.
 --benchmark and --benchmark-verdict RUN=pass|fail record a benchmark grader's own verdicts,
-kept apart from RECAP's success.
+one per run, kept apart from RECAP's success.
 --limitation adds what the runs' records cannot say themselves (repeatable).
 
     RECAP_TARGET=kind-demo python scripts/live_eval.py --from-data --data-dir ~/recap-kind-runs \
@@ -431,7 +431,9 @@ def common_methods(records: list[EvalRecord]) -> list[str]:
 def with_benchmark_verdicts(
     records: list[EvalRecord], verdicts: list[str], benchmark: str | None
 ) -> list[EvalRecord]:
-    """The records with the benchmark verdicts given as RUN=pass|fail (refused: ValueError)."""
+    """The records with the benchmark verdicts given as RUN=pass|fail, one per run (refused:
+    ValueError). A run named twice is refused even with the same verdict: which one was
+    meant is the owner's call, never the order of the arguments."""
     if verdicts and not benchmark:
         raise ValueError("--benchmark-verdict needs --benchmark, naming the grader")
     given: dict[str, str] = {}
@@ -439,6 +441,10 @@ def with_benchmark_verdicts(
         run_id, _, verdict = item.partition("=")
         if verdict not in ("pass", "fail"):
             raise ValueError(f"{item!r}: a verdict is RUN=pass or RUN=fail")
+        if run_id in given:
+            raise ValueError(
+                f"{run_id}: one verdict per run (given {given[run_id]}, then {verdict})"
+            )
         given[run_id] = verdict
     unknown = sorted(set(given) - {r.run_id for r in records})
     if unknown:
@@ -710,7 +716,7 @@ async def main(argv: list[str] | None = None) -> int:
         default=[],
         metavar="RUN=pass|fail",
         help="a benchmark grader's own verdict on one run, recorded by hand; kept apart from "
-        "RECAP's oracle and never merged into success (--from-data; repeatable)",
+        "RECAP's oracle and never merged into success (--from-data; repeatable, once per run)",
     )
     parser.add_argument(
         "--publish", action="store_true", help="also publish the batch in evals/reports/batches/"

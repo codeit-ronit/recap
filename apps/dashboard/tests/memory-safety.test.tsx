@@ -3,7 +3,10 @@
  *
  * Memory: episodes grouped by partition with each partition's one-line explanation, the source
  * run link, verified or not, a red-team plant marked as such, one run's hits with the reuse
- * verdict and RECAP's reason for a rejection, and the leakage protections.
+ * verdict and RECAP's reason for a rejection, and the leakage protections. M5: each episode names
+ * its own run's target (the Kind acceptance run's ep-9f3b0112ae is never called simulated), and
+ * the page's opening names where this server's runs act. Safety: a waiting request's card asks
+ * its run's target and GET /system before Approve can be one click.
  * Safety: policy decisions (allow, approval required, deny with rule ids), the approval lifecycle
  * (requested -> decided -> used, expired, rejected), attempted versus executed unsafe actions (the
  * BLOCKED malicious-log run: 1 attempted, 0 executed), a replay run, empty and not-recorded states.
@@ -17,11 +20,14 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { setToken } from "../src/auth";
 import type * as dto from "../src/dto";
+import { parseHash } from "../src/hooks";
 import {
   EpisodeDetail,
   EpisodeGroups,
   MemoryGuards,
+  MemoryPage,
   RunHitsList,
   RunMemoryView,
   knownRuns,
@@ -32,6 +38,7 @@ import {
   InjectionFlags,
   LifecycleView,
   Lifecycles,
+  PendingList,
   PolicyDecisions,
   PolicyRuleReference,
   RunSafetyView,
@@ -41,7 +48,7 @@ import {
   UnsafeSplit,
 } from "../src/pages/Safety";
 import type { RunSafetyData } from "../src/pages/Safety";
-import type { ApprovalEvent, ExperienceEpisode, RunRecord } from "../src/types";
+import type { ApprovalEvent, ApprovalRequest, ExperienceEpisode, RunRecord, SystemSummary } from "../src/types";
 import { gatewayRows, permissionLifecycle, targetWords, unsafeCounts, writeRows } from "../src/view/safety";
 import { count, polled, render, tags, textOf } from "./support/render";
 
@@ -317,8 +324,13 @@ test("memory guards: four partition tiles with their one-line explanation, acces
   assert.ok(text.includes("reads memory as it was when its recording began"));
   assert.ok(text.includes("Evaluation test run (scored) · fixed in code"));
   assert.ok(text.includes("never writes"));
-  // The leakage protections.
+  // The leakage protections, M5's per-target separation included.
   assert.ok(text.includes("Scripted and real-model experience never mix"));
+  assert.ok(
+    text.includes(
+      "Each kind of target keeps its own experience: a run finds only episodes from runs on its own kind of target (the simulated shop, the Kind demo cluster or SREGym's cluster), whatever partition they are in and however alike they read.",
+    ),
+  );
   assert.ok(text.includes("so a test never sees its own answer"));
   assert.ok(text.includes("A replay reads memory as it was when its recording began and writes nothing"));
   assert.ok(text.includes("Similar is not safe"));
@@ -367,6 +379,73 @@ test("an episode's detail shows the plant's note and its symptoms as escaped tex
   assert.ok(text.includes(`scripts/redteam_setup.py ${HOSTILE}`));
   assert.ok(text.includes("none: the plant cites no evidence"));
   assertSafe(html);
+});
+
+// --- memory: the target each episode's run acted on (M5) ----------------------------------------------
+
+// ep-9f3b0112ae, trimmed: the Kind acceptance run run-34a3580d2f wrote it to LIVE, with its target in its provenance.
+const KIND_EPISODE = episode({
+  episode_id: "ep-9f3b0112ae",
+  origin_run_id: "run-34a3580d2f",
+  scenario_id: "kind-bad-release",
+  partition: "live",
+  service: "frontend",
+  symptoms: ["frontend: HTTP error rate 0.30 over 10 probe requests (first failure: HTTP 502)"],
+  failure_mechanism: "bad_deployment",
+  mechanism_target: "backend",
+  successful_action: { action: "execute_rollback", target: "backend", params: { to_version: "v1.0.0" }, result: "recovered", at: "2026-11-07T09:29:24Z", note: "" },
+  verification_source: "kind-health-oracle",
+  provenance: { simulated: false, environment: "kind", provider: "ollama-vm:qwen3:8b", origin: "local_llm", model: "qwen3:8b", origin_run_id: "run-34a3580d2f" },
+  created_at: "2026-11-07T09:29:24Z",
+});
+
+const KIND_SYSTEM = {
+  environment: { kind: "kind", name: "Kind cluster recap-m5", namespace: "recap-demo", is_simulated: false },
+  environment_kind: "kind",
+} as unknown as SystemSummary;
+const SIM_SYSTEM = {
+  environment: { kind: "simulated", name: "RECAP simulated shop", namespace: "shop", is_simulated: true },
+  environment_kind: "simulated",
+} as unknown as SystemSummary;
+
+test("each episode names the target its own run acted on: a Kind run's episode is never labelled simulated", () => {
+  const html = render(<EpisodeGroups episodes={[SCRIPTED, LIVE, PLANT, KIND_EPISODE]} partitions={["demo", "live", "train", "test"]} known={KNOWN} />);
+  const text = textOf(html);
+  assert.ok(
+    text.includes("Filed by target: 3 under the simulated shop, 1 under the Kind demo cluster (live). A run finds only the episodes filed under its own kind of target."),
+  );
+  assert.ok(text.includes("Incident and target"));
+  // One token per episode, from its own provenance: the plant names none, and says so.
+  assert.equal(count(text, "SIMULATED TARGET"), 2);
+  assert.equal(count(text, "LIVE TARGET · kind"), 1);
+  assert.equal(count(text, "TARGET NOT RECORDED"), 1);
+  assert.ok(text.includes("kind-bad-release alert on frontend LIVE TARGET · kind"));
+  assert.ok(!/one simulated run/.test(text));
+  assertSafe(html);
+
+  const detail = textOf(render(<EpisodeDetail episode={KIND_EPISODE} known={KNOWN} />));
+  assert.ok(detail.includes("Where its run acted LIVE TARGET · kind The Kind demo cluster (live): only a run on the same kind of target finds it."));
+  const plant = textOf(render(<EpisodeDetail episode={PLANT} known={KNOWN} />));
+  assert.ok(plant.includes("TARGET NOT RECORDED Not recorded: memory files it under the simulated shop, as it does every episode that names no target."));
+});
+
+test("the page's opening names where this server's runs act; the episodes card never calls every episode simulated", () => {
+  const page = render(<MemoryPage route={parseHash("#/memory")} system={polled(KIND_SYSTEM)} />);
+  const opening = textOf(/<p class="page-description">([\s\S]*?)<\/p>/.exec(page)?.[1] ?? "");
+  assert.ok(
+    opening.startsWith(
+      "What RECAP remembers from finished runs, and how a run used it. This server's runs act on the Kind demo cluster (live) and find only episodes from runs on that kind of target; each episode names the target its run acted on.",
+    ),
+  );
+  assert.ok(!opening.includes("simulated"), "a Kind server's opening never says simulated");
+  const live = textOf(page);
+  assert.ok(live.includes("Each episode is RECAP's own record of what one past run did, and names the target that run acted on; no model wrote it."));
+  assert.ok(!live.includes("one simulated run") && !live.includes("finished runs on the simulated shop"));
+  const simulated = textOf(render(<MemoryPage route={parseHash("#/memory")} system={polled(SIM_SYSTEM)} />));
+  assert.ok(simulated.includes("This server's runs act on the simulated shop and find only episodes from runs on that kind of target"));
+  const unknown = textOf(render(<MemoryPage route={parseHash("#/memory")} system={polled<SystemSummary>(undefined)} />));
+  assert.ok(unknown.includes("Each episode names the target its run acted on, and a run finds only episodes from runs on its own kind of target."));
+  assert.ok(!unknown.includes("This server's runs act on"));
 });
 
 // --- memory: one run ---------------------------------------------------------------------------------
@@ -970,4 +1049,54 @@ test("empty states: no injection flag, no safety stop", () => {
   assert.ok(text.includes("The policy or the evidence gate refused the fix"));
   assert.ok(tags(html, "a").some((a) => a.attrs.href === `#/safety?run=${BLOCKED_RUN}`));
   assert.ok(text.includes("Showing the newest 2 of 3 blocked runs."));
+});
+
+// --- approvals waiting for a person: each against its own run's target --------------------------------
+
+/** run-34a3580d2f's request, shaped as GET /approvals/pending lists it (the Kind acceptance run). */
+function kindRequest(): ApprovalRequest {
+  return {
+    proposal_id: "prop-67e0d72552",
+    run_id: "run-34a3580d2f",
+    incident_id: "inc-47ea839a3d",
+    proposal_digest: DIGEST,
+    proposal: {
+      action: "execute_rollback",
+      target: "backend",
+      params: { to_version: "v1.0.0" },
+      rationale: `The verified root cause is a bad deployment of the backend service ${HOSTILE}`,
+      evidence_ids: ["ev-34a358-r1i02"],
+      expected_health_change: "The error rate should decrease.",
+      rollback_hint: "Reverts backend to v1.0.0.",
+      risk_level: "reversible_write",
+      hypothesis_claim: "The backend's deployment v1.1.0 introduced errors.",
+      source: "llm",
+      citations: [],
+      proposal_id: "prop-67e0d72552",
+      incident_id: "inc-47ea839a3d",
+      created_at: "2026-11-07T09:26:24Z",
+    },
+    status: "pending",
+    requested_at: "2026-11-07T09:26:24Z",
+    expires_at: new Date(Date.now() + 10 * 60_000).toISOString(),
+  } as ApprovalRequest;
+}
+
+test("a waiting request is decided against its own run's target as well as this server's: Approve waits for both", () => {
+  // The page reads GET /runs/{run_id} for each request; the card asks GET /system. A server render
+  // answers neither, so Approve waits for both and offers no one-click binding test meanwhile.
+  setToken(TOKEN);
+  try {
+    const html = render(<PendingList requests={[kindRequest()]} onDecided={() => undefined} />);
+    const approve = tags(html, "button").find((b) => b.attrs.class === "btn btn-approve");
+    assert.ok(approve && "disabled" in approve.attrs);
+    assert.equal(approve.attrs.title, "Checking which environment this approval acts on (GET /system and GET /runs/run-34a3580d2f)…");
+    const text = textOf(html);
+    assert.ok(!text.includes("Test binding"));
+    assert.ok(text.includes("Run run-34a3580d2f"));
+    assert.ok(text.includes("execute_rollback on backend"));
+    assertSafe(html);
+  } finally {
+    setToken(null);
+  }
 });

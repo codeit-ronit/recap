@@ -13,7 +13,9 @@ treats everything the server says about its tools (descriptions, schemas, hints)
 error, timeout, broken connection). They come back as `RawToolResult(ok=False, error=...)`, so
 the gateway records every outcome as data instead of crashing the incident run. A closed
 connection (the server process exited) is also remembered in `lost`: no later call can reach
-the target, and the controller ends the run instead of asking for a fix it cannot send.
+the target, and the controller ends the run instead of asking for a fix it cannot send. A
+server can also die while no call is under way, so `alive()` asks it (an MCP ping); the
+controller does so right before it asks a person to approve a fix.
 """
 
 from __future__ import annotations
@@ -126,6 +128,29 @@ class McpToolClient:
                 self.lost = reason  # the server process is gone: no later call can succeed
             return RawToolResult(ok=False, error=reason)
         return _raw_result(result)
+
+    async def alive(self, timeout_seconds: float) -> bool:
+        """Whether the server still answers an MCP ping within `timeout_seconds`.
+
+        Nothing else touches the connection between two calls, and a server can die then (for
+        minutes while a model drafts the fix): only a request notices. A closed connection or
+        no answer in time is remembered in `lost`, as `call_tool` remembers a closed
+        connection: a write could not be sent through it either. Any answer, even an error
+        (a server without ping), counts as alive.
+        """
+        client = self._connected()
+        if self.lost:
+            return False
+        try:
+            # The session's ping: Client.send_ping warns that the 2026-07-28 revision drops
+            # it, but both transports speak the classic protocol (_CONNECT_MODE), which has it.
+            await asyncio.wait_for(client.session.send_ping(), timeout=timeout_seconds)
+        except (TimeoutError, MCPError) as exc:
+            if isinstance(exc, MCPError) and exc.code not in (CONNECTION_CLOSED, REQUEST_TIMEOUT):
+                return True  # the server answered, with an error
+            self.lost = f"no answer to a ping ({_failure_reason(exc, timeout_seconds)})"
+            return False
+        return True
 
     def _connected(self) -> Client:
         """The live SDK client; using this object outside `async with` is a programming error."""

@@ -2,7 +2,7 @@
   "name": "recap-dashboard",
   "private": true,
   "version": "0.6.0",
-  "description": "RECAP V1 dashboard: live incident runs, agent timeline, evidence, memory, safety and evaluations (SIMULATED LOCAL ENVIRONMENT).",
+  "description": "RECAP's Mission Control: incident runs, agent timeline, evidence, memory, safety and evaluations, on the simulator or a real Kubernetes target (M5).",
   "type": "module",
   "scripts": {
     "dev": "vite",

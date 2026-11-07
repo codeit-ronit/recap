@@ -8,8 +8,8 @@ written: the package metadata reads 0.1.0 up to and including the v0.2.0 tag, an
 version from v0.3.0 on.
 
 Up to 0.5.0 everything ran against a **simulated** environment. 0.6.0 (M5) adds real
-Kubernetes targets: a Kind demo cluster and SREGym's own cluster, on the owner's VM, with a
-person approving every write. Nothing here ran in production.
+Kubernetes targets: a Kind demo cluster and SREGym's own cluster, on the owner's VM; the owner
+approved every real-model fix that ran there. Nothing here ran in production.
 
 ## [0.6.0] — release candidate, not tagged — M5: real Kubernetes incident recovery and SREGym
 
@@ -51,7 +51,7 @@ handoff report is [docs/m5-report.md](docs/m5-report.md).
   changes.
 - **The `real_kubernetes` evaluation mode**: records name their target (`kind`, `sregym`), and a
   batch can hold a benchmark grader's own verdicts, never merged with RECAP's. Two published
-  batches, failures included, and four exported runs in `evals/live/`.
+  batches, failures included, and four exported real-cluster runs in `evals/live/`.
 - **Mission Control on real targets**: the active environment and a readiness check, live
   labels, the typed-name approval dialog, the clusters told apart in Evaluations, and the
   Kubernetes authorization explained in Architecture & Learning.
@@ -84,6 +84,11 @@ handoff report is [docs/m5-report.md](docs/m5-report.md).
   no benchmark score.
 - SREGym's writer is limited by RBAC only (no admission policy there), and the clocks on
   SREGym's target go unchecked.
+- The six live acceptance tests last ran on the real Kind cluster in W3, before later changes
+  to the Kubernetes adapter; the real-model runs exercised its reads and its rollback since,
+  but not its restart. The Kind demo's dependency-crash scenario was tested offline only.
+- A run whose process is killed keeps its namespace lease: new runs on that target are refused
+  until the lease expires (an hour after the run's reset, by default) or is released.
 - Published runs are files to read; Mission Control opens runs from its own data folder only.
 
 ## [0.5.0] — 2026-11-02 — M4: product control center, agent evaluations and release evidence

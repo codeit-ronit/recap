@@ -57,22 +57,27 @@ scraped the errors, so the verifier saw a healthy platform and rightly refused t
 (reset now waits until each failing service shows its errors in Prometheus or cannot be
 observed).
 
-**Verified on the real cluster:** all six live acceptance tests pass
+**Verified on the real cluster:** all six live acceptance tests passed
 (`tests/e2e/test_kind_live.py`, `RECAP_LIVE_KIND=1`, scripted policy): reads are real and change
 nothing; a bad release is rolled back only after an exact approval and the oracle verifies the
 recovery; a rejected proposal changes nothing (BLOCKED); a restart fixes a full memory only
 when readiness says so; the scripted pipeline resolves the report burst; the write boundary
-holds for a direct MCP caller.
+holds for a direct MCP caller. The test harness gave their approvals
+(`operator:live-acceptance`), and two tests signed their capabilities themselves. They have
+not run on a cluster since.
 
 **Next:** W4, a real `qwen3:8b` investigation on the cluster with the owner approving the fix.
 
 ## W4: a real model on the real cluster, approved by the owner (2026-11-03)
 
-**Where it ran:** the Kind cluster and the model (Ollama 0.34.4, `qwen3:8b`, the same weights
-digest as on the Mac) on the owner's AWS VM (m6a.2xlarge, no GPU, `infra/aws/ec2.sh`); RECAP
-on the Mac, through an SSH tunnel (provider `ollama-vm`). The model moved there after the Mac
-ran out of memory running it beside the cluster's container VMs; `scripts/demo.py` now refuses
-to load a local model without room and stops a run when memory pressure turns critical.
+**Where it ran:** the Kind cluster, and from the second run the model (Ollama 0.34.4,
+`qwen3:8b`, the same weights digest as on the Mac, set up on the VM by hand), on the owner's AWS
+VM (m6a.2xlarge, no GPU, `infra/aws/ec2.sh`); RECAP on the Mac, through an SSH tunnel (provider
+`ollama-vm`). They moved there after the Mac ran out of memory running the model beside the
+cluster's container VMs: a first attempt on 2026-11-02 (`run-93b12c804e`, both on the Mac)
+froze the Mac and never finished, so it is in no batch; the cluster moved before the first run
+below, and the model after it. `scripts/demo.py` now refuses to load a local model without
+room and stops a run when memory pressure turns critical.
 
 **Verified on the real cluster** (scenario `kind-bad-release`, prompts-v4.7):
 
@@ -93,9 +98,10 @@ the stored runs by `scripts/live_eval.py --from-data`; the dashboard's tab shows
 **Published:** both RESOLVED runs in `evals/live/` (trace, record, recording, README), and all
 six runs as the first `real_kubernetes` batch, failures included
 (`evals/reports/batches/2026-11-03-real-kubernetes-qwen3-8b-prompts-v4.7/`): 2 verified
-recoveries, 2 rejections, 1 insufficient evidence, 1 cancelled. The export's README and the
-batch's digest now say when a run worked on a real cluster (both had called every run
-simulated), and the export lists text that read like an instruction.
+recoveries, 2 rejections, 1 insufficient evidence, 1 cancelled (W6 added a seventh run, the
+acceptance run, below). The export's README and the batch's digest now say when a run worked
+on a real cluster (both had called every run simulated), and the export lists text that read
+like an instruction.
 
 **W4 done:** a real model's investigation and recovery on the real cluster with a fresh
 approval (twice), blocked and failed runs that changed nothing, a dependency investigation
@@ -153,7 +159,8 @@ that SREGym's own grader passed.
 
 **The acceptance run, from Mission Control:** `run-34a3580d2f` on the Kind demo (on the owner's
 VM). The owner started `kind-bad-release` in the dashboard's Incident Lab, with the self-hosted
-model and experience memory off. Two specialists made 8 model requests (22,892 in / 1,189 out
+model and experience memory not read (the verified run was still saved as episode
+`ep-9f3b0112ae`, partition `live`). Two specialists made 8 model requests (22,892 in / 1,189 out
 tokens), and the verifier supported backend's bad release v1.1.0. The model proposed a rollback
 to v1.0.0. The dashboard's approval dialog asked for the target service's name; the owner typed
 `backend` 152.0 s after the request, and the decision log records how. The writer identity

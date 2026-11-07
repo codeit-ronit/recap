@@ -4,16 +4,20 @@ The tool server is a separate process (McpToolClient.stdio), so it can fail on i
 tests make the REAL server subprocess fail, on the kind-demo profile over the offline fake
 cluster (as in tests/e2e/test_kind_pipeline.py), and check what a live target needs from RECAP
 then: the run ends FAILED with the reason instead of hanging, nothing is written to the
-cluster, no person is asked to approve a fix that can no longer be sent, and the namespace
+cluster, no person is asked to approve a fix that can no longer be sent (even when the server
+died while no call was under way: the controller pings it before asking), and the namespace
 lease is given back at once for the next run.
 
-The failing adapters are KubernetesEnvironment subclasses named by import path, so the server
-subprocess builds them from the run's configuration exactly as it builds the real adapter.
+The failing adapters, and the one that tells a test its server's process id, are
+KubernetesEnvironment subclasses named by import path, so the server subprocess builds them
+from the run's configuration exactly as it builds the real adapter.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
+import signal
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -22,13 +26,27 @@ import pytest
 from mcp import StdioServerParameters
 
 from recap.core.config import REPO_ROOT, EnvironmentConfig, Settings
-from recap.core.models import IncidentState, RunRecord
+from recap.core.interfaces import LLMProvider
+from recap.core.models import (
+    IncidentState,
+    ProposalDecision,
+    ProposalRequest,
+    RunConfig,
+    RunRecord,
+)
 from recap.core.observations import ActionOutcome, AuthorizedAction, LogQueryResult
 from recap.environments.kubernetes import KubernetesEnvironment
 from recap.runtime import Runtime
+from recap.safety.approvals import ExternalApprovalChannel
 from recap.telemetry.tracer import TraceCategory as C
 from recap.tools.mcp_client import McpToolClient
-from tests.e2e.test_kind_pipeline import adapter, kind_runtime, run_with_operator
+from tests.e2e.test_kind_pipeline import (
+    OPERATOR,
+    RUN_LIMIT_SECONDS,
+    adapter,
+    kind_runtime,
+    run_with_operator,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -63,6 +81,33 @@ class DiesOnWrite(KubernetesEnvironment):
         os._exit(1)  # writes are executed only by the MCP server subprocess
 
 
+class LeavesItsPid(KubernetesEnvironment):
+    """The Kind adapter. Built in the MCP server subprocess, it writes that process's id to
+    `pid_file`, so a test can stop the server at a moment when no call is under way."""
+
+    def __init__(
+        self, run_id: str, controller_pid: int = 0, pid_file: str = "", **options: Any
+    ) -> None:
+        super().__init__(run_id, **options)
+        if os.getpid() != controller_pid:
+            Path(pid_file).write_text(str(os.getpid()), encoding="utf-8")
+
+
+class KillsTheServerWhileProposing:
+    """The run's own provider, except that it kills the MCP server process (SIGKILL) as it
+    starts drafting the fix: after the last read, so no call is under way to notice."""
+
+    def __init__(self, inner: LLMProvider, pid_file: Path) -> None:
+        self.inner, self.pid_file = inner, pid_file
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+    async def propose_mitigation(self, request: ProposalRequest) -> ProposalDecision:
+        os.kill(int(self.pid_file.read_text(encoding="utf-8")), signal.SIGKILL)
+        return await self.inner.propose_mitigation(request)
+
+
 def failing(runtime: Runtime, adapter_class: str, **options: Any) -> Runtime:
     """The same kind-demo runtime, with its adapter replaced by one of the classes above."""
     config = runtime.settings.environment
@@ -71,6 +116,34 @@ def failing(runtime: Runtime, adapter_class: str, **options: Any) -> Runtime:
         options={**config.options, **options},
     )
     return Runtime(runtime.settings.model_copy(update={"environment": environment}))
+
+
+def one_attempt(runtime: Runtime) -> Runtime:
+    """The same runtime, allowed a single mitigation attempt per run."""
+    settings = runtime.settings
+    retries = settings.budget.retries.model_copy(update={"max_mitigation_attempts": 1})
+    budget = settings.budget.model_copy(update={"retries": retries})
+    return Runtime(settings.model_copy(update={"budget": budget}))
+
+
+async def run_remembering(runtime: Runtime, scenario: str) -> RunRecord:
+    """run_with_operator, with memory writes on: what the run keeps as experience."""
+    task = asyncio.create_task(
+        runtime.run_incident(
+            scenario, RunConfig(memory_write=True), approval_channel=ExternalApprovalChannel()
+        )
+    )
+    async with asyncio.timeout(RUN_LIMIT_SECONDS):
+        while not task.done():
+            for request in runtime.approvals.pending():
+                runtime.approvals.decide(
+                    request.proposal_id,
+                    decision="approved",
+                    proposal_digest=request.proposal_digest,
+                    actor=OPERATOR,
+                )
+            await asyncio.sleep(0.05)
+    return task.result()
 
 
 def missing_program(tmp_path: Path) -> Callable[[EnvironmentConfig, str], McpToolClient]:
@@ -191,4 +264,64 @@ async def test_an_mcp_server_that_dies_while_the_fix_is_sent_ends_the_run_withou
     states = [change.state for change in record.history]
     assert states[-3:] == [IncidentState.MITIGATING, IncidentState.VERIFYING, IncidentState.FAILED]
     assert runtime.approvals.pending() == []
+    assert_nothing_written_and_namespace_free(kind, record)
+
+
+async def test_an_mcp_server_that_dies_while_the_fix_is_drafted_gets_nobody_asked(
+    settings: Settings, tmp_path: Path
+) -> None:
+    """The server process dies after the last read, while the fix is drafted (minutes for a
+    real model), so no call is under way to notice. Right before a person would be asked,
+    the controller pings the server; the ping finds the connection closed, and the run ends
+    FAILED naming the lost server. No approval request exists, nothing reached the cluster,
+    and the lease is given back."""
+    kind, _ = kind_runtime(settings, tmp_path)
+    pid_file = tmp_path / "tool-server.pid"
+    runtime = failing(kind, "LeavesItsPid", controller_pid=os.getpid(), pid_file=str(pid_file))
+    drafts = runtime.make_provider
+    runtime.make_provider = lambda config: KillsTheServerWhileProposing(drafts(config), pid_file)
+
+    record = await run_with_operator(runtime, "kind-bad-release")
+
+    assert record.state == IncidentState.FAILED and record.outcome_note == LOST
+    assert record.error == (
+        "the MCP tool server stopped during the run: "
+        "no answer to a ping (MCPError: Connection closed)"
+    )
+    [proposal] = record.proposals  # drafted, never put to a person
+    assert (proposal.action, proposal.target) == ("execute_rollback", "backend")
+    assert runtime.approvals.get_request(proposal.proposal_id) is None
+    assert record.approvals == [] and record.actions == []
+    events = runtime.events.list_events(record.run_id)
+    results = [e.payload for e in events if e.category == C.TOOL_RESULT]
+    assert results and "MCPError: Connection closed" not in {r.get("error") for r in results}
+    assert C.APPROVAL_REQUESTED not in [e.category for e in events]
+    states = [change.state for change in record.history]
+    assert states[-2:] == [IncidentState.PROPOSING, IncidentState.FAILED]
+    assert_nothing_written_and_namespace_free(kind, record)
+
+
+async def test_a_fix_lost_with_the_server_on_the_last_attempt_is_not_kept_as_experience(
+    settings: Settings, tmp_path: Path
+) -> None:
+    """One mitigation attempt is allowed, and the server dies when that fix reaches it. The
+    run still ends FAILED naming the lost server, with run.error set, not as a fix that did
+    not recover the system: with memory writes on, nothing is written to experience memory,
+    since the fix never reached the cluster."""
+    kind, _ = kind_runtime(settings, tmp_path, stabilization_timeout_seconds=1.0)
+    runtime = one_attempt(failing(kind, "DiesOnWrite"))
+
+    record = await run_remembering(runtime, "kind-bad-release")
+
+    assert record.state == IncidentState.FAILED and record.outcome_note == LOST
+    assert record.error == "the MCP tool server stopped during the run: MCPError: Connection closed"
+    [fix] = record.actions
+    assert (fix.action, fix.result) == ("execute_rollback", "error")
+    assert record.episode_id is None and runtime.memory.count() == 0
+    skipped = [
+        e.payload["reason"]
+        for e in runtime.events.list_events(record.run_id)
+        if e.category == C.MEMORY_SKIP
+    ]
+    assert skipped == ["run ended by an error or cancellation; it is not experience"]
     assert_nothing_written_and_namespace_free(kind, record)
