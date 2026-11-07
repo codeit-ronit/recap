@@ -1130,9 +1130,10 @@ adds:
 - **Real LLM inference, self-hosted:** `qwen3:8b` with Ollama on the VM's CPU (provider
   `ollama-vm`), reached through the SSH tunnel. The one run with the model on the Mac
   (provider `ollama`) was cancelled after about 28 s, and its record counts no model request.
-  The 11 real-cluster runs' records count 78 model requests; none was paid for.
-- **Real writes:** three rollbacks by real-model runs (two on the Kind demo, one on SREGym),
-  each approved by the owner typing the target service's name at an interactive terminal and
+  The 12 real-cluster runs' records count 86 model requests; none was paid for.
+- **Real writes:** four rollbacks by real-model runs (three on the Kind demo, one on SREGym),
+  each approved by the owner typing the target service's name (at an interactive terminal, and
+  for the acceptance run in Mission Control) and
   each verified by the oracle; and the scripted acceptance tests' writes, approved by the test
   harness.
 - **Spending:** about $5.40 of AWS usage before credits, all covered by the owner's credits;
@@ -1149,7 +1150,7 @@ adds:
   was changed between its five runs because of them), with every fix approved by a person: no
   benchmark score, and nothing comparable with SREGym's leaderboard. The only SREGym numbers
   are its own grader's recorded verdicts: 1 pass, 1 fail.
-- **No rates.** 3 verified recoveries in 11 real-cluster runs are counts.
+- **No rates.** 4 verified recoveries in 12 real-cluster runs are counts.
 - **No recovery from an API call alone.** A write the cluster accepted never counts as a
   recovery; only the oracle's verdict does, and SREGym's verdict is kept apart from it.
 - **No measured improvement of the model or the agents.** The fixes between runs made the path

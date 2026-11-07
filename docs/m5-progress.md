@@ -148,3 +148,38 @@ leaderboard. No held-out SREGym problem was run.
 that SREGym's own grader passed.
 
 **Next:** W6, Mission Control, reliability, documentation and the release candidate.
+
+## W6: Mission Control, reliability, documentation, release candidate (2026-11-07)
+
+**The acceptance run, from Mission Control:** `run-34a3580d2f` on the Kind demo (on the owner's
+VM). The owner started `kind-bad-release` in the dashboard's Incident Lab, with the self-hosted
+model and experience memory off. Two specialists made 8 model requests (22,892 in / 1,189 out
+tokens), and the verifier supported backend's bad release v1.1.0. The model proposed a rollback
+to v1.0.0. The dashboard's approval dialog asked for the target service's name; the owner typed
+`backend` 152.0 s after the request, and the decision log records how. The writer identity
+rolled backend back, and the oracle verified the recovery (backend's error rate 0.3 to 0.0). A
+read as `recap-reader` afterwards showed backend on v1.0.0, 2 of 2 ready, no restarts. The run
+is exported in `evals/live/2026-11-07-qwen3-8b-kind-dashboard-approved-prompts-v4.7/` and is
+the Kind batch's seventh record (3 verified recoveries in 7).
+
+**Implemented:**
+- **Live approvals in the dashboard and the API, as strict as the console's.** Approving needs
+  the target service's exact name (`confirm_target`); a click alone, or a wrong name, decides
+  nothing.
+- **API.** `POST /environment/check` runs the cluster adapter's preflight. Runs on a real
+  cluster are labelled live, only the configured adapter is operational, and the simulation
+  auto-approver is refused on a live target. A dead MCP tool server now ends the run.
+- **Mission Control.** The active environment and its readiness check; the Kubernetes
+  authorization explained; the typed-name dialog; live wording on every page; the clusters told
+  apart in Evaluations, with SREGym's grader verdicts in a tile of their own.
+- **Reliability.** Tests for a slow rollout, a cancelled run, a tool server that cannot start or
+  dies, concurrent runs and the namespace lease, injection in events, and a killed process.
+  Also optional Prometheus-format metrics (`RECAP_METRICS=1`, bounded labels) and an in-process
+  API load test.
+- **Records.** Evaluation records and batches name their target; a batch can hold a benchmark
+  grader's own verdicts. Both cluster batches were rebuilt.
+- **Docs.** ADR 0032; the M5 report ([m5-report.md](m5-report.md)); the README, status,
+  evaluation, architecture, flow and threat-model documents brought to M5; CHANGELOG 0.6.0.
+
+**Next:** the release candidate's checks and a final review; then the owner decides on pushing
+and tagging.

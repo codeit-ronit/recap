@@ -538,12 +538,13 @@ on a real system (section H).
 
 ### Seen on the real clusters
 
-Eleven runs used `qwen3:8b`, self-hosted (ten on the owner's VM, one on the Mac), and every
-approval request went to the owner at the terminal: six runs on the Kind demo
+Twelve runs used `qwen3:8b`, self-hosted (eleven on the owner's VM, one on the Mac), and every
+approval request went to the owner (at the terminal; for the acceptance run, in Mission Control,
+where the owner typed the service's name): seven runs on the Kind demo
 ([batch](../evals/reports/batches/2026-11-03-real-kubernetes-qwen3-8b-prompts-v4.7/README.md))
 and five on SREGym's `misconfig_app_hotel_res`
 ([batch](../evals/reports/batches/2026-11-03-real-kubernetes-sregym-qwen3-8b-prompts-v4.7/README.md)).
-Three ended in a recovery the oracle verified. These are counts of single runs, not rates. The
+Four ended in a recovery the oracle verified. These are counts of single runs, not rates. The
 SREGym problem is not held out (RECAP was changed between its runs) and a person approved each
 fix, so none of this is a benchmark result or comparable with SREGym's leaderboard. Where a
 control decided:

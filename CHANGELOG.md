@@ -19,8 +19,8 @@ real model investigates a real failure through RECAP's typed read tools; RECAP p
 exact fix; a person approves it by typing the target service's name; a restricted identity
 applies it; and an oracle with its own identity checks the recovery. It ran on a Kind demo
 cluster and on one SREGym 1.1 problem, on the owner's AWS VM, with a self-hosted `qwen3:8b`.
-Three of eleven real-cluster runs ended in a verified recovery, and SREGym's own grader passed
-the SREGym one. These are counts, not rates, and the SREGym problem is not held out. The
+Four of twelve real-cluster runs ended in a verified recovery, one of them started and approved
+in Mission Control, and SREGym's own grader passed the SREGym one. These are counts, not rates, and the SREGym problem is not held out. The
 handoff report is [docs/m5-report.md](docs/m5-report.md).
 
 ### Added
@@ -51,7 +51,7 @@ handoff report is [docs/m5-report.md](docs/m5-report.md).
   changes.
 - **The `real_kubernetes` evaluation mode**: records name their target (`kind`, `sregym`), and a
   batch can hold a benchmark grader's own verdicts, never merged with RECAP's. Two published
-  batches, failures included, and three exported runs in `evals/live/`.
+  batches, failures included, and four exported runs in `evals/live/`.
 - **Mission Control on real targets**: the active environment and a readiness check, live
   labels, the typed-name approval dialog, the clusters told apart in Evaluations, and the
   Kubernetes authorization explained in Architecture & Learning.

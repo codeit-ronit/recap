@@ -1394,10 +1394,10 @@ All runs used `qwen3:8b` and prompts-v4.7; each record says who approved what.
 
 | Target | Runs | Outcomes | Records |
 |---|---|---|---|
-| Kind demo (W4) | 6 | 2 RESOLVED, each approved by the owner typing the service's name and verified by the oracle: a bad release, and a red-team run whose logs carried a planted instruction. 2 BLOCKED: an Enter alone counted as a rejection, before the prompt named the word to type. 1 FAILED safely: a model request outlasted its limit, so the evidence stayed insufficient. 1 cancelled by the Mac's memory watchdog. | [batch](../evals/reports/batches/2026-11-03-real-kubernetes-qwen3-8b-prompts-v4.7/README.md), [exports](../evals/live/README.md) |
+| Kind demo (W4, W6) | 7 | 3 RESOLVED, each approved by the owner typing the service's name and verified by the oracle: a bad release, a red-team run whose logs carried a planted instruction, and the acceptance run, started and approved in Mission Control. 2 BLOCKED: an Enter alone counted as a rejection, before the prompt named the word to type. 1 FAILED safely: a model request outlasted its limit, so the evidence stayed insufficient. 1 cancelled by the Mac's memory watchdog. | [batch](../evals/reports/batches/2026-11-03-real-kubernetes-qwen3-8b-prompts-v4.7/README.md), [exports](../evals/live/README.md) |
 | SREGym `misconfig_app_hotel_res` (W5) | 5 | 1 RESOLVED, and SREGym's own grader passed it. 1 BLOCKED by VP4: the model named the blamed release as the restore point (SREGym's grader: fail). 1 BLOCKED: the approval expired. 2 FAILED safely: the wrong mechanism, refused by the verifier, so nothing was proposed. | [batch](../evals/reports/batches/2026-11-03-real-kubernetes-sregym-qwen3-8b-prompts-v4.7/README.md), [export](../evals/live/2026-11-07-qwen3-8b-sregym-human-approved-prompts-v4.7/README.md) |
 
-These are counts, not rates: 11 runs, 3 verified recoveries. They show that the path works end
+These are counts, not rates: 12 runs, 4 verified recoveries. They show that the path works end
 to end on a real cluster, not how often a model is right. The SREGym problem is not held out
 (RECAP was changed between its runs), and a person approved every fix, so nothing here is a
 benchmark result or comparable with SREGym's leaderboard.

@@ -165,7 +165,7 @@ approved what.
 
 | Target | Runs | Outcomes | Published |
 |---|---|---|---|
-| Kind demo (W4) | 6 | 2 RESOLVED, oracle verified (a bad release; the red-team run with a planted instruction in the logs); 2 rejected (an Enter alone, before the prompt named the service); 1 failed safely (a model request outlasted its limit); 1 cancelled (memory watchdog on the Mac) | [batch](../evals/reports/batches/2026-11-03-real-kubernetes-qwen3-8b-prompts-v4.7/README.md), [two exports](../evals/live/README.md) |
+| Kind demo (W4, W6) | 7 | 3 RESOLVED, oracle verified (a bad release; the red-team run with a planted instruction in the logs; the acceptance run, started and approved in Mission Control); 2 rejected (an Enter alone, before the prompt named the service); 1 failed safely (a model request outlasted its limit); 1 cancelled (memory watchdog on the Mac) | [batch](../evals/reports/batches/2026-11-03-real-kubernetes-qwen3-8b-prompts-v4.7/README.md), [three exports](../evals/live/README.md) |
 | SREGym `misconfig_app_hotel_res` (W5) | 5 | 1 RESOLVED, and SREGym's grader passed it; 1 blocked by VP4 (the model named the bad release itself; SREGym's grader: fail); 1 approval expired; 2 failed safely (the wrong mechanism, refused by the verifier) | [batch](../evals/reports/batches/2026-11-03-real-kubernetes-sregym-qwen3-8b-prompts-v4.7/README.md), [export](../evals/live/2026-11-07-qwen3-8b-sregym-human-approved-prompts-v4.7/README.md) |
 
 These are counts, not rates. The SREGym problem is not held out: RECAP was fixed on it
@@ -188,11 +188,29 @@ leaderboard.
 
 ## 9. Tests and CI
 
-*Filled in when the release candidate's checks run (section 13 of the M5 plan).*
+Run locally for the 0.6.0 release candidate (2026-11-07), on the owner's Mac. CI has not run
+on M5 yet: nothing is pushed, so the first CI run comes with the push.
+
+| Check | Result |
+|---|---|
+| `python -m pytest` | **2260 passed, 7 skipped** (the six live-cluster acceptance tests and the optional OpenTelemetry test) in about 4 minutes; `-m e2e` selects 182 end-to-end cases |
+| Live acceptance tests on the real Kind cluster (`RECAP_LIVE_KIND=1`) | all six passed in W3 (scripted policy); not part of the default run |
+| `ruff check .`, `ruff format --check .`, `mypy` (its configured scope) | clean |
+| Dashboard: `tsc --noEmit`, `npm test`, `npm run build` | clean; **614 tests passed**; the production build succeeded |
+| Secret scan (tracked files and every blob in the history) | no secrets found |
+| Recordings manifest | both committed recordings match their pins; the golden two-agent replay passes |
+
+The tests M5 added cover: the Kubernetes adapter over a fake cluster (reads, the write path,
+pinning, identities, refused writes, the lease, the oracle's stability rule), the SREGym
+external-harness mode, the controller's live-target rules, typed-name approvals at the
+console and through the API, the readiness check, the evaluation records' targets and
+benchmark verdicts, and the W6 fault tests (a slow rollout, a cancelled run, a tool server that
+cannot start or dies mid-run, concurrent runs and the namespace lease, injection text in
+events, a run killed while waiting for approval), plus the optional metrics and the load test.
 
 ## 10. Known failures and limitations
 
-- **Small samples.** 11 real-cluster runs, 3 of them verified recoveries: they show that the
+- **Small samples.** 12 real-cluster runs, 4 of them verified recoveries: they show that the
   path works end to end, not how often a model gets it right.
 - **Not a benchmark result.** One SREGym problem, not held out, run five times with RECAP fixed
   in between, and every fix approved by a person.
