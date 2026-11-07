@@ -195,8 +195,8 @@ investigation; its record still reads INVESTIGATING, and the move to the VM foll
 
 ## 9. Tests and CI
 
-Run locally for the 0.6.0 release candidate (2026-11-07), on the owner's Mac. CI has not run
-on M5 yet: nothing is pushed, so the first CI run comes with the push.
+Run locally for the 0.6.0 release candidate (2026-11-07), on the owner's Mac. CI runs the
+same offline checks on every push, so the v0.6.0 commit's CI run on GitHub repeats them.
 
 | Check | Result |
 |---|---|
