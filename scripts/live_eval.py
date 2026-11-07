@@ -41,9 +41,11 @@ Cost controls, checked before anything runs:
 (oldest first) without calling any model: for runs made before batches existed, or to
 re-judge them after the categories changed. With a PLAN, only that plan's runs count
 (matched by their labels). A batch holds one model and one prompt version. Runs against a
-real cluster (M5: the Kind target, each fix approved by a person at scripts/demo.py --approve
-ask) make a `real_kubernetes` batch instead, read with that target's profile
-(RECAP_TARGET=kind-demo); a folder that mixes the simulator with a cluster is refused.
+real cluster (M5: the Kind demo or SREGym's cluster, each fix approved by a person at the
+console or in the dashboard) make a `real_kubernetes` batch instead, read with that target's
+profile (RECAP_TARGET=kind-demo or sregym-hotel); a folder that mixes targets is refused.
+--benchmark and --benchmark-verdict RUN=pass|fail record a benchmark grader's own verdicts,
+kept apart from RECAP's success.
 --limitation adds what the runs' records cannot say themselves (repeatable).
 
     RECAP_TARGET=kind-demo python scripts/live_eval.py --from-data --data-dir ~/recap-kind-runs \
@@ -486,8 +488,8 @@ TARGETS: dict[str, str] = {
 LIVE_TARGETS: dict[str, str] = {
     "kind": "The Kind demo: two demo services and the faults RECAP's scenarios inject.",
     "sregym": "SREGym's own cluster: its hotel-reservation application and the problem "
-    "SREGym's harness injected. SREGym's mitigation oracle gives the benchmark's verdict, "
-    "which these records do not hold (see the notes below).",
+    "SREGym's harness injected. SREGym's own grader gives the benchmark's verdict, kept apart "
+    "from RECAP's success: a record holds it only when it was recorded (benchmark_verdict).",
 }
 
 

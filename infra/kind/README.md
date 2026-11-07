@@ -191,7 +191,9 @@ dropped, the runtime's default seccomp profile and a read-only root filesystem.
 **The kill switch**, from gentle to final:
 
 1. Cancel one run: `POST /runs/{id}/cancel`, or Ctrl-C in the terminal.
-2. Stop all writes in RECAP: the adapter's write switch (planned in M5's adapter work).
+2. Stop all writes in RECAP: the adapter's write switch. While the file `kind-writes-disabled` is in
+   the adapter's state folder, every write is refused and reads go on
+   (`recap/environments/kubernetes/options.py`).
 3. Revoke at the cluster, which holds even if RECAP itself is compromised:
    `kubectl --kubeconfig ~/.config/recap/kind/admin.kubeconfig --context kind-recap-m5 -n recap-demo delete rolebinding recap-writer`
    (and `recap-scenario`); every later write is refused by the API server. Deleting the

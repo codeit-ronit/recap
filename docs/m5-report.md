@@ -18,9 +18,11 @@ every write was approved by the owner.
 | SREGym target | The same adapter in external-harness mode ([integrations/sregym/](../integrations/sregym/), [ADR 0031](decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md)). SREGym 1.1 deploys its hotel-reservation app on its own cluster and injects the problem; release tags are rollback keys; there is no probe or metric |
 | Exact-action authorization | On a real cluster a person must type the target service's name, at the console or in the dashboard. A single-use signed capability is bound to that exact action, and a server-side dry run, read-back and audit wrap the write |
 | Independent oracle | Ground truth from the cluster through the oracle's own identity, never an MCP tool: rollout complete, readiness, the oracle's own HTTP probe (Kind), or containers that stayed up (SREGym) |
-| The owner's VM | One AWS EC2 VM runs both clusters and the model; RECAP stays on the Mac and reaches them through an SSH tunnel ([infra/aws/ec2.sh](../infra/aws/ec2.sh)). An idle guard on the VM stops it when nothing uses it |
+| The owner's VM | The Kind demo ran first on the owner's Mac (W2, W3). From W4 one AWS EC2 VM ran both clusters and the model, because the model beside the cluster exhausted the Mac's memory. RECAP stays on the Mac and reaches them through an SSH tunnel ([infra/aws/ec2.sh](../infra/aws/ec2.sh)), and an idle guard on the VM stops it when nothing uses it |
 | Records | Published runs in [evals/live/](../evals/live/) and the `real_kubernetes` evaluation mode with two batches (Kind, SREGym), failures included |
 | Mission Control | The dashboard shows the active target, checks that the cluster can be reached, asks for the typed service name before a live approval, and tells the two clusters apart in the evaluations |
+| Reliability | Tests for faults on Kubernetes and at runtime: a slow rollout, a cancelled run, a tool server that dies, concurrent runs, an interrupted process. They found one real bug: a run whose tool server died went on and asked for an approval it could never use |
+| Operational metrics (optional) | `GET /metrics` in the Prometheus text format, off unless `RECAP_METRICS=1`, with bounded labels only. A small in-process API load test runs with the scripted policy |
 
 ## 2. Which files changed
 
@@ -43,8 +45,8 @@ From v0.5.0 to this release candidate, outside the published records. The main a
 ```mermaid
 flowchart LR
   subgraph Mac["Owner's Mac"]
-    RECAP["RECAP controller<br/>agents, verifier, gateway"]
-    MCP["MCP server<br/>typed read tools"]
+    RECAP["RECAP controller<br/>agents, verifier, gateway, oracle"]
+    MCP["MCP server<br/>typed tools"]
     API["API + Mission Control"]
   end
   subgraph VM["Owner's AWS VM (m6a.2xlarge)"]
@@ -53,21 +55,23 @@ flowchart LR
     OLL["Ollama, qwen3:8b"]
   end
   RECAP -- "SSH tunnel: model requests" --> OLL
-  MCP -- "reader identity" --> KIND
-  MCP -- "reader identity" --> SRE
-  RECAP -- "writer identity, after an approval" --> KIND
-  RECAP -- "oracle identity" --> KIND
+  MCP -- "reader identity: reads" --> KIND
+  MCP -- "writer identity: one approved write" --> KIND
+  RECAP -- "oracle identity; scenario identity at reset" --> KIND
+  MCP -- "reader and writer identities" --> SRE
+  RECAP -- "oracle identity" --> SRE
 ```
 
 - **One interface.** The agents never import an environment. They reach the cluster only
   through MCP tools, and the gateway judges every call. The adapter translates real cluster
   data into RECAP's observation models: services, health, logs, metrics, releases, events,
-  and the rollback dry run. So the controller, verifier, memory and dashboard code did not
-  change for Kubernetes.
+  and the rollback dry run. Nothing outside the adapter is Kubernetes-specific. M5's changes
+  there hold on every target: live-target checks, typed-name approvals, pod-event onsets, and
+  memory kept per target kind.
 - **Identities.** Each role has its own ServiceAccount token, minted on the VM and copied to
-  the Mac (`ec2.sh creds`): `recap-reader` reads, `recap-oracle` reads for the oracle, and
-  `recap-writer` may only patch the app's Deployments. On the Kind demo, `recap-scenario`
-  injects faults. Each identity runs only the `kubectl` operations its role allows; the
+  the Mac (`ec2.sh creds`). In the MCP server, `recap-reader` serves the read tools and
+  `recap-writer` may only patch the app's Deployments. In the controller, `recap-oracle` reads
+  for the oracle and, on the Kind demo, `recap-scenario` injects faults. Each identity runs only the `kubectl` operations its role allows; the
   administrator's credential is refused.
 - **Pinning.** Every reset first proves the cluster is the pinned one. Each kubeconfig's API
   server must be on 127.0.0.1 and its CA fingerprint must match the one recorded at setup.
@@ -204,6 +208,14 @@ leaderboard.
   runs from its data folder; the exports in `evals/live/` are files to read, not a run store.
 - **Identity.** The console proves a terminal and a timing, the dashboard a token holder and
   a timing; neither proves which person decided.
+- **The API's reads are open on loopback.** Live runs' data is served without a token on the
+  owner's machine; token-protected reads are future hardening ([threat model](threat-model.md)).
+- **The writer's token.** It is mode 600, but while it is valid any process of the owner's
+  could patch the allowlisted Deployments without an approval: the capability is checked
+  inside RECAP, and the cluster enforces only RBAC (on Kind, also the admission policy).
+- **Smaller ones.** `POST /incidents/run` re-reads the scenario files on every request (about
+  40 ms that block the server's event loop). A run whose process was killed leaves its approval
+  request listed until it expires, although nothing can act on it.
 
 ## 11. Reproduction
 

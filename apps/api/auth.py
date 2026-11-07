@@ -6,7 +6,10 @@ who could reach it, and took the approver's "identity" from a free-text body fie
   * Every state-changing endpoint (start a run, decide an approval, cancel a run, start an
     evaluation) needs `Authorization: Bearer <operator token>`, compared in constant time.
     Reads stay open on the trusted hosts, because the dashboard's live event stream
-    (EventSource) cannot send headers. Run data is simulated and holds no secrets.
+    (EventSource) cannot send headers. Run data holds no secrets (keys, tokens and
+    capabilities are redacted or never stored); since M5 it may describe a real cluster, so
+    the API serves only loopback host names, and token-protected reads are future hardening
+    (docs/threat-model.md).
   * The approver recorded for a decision is `operator:<name>` from server configuration,
     never something a client typed.
   * Host header check (anti DNS rebinding): only requests addressed to this machine's
