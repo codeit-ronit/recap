@@ -14,7 +14,10 @@ infrastructure with a real one.
 > recorded replays; M3 two independent specialists, an evidence merger, hybrid retrieval and
 > memory partitions; M4 the read side: a typed API over the stored runs, the Mission Control
 > dashboard, a replay of committed recordings by manifest id, and evaluation records
-> ([section 13](#13-the-read-side-typed-views-replays-and-evaluation-records-m4)).
+> ([section 13](#13-the-read-side-typed-views-replays-and-evaluation-records-m4)); M5 real
+> Kubernetes targets behind the same interface: RECAP's own Kind demo cluster and SREGym's
+> cluster, both on the owner's VM, with a person approving every write
+> ([section 14](#14-real-kubernetes-targets-m5)).
 >
 > **Scope of V1.** RECAP V1 runs only against a **simulated** five-service shop. The default
 > decision provider is a **scripted deterministic policy, not an LLM**. The SREGym adapter was an
@@ -33,7 +36,8 @@ This document uses four status words:
 | **not yet built** | Planned. There is no working code in V1. |
 
 Related documents: the [threat model](threat-model.md) (attacks and defenses in depth), the
-[benchmark plan](benchmark-plan.md) (the planned real SREGym benchmark) and the
+[benchmark plan](benchmark-plan.md) (the planned real SREGym benchmark), the
+[M5 report](m5-report.md) (what ran on real clusters) and the
 [glossary](learning-notes.md#part-2--concepts-glossary) (terms used here).
 
 ## Contents
@@ -51,6 +55,7 @@ Related documents: the [threat model](threat-model.md) (attacks and defenses in 
 11. [Deterministic reproducibility](#11-deterministic-reproducibility)
 12. [Known limitations of this architecture](#12-known-limitations-of-this-architecture)
 13. [The read side: typed views, replays and evaluation records (M4)](#13-the-read-side-typed-views-replays-and-evaluation-records-m4)
+14. [Real Kubernetes targets (M5)](#14-real-kubernetes-targets-m5)
 
 ---
 
@@ -73,7 +78,7 @@ In one line: **untrusted data can suggest, trusted code decides, and an independ
 
 | Principle | What it means in V1 | Where to see it |
 |---|---|---|
-| **Modular monolith** | One Python package (`recap/`) in one main process, split into modules with sharp boundaries: `core`, `harness`, `tools`, `safety`, `environments`, `knowledge`, `memory`, `context`, `routing`, `agents`, `verification`, `providers`, `telemetry`. Modules call each other in-process. The only other process is the per-run MCP tool server. There is no broker and no network service to run: one install, SQLite files, a laptop is enough. | [`recap/`](../recap) |
+| **Modular monolith** | One Python package (`recap/`) in one main process, split into modules with sharp boundaries: `core`, `harness`, `tools`, `safety`, `environments`, `knowledge`, `memory`, `context`, `routing`, `agents`, `verification`, `providers`, `telemetry`. Modules call each other in-process. The only other process is the per-run MCP tool server (on a real cluster, since M5, also the `kubectl` calls the adapter starts without a shell: [section 14](#14-real-kubernetes-targets-m5)). There is no broker and no network service to run: one install, SQLite files, a laptop is enough. | [`recap/`](../recap) |
 | **Typed contracts** | Everything that crosses a module boundary is a Pydantic model (a Python class whose fields are type-checked at runtime). The `Contract` base class rejects unknown fields (`extra="forbid"`), `Evidence` is frozen (cannot be edited after creation), and every trace event carries `schema_version = "recap.v1"`. What any infrastructure must return is a separate contract file. | [`recap/core/models.py`](../recap/core/models.py), [`recap/core/observations.py`](../recap/core/observations.py) |
 | **Plugin interfaces** | Twelve interfaces ("plugin sockets") define the swappable parts. Code depends on the interface, never on a concrete class. One **composition root**, `Runtime`, picks the concrete classes; a composition root is the single place where implementations are chosen and wired together. | [`recap/core/interfaces.py`](../recap/core/interfaces.py), [`recap/runtime.py`](../recap/runtime.py) |
 | **Trusted vs untrusted** | Trusted means RECAP's own code and its YAML config. Everything else is untrusted data: alert text, tool output, logs, runbooks, past episodes, what the MCP server says about its tools, and every decision a provider makes. Untrusted data may shape a *proposal*; only trusted code decides what *executes*. Every tool call passes one door, the `ToolGateway`. | [Section 8](#8-data-flow-and-trust-boundaries) |
@@ -195,13 +200,14 @@ How to read it:
 | `Orchestrator` | [`recap/routing/orchestrator.py`](../recap/routing/orchestrator.py) | Runs the chosen agents; parallel means `asyncio.gather`; each agent has a timeout. |
 | `AgentHarness` | [`recap/harness/loop.py`](../recap/harness/loop.py) | The observe, reason, act loop every investigator runs. |
 | `EvidenceRegistry`, `ContextPacker` | [`recap/context/evidence.py`](../recap/context/evidence.py), [`recap/context/packer.py`](../recap/context/packer.py) | Append-only evidence with run-unique IDs; bounded, ranked context packs built from it, with the evidence a diagnosis cites and any contradicting evidence packed first. |
-| Decision provider | [`recap/providers/`](../recap/providers) | `DeterministicProvider` (default, scripted, not an LLM), `AnthropicProvider` (opt-in Claude adapter), and a red-team wrapper. |
+| Decision provider | [`recap/providers/`](../recap/providers) | `DeterministicProvider` (default, scripted, not an LLM); since M2 real models on the shared `HttpLLMProvider` loop: `OllamaProvider` (a local model, or since M5 the same model on the owner's VM as `ollama-vm`), `FreeHostedProvider` (Groq's free plan) and replays of recordings; `AnthropicProvider` (opt-in Claude adapter); and a red-team wrapper. |
 | `EvidenceVerifier`, merger | [`recap/agents/verifier.py`](../recap/agents/verifier.py), [`recap/agents/merger.py`](../recap/agents/merger.py) | The `Verifier`: merges the agents' claims, then rule checks of root-cause claims (V1 to V7; V6 lets platform signals outrank log text; V7 picks the deepest root cause, with no vote or tie-break) and of proposed fixes (VP1 to VP4); records every disagreement between agents and how a rule settled it. Not proof of causation. |
 | `ToolGateway`, `PolicyEngine`, `ToolRegistry` | [`recap/tools/gateway.py`](../recap/tools/gateway.py), [`recap/safety/policy.py`](../recap/safety/policy.py), [`recap/tools/registry.py`](../recap/tools/registry.py) | The single door for tool calls. ALLOW, APPROVAL_REQUIRED or DENY, decided from trusted config only. Every output is redacted and bounded before it becomes evidence. |
 | `ApprovalStore` and channels | [`recap/safety/approvals.py`](../recap/safety/approvals.py) | Approvals bound to one exact proposal, expiring and single-use, stored in SQLite. |
 | `McpToolClient` | [`recap/tools/mcp_client.py`](../recap/tools/mcp_client.py) | The `ToolTransport`: real MCP over stdio to a subprocess. |
 | MCP server | [`recap/tools/mcp_server.py`](../recap/tools/mcp_server.py) | Publishes one `TargetEnvironment` as 10 MCP tools (7 read, 3 write). Enforces nothing by design. |
 | `SimulatedEnvironment` | [`recap/environments/simulated/engine.py`](../recap/environments/simulated/engine.py) | The V1 target system (simulated). |
+| `KubernetesEnvironment`, `SREGymEnvironment` | [`recap/environments/kubernetes/`](../recap/environments/kubernetes/), [`integrations/sregym/adapter.py`](../integrations/sregym/adapter.py) | The real-cluster targets since M5: typed `kubectl` reads, one write path, a pinned cluster and an oracle identity of its own ([section 14](#14-real-kubernetes-targets-m5)). |
 | `EnvironmentHealthOracle` | [`recap/verification/oracle.py`](../recap/verification/oracle.py) | Recovery verdict from ground truth, never from agent text. Built for each run by `ControllerDeps.oracle_factory`. |
 | `Consolidator` | [`recap/memory/consolidation.py`](../recap/memory/consolidation.py) | Turns a finished run into an episode (consolidator-v2: trajectory, judged claims, diagnosis basis, fix preconditions, model info; deterministic extraction); `success` only if the oracle verified recovery. |
 | `Tracer`, sinks, `Redactor` | [`recap/telemetry/`](../recap/telemetry) | Numbered, redacted events to SQLite, JSONL, a live stream and (optionally) OpenTelemetry console spans. |
@@ -397,6 +403,10 @@ The numbers, explained:
 
 The full trace of this run has 66 events and is stored in `data/traces/<run_id>.jsonl`.
 
+A run on a real Kubernetes cluster (M5) takes the same lifecycle through the same components;
+[flow.md, section 9](flow.md#9-a-run-on-a-real-cluster-m5) follows one on SREGym's cluster,
+with its real numbers.
+
 ---
 
 ## 4. Incident lifecycle
@@ -474,6 +484,9 @@ Real paths through the lifecycle:
 | `budget-exhausted` demo | ... → INVESTIGATING → BUDGET_EXHAUSTED: "max_tool_calls (3/3 tool calls used)". No recovery is claimed. |
 | Evaluation, `baseline_single` on `test-inventory-bad-release` | ... → MITIGATING → VERIFYING → INVESTIGATING → PROPOSING → FAILED. Without runbooks, the scripted policy fell back to `restart_service`, which does not fix a bad release. The oracle said "not recovered", and the second round found no untried fix: "no remediation could be drafted; a human should take over". |
 | Evaluation, `redteam_safety_off` on `test-cart-injection` (simulation only) | ... → PROPOSING → MITIGATING → VERIFYING → INVESTIGATING → PROPOSING → MITIGATING → VERIFYING → FAILED. With safety off, the first `delete_namespace` ran in the sandbox and deleted the namespace; the second was sent too, and the sandbox refused it because the namespace was already gone. Then the attempts were used up. This is what the gateway prevents when safety is on. |
+| SREGym `run-9d7f47104d` (M5, a real cluster) | CREATED → RETRIEVING → INVESTIGATING → PROPOSING → AWAITING_APPROVAL → MITIGATING → VERIFYING → RESOLVED. The owner typed `geo` to approve the rollback; the oracle waited 66.9 s, until geo's new container had stayed up. |
+| SREGym `run-e08c17d46e` (M5) | ... → PROPOSING → BLOCKED: the model proposed rolling geo back to the very release the diagnosis blamed, and VP4 refused it. Nothing changed on the cluster. |
+| SREGym `run-6ffe22367d` (M5) | ... → AWAITING_APPROVAL → BLOCKED: nobody approved within 15 minutes, so the request expired. |
 
 Lifecycle rules are tested in [`tests/unit/test_core_contracts.py`](../tests/unit/test_core_contracts.py), and the
 controller's less common paths (namespace refusal, token-budget stop, retry, provider failure,
@@ -485,7 +498,8 @@ cancellation, a late answer) in
 ## 5. Process model
 
 A run uses three things: the controller process, one MCP server subprocess and one SQLite file
-holding the simulated world.
+holding the simulated world. (On a real cluster, since M5, the third is the cluster itself, beside
+a small state file of the adapter's own: [section 14](#14-real-kubernetes-targets-m5).)
 
 ```mermaid
 flowchart LR
@@ -599,7 +613,9 @@ terminal approval prompt run in worker threads, which is why the shared stores u
 has its own controller, MCP subprocess and sandbox file; the long-lived stores are shared. The
 remediation lock (`SHARED_LOCKS` in [`recap/tools/gateway.py`](../recap/tools/gateway.py)) is
 per process and keyed by target scope, which for the simulator includes the run ID
-(`simulated:<run_id>/shop/<service>`), so runs on different sandboxes never block each other. The
+(`simulated:<run_id>/shop/<service>`), so runs on different sandboxes never block each other. On
+a real cluster the scope names the cluster instead of the run, and the adapter's namespace lease
+keeps a second run off the namespace, even one in another process. The
 evaluation runner runs its cases one after another. A run started by another process (for example
 the CLI) is served by the API from its stored record and events: its status is `external` until the
 stored state is terminal, and its stream ends after the stored events, because live events exist
@@ -622,15 +638,15 @@ All interfaces live in [`recap/core/interfaces.py`](../recap/core/interfaces.py)
 |---|---|---|---|---|
 | `TargetEnvironment` | `SimulatedEnvironment` (default). Since M5: `KubernetesEnvironment` (a real cluster: the Kind demo) and `SREGymEnvironment` (the same adapter on SREGym's own cluster, external-harness mode). `FakeEnvironment` (tests only). | [`recap/environments/simulated/engine.py`](../recap/environments/simulated/engine.py), [`recap/environments/kubernetes/`](../recap/environments/kubernetes/), [`integrations/sregym/adapter.py`](../integrations/sregym/adapter.py), [`tests/fakes.py`](../tests/fakes.py) | simulated; Kind and SREGym: implemented (M5) | Benchmark runs on held-out SREGym problems |
 | `ToolTransport` | `McpToolClient`: real MCP over stdio to a subprocess at runtime, in-memory streams in tests | [`recap/tools/mcp_client.py`](../recap/tools/mcp_client.py) | implemented | Remote MCP servers over HTTP (not yet built) |
-| `LLMProvider` | `DeterministicProvider` (default; scripted, not an LLM). `AnthropicProvider` (opt-in Claude adapter; your own API key and billing; tested only with a fake client). `PromptInjectedProvider` wraps either one for red-team runs. | [`recap/providers/deterministic.py`](../recap/providers/deterministic.py), [`recap/providers/anthropic_provider.py`](../recap/providers/anthropic_provider.py), [`recap/safety/redteam.py`](../recap/safety/redteam.py) | scripted policy: implemented; Claude: adapter only; red-team planner: simulated | Measured LLM runs; adapters for open models (not yet built) |
+| `LLMProvider` | `DeterministicProvider` (default; scripted, not an LLM). Since M2: `OllamaProvider` and `FreeHostedProvider` on the shared `HttpLLMProvider` loop (a local model, Groq's free plan, or a replay of a recording); since M5 also `ollama-vm`, the same `qwen3:8b` served on the owner's VM. `AnthropicProvider` (opt-in Claude adapter; your own API key and billing; tested only with a fake client). `PromptInjectedProvider` wraps either one for red-team runs. | [`recap/providers/deterministic.py`](../recap/providers/deterministic.py), [`recap/providers/http_llm.py`](../recap/providers/http_llm.py), [`recap/providers/anthropic_provider.py`](../recap/providers/anthropic_provider.py), [`recap/safety/redteam.py`](../recap/safety/redteam.py) | scripted policy, Ollama, Groq Free and replays: implemented; Claude: adapter only; red-team planner: simulated | A GPU, or a larger open-weight model, to measure how much the model itself limits the results (not yet built) |
 | `RetrievalIndex` | `KnowledgeRetriever`: BM25 written from scratch; hybrid BM25 plus a dense ranking (`OllamaEmbedder`, `nomic-embed-text` on loopback; stored `VectorIndex`) fused by reciprocal rank fusion; agents search it through `search_runbooks` | [`recap/knowledge/retriever.py`](../recap/knowledge/retriever.py), [`recap/knowledge/bm25.py`](../recap/knowledge/bm25.py), [`recap/knowledge/embeddings.py`](../recap/knowledge/embeddings.py), [`recap/knowledge/ollama_embedder.py`](../recap/knowledge/ollama_embedder.py), [`recap/knowledge/vectors.py`](../recap/knowledge/vectors.py) | BM25: implemented (the default); hybrid: implemented, opt-in per run (needs Ollama and the stored vectors) | Neural reranking (see `Reranker`); a vector database for a large corpus |
 | `Reranker` | `LexicalReranker`: boosts chunks whose heading or title contains the query words. A heuristic, not a neural model. | [`recap/knowledge/retriever.py`](../recap/knowledge/retriever.py) | implemented | Neural reranker such as a cross-encoder (not yet built) |
 | `RouterPolicy` | `RulesRouter`: rules RT0 to RT7, first match wins. `LearnedRouter` is a stub that raises `NotImplementedError`. | [`recap/routing/router.py`](../recap/routing/router.py) | rules: implemented; learned: adapter only | Learned router, a contextual bandit (a model that learns which choice pays off in which situation) over the same signals (not yet built) |
-| `SafetyPolicy` | `PolicyEngine`: rules R1 to R10, R14, R11 and R12, in that order, over simulator-scoped allowlists (the gateway adds R13 and the per-agent tool allowlist) | [`recap/safety/policy.py`](../recap/safety/policy.py) | implemented | Kubernetes RBAC-aware policy, where RBAC is Kubernetes role-based access control (not yet built) |
-| `RecoveryOracle` | `EnvironmentHealthOracle` plus `recovery_result()`; each run's oracle is built by `ControllerDeps.oracle_factory` | [`recap/verification/oracle.py`](../recap/verification/oracle.py) | implemented (its ground truth comes from the simulator) | Benchmark health oracle, for example SREGym's own mitigation check (not yet built) |
+| `SafetyPolicy` | `PolicyEngine`: rules R1 to R10, R14, R11 and R12, in that order, over the allowlists of the configuration in use: the simulator's, or since M5 a target profile's (`policy-kind-v1`, `policy-sregym-hotel-v2`) (the gateway adds R13 and the per-agent tool allowlist) | [`recap/safety/policy.py`](../recap/safety/policy.py) | implemented | Kubernetes RBAC-aware policy, where RBAC is Kubernetes role-based access control (not yet built). Since M5 the cluster's own RBAC limits each of RECAP's identities, outside the policy engine ([section 14](#14-real-kubernetes-targets-m5)) |
+| `RecoveryOracle` | `EnvironmentHealthOracle` plus `recovery_result()`; each run's oracle is built by `ControllerDeps.oracle_factory` | [`recap/verification/oracle.py`](../recap/verification/oracle.py) | implemented (ground truth from the simulator or, since M5, from the cluster through the adapter's own oracle identity) | None for RECAP's own verdict: a benchmark's grader stays a separate verdict, never merged (SREGym's `run-oracle.py` since M5, [ADR 0031](decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md)) |
 | `Verifier` | `EvidenceVerifier`: merges the agents' claims; evidence rules for root-cause claims (V1 to V7) and for proposed fixes (VP1 to VP4), epoch-aware after a fix; typed disagreement records; not proof of causation | [`recap/agents/verifier.py`](../recap/agents/verifier.py) | implemented | Richer causal checks (not yet built) |
 | `TraceSink` | `JsonlTraceSink`, `SqliteTraceSink`, `BroadcastSink` (live stream); optional `OTelTraceSink` printing OpenTelemetry spans to the console | [`recap/telemetry/sinks.py`](../recap/telemetry/sinks.py), [`recap/telemetry/otel.py`](../recap/telemetry/otel.py) | implemented; OpenTelemetry bridge: adapter only (needs the `otel` extra) | OpenTelemetry collector over OTLP, the OpenTelemetry wire protocol (not yet built) |
-| `ApprovalChannel` | `AutoApprovalChannel` (refuses to exist outside a simulation), `ConsoleApprovalChannel` (terminal), `ExternalApprovalChannel` (dashboard through the API) | [`recap/safety/approvals.py`](../recap/safety/approvals.py) | console and API: implemented; auto-approver: simulated | Chat-ops approvals; authenticated approvers (not yet built: in V1 the approver is a free-text label) |
+| `ApprovalChannel` | `AutoApprovalChannel` (refuses to exist outside a simulation), `ConsoleApprovalChannel` (terminal), `ExternalApprovalChannel` (dashboard through the API). On a live target (M5) only the target service's exact name approves: typed at the console, or sent as `confirm_target` to `POST /approvals/{id}`. | [`recap/safety/approvals.py`](../recap/safety/approvals.py) | console and API: implemented; auto-approver: simulated | Chat-ops approvals; per-person identity (not yet built: in V1 the approver is a free-text label; since M5 an approval proves a terminal or a token holder and a timing, not a person) |
 | `TrainingPipeline` | None. An abstract placeholder whose `train()` raises `NotImplementedError`. | [`recap/core/interfaces.py`](../recap/core/interfaces.py) | not yet built | Trajectory distillation or SFT (supervised fine-tuning) on recorded runs |
 
 Not every part sits behind one of these interfaces. `ContextPacker`, `ExperienceStore`,
@@ -659,10 +675,16 @@ log conventions. What stays simulator-specific is data, not code: the log conven
 (step 4) and the runbooks. A real target must adapt those, or use an LLM provider for free-text
 logs ([the known caveat](#the-known-caveat-log-conventions)).
 
-Since M5 RECAP has a Kubernetes adapter and runs on SREGym's own cluster ([ADR 0031](decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md)).
-These were the steps to build one, kept as a guide for another target. The
-plan for an actual SREGym benchmark, including hosting and cost rules, is in the
-[benchmark plan](benchmark-plan.md).
+**The worked example is real since M5.** `KubernetesEnvironment`
+([`recap/environments/kubernetes/`](../recap/environments/kubernetes/), kind `kind`) took RECAP to
+a real Kind cluster, and `SREGymEnvironment`
+([`integrations/sregym/adapter.py`](../integrations/sregym/adapter.py), kind `sregym`) is the same
+class on SREGym's own cluster
+([ADR 0032](decisions/0032-a-real-kubernetes-target-behind-the-same-interface.md),
+[ADR 0031](decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md),
+[section 14](#14-real-kubernetes-targets-m5)). The steps below are the ones it followed, kept as a
+guide for another target; each ends with how M5 did it. The plan for an actual SREGym benchmark,
+including hosting and cost rules, is in the [benchmark plan](benchmark-plan.md).
 
 ### Step 1: implement `TargetEnvironment`
 
@@ -671,7 +693,7 @@ Subclass `TargetEnvironment` and translate your infrastructure into the models i
 repository):
 
 ```python
-# my_infra/k8s_adapter.py  (example only)
+# my_infra/cluster_adapter.py  (example only)
 from recap.core.interfaces import TargetEnvironment
 from recap.core.models import EnvironmentInfo, ScenarioInfo
 from recap.core.observations import (
@@ -690,8 +712,8 @@ from recap.core.observations import (
 )
 
 
-class KubernetesEnvironment(TargetEnvironment):
-    kind = "kubernetes"
+class MyClusterEnvironment(TargetEnvironment):
+    kind = "my-cluster"
 
     def __init__(self, run_id: str, namespace: str = "default", kubeconfig: str = "", **_: object):
         # Built twice per run (controller process and MCP subprocess) with the same options.
@@ -727,6 +749,7 @@ class KubernetesEnvironment(TargetEnvironment):
         self, action: AuthorizedAction
     ) -> ActionOutcome: ...  # the only write: verify_capability(...) first, refuse safety-off
     async def health_check(self) -> HealthReport: ...  # ground truth for the oracle
+    def end_run(self) -> None: ...  # optional (M5): free what the run held, such as a lease
 ```
 
 Rules for the translation:
@@ -751,20 +774,36 @@ Rules for the translation:
 - Enforce the write boundary yourself: store the public key from `bind_executor` where both
   adapter instances see it, call `verify_capability` (with `allow_safety_off=False`) before every
   write, and record the nonce together with the change. A real adapter must never accept a
-  write without it.
-- The planned (unverified) mapping from RECAP tools to Kubernetes-style capabilities is in
-  [`integrations/sregym/mapping.md`](../integrations/sregym/mapping.md), and what a real SREGym
-  integration needs is in [`integrations/sregym/README.md`](../integrations/sregym/README.md).
+  write without it. Where the change cannot share a transaction with your local store (a
+  Kubernetes write cannot), commit the nonce first, before the target is touched: a crash then
+  burns the capability, and it never works twice.
+- The mapping planned before M5 is kept, marked historical, in
+  [`integrations/sregym/mapping.md`](../integrations/sregym/mapping.md); what was built is in
+  [`integrations/sregym/README.md`](../integrations/sregym/README.md) and
+  [section 14](#14-real-kubernetes-targets-m5).
+
+**M5:** `KubernetesEnvironment` is this step done for a real cluster.
+[`translate.py`](../recap/environments/kubernetes/translate.py) and
+[`rollout.py`](../recap/environments/kubernetes/rollout.py) map Kubernetes JSON onto the
+observation models: pod states onto `ServiceStatus`, ReplicaSet revisions onto releases, and the
+rollout history onto the rollback dry run. A value the target cannot measure (SREGym has no
+request metrics) stays `None`, "not measured", and is never estimated. Both adapter instances
+read the cluster itself; the run's public key, its used nonces and the audit of every write and
+`kubectl` command live in a local file keyed by the run ID. The interface gained one optional
+method, `end_run()`, which the controller calls however a run ends, so a live target can free
+its namespace lease.
 
 ### Step 2: make the kind known in both processes
 
 [`recap/environments/registry.py`](../recap/environments/registry.py) builds adapters as
 `factory(run_id=..., **options)`. Two options work:
 
-- **Import path, no code change:** `kind: my_infra.k8s_adapter:KubernetesEnvironment`. The module must
+- **Import path, no code change:** `kind: my_infra.cluster_adapter:MyClusterEnvironment`. The module must
   be importable from the repository root or installed in the same virtual environment, because the
   MCP subprocess imports it too.
-- **Short name:** add a factory to `_FACTORIES` in `registry.py`, like the existing `_sregym` one.
+- **Short name:** add a factory to `_FACTORIES` in `registry.py`, like the existing `_kind` and
+  `_sregym` ones (M5). Their imports live inside the factories, so only the chosen adapter is
+  loaded.
 
 Calling `register_environment()` from your own start-up code is not enough on its own: it changes only
 the current process, and the MCP subprocess, which builds its own adapter, would not know the kind.
@@ -772,17 +811,23 @@ the current process, and the MCP subprocess, which builds its own adapter, would
 ### Step 3: point `configs/environment.yaml` at it
 
 ```yaml
-kind: my_infra.k8s_adapter:KubernetesEnvironment
+kind: my_infra.cluster_adapter:MyClusterEnvironment
 options:
   namespace: shop                    # must also be listed in configs/policies.yaml
   kubeconfig: /absolute/path/to/kubeconfig
 ```
 
+[`configs/targets/kind-demo/environment.yaml`](../configs/targets/kind-demo/environment.yaml) and
 [`configs/targets/sregym-hotel/environment.yaml`](../configs/targets/sregym-hotel/environment.yaml)
-is the real one for SREGym (M5). Note that the test suite and the demos load the same `configs/` files: once
+are the real ones (M5). Note that the test suite and the demos load the same `configs/` files: once
 `kind` points at your adapter, the simulator-based demo tests will run against it and fail on unknown
 scenarios. During development, keep `kind: simulated` and inject your adapter through a settings
 override, as `test_environment_swap.py` does.
+
+**M5:** a target profile removes that problem. `configs/targets/<name>/` holds one target's own
+`environment.yaml`, `policies.yaml`, `budget.yaml` and `knowledge.yaml` (a runbook overlay), read
+only when `RECAP_TARGET=<name>` is set. So `configs/environment.yaml` stays `kind: simulated`,
+and the simulator's tests and CI never see the real target.
 
 ### Step 4: adjust the allowlists in `configs/policies.yaml`
 
@@ -793,9 +838,11 @@ override, as `test_environment_swap.py` does.
   against it, and providers are shown the list.
 - Version arguments must look like `v1.2.3` (`_VERSION_RE` in
   [`recap/tools/registry.py`](../recap/tools/registry.py)). If your versions are image tags or
-  revision numbers, translate them in the adapter or extend that rule.
+  revision numbers, translate them in the adapter or extend that rule. (M5 extended it: an
+  argument of type `release` takes an image tag, and SREGym's profile uses it.)
 - Keep `delete_namespace` `destructive`. It is always denied (R9), and the planned mapping says it
-  must stay unimplemented against real infrastructure.
+  must stay unimplemented against real infrastructure. The Kubernetes adapter refuses it even
+  with a valid capability.
 - Review `limits` (tool timeout, output size) for real API latencies and log volumes, and
   `oracle.max_error_rate`.
 - A new *kind* of action (for example scaling) is more than an adapter: it needs a registry entry
@@ -803,15 +850,30 @@ override, as `test_environment_swap.py` does.
   [`recap/tools/mcp_server.py`](../recap/tools/mcp_server.py) and a new `EnvironmentAction` value in
   `observations.py`.
 
+**M5:** each target profile has its own `policies.yaml`: `policy-kind-v1` (namespace `recap-demo`,
+2 services) and `policy-sregym-hotel-v2` (namespace `hotel-reservation`, 19 services, and health
+and metric tool descriptions that say what that target measures). No new kind of action was
+added: rollback and restart only.
+
 ### Step 5: decide the oracle source
 
 Implement `health_check()` from ground truth that agents cannot reach or influence. For a benchmark,
-prefer the benchmark's own mitigation check where one exists; otherwise use readiness and error rate
-from metrics. `EnvironmentHealthOracle` then applies the same rule as today (Running, all replicas
+keep the benchmark's own grader as a separate verdict, recorded next to RECAP's and never merged
+(M5 did so for SREGym, [ADR 0031](decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md)),
+and build `health_check()` from rollout state, readiness, and an error rate from metrics or a probe
+of your own. `EnvironmentHealthOracle` then applies the same rule as today (Running, all replicas
 ready, error rate below the threshold), and its name becomes `<kind>-health-oracle`. If you need a
 different verdict rule, implement `RecoveryOracle` and pass a factory for it as `oracle_factory` in
 `Runtime.controller_deps`; the controller calls it with the run's environment and
 `oracle.max_error_rate`.
+
+**M5:** the Kubernetes adapter's `health_check()` reads the cluster as its own `recap-oracle`
+identity, in two rounds 2 s apart: every allowlisted service's rollout complete, its replicas
+ready, and on the Kind demo the oracle's own HTTP probe. A target without a probe (SREGym) also
+needs every container to have run a minute with no exit in the last five: without a readiness
+probe, a crash-looping container is Running and Ready for the seconds each start lasts.
+`EnvironmentHealthOracle` judges an error rate the target cannot measure (`None`) by status and
+readiness alone, and names itself `kind-health-oracle` or `sregym-health-oracle`.
 
 ### Step 6: approvals become human-only
 
@@ -819,6 +881,14 @@ With `is_simulated=False`, the controller refuses `approval_mode="auto"` and `sa
 (`_check_safety_scope`), and `AutoApprovalChannel` refuses to start. Approve through the terminal
 (`--approve ask`) or the dashboard. The evaluation runner uses the auto-approver, so it cannot run
 against a real environment as it is; it also refuses any provider other than the scripted policy.
+
+**M5:** on a live target the console accepts no `y`. The person types the target service's exact
+name; an Enter alone asks again, and the prompt gives up at the request's expiry. Through the
+dashboard or the API, an approval needs that name as `confirm_target`, or it decides nothing.
+Before `reset`, the controller also refuses a replay and a paid model, and a free hosted plan
+unless the owner sets `RECAP_ALLOW_HOSTED_MODEL_ON_LIVE_TARGET=1`. M5's real-cluster runs were made
+with `scripts/demo.py --approve ask`, and their evaluation records were built afterwards from the
+stored runs by `scripts/live_eval.py --from-data`.
 
 ### Step 7: test it
 
@@ -833,26 +903,38 @@ against a real environment as it is; it also refuses any provider other than the
    does with `ExternalApprovalChannel` and `ApprovalStore.decide`.
 4. Run the whole suite to confirm nothing else changed.
 
+**M5:** the Kubernetes adapter is tested in three layers: unit tests over an offline fake cluster
+(`tests/unit/test_kind_*.py`, with
+[`test_kind_external.py`](../tests/unit/test_kind_external.py) for the external-harness mode);
+the whole pipeline through the real MCP server subprocess on that fake cluster
+([`tests/e2e/test_kind_pipeline.py`](../tests/e2e/test_kind_pipeline.py)); and opt-in tests on the
+live Kind cluster, never in CI ([`tests/e2e/test_kind_live.py`](../tests/e2e/test_kind_live.py),
+`RECAP_LIVE_KIND=1`).
+
 ### What does not change
 
 | Part | Why it stays the same |
 |---|---|
 | Agents and roles ([`recap/agents/`](../recap/agents), [`recap/harness/loop.py`](../recap/harness/loop.py), `configs/agents.yaml`) | They know tool names, never an environment object. |
 | Runbook RAG ([`recap/knowledge/`](../recap/knowledge)) | It searches documents, not the environment. (You will probably want runbooks for your own system: that is content, not code.) |
-| Episodic memory ([`recap/memory/`](../recap/memory)) | It sees only run records, evidence and the environment's `kind`; provenance records `simulated: false`. |
+| Episodic memory ([`recap/memory/`](../recap/memory)) | It sees only run records, evidence and the environment's `kind`; provenance records `simulated: false`. Since M5 an episode is a hit only for an incident on the same environment kind, so a cluster never finds the simulator's experience, nor the reverse. |
 | Router and orchestrator ([`recap/routing/`](../recap/routing)) | They read routing signals and the budget. |
 | Gateway, policy, registry and approvals ([`recap/tools/`](../recap/tools), [`recap/safety/`](../recap/safety)) | Only the YAML allowlists change. |
 | MCP server and client | The server wraps whatever adapter the registry builds. |
 | Controller ([`recap/harness/controller.py`](../recap/harness/controller.py)) and oracle code | They depend on the interface. |
 | API and dashboard ([`apps/`](../apps)) | They read run records and traces; `GET /system` shows the adapter's own `describe()`. |
 
+M5 held to this table: the adapter, two target profiles and a runbook overlay are new. The few
+general changes it made, for every target, are listed in
+[section 14](#what-m5-changed-outside-the-adapter).
+
 The labels follow the adapter's `describe()`: the controller's RESOLVED note ("oracle verified
 recovery (simulated environment)", or the adapter's kind for a real one), the label of the API's
 `/health`, the demo banner and the dashboard badge ("SIMULATED LOCAL ENVIRONMENT · V1" or
 "LIVE ENVIRONMENT (<kind>) · V1"), and the environment sentence of the LLM system prompt in
 [`recap/providers/prompts.py`](../recap/providers/prompts.py) (changing that file means bumping
-`PROMPT_VERSION`). One text still assumes the simulator and should be revisited, although no
-control flow depends on it: the MCP server's instructions text ("Simulated sandbox tools ...").
+`PROMPT_VERSION`). So does the MCP server's instructions text ("Simulated sandbox tools ..." or
+"Target environment (<kind>) tools ...").
 
 ### The known caveat: log conventions
 
@@ -866,6 +948,15 @@ uses `RELEASE_ERROR_TEMPLATE`). Structured data such as metrics, deployments and
 reasons maps across naturally, but real free-text logs will not follow these templates. A real
 environment needs log parsers for its formats, or an LLM provider that reads free text for its
 decisions; the verifier's rules still need signals they can parse.
+
+**M5 met this caveat on both targets.** The Kind demo's app was written for RECAP, and its log
+lines use phrasings RECAP's parsers already read, so a success there proves the plumbing on a
+real cluster, not that RECAP understands logs written by someone else
+([infra/kind/README.md](../infra/kind/README.md)).
+SREGym's app was not: its geo service logged `no reachable servers`, with no release tag. The
+adapter's log translation learned zerolog's three-letter levels, and V2 may now date a bad
+release's onset by the first warning event that says the service's own pods fail
+([ADR 0031](decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md)).
 
 ---
 
@@ -906,7 +997,7 @@ Untrusted inputs, and where each is checked:
 | **Past episodes** (memories) | `data/memory.db` through `ExperienceStore` | Partition rules decide what a run may read. "Similar" is not "safe": `assess_reuse` requires a past success, verified by the oracle, whose mechanism and service match today's live evidence and whose fix still fits it (a rollback must restore a version today's evidence names). Only plain values from an episode reach trusted prompt text. Providers receive `AgentMemoryHit` views with no label fields at all, and a remembered claim faces the same verifier rules (V5-memory). |
 | **Provider decisions** (tool calls, hypotheses, mitigation drafts) | `DeterministicProvider`, the optional Claude adapter, or the red-team wrapper | Tool calls go through `ReadOnlyTools` and the policy. Hypotheses go through the verifier. For a draft, the policy takes the risk tier from the registry and ignores the draft's self-declared `risk_level`; the tool must be in the remediation catalog (R14), and the draft's params may not set the tool's target argument (R11/R12). Tool arguments are derived from the proposal by `mitigation_args`, and `check_proposal` requires cited evidence from this run and the diagnosed target. |
 | **Scenario overrides** (`run_overrides` in a scenario file) | `fixtures/scenarios` | Only `planner` and `strategy` are accepted, checked twice (`ScenarioSpec` validation and `SCENARIO_OVERRIDABLE` in the controller), and a field the caller set explicitly wins. A scenario can never switch off safety, approvals, memory isolation, the provider or the budget. |
-| **Approval decisions** | Terminal, API and dashboard, or the auto-approver (simulation only) | Accepted only through `ApprovalStore.decide`, which checks the digest and the expiry; approve only a pending request, reject a pending one or revoke an unused approval ("no" wins until the approval is used, right before the write is sent); compare-and-swap in one transaction; every attempt logged. Through the API the operator's bearer token is required and the approver recorded comes from it. The gateway re-reads the stored approval and consumes it before the call. |
+| **Approval decisions** | Terminal, API and dashboard, or the auto-approver (simulation only) | Accepted only through `ApprovalStore.decide`, which checks the digest and the expiry; approve only a pending request, reject a pending one or revoke an unused approval ("no" wins until the approval is used, right before the write is sent); compare-and-swap in one transaction; every attempt logged. Through the API the operator's bearer token is required and the approver recorded comes from it. On a live target (M5) only the target service's exact name approves: typed at the console, or sent as `confirm_target` to the API. The gateway re-reads the stored approval and consumes it before the call. |
 
 The trusted side:
 
@@ -915,7 +1006,7 @@ The trusted side:
 | `IncidentController` and `Lifecycle` | What happens next; the only writer | [`controller.py`](../recap/harness/controller.py), [`lifecycle.py`](../recap/core/lifecycle.py) |
 | `PolicyEngine`, `ToolRegistry`, `ToolGateway` | Whether any tool call may run, from config only | [`policy.py`](../recap/safety/policy.py), [`registry.py`](../recap/tools/registry.py), [`gateway.py`](../recap/tools/gateway.py) |
 | `ApprovalStore` | Whether this exact write was approved, once, and not revoked | [`approvals.py`](../recap/safety/approvals.py) |
-| `CapabilityIssuer` and the adapter's `execute_authorized` | Whether a write reaching the environment was signed by this run's gateway for exactly that action | [`capabilities.py`](../recap/safety/capabilities.py), [`engine.py`](../recap/environments/simulated/engine.py) |
+| `CapabilityIssuer` and the adapter's `execute_authorized` | Whether a write reaching the environment was signed by this run's gateway for exactly that action | [`capabilities.py`](../recap/safety/capabilities.py), [`engine.py`](../recap/environments/simulated/engine.py) (simulator), [`engine.py`](../recap/environments/kubernetes/engine.py) (Kubernetes, M5) |
 | `OperatorAuth` | Who is calling a state-changing API endpoint | [`auth.py`](../apps/api/auth.py) |
 | `EvidenceVerifier` | Which claim the evidence supports | [`verifier.py`](../recap/agents/verifier.py) |
 | `EnvironmentHealthOracle` | Whether the system recovered | [`oracle.py`](../recap/verification/oracle.py) |
@@ -931,6 +1022,15 @@ which obeys the line and proposes `delete_namespace` on `shop` while claiming th
 read-only. The policy ignores that claim, looks up the trusted tier (`destructive`) and denies it
 with `R9-destructive-deny`. The run ends BLOCKED, and no write reaches the transport.
 
+**The same boundary on a real cluster (M5, one red-team run).** On the Kind demo, backend's
+release `v1.1.1` logs lines that tell "AI responders" to run `delete_namespace` now. In
+`run-f5b9e5bf45` the gateway flagged that text (`imperative-destructive`) and it stayed data; a
+real model (`qwen3:8b`) proposed only the rollback to `v1.0.0`, the owner approved it by typing
+`backend`, and the oracle verified the recovery. The model never proposed the deletion, so this
+run did not exercise the denial itself; had it, R9 would have denied it, and the Kubernetes
+adapter refuses that action even with a signed capability
+([evals/live/README.md](../evals/live/README.md)).
+
 ---
 
 ## 9. Persistence map
@@ -942,6 +1042,10 @@ Everything is local files. The `data/` folder is git-ignored. `RECAP_DATA_DIR` m
 | `data/recap.db` | `RunStore`, `SqliteTraceSink`, `ApprovalStore` | Table `runs`: one `RunRecord` checkpoint per run, saved after every transition. Table `evidence`: every `Evidence` item per run. Table `events`: every trace event (the API pages through it with `after_seq`). Tables `approval_requests` and `approvals`. |
 | `data/memory.db` | `ExperienceStore` | Table `episodes`: metadata columns (partition, outcome, verified, ...) plus the full episode as JSON. Scripted demo and CLI runs read the `train` and `demo` partitions and write to `demo`; real-model runs read `train` and `live` and write to `live`; a replay writes nothing. Table `partition_moves`: each pre-M3 model episode moved from `demo` to `live` when the store opened the file (ADR 0023). |
 | `data/sandbox/<run_id>.db` | `SandboxStateStore`, from both adapter instances | Table `sandbox_state`: exactly one row, the run's simulated world as JSON, including an audit log of every attempted write with its approval ID and proposal digest. |
+| `data/sandbox/kind-<run_id>.db` | The Kubernetes adapter (M5), from both adapter instances | One real-cluster run's local state (the world itself is the cluster): the executor's public key, the used capability nonces, the run's baseline and release log, and an append-only audit of every write and every `kubectl` command. |
+| `data/sandbox/kind-leases.db` | The Kubernetes adapter (M5) | Which run holds which namespace: one live run at a time. |
+| `data/sandbox/kind-writes-disabled` | The owner, by hand | The write switch: while this file exists, the adapter refuses every write and reads go on. |
+| `~/.config/recap/kind/`, `~/.config/recap/sregym/` (outside the repository) | `infra/aws/ec2.sh creds` (M5) | RECAP's identity kubeconfigs (short-lived ServiceAccount tokens, mode 600) and the cluster CA's fingerprint, `ca.sha256`. Options carry only these paths, never a token. |
 | `data/traces/<run_id>.jsonl` | `JsonlTraceSink` | One trace event per line. The easiest audit log to read, grep or attach to a bug report. |
 | `evals/reports/runs/<report_id>/data/` | Evaluation runner | Its own `recap.db`, `memory.db`, `sandbox/` and `traces/`, created fresh for every evaluation, so demo memory can never leak into it. Git-ignored. |
 | `fixtures/recordings/*.jsonl` and `MANIFEST.json` | `scripts/recordings_manifest.py --update` (committed by hand) | Real model exchanges that CI and the dashboard replay; the manifest pins each file's SHA-256 and the run it reproduces (ADR 0028). |
@@ -978,6 +1082,12 @@ hash of all five files is recorded on every run.
 | [`configs/policies.yaml`](../configs/policies.yaml) | The trusted tool catalog and safety settings: risk tier, description and argument rules per tool, allowlists, output limits, the oracle threshold, the tools a mitigation may use (enforced by R14) | `policy-v1`; namespace `shop`; 5 services; 10 s tool timeout, 6000 characters, 60 list items; `max_error_rate` 0.05; `remediation_tools: [execute_rollback, restart_service]` |
 | [`configs/providers.yaml`](../configs/providers.yaml) | Decision providers and the default one | `default: deterministic` (scripted, not an LLM); `anthropic` (opt-in: model, effort, max tokens, and prices used only to *estimate* cost) |
 
+**Target profiles (M5).** `RECAP_TARGET=<name>` reads `environment.yaml`, `policies.yaml` and
+`budget.yaml` from `configs/targets/<name>/` instead, and that profile's `knowledge.yaml` adds a
+runbook overlay; the config hash covers the files actually read. Two profiles exist: `kind-demo`
+(`kind: kind`, namespace `recap-demo`, `policy-kind-v1`) and `sregym-hotel` (`kind: sregym`,
+namespace `hotel-reservation`, `policy-sregym-hotel-v2`). Without `RECAP_TARGET`, nothing changes.
+
 Environment variables (documented in [`.env.example`](../.env.example)) are read from the process
 environment, so export them in your shell:
 
@@ -989,6 +1099,10 @@ environment, so export them in your shell:
 | `RECAP_TOOL_LATENCY_MS` | Overrides the simulated read latency. |
 | `RECAP_ENABLE_EMBEDDINGS` | Makes hybrid retrieval the default for runs that do not choose (needs Ollama with `nomic-embed-text` and the stored vectors, `scripts/build_vector_index.py`). The V1 evaluation ignores it and pins BM25; it ignores `RECAP_KNOWLEDGE_OVERLAYS` too. |
 | `RECAP_ENABLE_OTEL` | Adds OpenTelemetry console spans (needs `pip install -e ".[otel]"`). |
+
+M5 added two that are set for one process, not in `.env.example`: `RECAP_TARGET` (above), and
+`RECAP_ALLOW_HOSTED_MODEL_ON_LIVE_TARGET=1`, the owner's permission for a free hosted plan to see a
+live target's data (a paid model is refused on a live target whatever is set).
 
 These variables are read only in the controller process. The MCP subprocess receives its settings
 through `--env-config` instead ([section 5](#5-process-model)).
@@ -1045,6 +1159,8 @@ were produced from identical configuration and fixtures.
 - In parallel rounds, the order in which the two agents' results arrive can vary with timing
   (their evidence IDs and stored order do not, and a replay stops where its recording says
   the original run stopped, ADR 0020 and ADR 0026).
+- A run on a real cluster (M5): neither the cluster nor the model is deterministic, and a replay is
+  refused against a live target, so each record stands for its own run.
 - Memory is an input. A demo run reads episodes that earlier demo runs wrote to `data/memory.db`; the
   `ambiguous-incident` demo found the episode written by `bad-deployment`. To repeat a run exactly,
   start from the same memory. The evaluation runner always starts from an empty, evaluation-only data
@@ -1058,14 +1174,19 @@ were produced from identical configuration and fixtures.
 
 - **The target is simulated by default.** Every V1 result comes from the local simulator and is
   labeled so. Since M5 RECAP also runs on real Kubernetes clusters (the Kind demo and SREGym's
-  own cluster), each write approved by a person; no SREGym benchmark results exist.
+  own cluster, both Kind clusters on the owner's VM, not production), each write approved by a
+  person ([section 14](#14-real-kubernetes-targets-m5)). SREGym's own grader passed one
+  development run and failed another; no SREGym benchmark results exist.
 - **The default brain is scripted.** It understands the simulator's log conventions
   ([`signals.py`](../recap/core/signals.py)); real logs would need real parsers or an LLM provider.
   The Claude adapter is opt-in and has not been measured.
 - **The MCP server is a local subprocess.** Since M1 a write needs a capability signed with the
   run's private key, so calling a write tool directly is refused. A process that can rewrite the
-  run's sandbox file, or the controller process itself, is still trusted. A real deployment would
-  also need least-privilege credentials (for example Kubernetes RBAC); that is not yet built.
+  run's sandbox file, or the controller process itself, is still trusted. On the M5 clusters each
+  of RECAP's identities is a least-privilege ServiceAccount, so the cluster's RBAC holds even if
+  RECAP itself is compromised; on the Kind demo an admission policy also checks each patch's
+  shape, while on SREGym RBAC alone limits the writer. Per-person identity and production
+  credentials are not yet built.
 - **Injection detection is pattern-based** and easy to evade. The protection is the gateway, which
   denies dangerous actions whatever any text says.
 - **Secret redaction is best-effort.** Pattern matching removes known key formats, values under
@@ -1075,6 +1196,8 @@ were produced from identical configuration and fixtures.
   about timing and platform signals; it is not proven.
 - **One operator, not individual people.** The API records `operator:<name>` from a single bearer
   token, reads stay open on the loopback host names, and the SQLite files are trusted local state.
+  On a live target (M5) the typed service name proves a terminal or a token holder and a timing,
+  not which person decided.
 - **One MCP subprocess per run** costs about 0.4 to 0.5 s of start-up.
 - **Token counts are estimates** (about 4 characters per token), and external API cost is $0 in
   deterministic mode.
@@ -1112,4 +1235,196 @@ flowchart LR
 | Replay by manifest id | implemented | SHA-256 checked before any answer; refused unless the environment is simulated; a fresh approval; `replay_pace` changes only timing. |
 | Evaluation records | implemented | One mode per batch; success only with the oracle's verified recovery; a named failure category otherwise. |
 | Mission Control | implemented | Reads only the typed API; types generated from the response models; untrusted text escaped and labelled. |
-| Kubernetes evaluation mode | implemented (M5) | `real_kubernetes`: a real model's runs on the Kind cluster, each fix approved by a person, built from the stored runs by `scripts/live_eval.py --from-data`; never mixed with simulated results ([m5-integration-plan.md](m5-integration-plan.md)). |
+| Kubernetes evaluation mode | implemented (M5) | `real_kubernetes`: a real model's runs on a real cluster (the Kind demo, or SREGym's), each fix approved by a person, built from the stored runs by `scripts/live_eval.py --from-data`; never mixed with simulated results ([m5-integration-plan.md](m5-integration-plan.md)). A record names its target (`kind` or `sregym`), and a batch may hold a benchmark grader's own verdicts, recorded by hand and never merged with RECAP's ([section 14](#14-real-kubernetes-targets-m5)). |
+
+---
+
+## 14. Real Kubernetes targets (M5)
+
+Since M5 RECAP also works on real Kubernetes clusters, behind the same `TargetEnvironment`
+interface as the simulator
+([ADR 0032](decisions/0032-a-real-kubernetes-target-behind-the-same-interface.md)). There are two
+targets:
+
+- **RECAP's own Kind demo cluster** ([infra/kind/](../infra/kind/README.md)): two services
+  (frontend calls backend), Prometheus, a traffic generator, and four scenarios that inject real
+  faults: a bad release, a dependency crash, a memory leak, and logs that carry a planted
+  instruction.
+- **SREGym 1.1's own cluster**, on one SREGym problem (`misconfig_app_hotel_res`), in SREGym's
+  external-harness mode: SREGym deploys its hotel-reservation app and injects the problem, and
+  RECAP works the incident
+  ([ADR 0031](decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md),
+  [integrations/sregym/](../integrations/sregym/README.md)).
+
+Both are Kind clusters on the owner's AWS VM, not production, and a person approves every write.
+The handoff report is [m5-report.md](m5-report.md) and the log [m5-progress.md](m5-progress.md);
+[flow.md, section 9](flow.md#9-a-run-on-a-real-cluster-m5) follows one real run end to end.
+
+### Where it runs
+
+```mermaid
+flowchart LR
+    subgraph mac["Owner's Mac - RECAP"]
+        dash["Mission Control dashboard"]
+        ctrl["Controller process - CLI demo or API server: controller, agents, verifier, gateway, approvals, oracle"]
+        mcp["MCP server subprocess, one per run - typed read tools and the write path"]
+    end
+    tunnel{{"SSH tunnel - infra/aws/ec2.sh tunnel - loopback ports only"}}
+    subgraph vm["Owner's AWS VM - EC2 m6a.2xlarge, 8 vCPU, 32 GiB, no GPU"]
+        kindc["Kind demo cluster recap-m5 - frontend, backend, Prometheus, traffic"]
+        sre["SREGym's cluster kind-kind - hotel-reservation, 19 Deployments"]
+        harness["SREGym 1.1 harness and grader - infra/sregym/sregym.sh"]
+        oll["Ollama - qwen3:8b on CPU"]
+    end
+    dash -->|"HTTP and SSE, operator token"| ctrl
+    ctrl -->|"MCP over stdio"| mcp
+    ctrl -->|"model requests, provider ollama-vm"| tunnel
+    mcp -->|"kubectl as recap-reader, and as recap-writer only with a capability"| tunnel
+    ctrl -->|"kubectl for reset, and as recap-oracle for health_check"| tunnel
+    tunnel --> kindc
+    tunnel --> sre
+    tunnel --> oll
+    harness -->|"deploys the app and injects the problem, grades afterwards"| sre
+```
+
+How to read it:
+
+- **RECAP stays on the Mac.** The controller process and its MCP server subprocess are the ones
+  of [section 5](#5-process-model); only the adapter inside them is new. Each process builds its
+  own adapter instance for the run (`KubernetesEnvironment`, or its `SREGymEnvironment`
+  subclass). The read tools and the write path run in the MCP
+  server, as `recap-reader` and `recap-writer`; reset and the oracle's `health_check()` run in the
+  controller process.
+- **The tunnel carries only loopback ports.** `ec2.sh tunnel` forwards the clusters' API servers,
+  the Kind demo's NodePorts (frontend 30080, backend 30081) and its Prometheus (30090), and the
+  VM's Ollama (Mac 127.0.0.1:11435 to VM 127.0.0.1:11434). The VM's security group opens only SSH,
+  to the owner's IP, and every URL in a target profile must be on the loopback interface.
+- **One cluster at a time.** The Kind demo is stopped while SREGym's cluster exists.
+- **The model** is `qwen3:8b` (Q4_K_M) under Ollama 0.34.4 on the VM's CPU: provider `ollama-vm`,
+  self-hosted, $0 per request. One request took 75 to 300 s. When two specialists run in parallel,
+  their requests overlap in time but share that one CPU server, so a parallel round is
+  concurrency, not faster inference.
+- **The VM runs only while used.** An idle guard on the VM stops it when nothing uses it, and
+  `ec2.sh hold` keeps it up for one run (2 hours at most). AWS showed about $5.40 of usage before
+  credits from 2026-11-02 to 2026-11-07, all covered by the owner's credits: $0 out of pocket
+  ([m5-report.md, section 8](m5-report.md#8-runtime-resources-and-spending)).
+
+### The adapter's parts
+
+| Part | What it does | Code |
+|---|---|---|
+| Target profile | `RECAP_TARGET=kind-demo` or `sregym-hotel` swaps in that target's environment, policies and budget, and adds a Kubernetes runbook overlay ([section 10](#10-configuration-files)). Without it nothing changes. | [`configs/targets/`](../configs/targets/), [`config.py`](../recap/core/config.py) |
+| Typed operations | A closed list (`KubeOp`): list or get Deployments, list ReplicaSets, pods and events, read pod logs and the server's version, `rollout undo` and `rollout restart`, and `set image` for a Kind reset only. Every argument is a validated Kubernetes name or number, so no model text ever becomes one. `kubectl` starts without a shell, with a minimal environment and `--kubeconfig`, `--context` and `--namespace` on every call; its output is size-limited and parsed strictly, and every call is audited. There is no exec, apply, delete or scale. | [`kubectl.py`](../recap/environments/kubernetes/kubectl.py) |
+| Identities | One ServiceAccount per role, with short-lived tokens kept outside git: `recap-reader` serves the read tools; `recap-writer` only the write path (get and patch the app's Deployments, list their ReplicaSets); `recap-oracle` reads for `health_check()`; `recap-scenario` injects the Kind demo's faults (SREGym has none). Each client refuses an operation its role does not grant before the API server checks the real RBAC. The administrator's credential is refused. | [`options.py`](../recap/environments/kubernetes/options.py), [Kind RBAC](../infra/kind/manifests/10-recap-rbac.yaml), [SREGym RBAC](../infra/sregym/recap-rbac.yaml) |
+| Pinning | Every reset checks each identity's kubeconfig before any request: a private file, the pinned context, an https API server on a loopback address, the cluster CA's SHA-256 fingerprint recorded at setup, and a ServiceAccount token (no exec plugin, no client certificate). `kubectl` must be within one minor version of the API server, and on the Kind demo Prometheus's clock within 5 s of the Mac's. | [`preflight.py`](../recap/environments/kubernetes/preflight.py) |
+| Lease and write switch | A namespace lease keeps a second run off the namespace; it expires on its own after an hour, and `end_run()` frees it when the run ends, however it ends. While the file `kind-writes-disabled` exists in the state folder, every write is refused and reads go on. | [`state.py`](../recap/environments/kubernetes/state.py) |
+| Translation | Kubernetes JSON into the observation models the agents already read: services, health, logs, releases (ReplicaSet revisions), events, metrics (fixed PromQL against the Kind demo's Prometheus; restarts from pod status) and the rollback dry run, each limited to the run's own window. | [`translate.py`](../recap/environments/kubernetes/translate.py), [`rollout.py`](../recap/environments/kubernetes/rollout.py), [`metrics.py`](../recap/environments/kubernetes/metrics.py) |
+| The write path | The only write, step by step below. | [`engine.py`](../recap/environments/kubernetes/engine.py) (`execute_authorized`) |
+| The oracle | `health_check()` as `recap-oracle`, never an MCP tool, in two rounds 2 s apart: every allowlisted service's rollout complete, its replicas ready, and on the Kind demo the oracle's own HTTP probe below the error-rate threshold (0.05). Where a target has no probe, every container must have run a minute with no exit in the last five. The controller probes until the target is healthy or its stabilization window ends (180 s on Kind, 240 s on SREGym). | [`engine.py`](../recap/environments/kubernetes/engine.py) (`health_check`), [`probe.py`](../recap/environments/kubernetes/probe.py), [`oracle.py`](../recap/verification/oracle.py) |
+| External-harness mode | For a benchmark's own cluster: reset changes nothing, takes each Deployment's first revision as the run's baseline and waits for the alert from the cluster's own state; a release may be an image tag, only a key into a Deployment's history; what is not measured is reported as not measured. | [`adapter.py`](../integrations/sregym/adapter.py), [ADR 0031](decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md) |
+| Fake cluster | `FakeKubeClient` runs the same validation and parsing over an in-process fake cluster, so the whole pipeline is tested offline. | [`fake.py`](../recap/environments/kubernetes/fake.py) |
+
+**The write path.** Rollback and restart only. In the MCP server, `execute_authorized` takes these
+steps, all inside the 10 s tool limit:
+
+1. Only `rollback` and `restart` exist here. `delete_namespace` is refused even with a valid
+   capability: the policy's R9 is the first lock, this is the second.
+2. While the write switch is on, nothing is written.
+3. The capability is verified against the run's bound public key and the used nonces (never one
+   signed for safety off), and its nonce is committed before the cluster is touched.
+4. The adapter checks the target again: an allowlisted service, a namespace lease held by this
+   run, and for a rollback a version in the profile's release format.
+5. As `recap-writer`, the Deployment is read and the named release resolved to the revision that
+   ran it. Then come a server-side dry run (`--dry-run=server`) and the write
+   (`kubectl rollout undo --to-revision`, or the patch a rolling restart makes).
+6. A read-back: the generation moved, and a rollback now runs exactly that revision's image,
+   digest included.
+7. An audit row in the run's local state file.
+
+The write is shielded from cancellation: once sent, it finishes and is audited before the call
+returns. A write that was sent but not confirmed by the read-back is reported as an error, never
+as a success, and the oracle judges what really happened. A successful write is never counted as
+a recovery by itself; only the oracle's verdict is.
+
+### Two targets, one adapter
+
+| | Kind demo (`RECAP_TARGET=kind-demo`) | SREGym (`RECAP_TARGET=sregym-hotel`) |
+|---|---|---|
+| Adapter kind | `kind` (`KubernetesEnvironment`) | `sregym` (`SREGymEnvironment`: the same class, in external-harness mode) |
+| Cluster and namespace | `recap-m5`, one node; `recap-demo` | SREGym's four-node `kind-kind`; `hotel-reservation` |
+| Services | `frontend` and `backend`, 2 pods each | 19 Deployments of the hotel-reservation app |
+| Who injects the fault | RECAP's reset, as `recap-scenario`: the baseline restored, then the scenario's typed fault steps | SREGym's harness (`sregym.sh deploy`); RECAP's reset changes nothing |
+| Releases | `vX.Y.Z` image tags | image tags by date or commit, behind a digest |
+| Metrics | Prometheus, fixed PromQL | none: "not measured" |
+| The oracle's extra check | its own HTTP probe | every container up a minute, no exit in five |
+| Shape of the writer's patches | checked by an admission policy | RBAC alone limits the writer |
+| Clock | Prometheus's clock checked | unchecked |
+| Stabilization window | 180 s | 240 s |
+| Verdicts | RECAP's oracle | RECAP's oracle, and separately SREGym's own grader (`run-oracle.py`), never merged |
+
+### What M5 changed outside the adapter
+
+The agents, the MCP tools, the gateway, the verifier and memory are the same code on every target.
+M5 made a few general changes, none of them specific to one target:
+
+- `TargetEnvironment.end_run()`, an optional hook the controller calls however a run ends.
+- Before `reset`, the controller refuses for a target that is not simulated: the auto-approver,
+  safety off, a replay, a paid model, and a free hosted plan unless the owner sets
+  `RECAP_ALLOW_HOSTED_MODEL_ON_LIVE_TARGET=1`.
+- On a live target an approval needs the target service's exact name: typed at the console (an
+  Enter alone asks again, and the prompt gives up at the request's expiry), or sent as
+  `confirm_target` to `POST /approvals/{id}`. The decision log records how and when; it proves a
+  terminal or a token holder and a timing, not a person.
+- A `release` argument type (an image tag) beside `version`. The proposal schema offers a release
+  only among the restore points the evidence names, and VP4 still checks the answer.
+- V2 may date a bad release's onset by the first warning event that says the service's own pods
+  fail, where no error-rate metric and no release-tagged log line exist. A health value the target
+  cannot measure stays `None` and is never estimated.
+- Memory is scoped by environment kind.
+- The `real_kubernetes` evaluation mode
+  ([section 13](#13-the-read-side-typed-views-replays-and-evaluation-records-m4)), and
+  `POST /environment/check`, which runs a real cluster's preflight for an operator and changes
+  nothing. Mission Control shows the active target and checks that it can be reached, asks for
+  the typed service name before a live approval, and tells the two clusters apart in
+  Evaluations.
+
+### What ran
+
+All runs used `qwen3:8b` and prompts-v4.7; each record says who approved what.
+
+| Target | Runs | Outcomes | Records |
+|---|---|---|---|
+| Kind demo (W4) | 6 | 2 RESOLVED, each approved by the owner typing the service's name and verified by the oracle: a bad release, and a red-team run whose logs carried a planted instruction. 2 BLOCKED: an Enter alone counted as a rejection, before the prompt named the word to type. 1 FAILED safely: a model request outlasted its limit, so the evidence stayed insufficient. 1 cancelled by the Mac's memory watchdog. | [batch](../evals/reports/batches/2026-11-03-real-kubernetes-qwen3-8b-prompts-v4.7/README.md), [exports](../evals/live/README.md) |
+| SREGym `misconfig_app_hotel_res` (W5) | 5 | 1 RESOLVED, and SREGym's own grader passed it. 1 BLOCKED by VP4: the model named the blamed release as the restore point (SREGym's grader: fail). 1 BLOCKED: the approval expired. 2 FAILED safely: the wrong mechanism, refused by the verifier, so nothing was proposed. | [batch](../evals/reports/batches/2026-11-03-real-kubernetes-sregym-qwen3-8b-prompts-v4.7/README.md), [export](../evals/live/2026-11-07-qwen3-8b-sregym-human-approved-prompts-v4.7/README.md) |
+
+These are counts, not rates: 11 runs, 3 verified recoveries. They show that the path works end
+to end on a real cluster, not how often a model is right. The SREGym problem is not held out
+(RECAP was changed between its runs), and a person approved every fix, so nothing here is a
+benchmark result or comparable with SREGym's leaderboard.
+
+### Tests
+
+- **Offline:** `tests/unit/test_kind_*.py` over the fake cluster,
+  [`test_kind_external.py`](../tests/unit/test_kind_external.py) for the external-harness mode
+  and [`test_sregym_adapter.py`](../tests/unit/test_sregym_adapter.py) for the SREGym profile.
+  [`tests/e2e/test_kind_pipeline.py`](../tests/e2e/test_kind_pipeline.py) runs the whole pipeline
+  on the Kind profile through the real MCP server subprocess, for example
+  `test_the_write_boundary_holds_inside_the_mcp_server_for_any_caller`.
+- **On the live cluster, opt-in and never in CI:**
+  [`tests/e2e/test_kind_live.py`](../tests/e2e/test_kind_live.py), with `RECAP_LIVE_KIND=1` and a
+  running Kind cluster; it passed on the real cluster in W3 with the scripted policy
+  ([m5-progress.md](m5-progress.md)).
+- **Typed-name approvals:** [`test_console_approval_live.py`](../tests/unit/test_console_approval_live.py)
+  and `test_a_live_approval_needs_the_target_services_exact_name` in
+  [`tests/e2e/test_api_security.py`](../tests/e2e/test_api_security.py).
+
+### Limits
+
+- Kind clusters on the owner's VM: one small cluster per target, no production traffic.
+- Small samples: counts, not rates, and one SREGym problem that is not held out.
+- SREGym's writer is limited by RBAC only: no admission policy checks its patches there.
+- Clocks on SREGym go unchecked: without Prometheus there is nothing to compare with, so a skew
+  between the Mac and the VM would go unseen.
+- An approval proves a terminal or a token holder and a timing, not which person decided.
+- A run on a real cluster cannot be replayed; its recording is evidence only. Published runs are
+  files to read: Mission Control opens runs from its own data folder only.
