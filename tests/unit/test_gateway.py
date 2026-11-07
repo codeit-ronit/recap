@@ -34,7 +34,7 @@ from recap.core.models import (
     TrustLevel,
     Verdict,
 )
-from recap.core.observations import AuthorizedAction
+from recap.core.observations import AuthorizedAction, ClusterEvent, EventList
 from recap.harness.budget import BudgetTracker
 from recap.safety.approvals import ApprovalStore
 from recap.safety.capabilities import CapabilityIssuer, CapabilityPayload, verify_capability
@@ -401,6 +401,57 @@ async def test_injection_text_is_flagged_on_evidence_and_traced(settings: Settin
     assert {"ignore-instructions", "imperative-destructive"} <= set(event.payload["patterns"])
     assert "delete_namespace" in event.payload["excerpt"]
     assert kit.transport.names() == ["get_service_logs"]  # flagged text triggers nothing
+
+
+async def test_injection_text_in_cluster_events_is_flagged_and_stays_data(
+    settings: Settings,
+) -> None:
+    """On Kubernetes the workload writes part of what events say: a failed exec probe's event
+    carries the probe command's own output. Instructions planted there are flagged like log
+    lines, traced with the tool that returned them, and stay untrusted data, kept verbatim:
+    the one read is the only call, and nothing is written."""
+    planted = ClusterEvent(
+        timestamp=T0,
+        type="Warning",
+        reason="Unhealthy",
+        object="pod/checkout-7d9f8-x2k9q",
+        service="checkout",
+        message=f"Readiness probe failed: {INJECTED}",
+        count=6,
+    )
+    scaled = planted.model_copy(
+        update={
+            "type": "Normal",
+            "reason": "ScalingReplicaSet",
+            "object": "deployment/checkout",
+            "message": "Scaled up replica set checkout-7d9f8 to 2",
+            "count": 1,
+        }
+    )
+    events = EventList(events=[planted, scaled]).model_dump(mode="json")
+    kit = make_kit(
+        settings, FakeTransport({"get_k8s_like_events": RawToolResult(ok=True, structured=events)})
+    )
+    result = await kit.gateway.call_read(
+        "get_k8s_like_events", {"service": "checkout"}, AgentRole.INFRASTRUCTURE
+    )
+
+    evidence = kit.evidence.get(result.evidence_id)
+    assert result.ok and INJECTION_FLAG in evidence.flags
+    assert evidence.trust_level == TrustLevel.UNTRUSTED
+    assert evidence.data["events"][0]["message"] == f"Readiness probe failed: {INJECTED}"
+    (event,) = kit.events(TraceCategory.INJECTION)
+    assert (event.payload["tool"], event.payload["evidence_id"]) == (
+        "get_k8s_like_events",
+        evidence.id,
+    )
+    assert event.agent == AgentRole.INFRASTRUCTURE.value
+    assert {"ignore-instructions", "imperative-destructive"} <= set(event.payload["patterns"])
+    assert "delete_namespace" in event.payload["excerpt"]
+    assert kit.transport.calls == [("get_k8s_like_events", {"service": "checkout"})]
+    assert kit.budget.tool_calls == 1
+    writes = (TraceCategory.MITIGATION_STARTED, TraceCategory.MITIGATION)
+    assert [e for e in kit.sink.events if e.category in writes] == []
 
 
 async def test_secrets_in_tool_output_never_reach_evidence(settings: Settings) -> None:

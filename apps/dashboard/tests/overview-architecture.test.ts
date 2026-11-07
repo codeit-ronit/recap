@@ -2,10 +2,13 @@
  * Tests for src/view/system.ts: what the Overview and Architecture & Learning pages show from
  * GET /system, GET /providers and GET /runs. Run with `npm test` (Node runs TypeScript directly).
  *
- * The fixtures follow what a seeded server really returned (scripts/seed_demo.py): a simulated
- * shop that is active, SREGym and Kind planned for M5, nine scripted runs and two replays of two
- * committed recordings. Partial records (no provider class, no wall time) must read "not
- * recorded", never a default; outcomes are never added up across data sources.
+ * The fixtures follow what servers of this repository really return: the seeded simulated
+ * server (scripts/seed_demo.py: the simulated shop active, the Kind and SREGym adapters
+ * implemented but not configured, nine scripted runs and two replays of two committed
+ * recordings), and the adapter lists of a server with RECAP_TARGET=kind-demo or sregym-hotel
+ * (Runtime.system_summary, offline). Partial records (no provider class, no target, no wall
+ * time) must read "not recorded", never a default; outcomes are never added up across data
+ * sources or targets.
  */
 
 import assert from "node:assert/strict";
@@ -19,22 +22,28 @@ import {
   AROUND_NODES,
   DOCS,
   FLOW_STEPS,
+  KUBERNETES_AUTHORIZATION,
   NODE_ORDER,
   OUTCOME_ORDER,
+  SOURCE_NOTES,
   SOURCE_ORDER,
+  TARGET_KINDS,
   accessFacts,
   activeRuns,
   adapterLook,
   adapterName,
   adrPath,
   archNode,
+  checkLook,
   componentById,
   componentLook,
+  configuredAdapter,
   keyStatus,
   livenessLook,
   nextNodeId,
   nodeFacts,
   nodeStatus,
+  operationalLook,
   orderProviders,
   outcomeLook,
   outcomesBySource,
@@ -49,6 +58,10 @@ import {
   sessionLook,
   sourceOf,
   tallyComponents,
+  targetGuide,
+  targetLabel,
+  targetNote,
+  targetOf,
 } from "../src/view/system.ts";
 import type { AdapterStatus, ComponentStatus, RunSummary, SystemView } from "../src/dto.ts";
 
@@ -75,35 +88,42 @@ const COMPONENTS: ComponentStatus[] = [
   component("opentelemetry", "TraceSink", "OpenTelemetry console spans", "disabled", "optional: RECAP_ENABLE_OTEL=1"),
 ];
 
-const ADAPTERS: AdapterStatus[] = [
-  {
-    kind: "simulated",
-    adapter: "SimulatedEnvironment",
-    configured: true,
-    status: "active",
-    operational: true,
+const SIMULATED_DETAIL = "deterministic local simulation of a five-service shop (recap/environments/simulated/)";
+const SREGYM_DETAIL =
+  "a SREGym 1.1 problem on SREGym's own Kind cluster, deployed and injected by its external harness: RECAP's Kubernetes adapter with image-tag releases and no probe or metrics, three RBAC-limited identities of its own, and SREGym's mitigation oracle as the benchmark's grader (integrations/sregym/, ADR 0031); chosen with RECAP_TARGET=sregym-hotel. GET /system never contacts the cluster";
+const KIND_DETAIL =
+  "a local Kind cluster through typed kubectl operations, four RBAC-limited identities and an HTTP probe of its own (recap/environments/kubernetes/); chosen with RECAP_TARGET=kind-demo. GET /system never contacts the cluster: whether it is up is checked when a run starts";
+
+/** GET /system `environment_adapters` with `configured` the active one (recap/runtime.py). */
+function adaptersFor(configured: "simulated" | "kind" | "sregym"): AdapterStatus[] {
+  const entry = (kind: string, adapter: string, detail: string): AdapterStatus => ({
+    kind,
+    adapter,
+    configured: kind === configured,
+    status: kind === configured ? "active" : "available",
+    operational: kind === configured,
     milestone: null,
-    detail: "deterministic local simulation of a five-service shop (recap/environments/simulated/)",
-  },
-  {
-    kind: "sregym",
-    adapter: "SREGymEnvironment",
-    configured: false,
-    status: "planned",
-    operational: false,
-    milestone: "M5",
-    detail: "interface only: every operation raises EnvironmentNotIntegrated (integrations/sregym/); the real integration is planned for M5",
-  },
-  {
-    kind: "kind",
-    adapter: null,
-    configured: false,
-    status: "planned",
-    operational: false,
-    milestone: "M5",
-    detail: "no adapter in this repository: a local Kind cluster is the first M5 target",
-  },
-];
+    detail,
+  });
+  return [
+    entry("simulated", "SimulatedEnvironment", SIMULATED_DETAIL),
+    entry("sregym", "SREGymEnvironment", SREGYM_DETAIL),
+    entry("kind", "KubernetesEnvironment", KIND_DETAIL),
+  ];
+}
+
+const ADAPTERS = adaptersFor("simulated");
+
+/** An adapter a server lists as not built (none does since M5; a later one might). */
+const PLANNED: AdapterStatus = {
+  kind: "nomad",
+  adapter: null,
+  configured: false,
+  status: "planned",
+  operational: false,
+  milestone: "M9",
+  detail: "no adapter in this repository",
+};
 
 const SYSTEM = {
   schema_version: "recap-api-v1",
@@ -177,7 +197,51 @@ const SYSTEM = {
   },
 } as unknown as SystemView;
 
-type RunBits = Pick<RunSummary, "provider_class" | "provider_kind" | "outcome" | "scenario_id" | "replay" | "terminal" | "wall_seconds" | "status">;
+/** The same server with RECAP_TARGET=kind-demo (what Runtime.system_summary reports, offline). */
+const KIND_SYSTEM: SystemView = {
+  ...SYSTEM,
+  environment: {
+    kind: "kind",
+    name: "Kind cluster recap-m5",
+    namespace: "recap-demo",
+    is_simulated: false,
+    supported_actions: ["rollback", "restart"],
+    description: "Local Kind cluster recap-m5 (context kind-recap-m5), not production: 2 demo services in namespace recap-demo.",
+    stabilization_timeout_seconds: 180,
+    stabilization_poll_seconds: 5,
+  },
+  environment_kind: "kind",
+  oracle: "kind-health-oracle",
+  safety_policy: "recap-policy-engine (policy-kind-v1)",
+  label: "LIVE ENVIRONMENT (kind) · V1",
+  simulation_notice: null,
+  environment_adapters: adaptersFor("kind"),
+  versions: { ...SYSTEM.versions, policy_version: "policy-kind-v1" },
+};
+
+/** The same server with RECAP_TARGET=sregym-hotel. */
+const SREGYM_SYSTEM: SystemView = {
+  ...KIND_SYSTEM,
+  environment: {
+    ...KIND_SYSTEM.environment,
+    kind: "sregym",
+    name: "SREGym on Kind cluster kind",
+    namespace: "hotel-reservation",
+    description: "SREGym 1.1 on its own Kind cluster kind (context kind-kind), not production.",
+    stabilization_timeout_seconds: 240,
+  },
+  environment_kind: "sregym",
+  oracle: "sregym-health-oracle",
+  safety_policy: "recap-policy-engine (policy-sregym-hotel-v2)",
+  label: "LIVE ENVIRONMENT (sregym) · V1",
+  environment_adapters: adaptersFor("sregym"),
+  versions: { ...SYSTEM.versions, policy_version: "policy-sregym-hotel-v2" },
+};
+
+type RunBits = Pick<
+  RunSummary,
+  "provider_class" | "provider_kind" | "outcome" | "scenario_id" | "replay" | "terminal" | "wall_seconds" | "status" | "environment_kind" | "environment_simulated"
+>;
 
 function run(over: Partial<RunBits>): RunBits {
   return {
@@ -189,8 +253,15 @@ function run(over: Partial<RunBits>): RunBits {
     terminal: true,
     wall_seconds: 0.84,
     status: "finished",
+    environment_kind: "simulated",
+    environment_simulated: true,
     ...over,
   };
+}
+
+/** A run on a real cluster with the self-hosted model (provider ollama-vm). */
+function clusterRun(kind: "kind" | "sregym", over: Partial<RunBits> = {}): RunBits {
+  return run({ provider_class: "local_llm", provider_kind: "llm", environment_kind: kind, environment_simulated: false, scenario_id: `${kind}-bad-release`, ...over });
 }
 
 function replayOf(fixture: string, recording: string): RunSummary["replay"] {
@@ -240,16 +311,58 @@ test("component states read as words, with a distinct icon per meaning", () => {
   assert.equal(componentLook(null).label, "Not reported");
 });
 
-test("a planned adapter names its milestone and is never active", () => {
+test("every M5 adapter is implemented: the configured one is active, the others available; a planned one names its milestone", () => {
   const [simulated, sregym, kind] = ADAPTERS;
   assert.equal(adapterLook(simulated).label, "Active");
-  assert.equal(adapterLook(sregym).label, "Planned · M5");
-  assert.equal(adapterLook(kind).label, "Planned · M5");
-  assert.notEqual(adapterLook(kind).tone, "ok");
+  assert.equal(adapterLook(sregym).label, "Available");
+  assert.equal(adapterLook(kind).label, "Available");
+  const onKind = adaptersFor("kind");
+  assert.deepEqual(
+    onKind.map((a) => adapterLook(a).label),
+    ["Available", "Available", "Active"],
+  );
+  // A planned adapter (none since M5) is never active and names its milestone.
+  assert.equal(adapterLook(PLANNED).label, "Planned · M9");
+  assert.notEqual(adapterLook(PLANNED).tone, "ok");
   assert.equal(adapterLook({ status: "planned", milestone: null }).label, "Planned");
   assert.equal(adapterName("kind"), "Kind (local Kubernetes)");
   assert.equal(adapterName("sregym"), "SREGym");
   assert.equal(adapterName("custom.module:Adapter"), "custom.module:Adapter");
+});
+
+test("only the configured adapter is operational; on a real cluster that is where runs go, not that it answers", () => {
+  assert.equal(configuredAdapter(SYSTEM)?.kind, "simulated");
+  assert.equal(configuredAdapter(KIND_SYSTEM)?.adapter, "KubernetesEnvironment");
+  assert.equal(configuredAdapter(SREGYM_SYSTEM)?.adapter, "SREGymEnvironment");
+  assert.equal(configuredAdapter({ environment_adapters: [] }), null);
+
+  const [simulated, sregym, kind] = adaptersFor("kind");
+  assert.equal(operationalLook(kind).label, "Operational");
+  assert.equal(operationalLook(kind).tone, "ok");
+  assert.match(operationalLook(kind).title, /does not contact the cluster: Check now/);
+  assert.equal(operationalLook(simulated).label, "Not operational");
+  assert.equal(operationalLook(sregym).label, "Not operational");
+  assert.notEqual(operationalLook(sregym).tone, "ok");
+  // The simulator, when configured, needs no such caveat.
+  assert.doesNotMatch(operationalLook(adaptersFor("simulated")[0]).title, /cluster/);
+});
+
+test("each real-cluster target links where it is set up; the simulator has no such guide", () => {
+  assert.deepEqual(targetGuide("kind")?.path, "infra/kind/README.md");
+  assert.deepEqual(targetGuide("sregym")?.path, "integrations/sregym/README.md");
+  assert.equal(targetGuide("simulated"), null);
+  assert.equal(targetGuide("custom.module:Adapter"), null);
+  assert.equal(targetGuide(null), null);
+  assert.deepEqual([...TARGET_KINDS], ["simulated", "kind", "sregym"]);
+});
+
+test("a readiness check reads passed or failed in words, and says nothing was changed", () => {
+  assert.equal(checkLook(true).label, "Passed");
+  assert.equal(checkLook(true).tone, "ok");
+  assert.equal(checkLook(false).label, "Failed");
+  assert.equal(checkLook(false).tone, "bad");
+  assert.notEqual(checkLook(true).icon, checkLook(false).icon, "never color alone");
+  for (const ok of [true, false]) assert.match(checkLook(ok).title, /Nothing was changed/);
 });
 
 test("components are tallied by status and the inactive ones are listed", () => {
@@ -266,27 +379,24 @@ test("components are tallied by status and the inactive ones are listed", () => 
   assert.deepEqual(tallyComponents([]), { counts: [], notActive: [] });
 });
 
-test("M5 gaps are exactly what the server lists as planned", () => {
-  const gaps = plannedGaps(SYSTEM);
+test("planned items are exactly what the server lists as planned: an M5 server lists none", () => {
+  // Kind and SREGym are implemented, whichever target is configured: nothing is planned.
+  for (const system of [SYSTEM, KIND_SYSTEM, SREGYM_SYSTEM]) assert.deepEqual(plannedGaps(system), []);
+  // A planned adapter, component or evaluation mode is listed with the server's own words.
+  const gaps = plannedGaps({ ...SYSTEM, environment_adapters: [...ADAPTERS, PLANNED] });
   assert.deepEqual(
     gaps.map((g) => g.id),
-    ["adapter:sregym", "adapter:kind"],
+    ["adapter:nomad"],
   );
-  // An evaluation mode the server lists as planned is a gap too (since M5 none is).
+  assert.equal(gaps[0].title, "nomad adapter");
+  assert.equal(gaps[0].look.label, "Planned · M9");
+  assert.equal(gaps[0].detail, "no adapter in this repository");
   const planned = { ...SYSTEM.features, evaluation_modes: { ...SYSTEM.features.evaluation_modes, real_kubernetes: "planned" } };
   assert.ok(plannedGaps({ ...SYSTEM, features: planned }).some((g) => g.id === "eval:real_kubernetes"));
-  assert.equal(gaps[1].title, "Kind (local Kubernetes) adapter");
-  assert.equal(gaps[1].look.label, "Planned · M5");
-  assert.match(gaps[0].detail, /EnvironmentNotIntegrated/);
-  // A planned component is a gap too; an active adapter never is.
-  const more = plannedGaps({ ...SYSTEM, components: [...COMPONENTS, component("k8s_probe", "RecoveryOracle", "kubectl rollout status", "planned", "M5")] });
+  const more = plannedGaps({ ...SYSTEM, components: [...COMPONENTS, component("k8s_probe", "RecoveryOracle", "kubectl rollout status", "planned", "M9")] });
   assert.ok(more.some((g) => g.id === "component:k8s_probe"));
-  assert.ok(!more.some((g) => g.id === "adapter:simulated"));
-  // Nothing planned: an empty list, not an invented one.
-  assert.deepEqual(
-    plannedGaps({ ...SYSTEM, environment_adapters: [ADAPTERS[0]], features: { ...SYSTEM.features, evaluation_modes: {} } }),
-    [],
-  );
+  // An implemented adapter is never a gap, configured or not.
+  assert.ok(!more.some((g) => g.id.startsWith("adapter:")));
 });
 
 test("componentById finds a component or says it is not listed", () => {
@@ -368,12 +478,82 @@ test("outcomes are counted per data source and never added together", () => {
   assert.equal(scripted.recordings, null);
   assert.equal(replay.total, 2);
   assert.equal(replay.recordings, 2, "two replays of two different recordings");
-  assert.deepEqual(local, { source: "local_llm", total: 0, outcomes: [], resolved: 0, inProgress: 0, scenarios: 0, recordings: null });
+  assert.deepEqual(scripted.target, { key: "simulated", simulated: true, kind: "simulated" });
+  assert.deepEqual(local, { source: "local_llm", target: null, total: 0, outcomes: [], resolved: 0, inProgress: 0, scenarios: 0, recordings: null });
   assert.equal(hosted.total, 0);
   // No group, and no field, adds sources together.
   for (const group of groups) {
-    assert.deepEqual(Object.keys(group).sort(), ["inProgress", "outcomes", "recordings", "resolved", "scenarios", "source", "total"]);
+    assert.deepEqual(Object.keys(group).sort(), ["inProgress", "outcomes", "recordings", "resolved", "scenarios", "source", "target", "total"]);
   }
+});
+
+test("a run's target comes from what it recorded: simulated, a real cluster's kind, or not recorded", () => {
+  assert.deepEqual(targetOf({ environment_simulated: true, environment_kind: "simulated" }), { key: "simulated", simulated: true, kind: "simulated" });
+  assert.deepEqual(targetOf({ environment_simulated: false, environment_kind: "kind" }), { key: "live:kind", simulated: false, kind: "kind" });
+  assert.deepEqual(targetOf({ environment_simulated: false, environment_kind: "sregym" }), { key: "live:sregym", simulated: false, kind: "sregym" });
+  // Not simulated, kind missing: still live, never guessed to be one cluster or another.
+  assert.deepEqual(targetOf({ environment_simulated: false, environment_kind: null }), { key: "live:", simulated: false, kind: null });
+  // A kind without the simulated flag says nothing about where the run acted.
+  assert.deepEqual(targetOf({ environment_simulated: null, environment_kind: "kind" }), { key: "unknown", simulated: null, kind: null });
+  assert.equal(targetLabel(targetOf({ environment_simulated: true, environment_kind: "simulated" })), "Simulated target");
+  assert.equal(targetLabel(targetOf({ environment_simulated: false, environment_kind: "kind" })), "Live target · Kind (local Kubernetes)");
+  assert.equal(targetLabel(targetOf({ environment_simulated: false, environment_kind: "sregym" })), "Live target · SREGym");
+  assert.equal(targetLabel(targetOf({ environment_simulated: false, environment_kind: null })), "Live target · kind not reported");
+  assert.equal(targetLabel(targetOf({ environment_simulated: null, environment_kind: null })), "Target not recorded");
+});
+
+test("outcomes on the simulator and on each real cluster are counted apart, never added together", () => {
+  const runs = [
+    ...SEEDED,
+    clusterRun("kind", { outcome: "resolved" }),
+    clusterRun("kind", { outcome: "approval_rejected" }),
+    clusterRun("kind", { outcome: "approval_rejected" }),
+    clusterRun("sregym", { outcome: "resolved" }),
+    clusterRun("sregym", { outcome: "safety_blocked" }),
+    run({ provider_class: "local_llm", provider_kind: "llm", scenario_id: "bad-deployment" }),
+  ];
+  const groups = outcomesBySource(runs);
+  assert.deepEqual(
+    groups.map((g) => `${g.source}|${g.target?.key ?? "none"}`),
+    ["scripted|simulated", "replay|simulated", "local_llm|simulated", "local_llm|live:kind", "local_llm|live:sregym", "free_hosted_llm|none"],
+  );
+  const [, , localSim, localKind, localSregym, hosted] = groups;
+  assert.equal(localSim.total, 1);
+  assert.equal(localKind.total, 3);
+  assert.deepEqual(localKind.outcomes, [
+    { outcome: "resolved", count: 1 },
+    { outcome: "approval_rejected", count: 2 },
+  ]);
+  assert.equal(localSregym.total, 2);
+  assert.equal(localSregym.resolved, 1);
+  // The always-shown source without any run is one empty column with no target to name.
+  assert.equal(hosted.total, 0);
+  assert.equal(hosted.target, null);
+  // No column holds runs of two targets.
+  assert.equal(groups.reduce((n, g) => n + g.total, 0), runs.length);
+  // Old runs that recorded no target stay apart from both.
+  const old = outcomesBySource([run({ environment_simulated: null, environment_kind: null }), run({})]);
+  assert.deepEqual(
+    old.filter((g) => g.source === "scripted").map((g) => g.target?.key),
+    ["simulated", "unknown"],
+  );
+});
+
+test("a column's target note: none for the simulator, a real cluster said plainly, SREGym's grader kept apart", () => {
+  assert.equal(targetNote(null), null);
+  assert.equal(targetNote({ simulated: true, kind: "simulated" }), null);
+  assert.equal(targetNote({ simulated: false, kind: "kind" }), "These runs acted on a real cluster, not a simulation.");
+  assert.match(targetNote({ simulated: false, kind: "sregym" }) ?? "", /RECAP's own oracle; SREGym's grader gives the benchmark's verdict separately/);
+  assert.match(targetNote({ simulated: null, kind: null }) ?? "", /did not record which environment/);
+  // A live adapter this repository does not describe is live, but not called a cluster.
+  assert.equal(targetNote({ simulated: false, kind: "custom.module:Adapter" }), "These runs acted on a live target, not a simulation.");
+  assert.equal(targetNote({ simulated: false, kind: null }), "These runs acted on a live target, not a simulation.");
+});
+
+test("the local-LLM note covers a self-hosted model on this machine or the owner's VM", () => {
+  assert.match(SOURCE_NOTES.local_llm, /self-hosted open-weight model \(Ollama\), on this machine or on the owner's own VM/);
+  // The M5 runs used ollama-vm on the owner's VM: the note no longer says "this machine" only.
+  assert.doesNotMatch(SOURCE_NOTES.local_llm, /^New inference by a model on this machine/);
 });
 
 test("replaying one recording again counts as one recording", () => {
@@ -384,12 +564,14 @@ test("replaying one recording again counts as one recording", () => {
 });
 
 test("unusual sources and outcomes appear only when present, in a fixed order", () => {
+  // (All on the simulator: the target split is tested above.)
   const groups = outcomesBySource([
     run({ provider_class: null, provider_kind: null, outcome: "failed" }),
     run({ provider_class: "paid_llm", provider_kind: "llm", outcome: "error" }),
     run({ provider_class: "local_llm", provider_kind: "llm", outcome: "quota_deferred" }),
     run({ provider_class: "local_llm", provider_kind: "llm", outcome: "in_progress", terminal: false }),
-    run({ provider_class: "local_llm", provider_kind: "llm", outcome: "brand_new_outcome" }),
+    // An outcome a newer server might send: shown as sent, never dropped.
+    run({ provider_class: "local_llm", provider_kind: "llm", outcome: "brand_new_outcome" as RunSummary["outcome"] }),
   ]);
   assert.deepEqual(
     groups.map((g) => g.source),
@@ -522,8 +704,83 @@ test("every linked code path, ADR and document exists in this repository", () =>
     ...ARCH_NODES.flatMap((n) => n.modules),
     ...[...ADRS.values()].map(adrPath),
     ...Object.values(DOCS),
+    ...KUBERNETES_AUTHORIZATION.flatMap((step) => step.links),
   ]);
   for (const path of paths) assert.ok(existsSync(repo + path), `missing in the repository: ${path}`);
+});
+
+test("the flow map says what M5 built: no step calls Kind or SREGym planned, or RECAP simulator-only", () => {
+  const text = JSON.stringify([ARCH_NODES, KUBERNETES_AUTHORIZATION]);
+  for (const stale of [/planned for M5/i, /nothing in RECAP runs on a real cluster/i, /documentation only/i, /interface only/i, /EnvironmentNotIntegrated/]) {
+    assert.doesNotMatch(text, stale);
+  }
+  // The M5 modules, manifests and ADRs are linked from the steps they belong to.
+  const modules = (id: string) => archNode(id)!.modules;
+  assert.ok(modules("environment").includes("recap/environments/kubernetes/"));
+  assert.ok(modules("environment").includes("integrations/sregym/"));
+  assert.ok(modules("environment").includes("configs/targets/"));
+  assert.ok(modules("alert").includes("fixtures/kind-scenarios/") && modules("alert").includes("fixtures/sregym-scenarios/"));
+  assert.ok(modules("write").includes("recap/environments/kubernetes/engine.py"));
+  assert.ok(modules("write").includes("infra/kind/manifests/") && modules("write").includes("infra/sregym/recap-rbac.yaml"));
+  assert.ok(modules("oracle").includes("recap/environments/kubernetes/probe.py"));
+  for (const id of ["0029", "0030", "0031"]) assert.ok(ADRS.has(id), `ADR ${id}`);
+  for (const id of ["alert", "write", "oracle", "environment"]) assert.ok(archNode(id)!.adrs.includes("0031"), `${id} links ADR 0031`);
+});
+
+test("the steps that differ by target explain all three, truthfully for each", () => {
+  for (const id of ["alert", "approval", "write", "oracle", "environment"]) {
+    const notes = archNode(id)!.onTarget ?? {};
+    assert.deepEqual(Object.keys(notes).sort(), [...TARGET_KINDS].sort(), `${id} covers every target`);
+  }
+  for (const node of ARCH_NODES) for (const kind of Object.keys(node.onTarget ?? {})) assert.ok((TARGET_KINDS as readonly string[]).includes(kind));
+  const on = (id: string, kind: "simulated" | "kind" | "sregym") => archNode(id)!.onTarget?.[kind] ?? "";
+  // Who puts the problem in place: RECAP on the simulator and on Kind, SREGym's harness on SREGym.
+  assert.match(on("alert", "kind"), /applies the scenario's fault steps as its own scenario identity/);
+  assert.match(on("alert", "sregym"), /SREGym's own harness deploys the app and injects the problem/);
+  assert.match(on("alert", "sregym"), /RECAP's reset changes nothing/);
+  // The oracle: Kind has its own probe; SREGym has none, and its grader is separate.
+  assert.match(on("oracle", "kind"), /a complete rollout, readiness, and its own HTTP probe/);
+  assert.match(on("oracle", "sregym"), /No probe and no metrics/);
+  assert.match(on("oracle", "sregym"), /containers that stayed up a minute with no exit in the last five/);
+  assert.match(on("oracle", "sregym"), /SREGym's own grader gives the benchmark's verdict separately/);
+  assert.doesNotMatch(on("oracle", "sregym"), /probe of/);
+  // Approving on a real cluster takes the service's exact name; writes have their limits.
+  assert.match(on("approval", "kind"), /exact name/);
+  assert.match(on("write", "kind"), /admission policy/);
+  assert.match(on("write", "sregym"), /no admission policy, so RBAC is the only limit/);
+  assert.doesNotMatch(archNode("oracle")!.what.join(" "), /probes the environment/);
+});
+
+test("how a real Kubernetes action is authorized: every step in order, each with its code", () => {
+  assert.deepEqual(
+    KUBERNETES_AUTHORIZATION.map((step) => step.title),
+    [
+      "One exact proposal",
+      "The verifier's checks",
+      "A person types the service's name",
+      "A signed, single-use capability",
+      "The writer's limits",
+      "Dry run, write, read-back, audit",
+      "The independent oracle",
+    ],
+  );
+  const links = new Set(KUBERNETES_AUTHORIZATION.flatMap((step) => step.links));
+  for (const path of [
+    "recap/environments/kubernetes/engine.py",
+    "recap/safety/approvals.py",
+    "recap/safety/capabilities.py",
+    "infra/kind/manifests/",
+    "infra/sregym/recap-rbac.yaml",
+  ]) {
+    assert.ok(links.has(path), `links ${path}`);
+  }
+  const text = KUBERNETES_AUTHORIZATION.map((step) => step.text).join(" ");
+  assert.match(text, /types the target service's exact name, at the console or in this dashboard/);
+  assert.match(text, /commits its nonce before touching the cluster/);
+  assert.match(text, /patch only the app's named Deployments in one namespace/);
+  assert.match(text, /On the Kind demo an admission policy also checks each patch's shape; SREGym's cluster has RBAC only\./);
+  assert.match(text, /A server-side dry run first, then the write, a read-back of the Deployment, and an audit row/);
+  for (const step of KUBERNETES_AUTHORIZATION) assert.ok(step.links.length >= 1, `${step.title} links its code`);
 });
 
 test("repository links point at GitHub: blob for files, tree for folders", () => {
@@ -543,8 +800,31 @@ test("node facts are read from GET /system", () => {
   assert.equal(facts("episode")["Scripted baseline"], "reads train, demo · writes demo");
   assert.equal(facts("alert")["Simulated"], "yes");
   assert.equal(facts("approval")["Deciding needs the operator token"], "yes");
+  assert.equal(facts("approval")["Approving needs the service's name typed"], "no (simulated target)");
+  assert.equal(facts("write")["Actions it supports"], "rollback, restart, delete_namespace");
+  assert.equal(facts("environment")["Adapter class"], "SimulatedEnvironment");
   assert.equal(facts("telemetry")["OpenTelemetry"], "off");
   // A server with no stored vectors says so instead of inventing an embedder.
   const bare = Object.fromEntries(nodeFacts(archNode("retrieval")!, { ...SYSTEM, embedder: null }));
   assert.equal(bare["Stored vectors"], "Not recorded");
+});
+
+test("node facts on a Kind and a SREGym server name the real cluster's adapter, policy and approval rule", () => {
+  const kind = (id: string) => Object.fromEntries(nodeFacts(archNode(id)!, KIND_SYSTEM));
+  assert.deepEqual(kind("environment"), {
+    "Configured kind": "kind",
+    "Adapter class": "KubernetesEnvironment",
+    Namespace: "recap-demo",
+    Simulated: "no",
+    "Safety policy version": "policy-kind-v1",
+  });
+  assert.equal(kind("alert")["Environment"], "Kind cluster recap-m5 (kind kind)");
+  assert.equal(kind("approval")["Approving needs the service's name typed"], "yes (not simulated)");
+  assert.equal(kind("write")["Actions it supports"], "rollback, restart");
+  assert.equal(kind("oracle")["Oracle"], "kind-health-oracle");
+  const sregym = (id: string) => Object.fromEntries(nodeFacts(archNode(id)!, SREGYM_SYSTEM));
+  assert.equal(sregym("environment")["Adapter class"], "SREGymEnvironment");
+  assert.equal(sregym("environment")["Namespace"], "hotel-reservation");
+  assert.equal(sregym("environment")["Safety policy version"], "policy-sregym-hotel-v2");
+  assert.equal(sregym("oracle")["Oracle"], "sregym-health-oracle");
 });

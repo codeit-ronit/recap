@@ -1,7 +1,9 @@
 /**
- * View helpers for the Incident Lab (pages/LiveRun.tsx): the replay launcher (GET /replays),
- * the backend choice (GET /providers), the run's data-source banner, the stage stepper, the
- * approval state of a run, its outcome and oracle verdict, and the bounded live feed.
+ * View helpers for the Incident Lab (pages/LiveRun.tsx): the target a run acts on (simulated or a
+ * live cluster), the replay launcher (GET /replays), the backend choice (GET /providers), the
+ * run's data-source banner, the stage stepper, the approval state of a run and the body of a
+ * decision, its outcome, the oracle's verdict and what it observed, and the bounded live feed.
+ * The target helpers are shared with Trace Explorer, Evidence & Decisions and the approval card.
  *
  * Every label is built from what the server reported; a value it did not report reads
  * NOT_RECORDED, never a guess. Text a model or a tool wrote passes through unchanged: the
@@ -14,7 +16,15 @@ import type { IconName } from "../components/Icon";
 import type { SourceFields } from "../components/DataSourceBadge";
 import type { FixtureView, OracleVerdict, ProviderView, TextAuthor } from "../dto";
 import type { Tone } from "../format";
-import type { EnvironmentInfo, ExperienceEpisode, ProviderInfo, RunConfigInput, ScenarioInfo, TraceEvent } from "../types";
+import type {
+  ApprovalDecisionBody,
+  EnvironmentInfo,
+  ExperienceEpisode,
+  ProviderInfo,
+  RunConfigInput,
+  ScenarioInfo,
+  TraceEvent,
+} from "../types";
 
 /** What a value the server did not report reads as. */
 export const NOT_RECORDED = "Not recorded";
@@ -37,6 +47,82 @@ function list(value: unknown): unknown[] {
 export function isoMs(iso: string | null | undefined): number {
   if (!iso) return Number.NaN;
   return Date.parse(iso.replace(/(\.\d{3})\d+/, "$1"));
+}
+
+function count(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+// ==================================================================================================
+// The target: where a run's actions land (GET /system `environment`, or the run's own)
+// ==================================================================================================
+
+/** The environment fields a target is read from: GET /system `environment`, or a run's own. */
+export type TargetFields = Partial<
+  Pick<EnvironmentInfo, "is_simulated" | "kind" | "name" | "namespace" | "description" | "stabilization_timeout_seconds">
+>;
+
+/** Where actions land, as the server reported it. "unknown": nothing was reported (never guessed). */
+export interface TargetFacts {
+  state: "simulated" | "live" | "unknown";
+  /** The adapter's kind (simulated, kind, sregym...); "" when not reported. */
+  kind: string;
+  name: string;
+  namespace: string;
+  /** The adapter's own description, from the target profile (RECAP's configuration). */
+  description: string;
+  /** How long the oracle lets a live target settle after a fix (seconds), when reported. */
+  settleSeconds: number | null;
+}
+
+export function targetFacts(environment: TargetFields | null | undefined): TargetFacts {
+  let state: TargetFacts["state"] = "unknown";
+  if (environment && typeof environment.is_simulated === "boolean") state = environment.is_simulated ? "simulated" : "live";
+  const settle = count(environment?.stabilization_timeout_seconds);
+  return {
+    state,
+    kind: text(environment?.kind),
+    name: text(environment?.name),
+    namespace: text(environment?.namespace),
+    description: text(environment?.description),
+    settleSeconds: settle ? settle : null,
+  };
+}
+
+/** "Kind cluster recap-m5, namespace recap-demo": what the server named of the target ("" if nothing). */
+export function targetPlace(target: TargetFacts): string {
+  return [target.name, target.namespace ? `namespace ${target.namespace}` : ""].filter(Boolean).join(", ");
+}
+
+/**
+ * A live target in a few words: its name and namespace when reported, else its kind. Both live
+ * adapters (Kind, SREGym) are Kubernetes clusters with a namespace, so "real cluster"; a live
+ * target that reports no namespace is called a real system.
+ */
+export function liveTargetWords(target: TargetFacts): { place: string; real: string } {
+  return {
+    place: targetPlace(target) || `the live ${target.kind || "target"}`,
+    real: target.namespace ? "a real cluster" : "a real system",
+  };
+}
+
+/**
+ * The environment an approval acts on: the run's own (its first event or record) and the
+ * server's (GET /system, what the server checks a decision against). When either is not
+ * simulated, the live one: a typed name is never skipped because one source said "simulated".
+ * null when neither is known.
+ */
+export function approvalTarget(run: TargetFields | null | undefined, server: TargetFields | null | undefined): TargetFields | null {
+  const known = [run, server].filter((e): e is TargetFields => !!e && typeof e.is_simulated === "boolean");
+  return known.find((e) => e.is_simulated === false) ?? known[0] ?? null;
+}
+
+/** A typed run summary's two target fields (GET /runs), as TargetFields. */
+export function summaryTarget(
+  summary: { environment_kind?: string | null; environment_simulated?: boolean | null } | null | undefined,
+): TargetFields | null {
+  if (!summary || typeof summary.environment_simulated !== "boolean") return null;
+  return { is_simulated: summary.environment_simulated, kind: summary.environment_kind ?? undefined };
 }
 
 // ==================================================================================================
@@ -228,12 +314,25 @@ export function readinessView(status: string | null | undefined, detail?: string
 /**
  * The RunConfig a scenario run sends. `provider` is sent only when the operator chose a backend
  * other than the server's default; left out, the server's default applies (as before M4).
+ *
+ * Against a target that is not simulated (or not reported yet) a person always approves: the
+ * controller refuses the auto-approver there, so "auto" is never sent. Nor is a simulated tool
+ * latency: a real cluster has its own (the Kubernetes adapters accept the knob and ignore it).
  */
-export function runConfigBody(config: RunConfigInput, chosen: string | null, defaultName: string | null): RunConfigInput {
+export function runConfigBody(
+  config: RunConfigInput,
+  chosen: string | null,
+  defaultName: string | null,
+  target?: TargetFacts | null,
+): RunConfigInput {
   const body: RunConfigInput = { ...config };
   delete body.provider;
   delete body.replay_fixture;
   if (chosen && chosen !== defaultName) body.provider = chosen;
+  if (target && target.state !== "simulated") {
+    body.approval_mode = "manual";
+    body.tool_latency_ms = null;
+  }
   return body;
 }
 
@@ -258,6 +357,46 @@ export function withOverrides(config: RunConfigInput, scenario: Pick<ScenarioInf
   if (o.approval_mode === "manual" || o.approval_mode === "auto") next.approval_mode = o.approval_mode;
   if (typeof o.tool_latency_ms === "number") next.tool_latency_ms = o.tool_latency_ms;
   return next;
+}
+
+// --- the lab's words for the server's target (GET /system) -----------------------------------------
+
+/** The Incident Lab's description, for the target this server's runs act on. */
+export function labIntro(environment: TargetFields | null | undefined): string {
+  const watch = "then watch RECAP investigate, propose a fix, wait for a person's approval and verify the recovery.";
+  const target = targetFacts(environment);
+  if (target.state === "simulated") {
+    return `Replay a recorded real-model incident or start a new one, ${watch} Everything streams from the API and acts only on the simulated shop.`;
+  }
+  if (target.state === "live") {
+    const { place, real } = liveTargetWords(target);
+    return `Start an incident on this server's live target, ${watch} The target is ${place} (${target.kind || "kind not reported"}): ${real}, not a simulation, so an approved fix changes it, and a person approves each fix by typing the target service's name. Everything streams from the API.`;
+  }
+  return `Replay a recorded real-model incident or start a new one, ${watch} Everything streams from the API; the target shows here once GET /system reports it.`;
+}
+
+/** The scenario card's subtitle: the scenarios are the configured target's own (GET /scenarios). */
+export function scenarioIntro(environment: TargetFields | null | undefined): string {
+  const target = targetFacts(environment);
+  if (target.state === "simulated") {
+    return "Inject a scenario's fault into the simulated shop and let RECAP handle it with the backend you choose (GET /scenarios)";
+  }
+  if (target.state === "live") {
+    const { place, real } = liveTargetWords(target);
+    return `This target's scenarios (GET /scenarios), on ${place}: ${real}. Each says how its fault arises; RECAP handles it with the backend you choose`;
+  }
+  return "The scenarios of the server's target (GET /scenarios), handled by RECAP with the backend you choose";
+}
+
+/**
+ * Why no recording can be replayed here, when the target is not simulated: the controller
+ * refuses a replay against a live target before it starts (a recorded model's fix must never
+ * reach anything real). null on the simulated shop or before GET /system answers.
+ */
+export function replayBlockedNote(environment: TargetFields | null | undefined): string | null {
+  const target = targetFacts(environment);
+  if (target.state !== "live") return null;
+  return `This server's target is live (${target.kind || "kind not reported"}): RECAP refuses a replay against it before it starts, because a recorded model's fix must never reach a real system. Replays run on a server whose target is the simulated shop.`;
 }
 
 /** Demo prerequisites (e.g. memory-caution needs a verified bad-deployment episode in memory). */
@@ -292,7 +431,7 @@ export interface RunBanner {
  */
 export function runBanner(
   provider: Partial<Pick<ProviderInfo, "origin" | "kind" | "model" | "replay_of">> | null | undefined,
-  environment: Partial<Pick<EnvironmentInfo, "is_simulated" | "kind">> | null | undefined,
+  environment: TargetFields | null | undefined,
 ): RunBanner {
   const origin = provider?.origin ?? (provider?.kind === "scripted" || provider?.kind === "replay" ? provider.kind : undefined);
   const of = record(provider?.replay_of);
@@ -342,36 +481,67 @@ export function runBanner(
   }
   let target: string;
   let where: string;
-  if (!environment || typeof environment.is_simulated !== "boolean") {
+  const facts = targetFacts(environment);
+  if (facts.state === "unknown") {
     target = "TARGET NOT RECORDED";
     where = "The run did not record which environment it acts on.";
-  } else if (environment.is_simulated) {
+  } else if (facts.state === "simulated") {
     target = "SIMULATED TARGET";
     where = "Every action changes only RECAP's simulated shop.";
   } else {
-    target = `LIVE TARGET · ${text(environment.kind) || "kind not reported"}`;
-    where = "The server reports a live environment: an approved action changes a real system.";
+    const live = liveTargetWords(facts);
+    target = `LIVE TARGET · ${facts.kind || "kind not reported"}`;
+    where = `It acts on ${live.place}: ${live.real}, not a simulation, and an approved action changes it.`;
     tone = "bad";
     icon = "alert";
   }
   return { label: `${decisions} · ${target}`, decisions, target, tone, icon, explanation: `${why} ${where}` };
 }
 
-/** What each lifecycle stage does, in one plain sentence (RECAP's own description). */
+/** What each lifecycle stage does, in one plain sentence (RECAP's own description), for any target. */
 export const STAGE_HELP: Readonly<Record<string, string>> = {
   CREATED: "The alert became an incident with its own budget.",
   RETRIEVING: "RECAP searches the runbooks and its memory of past incidents for context.",
-  INVESTIGATING: "Agents call read-only tools on the simulated shop and propose diagnoses; the verifier checks each one against the evidence.",
+  INVESTIGATING: "Agents call read-only tools on the target and propose diagnoses; the verifier checks each one against the evidence.",
   PROPOSING: "A fix is drafted from the verified diagnosis and checked by the evidence gate.",
   AWAITING_APPROVAL: "The safety policy needs a person to approve this exact action before anything changes.",
-  MITIGATING: "The approved action goes through the safety gateway to the simulated shop, once.",
-  VERIFYING: "An independent oracle checks whether the shop recovered.",
+  MITIGATING: "The approved action goes through the safety gateway to the target, once.",
+  VERIFYING: "An independent oracle checks whether the target recovered.",
   RESOLVED: "The independent oracle verified the recovery.",
   FAILED: "The run stopped without a verified recovery.",
   BLOCKED: "The fix did not run: the policy or the evidence gate refused it, a person rejected it, or the approval expired.",
   BUDGET_EXHAUSTED: "A run limit was reached, so the run stopped safely.",
   QUOTA_EXHAUSTED: "A free model's quota ran out: the run was deferred and nothing was decided.",
 };
+
+/**
+ * What a stage does on the run's own target (its first event or record): the simulated shop, a
+ * live cluster by name, or (target not recorded) the target-neutral sentence of STAGE_HELP.
+ */
+export function stageHelp(state: string | null | undefined, environment: TargetFields | null | undefined): string {
+  const base = STAGE_HELP[state ?? ""] ?? "";
+  const target = targetFacts(environment);
+  if (target.state === "simulated") {
+    const simulated: Record<string, string> = {
+      INVESTIGATING: "Agents call read-only tools on the simulated shop and propose diagnoses; the verifier checks each one against the evidence.",
+      MITIGATING: "The approved action goes through the safety gateway to the simulated shop, once.",
+      VERIFYING: "An independent oracle checks whether the shop recovered.",
+    };
+    return simulated[state ?? ""] ?? base;
+  }
+  if (target.state === "live") {
+    const { place, real } = liveTargetWords(target);
+    const settle = target.settleSeconds !== null ? ` (up to ${target.settleSeconds} s)` : "";
+    const live: Record<string, string> = {
+      INVESTIGATING: `Agents call read-only tools on ${place}, ${real}, and propose diagnoses; the verifier checks each one against the evidence.`,
+      AWAITING_APPROVAL: `The safety policy needs a person to approve this exact action before anything changes. On this live target, approving takes the target service's name, typed.`,
+      MITIGATING: `The approved action goes through the safety gateway to ${place}, once: this changes ${real}.`,
+      VERIFYING: `An independent oracle probes ${place} until its services are healthy or the target's settle window${settle} ends.`,
+    };
+    return live[state ?? ""] ?? base;
+  }
+  return base;
+}
 
 /** The states a run entered, in order (state.transition events). */
 export function statesOf(events: readonly TraceEvent[]): string[] {
@@ -411,8 +581,20 @@ export type ApprovalPhase =
   | { kind: "none" }
   /** A request is open. `auto`: the simulation auto-approver decides, not a person. */
   | { kind: "waiting"; auto: boolean; proposalId: string | null; expiresAt: string | null; channel: string }
-  /** The last request was decided: approved, rejected, or expired. */
-  | { kind: "decided"; auto: boolean; decision: string; actor: string | null; approvalId: string | null; proposalId: string | null };
+  /**
+   * The last request was decided: approved, rejected, or expired. `note`: RECAP's record of how
+   * the answer came (e.g. "dashboard or API; typed the target service's name; answered 41.2 s
+   * after the request"), when the decision log kept one.
+   */
+  | {
+      kind: "decided";
+      auto: boolean;
+      decision: string;
+      actor: string | null;
+      approvalId: string | null;
+      proposalId: string | null;
+      note: string | null;
+    };
 
 export function approvalPhase(events: readonly TraceEvent[]): ApprovalPhase {
   let requested: TraceEvent | null = null;
@@ -434,9 +616,77 @@ export function approvalPhase(events: readonly TraceEvent[]): ApprovalPhase {
       actor: text(said.actor) || null,
       approvalId: text(said.approval_id) || null,
       proposalId: text(said.proposal_id) || text(asked.proposal_id) || null,
+      note: text(said.note) || null,
     };
   }
   return { kind: "waiting", auto, proposalId: text(asked.proposal_id) || null, expiresAt: text(asked.expires_at) || null, channel };
+}
+
+// --- deciding: the body of POST /approvals/{proposal_id} ---------------------------------------------
+
+/**
+ * Whether the typed text names the proposal's target exactly, as the server compares it
+ * (apps/api/main.py: surrounding spaces dropped, then equal, case included) and as the console
+ * does on a live target. An empty target is never named.
+ */
+export function namesTarget(typed: string | null | undefined, target: string | null | undefined): boolean {
+  return typeof target === "string" && target !== "" && typeof typed === "string" && typed.trim() === target;
+}
+
+/** Flip the last hex digit: a digest for a *different* proposal than the one shown. */
+export function tamper(digest: string): string {
+  if (!digest) return "0";
+  return digest.slice(0, -1) + (digest.endsWith("0") ? "1" : "0");
+}
+
+/** One decision a person sends from this tab. */
+export interface DecisionChoice {
+  decision: "approved" | "rejected";
+  /** The binding test: send a digest for a different proposal (the server must refuse it, 409). */
+  tampered?: boolean;
+  /** On a live target: the target service's name, as the person typed it. */
+  confirmTarget?: string | null;
+}
+
+/**
+ * The body of POST /approvals/{proposal_id}: the decision and the digest of the exact proposal
+ * shown. An approval carries the name the person typed (`confirm_target`), which a target that is
+ * not simulated requires; a rejection never needs it and never sends it. Who decided comes from
+ * the operator token, never from the body.
+ */
+export function decisionBody(digest: string, choice: DecisionChoice): ApprovalDecisionBody {
+  const body: ApprovalDecisionBody = { decision: choice.decision, proposal_digest: choice.tampered ? tamper(digest) : digest };
+  const typed = typeof choice.confirmTarget === "string" ? choice.confirmTarget.trim() : "";
+  if (choice.decision === "approved" && typed) body.confirm_target = typed;
+  return body;
+}
+
+/** The attempt in words, for the server's answer ("HTTP 400 for “approve”: ..."). */
+export function attemptLabel(choice: DecisionChoice): string {
+  if (choice.tampered) return "approve with a tampered digest";
+  return choice.decision === "approved" ? "approve" : "reject";
+}
+
+export interface ApproveGate {
+  /** The Approve button is disabled. */
+  blocked: boolean;
+  /** Why, when it waits for the name or for GET /system (shown on the button). */
+  why: string | null;
+}
+
+/**
+ * Whether Approve can be pressed. `canDecide`: signed in, nothing being sent, the request still
+ * open. `checking`: GET /system has not said yet whether the target is simulated. `needsName`:
+ * the target is live (or not reported), so the person must type the proposal's target service,
+ * exactly (namesTarget). Reject is never gated by the name.
+ */
+export function approveGate(opts: { canDecide: boolean; checking: boolean; needsName: boolean; typed: string; service: string }): ApproveGate {
+  if (!opts.canDecide) return { blocked: true, why: null };
+  if (opts.checking) return { blocked: true, why: "Checking which environment this approval acts on (GET /system)…" };
+  if (opts.needsName && !namesTarget(opts.typed, opts.service)) {
+    return { blocked: true, why: `Type ${opts.service || "the target service's name"} above to enable Approve` };
+  }
+  return { blocked: false, why: null };
 }
 
 /** The trusted risk tier the registry gave a proposal (its mitigation.proposed event), if traced. */
@@ -488,11 +738,25 @@ export interface OutcomeView {
   sentence: string;
 }
 
-/** How a run ended (GET /runs/{id} summary.outcome, apps/api/dto.py RunOutcome), in plain words. */
-export function outcomeView(outcome: string | null | undefined): OutcomeView {
+/** The resolved sentence for the run's target: the simulated shop, a live cluster by name, or neither named. */
+function recoveredSentence(environment: TargetFields | null | undefined): string {
+  const target = targetFacts(environment);
+  if (target.state === "simulated") return "The independent oracle verified that the simulated shop recovered.";
+  if (target.state === "live") {
+    const { place, real } = liveTargetWords(target);
+    return `The independent oracle verified that ${place} recovered: ${real}, not a simulation.`;
+  }
+  return "The independent oracle verified the recovery.";
+}
+
+/**
+ * How a run ended (GET /runs/{id} summary.outcome, apps/api/dto.py RunOutcome), in plain words.
+ * `environment`: the run's own target, which the resolved sentence names.
+ */
+export function outcomeView(outcome: string | null | undefined, environment?: TargetFields | null): OutcomeView {
   switch (outcome) {
     case "resolved":
-      return { label: "Resolved", tone: "ok", icon: "check", sentence: "The independent oracle verified that the simulated shop recovered." };
+      return { label: "Resolved", tone: "ok", icon: "check", sentence: recoveredSentence(environment) };
     case "failed":
       return { label: "Failed", tone: "bad", icon: "x", sentence: "The run ended without a verified recovery: the evidence stayed insufficient, or a person must decide." };
     case "error":
@@ -540,6 +804,80 @@ export function oracleView(oracle: OracleVerdict | null | undefined): StatusView
     after: healthy(oracle.healthy_after),
     services,
   };
+}
+
+/**
+ * How long the oracle waited for the target after the fix (the verification.recovery event): a
+ * simulated target is probed once; a live one every few seconds until healthy or its settle
+ * window ends. "" when the trace did not record it.
+ */
+export function settleWords(payload: Record<string, unknown> | null | undefined, target: TargetFacts = targetFacts(null)): string {
+  const p = record(payload);
+  const probes = count(p.probes);
+  const waited = count(p.waited_seconds);
+  if (probes === null) return "";
+  const live = p.simulated === false || (p.simulated !== true && target.state === "live");
+  const where = p.simulated === true ? "simulated target" : live ? "live target" : "target";
+  const times = `${probes} probe${probes === 1 ? "" : "s"}`;
+  const over = waited !== null && probes > 1 ? ` over ${waited.toFixed(1)} s` : "";
+  const window = live && target.settleSeconds !== null ? ` (settle window ${target.settleSeconds} s)` : "";
+  return `${where} · ${times}${over}${window}`;
+}
+
+/** One side of a service's health the oracle observed (GroundTruthHealth: status, replicas, error rate). */
+export interface ObservedHealth {
+  status: string;
+  ready: number | null;
+  replicas: number | null;
+  /** A ratio (0.3 = 30% of requests failed); null where the target measures no request errors. */
+  errorRate: number | null;
+}
+
+export interface SignalRow {
+  service: string;
+  before: ObservedHealth | null;
+  after: ObservedHealth | null;
+  /** Status, readiness or error rate differ between before and after. */
+  changed: boolean;
+}
+
+function observedHealth(value: unknown): ObservedHealth | null {
+  const h = record(value);
+  if (!Object.keys(h).length) return null;
+  const rate = h.error_rate;
+  return {
+    status: text(h.status) || NOT_RECORDED,
+    ready: count(h.ready_replicas),
+    replicas: count(h.replicas),
+    errorRate: typeof rate === "number" && Number.isFinite(rate) ? rate : null,
+  };
+}
+
+/**
+ * The oracle's own observations (RecoveryResult.observed_signals: {before, after}, each keyed by
+ * service), one row per service in the order the oracle checked them, the services that changed
+ * first. Ground truth from the environment's health check: RECAP's trusted channel, not an agent's.
+ */
+export function recoverySignals(observed: unknown): SignalRow[] {
+  const signals = record(observed);
+  const before = record(signals.before);
+  const after = record(signals.after);
+  const services = [...new Set([...Object.keys(after), ...Object.keys(before)])];
+  const rows = services.map((service): SignalRow => {
+    const b = observedHealth(before[service]);
+    const a = observedHealth(after[service]);
+    const changed = JSON.stringify(b) !== JSON.stringify(a);
+    return { service, before: b, after: a, changed };
+  });
+  return [...rows.filter((r) => r.changed), ...rows.filter((r) => !r.changed)];
+}
+
+/** "Running · 2/2 ready · errors 30%" (a side the oracle did not observe reads NOT_RECORDED). */
+export function healthWords(health: ObservedHealth | null): string {
+  if (!health) return NOT_RECORDED;
+  const ready = health.ready !== null && health.replicas !== null ? ` · ${health.ready}/${health.replicas} ready` : "";
+  const errors = health.errorRate !== null ? ` · errors ${Number((health.errorRate * 100).toFixed(1))}%` : "";
+  return `${health.status}${ready}${errors}`;
 }
 
 /** The pages that show more of one run, with what each shows (the lab links to them when a run ends). */

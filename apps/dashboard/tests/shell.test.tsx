@@ -25,6 +25,28 @@ const SIMULATED: EnvironmentInfo = {
   stabilization_poll_seconds: 2,
 };
 
+/** GET /system `environment` with RECAP_TARGET=kind-demo and sregym-hotel (KubernetesEnvironment.describe). */
+const KIND: EnvironmentInfo = {
+  kind: "kind",
+  name: "Kind cluster recap-m5",
+  namespace: "recap-demo",
+  is_simulated: false,
+  supported_actions: ["rollback", "restart"],
+  description:
+    "Local Kind cluster recap-m5 (context kind-recap-m5), not production: 2 demo services in namespace recap-demo, read through typed kubectl operations.",
+  stabilization_timeout_seconds: 180,
+  stabilization_poll_seconds: 5,
+};
+
+const SREGYM: EnvironmentInfo = {
+  ...KIND,
+  kind: "sregym",
+  name: "SREGym on Kind cluster kind",
+  namespace: "hotel-reservation",
+  description: "SREGym 1.1 on its own Kind cluster kind (context kind-kind), not production: deployed and broken by SREGym's own harness.",
+  stabilization_timeout_seconds: 240,
+};
+
 const HEALTH: HealthResponse = {
   status: "ok",
   version: "0.4.0",
@@ -206,6 +228,32 @@ test("a live environment reported by the server is labelled live, in red", () =>
   assert.match(textOf(html), /LIVE ENVIRONMENT · kind/);
   assert.match(html, /env-banner env-live tone-bad/);
   assert.doesNotMatch(textOf(html), /SIMULATED ENVIRONMENT/);
+});
+
+test("the Kind demo cluster and SREGym's cluster are each named live, with the server's own words", () => {
+  const cases: [EnvironmentInfo, RegExp, RegExp][] = [
+    [KIND, /LIVE ENVIRONMENT · kind Kind cluster recap-m5 · kind kind · namespace recap-demo/, /Local Kind cluster recap-m5 \(context kind-recap-m5\), not production/],
+    [SREGYM, /LIVE ENVIRONMENT · sregym SREGym on Kind cluster kind · kind sregym · namespace hotel-reservation/, /deployed and broken by SREGym's own harness/],
+  ];
+  for (const [environment, banner, words] of cases) {
+    const html = shell({ system: polled<SystemSummary>(system(environment)) });
+    const text = textOf(html);
+    assert.match(text, banner);
+    assert.match(text, words);
+    assert.match(html, /env-banner env-live tone-bad/);
+    assert.doesNotMatch(text, /SIMULATED/);
+  }
+});
+
+test("a selected run on a real cluster shows its live model and LIVE TARGET from its record", () => {
+  const provider: ProviderInfo = { name: "ollama-vm:qwen3:8b", kind: "llm", origin: "local_llm", model: "qwen3:8b", description: "" };
+  const record = { provider_info: provider, environment: SREGYM } as unknown as RunRecord;
+  const detail: RunDetail = { status: "finished", record, evidence: [], error: null };
+  // Even on a simulated server, the run's own record decides its target.
+  const html = shell({ page: "timeline", selectedRun: { runId: "run-9d7f47104d", detail: polled<RunDetail>(detail) } });
+  assert.equal(withAttr(html, "aria-label", "Selected run data source").length, 1);
+  assert.match(textOf(html), /Selected run run-9d7f47104d LOCAL LLM qwen3:8b \/ LIVE TARGET · sregym/);
+  assert.doesNotMatch(textOf(html), /SIMULATED TARGET/);
 });
 
 test("API status: online with the server version, offline with the start command banner", () => {

@@ -9,7 +9,7 @@ command and write audits); by default it lives in pytest's temporary folder.
 
 The approvals here are given by the test harness through the same store the dashboard uses,
 recorded as "operator:live-acceptance": these tests check the machinery, not a person's
-judgement. Nothing here has been run yet: no cluster existed when it was written.
+judgement. All six passed on the real Kind cluster in M5 W3 (docs/m5-progress.md).
 """
 
 from __future__ import annotations

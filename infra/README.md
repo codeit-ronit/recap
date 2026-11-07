@@ -33,18 +33,20 @@ approval. The demo program and the manifests are checked offline by
 credentials (the administrator and RECAP's four kubeconfigs, the recorded CA fingerprint)
 will live in `~/.config/recap/kind/`, outside the repository, and are never committed.
 
-## Later (V2+): a real benchmark host (plan only, nothing provisioned)
+## The benchmark host (M5): the owner's AWS VM
 
 The plan for running RECAP against SREGym is in
 [`docs/benchmark-plan.md`](../docs/benchmark-plan.md) and
 [`docs/m5-integration-plan.md`](../docs/m5-integration-plan.md) (sections 6 and 8). The hosting
 rules those plans follow:
 
-1. **Explicit owner consent before any provisioning.** No script in this repo creates cloud resources.
+1. **Explicit owner consent before any provisioning.** Only [`infra/aws/ec2.sh`](aws/ec2.sh) creates
+   cloud resources, and only when the owner runs it (M5: one VM for the clusters and the model).
 2. **Check before spending:** the account's EC2 quotas, whether promotional credits actually apply
    to the chosen instance type and region, on-demand price, EBS volume and public-IPv4 charges.
 3. **Budget alerts are not spending caps.** Set an AWS Budget with alerts *and* a hard personal
-   rule: stop and terminate the instance after each benchmark session.
+   rule: stop the instance after each session (in M5 the VM's own idle guard also stops it after
+   45 minutes unused) and terminate it at the end.
 4. **Smallest instance that fits the pinned benchmark subset**, in one region, with a scheduled
    auto-stop; verify whether the chosen SREGym problems need privileged containers first.
 5. **Keep the benchmark cluster separate** from RECAP's own SQLite memory and data, so benchmark

@@ -98,7 +98,7 @@ MODE_LABELS: dict[str, str] = {
     "scripted_regression": "Scripted regression (the scripted policy, not an LLM)",
     "offline_replay": "Offline replay of recorded real-model runs (no model is called)",
     "real_llm": "Real model on simulated incidents",
-    "real_kubernetes": "Real model on a real Kubernetes cluster (Kind)",
+    "real_kubernetes": "Real model on a real Kubernetes cluster",
 }
 
 # The controller's own note for a cancelled run (recap/harness/controller.py, run()).
@@ -705,8 +705,9 @@ def outcome_counts(records: Sequence[EvalRecord]) -> dict[str, int]:
 def batch_markdown(batch: EvalBatch) -> str:
     """A readable digest of one batch. Every number is a count of its records, never a rate."""
     records = batch.records
+    clusters = f" ({', '.join(batch.targets)})" if batch.targets else ""
     target = (
-        "REAL target: a Kubernetes cluster, not production"
+        f"REAL target: a Kubernetes cluster{clusters}, not production"
         if batch.mode == "real_kubernetes"
         else "SIMULATED target environment"
     )

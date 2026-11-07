@@ -1,8 +1,10 @@
 /**
  * Pure helpers for the Safety & Approvals page (src/pages/Safety.tsx): the four safety layers
  * in plain words, a run's unsafe-action counts (attempted is not executed), each proposal's
- * permission lifecycle from the append-only approval log, the gateway's decisions, what RECAP
- * stopped and by which layer, and the prompt-injection flags.
+ * permission lifecycle from the append-only approval log (with how each decision came, and what
+ * that proves: a terminal or a token holder and a timing, never a person), the gateway's
+ * decisions, the evidence gate's rules, what RECAP stopped and by which layer, the target's own
+ * answer to each write, and the prompt-injection flags.
  *
  * Every value is read from the server: GET /system (components), GET /runs/{id} (the record),
  * GET /runs/{id}/evidence, GET /runs/{id}/timeline (policy, summary, approval and write events)
@@ -123,8 +125,8 @@ export const SAFETY_LAYERS: readonly SafetyLayer[] = [
     key: "capability",
     title: "Signed capability",
     plain:
-      "The simulated shop applies a write only with a single-use capability signed for exactly that action, so a call that skips the gateway changes nothing.",
-    rules: "Ed25519 signature · checked by the environment",
+      "The target applies a write only with a single-use capability signed for exactly that action, so a call that skips the gateway changes nothing. On a real cluster the adapter also dry-runs the write first, as its limited writer identity, and reads the change back after it.",
+    rules: "Ed25519 signature · checked by the target's adapter",
     componentId: "write_boundary",
   },
 ];
@@ -239,7 +241,11 @@ export function approvalKind(kind: string): KindView {
 
 export interface ActorView {
   label: string;
-  /** True: a person decided; false: no person (RECAP, the simulation auto-approver); null: unknown. */
+  /**
+   * True: a person is expected (an interactive console, a signed-in operator), though the log
+   * proves a terminal or a token holder, not a person (decisionAttestation); false: no person
+   * (RECAP, the simulation auto-approver); null: unknown.
+   */
   person: boolean | null;
 }
 
@@ -275,6 +281,12 @@ export interface LifecycleStep {
   text: string;
   at: string | null;
   actor: string | null;
+  /**
+   * How a decision came, in the decision log's own words (the entry's detail): "interactive
+   * terminal; typed the target service's name; answered after 121.9 s; ...", or "dashboard or
+   * API; ...". Null when the entry has none (a simulated run decided in the dashboard).
+   */
+  note: string | null;
 }
 
 export type LifecycleStatus =
@@ -296,15 +308,40 @@ export interface Lifecycle {
   steps: LifecycleStep[];
   /** Refused decision attempts (a tampered digest, a late answer...). */
   refused: ApprovalEvent[];
+  /** When the log recorded the expiry, or null. */
+  expiredAt: string | null;
+  /** Of the refused attempts, the answers that came at or after the expiry: refused, they changed nothing. */
+  late: ApprovalEvent[];
   /** Every entry for this proposal, oldest first. */
   events: ApprovalEvent[];
+}
+
+function step(key: LifecycleStep["key"], state: StepState, text: string, entry: ApprovalEvent | null = null, note: string | null = null): LifecycleStep {
+  const title = key === "requested" ? "Requested" : key === "decided" ? "Decided" : "Used";
+  return { key, title, state, text, at: entry?.at ?? null, actor: entry?.actor ?? null, note };
+}
+
+function noteOf(entry: ApprovalEvent | null, fallback: string | null = null): string | null {
+  return (entry ? text(entry.detail).trim() : "") || fallback || null;
+}
+
+function time(value: string | null | undefined): number {
+  const t = Date.parse(text(value).replace(/(\.\d{3})\d+/, "$1"));
+  return Number.isFinite(t) ? t : Number.NaN;
 }
 
 /**
  * requested -> decided -> used, or expired / rejected / revoked, from the proposal's entries in
  * the approval log. `live`: the run is still going, so a missing step is "waiting", not "never".
+ * `trace`: the run's own record of the decision (its approval.decided event), whose note stands
+ * in when the log's entry carries none.
  */
-export function permissionLifecycle(proposalId: string, entries: readonly ApprovalEvent[], live: boolean): Lifecycle {
+export function permissionLifecycle(
+  proposalId: string,
+  entries: readonly ApprovalEvent[],
+  live: boolean,
+  trace: TraceDecision | null = null,
+): Lifecycle {
   const events = entries.filter((e) => e.proposal_id === proposalId).sort((a, b) => a.event_id - b.event_id);
   const first = (kind: string) => events.find((e) => e.kind === kind) ?? null;
   const requested = first("requested");
@@ -314,7 +351,10 @@ export function permissionLifecycle(proposalId: string, entries: readonly Approv
   const expired = first("expired");
   const consumed = first("consumed");
   const refused = events.filter((e) => e.kind === "refused");
+  const late = expired ? refused.filter((e) => time(e.at) >= time(expired.at) || e.event_id > expired.event_id) : [];
   const who = (e: ApprovalEvent) => actorLabel(e.actor).label;
+  // The trace's note for the same decision, when the log's entry has none.
+  const traced = (decision: string) => (trace && trace.decision === decision ? trace.note : null);
 
   if (!events.length || (!requested && !approved && !rejected && !expired && !consumed && !revoked)) {
     return {
@@ -323,30 +363,30 @@ export function permissionLifecycle(proposalId: string, entries: readonly Approv
       label: "No approval requested",
       tone: "neutral",
       steps: [
-        { key: "requested", title: "Requested", state: "skipped", text: "No request in the approval log", at: null, actor: null },
-        { key: "decided", title: "Decided", state: "skipped", text: "Nothing to decide", at: null, actor: null },
-        { key: "used", title: "Used", state: "skipped", text: "Nothing was used", at: null, actor: null },
+        step("requested", "skipped", "No request in the approval log"),
+        step("decided", "skipped", "Nothing to decide"),
+        step("used", "skipped", "Nothing was used"),
       ],
       refused,
+      expiredAt: null,
+      late: [],
       events,
     };
   }
 
-  const requestStep: LifecycleStep = requested
-    ? { key: "requested", title: "Requested", state: "done", text: "A decision was requested", at: requested.at, actor: requested.actor }
-    : { key: "requested", title: "Requested", state: "done", text: "Request not in the log", at: null, actor: null };
+  const requestStep = requested ? step("requested", "done", "A decision was requested", requested) : step("requested", "done", "Request not in the log");
 
   let decided: LifecycleStep;
-  if (approved) decided = { key: "decided", title: "Decided", state: "done", text: `Approved by ${who(approved)}`, at: approved.at, actor: approved.actor };
-  else if (rejected) decided = { key: "decided", title: "Decided", state: "failed", text: `Rejected by ${who(rejected)}`, at: rejected.at, actor: rejected.actor };
-  else if (expired) decided = { key: "decided", title: "Decided", state: "failed", text: "Expired: nobody decided in time", at: expired.at, actor: expired.actor };
-  else decided = { key: "decided", title: "Decided", state: live ? "waiting" : "skipped", text: live ? "Waiting for a decision" : "No decision recorded", at: null, actor: null };
+  if (approved) decided = step("decided", "done", `Approved by ${who(approved)}`, approved, noteOf(approved, traced("approved")));
+  else if (rejected) decided = step("decided", "failed", `Rejected by ${who(rejected)}`, rejected, noteOf(rejected, traced("rejected")));
+  else if (expired) decided = step("decided", "failed", "Expired: nobody decided in time", expired);
+  else decided = step("decided", live ? "waiting" : "skipped", live ? "Waiting for a decision" : "No decision recorded");
 
   let used: LifecycleStep;
-  if (consumed) used = { key: "used", title: "Used", state: "done", text: "Used once by the gateway", at: consumed.at, actor: consumed.actor };
-  else if (revoked) used = { key: "used", title: "Used", state: "failed", text: `Revoked by ${who(revoked)} before use`, at: revoked.at, actor: revoked.actor };
-  else if (approved) used = { key: "used", title: "Used", state: live ? "waiting" : "skipped", text: live ? "Waiting for the gateway" : "Approved but never used", at: null, actor: null };
-  else used = { key: "used", title: "Used", state: "skipped", text: "Not used", at: null, actor: null };
+  if (consumed) used = step("used", "done", "Used once by the gateway", consumed);
+  else if (revoked) used = step("used", "failed", `Revoked by ${who(revoked)} before use`, revoked, noteOf(revoked));
+  else if (approved) used = step("used", live ? "waiting" : "skipped", live ? "Waiting for the gateway" : "Approved but never used");
+  else used = step("used", "skipped", "Not used");
 
   let status: LifecycleStatus;
   let label: string;
@@ -358,7 +398,128 @@ export function permissionLifecycle(proposalId: string, entries: readonly Approv
   else if (approved) [status, label, tone] = live ? ["approved_waiting", "Approved, not used yet", "info"] : ["approved_unused", "Approved, never used", "warn"];
   else [status, label, tone] = live ? ["waiting", "Waiting for a person", "warn"] : ["no_decision", "No decision recorded", "neutral"];
 
-  return { proposalId, status, label, tone, steps: [requestStep, decided, used], refused, events };
+  return { proposalId, status, label, tone, steps: [requestStep, decided, used], refused, expiredAt: expired?.at ?? null, late, events };
+}
+
+// --- how a decision came: what the decision log proves, and what it does not -------------------------
+
+export interface Attestation {
+  /** "console": typed at a terminal; "dashboard": sent with the operator token (the dashboard or the API). */
+  channel: "console" | "dashboard";
+  /** What the decision log shows, in plain words. */
+  shows: string;
+  /** What that does not prove. */
+  limit: string;
+}
+
+/** "121.9 s after the prompt appeared" / "42.3 s after the request", from the note's own wording. */
+function answeredAfter(note: string): string | null {
+  const atPrompt = /answered after (\d+(?:\.\d+)?) s/.exec(note);
+  if (atPrompt) return `${atPrompt[1]} s after the prompt appeared`;
+  const sinceRequest = /answered (\d+(?:\.\d+)?) s after the request/.exec(note);
+  return sinceRequest ? `${sinceRequest[1]} s after the request` : null;
+}
+
+/**
+ * What a human decision's log entry proves, from its actor and note (recap/safety/approvals.py
+ * writes the console's note, apps/api/main.py the dashboard's). The console proves an answer
+ * typed at an interactive terminal and when; the dashboard or the API proves a holder of the
+ * operator token and when. Neither proves which person it was. Null for decisions no person
+ * is expected to make (RECAP's own entries, the simulation auto-approver) or unknown actors.
+ */
+export function decisionAttestation(actor: string | null | undefined, note: string | null | undefined): Attestation | null {
+  const who = text(actor).trim();
+  const said = text(note).trim();
+  const atConsole = who === "console-user";
+  const withToken = who.startsWith("operator:") || said.startsWith("dashboard or API");
+  if (!atConsole && !withToken) return null;
+  const when = answeredAfter(said);
+  const typed = said.includes("typed the target service's name");
+  const notTyped = said.includes("did not type the target service's name");
+  if (atConsole) {
+    if (said.startsWith("rejected unread") || said.startsWith("rejected without asking")) {
+      return {
+        channel: "console",
+        shows: `The decision log shows that RECAP rejected the request without reading any answer (${said}).`,
+        limit: "No answer was read, so it shows nothing about who was at the terminal.",
+      };
+    }
+    const facts = [
+      `an answer at an interactive terminal${when ? `, ${when}` : ""}`,
+      typed ? "it was the target service's exact name" : notTyped ? "it was not the target service's exact name, so it rejected" : "",
+      said.includes("faster than a person can read") ? "it came faster than a person can read the proposal" : "",
+    ]
+      .filter(Boolean)
+      .join("; ");
+    return {
+      channel: "console",
+      shows: `The decision log shows ${facts}.`,
+      limit: `That proves a terminal and a timing, not a person: a program driving the terminal could answer too.${
+        said.includes("login name kept in the local decision log") ? " This machine's login name is kept only in the local decision log, never on this page." : ""
+      }`,
+    };
+  }
+  const facts = [
+    `a decision sent through the dashboard or the API with the operator token${when ? `, ${when}` : ""}`,
+    typed ? "the target service's exact name was typed" : "",
+  ]
+    .filter(Boolean)
+    .join("; ");
+  return {
+    channel: "dashboard",
+    shows: `The decision log shows ${facts}.`,
+    limit: "That proves a holder of the operator token and a timing, not a person: anyone holding the token could send it.",
+  };
+}
+
+// --- the run's own record of each decision (approval.decided trace events) -------------------------
+
+export interface TraceDecision {
+  proposalId: string;
+  /** approved, rejected, refused or expired, as the controller recorded it. */
+  decision: string;
+  actor: string | null;
+  /** The decision log's note, as the controller copied it into the trace. */
+  note: string | null;
+  /** Why a decision was refused (RECAP's text), for a refused one. */
+  reason: string | null;
+  seq: number;
+}
+
+/**
+ * The last approval.decided event per proposal, from a run's trace. An expiry or a refusal does
+ * not name its proposal there: it belongs to the request the trace recorded just before it (the
+ * controller waits for one request at a time). The approval id each event carries is never read.
+ */
+export function traceDecisions(
+  requests: readonly TimelineEntry[] | null | undefined,
+  decisions: readonly TimelineEntry[] | null | undefined,
+): Map<string, TraceDecision> {
+  const asked = (requests ?? [])
+    .filter((entry) => entry.kind === "approval_requested" || entry.category === "approval.requested")
+    .map((entry) => ({ seq: entry.seq, id: text(isRecord(entry.payload) ? entry.payload.proposal_id : "") }))
+    .filter((r) => r.id)
+    .sort((a, b) => a.seq - b.seq);
+  const found = new Map<string, TraceDecision>();
+  const ordered = [...(decisions ?? [])]
+    .filter((entry) => entry.kind === "approval_decided" || entry.category === "approval.decided")
+    .sort((a, b) => a.seq - b.seq);
+  for (const entry of ordered) {
+    const payload = isRecord(entry.payload) ? entry.payload : {};
+    const named = text(payload.proposal_id);
+    const before = [...asked].reverse().find((r) => r.seq < entry.seq);
+    const proposalId = named || before?.id || "";
+    if (!proposalId) continue;
+    found.set(proposalId, {
+      proposalId,
+      decision: text(payload.decision ?? entry.verdict),
+      actor: text(payload.actor) || null,
+      note: text(payload.note).trim() || null,
+      reason: text(payload.reason).trim() || null,
+      seq: entry.seq,
+    });
+  }
+  return found;
 }
 
 // --- the gateway's decisions ------------------------------------------------------------------------
@@ -427,6 +588,51 @@ export function callScope(row: Pick<GatewayRow, "fix">): keyof typeof CALL_SCOPE
   return row.fix ? "fix" : "call";
 }
 
+// --- the evidence gate's rules (VP1 to VP4) ------------------------------------------------------------
+
+export interface ProposalRule {
+  id: string;
+  /** One plain sentence (documentation, not a measurement). */
+  meaning: string;
+  /** How RECAP's own problem text begins when this rule fails (recap/agents/verifier.py). */
+  problems: readonly string[];
+}
+
+/** The rules every proposed fix is checked against (recap/agents/verifier.py, PROPOSAL_RULES). */
+export const PROPOSAL_RULES: readonly ProposalRule[] = [
+  {
+    id: "VP1-evidence-exists",
+    meaning: "The fix cites evidence, and only evidence recorded in this run.",
+    problems: ["the proposal cites no evidence", "the proposal cites evidence not in this run"],
+  },
+  {
+    id: "VP2-target-matches-diagnosis",
+    meaning: "There is a supported diagnosis, and the fix targets its service.",
+    problems: ["there is no supported diagnosis to act on", "the proposal targets "],
+  },
+  {
+    id: "VP3-action-named",
+    meaning: "The fix names its action.",
+    problems: ["the proposal names no action"],
+  },
+  {
+    id: "VP4-restore-point",
+    meaning:
+      "A fix that restores a version restores one this run's evidence names (the release before the bad one, or a rollback dry run's target), never the release the diagnosis blames.",
+    problems: ["the proposal restores ", "no deployment history or rollback dry run in this run names a version"],
+  },
+];
+
+/**
+ * The rules a refused proposal failed, read from the start of RECAP's own problem text (a model
+ * can only fill in the names inside it). Empty when no problem reads like one of them.
+ */
+export function failedProposalRules(problems: readonly string[]): string[] {
+  return PROPOSAL_RULES.filter((rule) => problems.some((problem) => rule.problems.some((start) => text(problem).startsWith(start)))).map(
+    (rule) => rule.id,
+  );
+}
+
 // --- what RECAP stopped, and which layer stopped it ---------------------------------------------------
 
 export type BlockLayer = "policy" | "evidence_gate" | "approval" | "write";
@@ -472,19 +678,37 @@ export function blockedActions(input: {
   const rows: BlockedRow[] = [];
   const fixDenials = input.gateway.filter((row) => row.fix && row.verdict === "DENY");
   const deniedTools = new Set<string>();
+  const gateRefusals = input.checks.filter((check) => !check.ok && check.enforced);
+  const proposalOf = (id: string) => input.proposals.find((p) => p.proposal_id === id);
+  // The run record lists a fix the evidence gate refused as "denied" too: it is shown once, as
+  // the gate's row (with the failed rule), at the time the record gives.
+  const gateTimes = new Map<number, string>();
 
   input.actions.forEach((action, index) => {
     const block = ACTION_BLOCKS[action.result];
     if (!block) return;
     // The deciding rule of the policy's last DENY on this tool (a join on recorded fields).
     const denial = block.layer === "policy" ? [...fixDenials].reverse().find((row) => row.tool === action.action) : undefined;
+    if (block.layer === "policy" && !denial) {
+      const refusal = gateRefusals.find((check) => {
+        const proposal = proposalOf(check.proposal_id);
+        return !!proposal && proposal.action === action.action && proposal.target === action.target;
+      });
+      if (refusal) {
+        if (text(action.at)) gateTimes.set(refusal.seq, text(action.at));
+        return;
+      }
+    }
+    // A rejected or expired fix: the rule that required the approval it never got (R11).
+    const asked =
+      block.layer === "approval" ? [...input.gateway].reverse().find((row) => row.fix && row.tool === action.action && row.verdict === "APPROVAL_REQUIRED") : undefined;
     if (block.layer === "policy") deniedTools.add(action.action);
     rows.push({
       key: `action-${index}`,
       layer: block.layer,
       what: actionText(action.action, action.target, action.params),
       result: block.result,
-      rule: denial?.deciding ?? null,
+      rule: denial?.deciding ?? asked?.deciding ?? null,
       reason: text(action.note) || (denial ? denial.reasons.join("; ") : "") || "Not recorded",
       at: text(action.at) || null,
     });
@@ -505,26 +729,29 @@ export function blockedActions(input: {
     });
   }
 
-  for (const check of input.checks) {
-    if (check.ok || !check.enforced) continue;
-    const proposal = input.proposals.find((p) => p.proposal_id === check.proposal_id);
+  for (const check of gateRefusals) {
+    const proposal = proposalOf(check.proposal_id);
+    // The rule that failed when RECAP's problem text names it; else every rule the check ran.
+    const failed = failedProposalRules(check.problems);
+    const rules = failed.length ? failed : check.rule_ids;
     rows.push({
       key: `gate-${check.seq}`,
       layer: "evidence_gate",
       what: proposal ? actionText(proposal.action, proposal.target, proposal.params) : `proposal ${check.proposal_id}`,
       result: "Refused",
-      rule: check.rule_ids.length ? check.rule_ids.join(", ") : null,
+      rule: rules.length ? rules.join(", ") : null,
       reason: check.problems.join("; ") || "Not recorded",
-      at: null,
+      at: gateTimes.get(check.seq) ?? null,
     });
   }
 
   for (const lifecycle of input.lifecycles) {
     for (const event of lifecycle.refused) {
+      const late = lifecycle.late.includes(event);
       rows.push({
         key: `refused-${event.event_id}`,
         layer: "approval",
-        what: `a decision on proposal ${lifecycle.proposalId}`,
+        what: late ? `a late answer on proposal ${lifecycle.proposalId}, after its expiry` : `a decision on proposal ${lifecycle.proposalId}`,
         result: "Refused",
         rule: null,
         reason: text(event.detail) || "Not recorded",
@@ -596,7 +823,10 @@ function gateOutcome(checks: readonly ProposalCheckView[], policy: LayerOutcome)
   }
   const refused = checks.filter((check) => !check.ok && check.enforced);
   const unenforced = checks.filter((check) => !check.ok && !check.enforced);
-  if (refused.length) return outcome("evidence_gate", "stopped", "Refused the fix", refused.flatMap((check) => check.problems));
+  if (refused.length) {
+    const failed = [...new Set(refused.flatMap((check) => failedProposalRules(check.problems)))];
+    return outcome("evidence_gate", "stopped", "Refused the fix", [...(failed.length ? [`failed ${failed.join(" · ")}`] : []), ...refused.flatMap((check) => check.problems)]);
+  }
   if (unenforced.length) {
     return outcome("evidence_gate", "warning", "Failed, but not enforced", [
       "the simulation-only safety-off ablation was on",
@@ -631,22 +861,114 @@ function approvalOutcome(lifecycles: readonly Lifecycle[]): LayerOutcome {
 }
 
 function writeOutcome(writes: readonly TimelineEntry[], counts: UnsafeCounts): LayerOutcome {
-  const sent = writes
-    .filter((entry) => entry.kind === "write_executed" || entry.category === "mitigation.executed")
-    .map((entry) => (isRecord(entry.payload) ? entry.payload : {}));
+  const sent = writeRows(writes);
   const refusedLine =
     counts.refusedByEnvironment !== null && counts.refusedByEnvironment > 0
       ? [`${counts.refusedByEnvironment} unsafe ${counts.refusedByEnvironment === 1 ? "write" : "writes"} refused by the environment`]
       : [];
   if (!sent.length) return outcome("capability", "not_reached", "No write was sent", refusedLine);
-  const failed = sent.filter((payload) => payload.ok !== true);
-  const last = sent[sent.length - 1];
-  const what = actionText(last.tool, last.target);
+  const failed = sent.filter((row) => !row.ok);
   if (failed.length) {
-    const error = text(failed[failed.length - 1].error);
-    return outcome("capability", "stopped", `Write failed or refused: ${what}`, [error || "error not recorded", ...refusedLine]);
+    const last = failed[failed.length - 1];
+    return outcome("capability", "stopped", `Write failed or refused: ${last.what}`, [last.error || "error not recorded", ...refusedLine]);
   }
-  return outcome("capability", "passed", sent.length === 1 ? `Signed write applied: ${what}` : `${sent.length} signed writes applied`, refusedLine);
+  const last = sent[sent.length - 1];
+  const reported = last.effects.map((effect) => `the target reported: ${effect}`);
+  return outcome(
+    "capability",
+    "passed",
+    sent.length === 1 ? `Signed write applied: ${last.what}` : `${sent.length} signed writes applied`,
+    [...reported, ...refusedLine],
+  );
+}
+
+// --- the target's own verdict on each write (mitigation.executed) -------------------------------------
+
+export interface WriteRow {
+  seq: number;
+  ts: string;
+  /** "execute_rollback on geo" (the tool and its target; parameters are in `params`). */
+  what: string;
+  params: string;
+  /** The target applied it (ok); false: it refused the write, or the write failed. */
+  ok: boolean;
+  /** What the target's adapter reported it changed ("geo generation 2 -> 3"), RECAP's adapter's words. */
+  effects: string[];
+  error: string | null;
+  /** The first characters of the digest the write was bound to (never the whole value). */
+  digest: string;
+}
+
+/**
+ * The writes RECAP sent to the target, with the target's own answer. Only these fields are read:
+ * a capability, an approval id or a token in the payload never reaches the page.
+ */
+export function writeRows(entries: readonly TimelineEntry[] | null | undefined): WriteRow[] {
+  return (entries ?? [])
+    .filter((entry) => entry.kind === "write_executed" || entry.category === "mitigation.executed")
+    .map((entry) => {
+      const payload = isRecord(entry.payload) ? entry.payload : {};
+      return {
+        seq: entry.seq,
+        ts: entry.ts,
+        what: actionText(payload.tool, payload.target),
+        params: paramsText(payload.params),
+        ok: payload.ok === true,
+        effects: texts(payload.side_effects),
+        error: text(payload.error) || null,
+        digest: shortHash(payload.proposal_digest),
+      };
+    })
+    .sort((a, b) => a.seq - b.seq);
+}
+
+export interface TargetWords {
+  /** True: the simulated shop; false: a real cluster; null: the run did not record its target. */
+  simulated: boolean | null;
+  /** The adapter that checked the run's writes: the simulator, RECAP's Kubernetes adapter (Kind and SREGym), or not known here. */
+  adapter: "simulated" | "kubernetes" | null;
+  /** "the shop", "the cluster" or "the target", for short sentences. */
+  short: string;
+  /** "the simulated shop", "the Kind demo cluster (live)", "SREGym's cluster (live)". */
+  long: string;
+}
+
+/** The live targets RECAP's Kubernetes adapter serves (SREGym's adapter is a KubernetesEnvironment too). */
+const LIVE_TARGET_NAMES: Readonly<Record<string, string>> = {
+  kind: "the Kind demo cluster",
+  sregym: "SREGym's cluster",
+};
+
+/** How to name a run's target in a sentence, from its recorded environment (never guessed). */
+export function targetWords(environment: { kind?: string | null; is_simulated?: boolean | null } | null | undefined): TargetWords {
+  if (!environment || typeof environment.is_simulated !== "boolean") {
+    return { simulated: null, adapter: null, short: "the target", long: "the target (not recorded)" };
+  }
+  if (environment.is_simulated) return { simulated: true, adapter: "simulated", short: "the shop", long: "the simulated shop" };
+  const kind = text(environment.kind);
+  const named = Object.prototype.hasOwnProperty.call(LIVE_TARGET_NAMES, kind) ? LIVE_TARGET_NAMES[kind] : null;
+  return {
+    simulated: false,
+    adapter: named ? "kubernetes" : null,
+    short: named ? "the cluster" : "the target",
+    long: named ? `${named} (live)` : kind ? `the ${kind} target (live)` : "a live target (its kind not recorded)",
+  };
+}
+
+/**
+ * What the run's target checks before it applies a write, read from its adapter's code
+ * (documentation, not a per-run record: the Kubernetes adapter audits each step in its own
+ * local state, which no trace or API response carries). Null when the adapter is not known here.
+ */
+export function adapterChecks(where: Pick<TargetWords, "adapter">): string | null {
+  switch (where.adapter) {
+    case "simulated":
+      return "The simulated shop applies a write only with this run's single-use capability, signed for exactly that action, target and parameters.";
+    case "kubernetes":
+      return "RECAP's Kubernetes adapter performs only rollbacks and restarts, and only with this run's single-use capability for exactly that action (its nonce is spent before the cluster is touched; a capability made with safety off is never accepted). It then checks the service, this run's hold on the namespace and the release, runs a server-side dry run as its RBAC-limited writer identity, writes, and reads the Deployment back to confirm the approved change.";
+    default:
+      return null;
+  }
 }
 
 /** How one run went through the four layers, from what it recorded. */
@@ -781,9 +1103,14 @@ export interface TestedGuarantee {
   test: string;
   /** What the test shows, in plain words. */
   shows: string;
+  /**
+   * M5: a guard for a target that is not simulated. These run in CI too, offline: on RECAP's
+   * fake cluster or a target marked live, never on a real cluster.
+   */
+  liveTarget?: boolean;
 }
 
-/** Adversarial tests that pin these guarantees (they run in CI with `python -m pytest`). */
+/** Tests that pin these guarantees (they run in CI with `python -m pytest`). */
 export const SAFETY_TESTS: readonly TestedGuarantee[] = [
   {
     file: "tests/adversarial/test_prompt_injection_gateway.py",
@@ -814,5 +1141,42 @@ export const SAFETY_TESTS: readonly TestedGuarantee[] = [
     file: "tests/adversarial/test_m4_safety.py",
     test: "test_a_correct_fix_still_runs_with_every_lure_present",
     shows: "Not a trivial refusal: with every lure present, a correct fix is still approved by a person, executed and verified by the oracle.",
+  },
+  {
+    file: "tests/e2e/test_api_security.py",
+    test: "test_a_live_approval_needs_the_target_services_exact_name",
+    shows: "On a live target, an approval through the dashboard or the API needs the target service's exact name: one click, or a wrong name, decides nothing.",
+    liveTarget: true,
+  },
+  {
+    file: "tests/unit/test_console_approval_live.py",
+    test: "test_anything_but_the_exact_name_rejects_on_a_live_target",
+    shows: "At the terminal, y, yes, an Enter alone or any other text rejects a live write; the log says why, never what was typed.",
+    liveTarget: true,
+  },
+  {
+    file: "tests/unit/test_console_approval_live.py",
+    test: "test_a_prompt_nobody_answers_gives_up_when_the_request_expires",
+    shows: "A prompt nobody answers gives up when the request expires (an M5 run once waited four hours past it); a late line is ignored.",
+    liveTarget: true,
+  },
+  {
+    file: "tests/e2e/test_kind_pipeline.py",
+    test: "test_the_write_boundary_holds_inside_the_mcp_server_for_any_caller",
+    shows: "A caller that skips RECAP's gateway can read, but a forged capability, delete_namespace and a second use of a capability are refused inside the tool server.",
+    liveTarget: true,
+  },
+  {
+    file: "tests/unit/test_kind_engine.py",
+    test: "test_delete_namespace_is_refused_even_with_a_valid_capability",
+    shows: "The Kubernetes adapter performs only rollbacks and restarts: delete_namespace is refused even with a validly signed capability, before anything is sent.",
+    liveTarget: true,
+  },
+  {
+    file: "tests/e2e/test_live_target_provider_scope.py",
+    test: "test_a_hosted_model_is_refused_before_a_live_target_is_touched",
+    shows:
+      "A free hosted or a paid model is refused before a live target is reset or read, so nothing of the target is observed (only the owner can permit a free hosted plan there).",
+    liveTarget: true,
   },
 ];

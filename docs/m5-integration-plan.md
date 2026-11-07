@@ -1,12 +1,19 @@
 # M5 integration plan: RECAP on a real Kubernetes target
 
-> **Plan only. Nothing in this document is built, installed, provisioned or run.** It was
-> written during M4 (step 6, "readiness for M5") on 2026-10-26. RECAP still works only
-> against its simulated shop and against recorded replays. No Kubernetes cluster exists for
-> RECAP, `kind`, `kubectl` and Helm are not installed on the build machine, no cloud
-> resource exists, and there are **no Kind or SREGym results**. Every step that installs or
-> downloads something, starts a VM, creates a cluster or provisions a cloud resource waits
-> for the owner's explicit "yes" (sections 7, 8 and 12).
+> **Built in M5 (2026-11-02 to 2026-11-07).** This is the plan as written during M4, on
+> 2026-10-26, kept as it was. What was built and what happened are in
+> [m5-report.md](m5-report.md) and [m5-progress.md](m5-progress.md), and the decisions are in
+> [ADR 0032](decisions/0032-a-real-kubernetes-target-behind-the-same-interface.md) and
+> [ADR 0031](decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md).
+> Where they differ from this plan:
+> - The clusters and the model moved from the Mac to the owner's AWS VM (section 8). With the
+>   model beside the cluster, the Mac ran out of memory.
+> - Decision 4: live approvals come from the console and the dashboard. Both need the target
+>   service's typed name.
+> - The write switch (section 4.3, level 2) is built.
+> - SREGym runs in its external-harness mode: it owns the fault, a release is an image tag, and
+>   the target has no probe or metric (ADR 0031).
+> - The admission policy exists on the Kind demo only.
 
 ## In short
 

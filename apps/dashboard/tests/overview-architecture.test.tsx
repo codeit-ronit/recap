@@ -1,21 +1,36 @@
 /**
  * The Overview and Architecture & Learning pages, rendered with server answers shaped exactly
- * like src/dto.ts (GET /system, /providers, /runs, /replays as a seeded server returned them):
- * readiness with Kind and SREGym planned, providers without keys, the newest runs with their
- * data source, outcomes counted per source (never one success rate), active incidents, access,
- * the M5 gaps, and the flow map (a vertical tab list whose statuses come from /system).
- * Also: loading / empty / error states, partial records ("Not recorded") and hostile text.
+ * like src/dto.ts (GET /system, /providers, /runs, /replays, /scenarios and POST
+ * /environment/check): the seeded simulated server (the Kind and SREGym adapters implemented,
+ * not configured), and the same server with RECAP_TARGET=kind-demo or sregym-hotel. Covered:
+ * readiness, the active environment and its Check now button in every state, the demo or the
+ * real-cluster call to action, providers without keys, the newest runs with their data source
+ * and target, outcomes counted per source and target (never one success rate), active
+ * incidents, access, and the flow map (a vertical tab list whose statuses come from /system)
+ * with each target's explanation and how a real Kubernetes action is authorized. Also:
+ * loading / empty / error states, partial records ("Not recorded") and hostile text.
  */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import type { ReactElement, ReactNode } from "react";
 import { ApiError } from "../src/api";
 import type { Page } from "../src/api";
+import { SIGN_IN_HINT } from "../src/auth";
 import type * as dto from "../src/dto";
 import { parseHash } from "../src/hooks";
 import { ArchitecturePage, ArchitectureView, Breakable } from "../src/pages/Architecture";
-import { OverviewPage, OverviewView, RECENT_RUNS, demoFixture, demoHref, sessionState } from "../src/pages/Overview";
-import type { OverviewViewProps } from "../src/pages/Overview";
+import {
+  EnvironmentCheckPanel,
+  NO_CHECK,
+  OverviewPage,
+  OverviewView,
+  RECENT_RUNS,
+  demoFixture,
+  demoHref,
+  sessionState,
+} from "../src/pages/Overview";
+import type { EnvironmentCheckState, OverviewViewProps, ScenarioRef } from "../src/pages/Overview";
 import type { SessionState } from "../src/view/system";
 import { count, polled, render, tags, textOf, withAttr } from "./support/render";
 
@@ -42,11 +57,29 @@ const COMPONENTS: dto.ComponentStatus[] = [
   component("opentelemetry", "TraceSink", "OpenTelemetry console spans", "disabled", "optional: RECAP_ENABLE_OTEL=1 with the otel extra installed"),
 ];
 
-const ADAPTERS: dto.AdapterStatus[] = [
-  { kind: "simulated", adapter: "SimulatedEnvironment", configured: true, status: "active", operational: true, milestone: null, detail: "deterministic local simulation of a five-service shop (recap/environments/simulated/)" },
-  { kind: "sregym", adapter: "SREGymEnvironment", configured: false, status: "planned", operational: false, milestone: "M5", detail: "interface only: every operation raises EnvironmentNotIntegrated (integrations/sregym/); the real integration is planned for M5" },
-  { kind: "kind", adapter: null, configured: false, status: "planned", operational: false, milestone: "M5", detail: "no adapter in this repository: a local Kind cluster is the first M5 target" },
-];
+const SIMULATED_DETAIL = "deterministic local simulation of a five-service shop (recap/environments/simulated/)";
+const SREGYM_DETAIL =
+  "a SREGym 1.1 problem on SREGym's own Kind cluster, deployed and injected by its external harness: RECAP's Kubernetes adapter with image-tag releases and no probe or metrics, three RBAC-limited identities of its own, and SREGym's mitigation oracle as the benchmark's grader (integrations/sregym/, ADR 0031); chosen with RECAP_TARGET=sregym-hotel. GET /system never contacts the cluster";
+const KIND_DETAIL =
+  "a local Kind cluster through typed kubectl operations, four RBAC-limited identities and an HTTP probe of its own (recap/environments/kubernetes/); chosen with RECAP_TARGET=kind-demo. GET /system never contacts the cluster: whether it is up is checked when a run starts";
+
+/** GET /system `environment_adapters` as recap/runtime.py reports them with `configured` active. */
+function adaptersFor(configured: "simulated" | "kind" | "sregym"): dto.AdapterStatus[] {
+  const entry = (kind: string, adapter: string, detail: string): dto.AdapterStatus => ({
+    kind,
+    adapter,
+    configured: kind === configured,
+    status: kind === configured ? "active" : "available",
+    operational: kind === configured,
+    milestone: null,
+    detail,
+  });
+  return [
+    entry("simulated", "SimulatedEnvironment", SIMULATED_DETAIL),
+    entry("sregym", "SREGymEnvironment", SREGYM_DETAIL),
+    entry("kind", "KubernetesEnvironment", KIND_DETAIL),
+  ];
+}
 
 const SYSTEM: dto.SystemView = {
   schema_version: "recap-api-v1",
@@ -82,7 +115,7 @@ const SYSTEM: dto.SystemView = {
   simulation_notice:
     "SIMULATED ENVIRONMENT: every incident runs against RECAP's local simulation of a five-service shop. No real cluster, Kubernetes or production system is touched.",
   components: COMPONENTS,
-  environment_adapters: ADAPTERS,
+  environment_adapters: adaptersFor("simulated"),
   features: {
     retrieval_default: "bm25",
     hybrid_ready: true,
@@ -120,6 +153,91 @@ const SYSTEM: dto.SystemView = {
     python: "3.11.15",
   },
 };
+
+/** The components of a server on a real cluster: its environment, oracle and policy. */
+function clusterComponents(name: string, kind: string, scenarios: string, policy: string): dto.ComponentStatus[] {
+  return COMPONENTS.map((c) => {
+    if (c.id === "environment") return { ...c, implementation: `${name} (kind ${kind})`, detail: `${scenarios}; NOT simulated` };
+    if (c.id === "oracle") return { ...c, implementation: `${kind}-health-oracle` };
+    if (c.id === "safety_policy") return { ...c, implementation: `recap-policy-engine (${policy})` };
+    return c;
+  });
+}
+
+/** The server with RECAP_TARGET=kind-demo (Runtime.system_summary, offline: GET /system never contacts the cluster). */
+const KIND_SYSTEM: dto.SystemView = {
+  ...SYSTEM,
+  environment: {
+    kind: "kind",
+    name: "Kind cluster recap-m5",
+    namespace: "recap-demo",
+    is_simulated: false,
+    supported_actions: ["rollback", "restart"],
+    description:
+      "Local Kind cluster recap-m5 (context kind-recap-m5), not production: 2 demo services in namespace recap-demo, read through typed kubectl operations. The only writes are a rollback to a named revision and a rolling restart, each with a signed single-use capability, inside the cluster's RBAC and admission policy.",
+    stabilization_timeout_seconds: 180,
+    stabilization_poll_seconds: 5,
+  },
+  environment_kind: "kind",
+  safety_policy: "recap-policy-engine (policy-kind-v1)",
+  oracle: "kind-health-oracle",
+  label: "LIVE ENVIRONMENT (kind) · V1",
+  simulation_notice: null,
+  components: clusterComponents("Kind cluster recap-m5", "kind", "4 scenarios", "policy-kind-v1"),
+  environment_adapters: adaptersFor("kind"),
+  versions: { ...SYSTEM.versions, recap: "0.5.0", policy_version: "policy-kind-v1" },
+};
+
+/** The server with RECAP_TARGET=sregym-hotel. */
+const SREGYM_SYSTEM: dto.SystemView = {
+  ...KIND_SYSTEM,
+  environment: {
+    ...KIND_SYSTEM.environment,
+    kind: "sregym",
+    name: "SREGym on Kind cluster kind",
+    namespace: "hotel-reservation",
+    description:
+      "SREGym 1.1 on its own Kind cluster kind (context kind-kind), not production: 19 Deployments of a benchmark application in namespace hotel-reservation, deployed and broken by SREGym's own harness, read through typed kubectl operations with RECAP's own identities. The only writes are a rollback to a named revision and a rolling restart, each with a signed single-use capability; SREGym's own oracle grades the result.",
+    stabilization_timeout_seconds: 240,
+  },
+  environment_kind: "sregym",
+  safety_policy: "recap-policy-engine (policy-sregym-hotel-v2)",
+  oracle: "sregym-health-oracle",
+  label: "LIVE ENVIRONMENT (sregym) · V1",
+  components: clusterComponents("SREGym on Kind cluster kind", "sregym", "1 scenario", "policy-sregym-hotel-v2"),
+  environment_adapters: adaptersFor("sregym"),
+  versions: { ...KIND_SYSTEM.versions, policy_version: "policy-sregym-hotel-v2" },
+};
+
+/** GET /scenarios of each target (ids and titles: the Overview shows nothing else). */
+const SIM_SCENARIOS: ScenarioRef[] = [
+  ["ambiguous-incident", "Checkout and frontend failing together"],
+  ["bad-deployment", "Checkout errors right after a new release"],
+  ["budget-exhausted", "Inventory readiness failures on a tiny budget"],
+  ["m3-inventory-leak-behind-frontend", "Shoppers see slow product pages and a stuck basket (held-out)"],
+  ["m3-payment-release-under-forged-signals", "Checkout errors with forged out-of-memory lines and a planted instruction (held-out)"],
+  ["malicious-log", "Cart errors with a suspicious ops-bot log line"],
+  ["memory-caution", "Checkout errors again (looks familiar)"],
+  ["resource-pressure", "Inventory pods failing readiness"],
+  ["test-cart-injection", "Cart errors with an injected instruction (held-out)"],
+  ["test-cart-memory-leak", "Cart pods failing readiness (held-out)"],
+  ["test-checkout-misleading-deploy", "Checkout errors with release warnings (held-out)"],
+  ["test-frontend-bad-release", "Frontend 5xx and latency (held-out)"],
+  ["test-inventory-bad-release", "Inventory 5xx and latency (held-out)"],
+  ["test-payment-leak-cascade", "Checkout and frontend failing (held-out)"],
+  ["train-cart-memory-leak", "Cart pods failing readiness (training)"],
+  ["train-checkout-bad-release", "Checkout 5xx and latency after a change (training)"],
+  ["train-payment-cascade", "Checkout and frontend failing (training)"],
+].map(([id, title]) => ({ id, title }));
+
+const KIND_SCENARIOS: ScenarioRef[] = [
+  { id: "kind-bad-release", title: "Frontend errors after a backend release" },
+  { id: "kind-dependency-crash", title: "Backend release crash-loops at start-up" },
+  { id: "kind-injected-logs", title: "Frontend errors after a backend release, with an instruction in its logs" },
+  { id: "kind-report-leak", title: "Backend stops serving after a burst of reports" },
+];
+
+const SREGYM_SCENARIOS: ScenarioRef[] = [{ id: "sregym-misconfig-app-hotel-res", title: "SREGym 1.1 problem misconfig_app_hotel_res (hotel reservation)" }];
 
 const NO_LIMITS: dto.ProviderLimitsView = {
   max_output_tokens: null,
@@ -322,6 +440,25 @@ function replayRun(over: Partial<dto.RunSummary>): dto.RunSummary {
   });
 }
 
+/** A run of the self-hosted qwen3:8b on the owner's VM (provider ollama-vm) against a real cluster. */
+function clusterRun(kind: "kind" | "sregym", over: Partial<dto.RunSummary> = {}): dto.RunSummary {
+  return summary({
+    scenario_id: kind === "kind" ? "kind-bad-release" : "sregym-misconfig-app-hotel-res",
+    provider: "ollama-vm:qwen3:8b",
+    provider_class: "local_llm",
+    provider_kind: "llm",
+    model: "qwen3:8b",
+    prompt_version: "prompts-v4.7",
+    environment_kind: kind,
+    environment_simulated: false,
+    outcome_note: "oracle verified recovery",
+    model_requests: 8,
+    wall_seconds: 905.2,
+    labels: [`LIVE ENVIRONMENT (${kind})`, "LIVE LOCAL MODEL"],
+    ...over,
+  });
+}
+
 /** The seeded folder: two replays of two recordings, then nine scripted runs (newest first). */
 const RUNS: dto.RunSummary[] = [
   replayRun({ run_id: "run-69960d199f", wall_seconds: 0.842, replay: replayProvenance("qwen3-8b-bad-deployment", "20261025-110603-ollama-b1ae62", "Bad deployment, one investigator (CI fixture)") }),
@@ -342,6 +479,14 @@ const RUNS: dto.RunSummary[] = [
   summary({ run_id: "run-03c9c7c6fb", scenario_id: "bad-deployment" }),
   summary({ run_id: "run-a8b6f0d392", scenario_id: "train-checkout-bad-release" }),
   summary({ run_id: "run-0ldest0001", scenario_id: "train-inventory-leak" }),
+];
+
+/** The Kind server's folder: the W4 runs (a verified recovery, a safe failure, two rejections). */
+const KIND_RUNS: dto.RunSummary[] = [
+  clusterRun("kind", { run_id: "run-047aac6eb0" }),
+  clusterRun("kind", { run_id: "run-9fea287988", state: "FAILED", outcome: "failed", recovered: false }),
+  clusterRun("kind", { run_id: "run-e4bd2821df", state: "BLOCKED", outcome: "approval_rejected", recovered: false }),
+  clusterRun("kind", { run_id: "run-16e2fb14b3", state: "BLOCKED", outcome: "approval_rejected", recovered: false }),
 ];
 
 function fixture(over: Partial<dto.FixtureView> = {}): dto.FixtureView {
@@ -387,6 +532,17 @@ const REPLAYS: dto.ReplaysView = {
 
 const NOW = Date.parse("2026-10-26T05:30:00Z");
 
+/** POST /environment/check answers, 12 s before NOW. */
+const PASSED: dto.EnvironmentCheck = {
+  checked_at: "2026-10-26T05:29:48.000000Z",
+  environment_kind: "kind",
+  simulated: false,
+  ok: true,
+  checks: [{ name: "preflight", ok: true, detail: "credentials pinned to this cluster; API server and versions answer as expected" }],
+};
+const FAILED: dto.EnvironmentCheck = { ...PASSED, ok: false, checks: [{ name: "preflight", ok: false, detail: "no answer within 20 s (tunnel down?)" }] };
+const SIGNED_IN: SessionState = { kind: "signed_in", operator: "owner" };
+
 function page(items: dto.RunSummary[], total: number | null = items.length): Page<dto.RunSummary> {
   return { items, total };
 }
@@ -397,11 +553,24 @@ function overview(over: Partial<OverviewViewProps> = {}): string {
     providers: polled(PROVIDERS),
     runs: polled(page(RUNS)),
     replays: polled(REPLAYS),
+    scenarios: polled(SIM_SCENARIOS),
     session: { kind: "signed_out" },
+    check: NO_CHECK,
+    onCheck: () => undefined,
     now: NOW,
     ...over,
   };
   return render(<OverviewView {...props} />);
+}
+
+/** The Overview of the server with RECAP_TARGET=kind-demo (or another real-cluster system). */
+function clusterOverview(system: dto.SystemView, over: Partial<OverviewViewProps> = {}): string {
+  return overview({
+    system: polled(system),
+    runs: polled(page(system.environment_kind === "kind" ? KIND_RUNS : [])),
+    scenarios: polled(system.environment_kind === "kind" ? KIND_SCENARIOS : SREGYM_SCENARIOS),
+    ...over,
+  });
 }
 
 /** The markup of the first element whose opening tag carries `marker`, up to the next sibling marker. */
@@ -413,6 +582,7 @@ function between(html: string, start: string, end: string): string {
 }
 
 const hrefs = (html: string) => tags(html, "a").map((a) => a.attrs.href ?? "");
+const github = (path: string) => `https://github.com/codeit-ronit/recap/${path.endsWith("/") ? "tree" : "blob"}/main/${path.replace(/\/$/, "")}`;
 
 // --- Overview ---------------------------------------------------------------------------------
 
@@ -424,11 +594,13 @@ test("before the first answer every card shows its loading state", () => {
   assert.match(text, /Loading GET \/system/);
   assert.match(text, /Loading runs/);
   assert.match(text, /Loading GET \/providers/);
-  // The demo call to action is there from the start.
+  // Until GET /system answers, the demo call to action stands (its recordings say whether
+  // they can be replayed here); nothing is called simulated or live meanwhile.
   assert.ok(hrefs(html).includes("#/live?panel=replay"));
+  assert.doesNotMatch(text, /Run a real-cluster incident|Simulated environment · this page only reads|Live environment:/);
 });
 
-test("readiness: the simulated shop is active, Kind and SREGym are planned for M5 and not operational", () => {
+test("readiness: the simulated shop is active and operational; Kind and SREGym are implemented, available, not operational", () => {
   const html = overview();
   const text = textOf(html);
   assert.match(text, /Simulated environment · this page only reads/);
@@ -436,10 +608,11 @@ test("readiness: the simulated shop is active, Kind and SREGym are planned for M
   const simulated = between(html, "Simulated shop", "SREGym");
   assert.match(textOf(simulated), /configured Active Operational/);
   const kind = between(html, "Kind (local Kubernetes)</span>", "</li>");
-  assert.match(textOf(kind), /Planned · M5 Not operational/);
-  assert.doesNotMatch(textOf(kind), /Active/);
+  assert.match(textOf(kind), /Available Not operational a local Kind cluster through typed kubectl operations/);
+  assert.doesNotMatch(textOf(kind), /Active|Planned/);
   const sregym = between(html, ">SREGym</span>", "</li>");
-  assert.match(textOf(sregym), /Planned · M5 Not operational/);
+  assert.match(textOf(sregym), /Available Not operational a SREGym 1\.1 problem on SREGym's own Kind cluster/);
+  assert.doesNotMatch(textOf(sregym), /Planned|interface only|EnvironmentNotIntegrated/);
   assert.match(text, /12 active · 1 available · 1 disabled/);
   assert.match(text, /OpenTelemetry console spans \(TraceSink\) Disabled/);
   assert.match(text, /Versions RECAP 0\.4\.0 prompts prompts-v4\.7 policy policy-v1 API recap-api-v1 code 673bb8ad878a/);
@@ -461,6 +634,7 @@ test("the demo starts from the golden recording, labelled as a replay of a real 
   assert.ok(hrefs(card).includes("https://github.com/codeit-ronit/recap/tree/main/evals/live/2026-10-25-qwen3-8b-human-approved-unfamiliar-prompts-v4.7"));
   assert.ok(hrefs(card).includes("https://github.com/codeit-ronit/recap/blob/main/docs/demo-walkthrough.md"));
   assert.match(text, /Starting a replay needs the operator token/);
+  assert.doesNotMatch(text, /Run a real-cluster incident/, "a simulated server offers no real-cluster run");
 });
 
 test("when no recording can be replayed the demo card says why, and still links the Incident Lab", () => {
@@ -499,18 +673,37 @@ test("recent runs: the ten newest, each opening the Trace Explorer, with its dat
 
 test("outcomes are counted per data source: no blended success rate, no percentage", () => {
   const html = overview();
-  const card = between(html, "Outcomes by data source</h2>", "Access</h2>");
+  const card = between(html, "Outcomes by data source</h2>", "Active environment</h2>");
   const text = textOf(card);
-  assert.match(text, /Scripted baseline .*9 runs · 9 scenarios Resolved 7 Safety blocked 1 Budget exhausted 1/);
-  assert.match(text, /Replay .*2 runs · 2 scenarios Resolved 2/);
+  assert.match(text, /Scripted baseline · Simulated target SCRIPTED BASELINE \/ SIMULATED TARGET 9 runs · 9 scenarios Resolved 7 Safety blocked 1 Budget exhausted 1/);
+  assert.match(text, /Replay · Simulated target .*2 runs · 2 scenarios Resolved 2/);
   assert.match(text, /These 2 replays re-ran 2 recordings: a recording replayed again is not a new model result\./);
-  assert.match(text, /Local LLM .*0 runs No runs from this source yet\./);
-  assert.match(text, /Free hosted LLM .*0 runs No runs from this source yet\./);
-  assert.match(text, /none is a success rate, and the sources are never added together/);
+  assert.match(text, /Local LLM LOCAL LLM 0 runs No runs from this source yet\./);
+  assert.match(text, /Free hosted LLM FREE HOSTED LLM 0 runs No runs from this source yet\./);
+  assert.match(text, /New inference by a self-hosted open-weight model \(Ollama\), on this machine or on the owner's own VM\./);
+  assert.match(text, /none is a success rate, and no two sources or targets are ever added together/);
   assert.doesNotMatch(textOf(html), /%/, "no rate anywhere on the page");
   assert.doesNotMatch(text, /11 runs/, "the sources are never summed");
-  // Sources without runs are drawn as empty (dashed), not hidden.
+  // Sources without runs are drawn as empty (dashed), not hidden, and claim no target.
   assert.equal(count(card, 'class="ov-source is-empty"'), 2);
+  assert.doesNotMatch(textOf(between(card, "Local LLM", "No runs from this source yet")), /TARGET/);
+});
+
+test("outcomes on a real cluster get their own column, apart from the same source on the simulator", () => {
+  const runs = [clusterRun("kind", { run_id: "run-k1" }), clusterRun("kind", { run_id: "run-k2", outcome: "approval_rejected", state: "BLOCKED" }), summary({ provider_class: "local_llm", provider_kind: "llm", model: "qwen3:8b" }), clusterRun("sregym", { run_id: "run-s1" })];
+  const html = overview({ runs: polled(page(runs)) });
+  const card = between(html, "Outcomes by data source</h2>", "Active environment</h2>");
+  const text = textOf(card);
+  assert.match(text, /Local LLM · Simulated target LOCAL LLM \/ SIMULATED TARGET 1 run · 1 scenario Resolved 1/);
+  assert.match(text, /Local LLM · Live target · Kind \(local Kubernetes\) LOCAL LLM \/ LIVE TARGET · kind 2 runs · 1 scenario Resolved 1 Approval rejected 1/);
+  assert.match(text, /These runs acted on a real cluster, not a simulation\./);
+  assert.match(text, /Local LLM · Live target · SREGym LOCAL LLM \/ LIVE TARGET · sregym 1 run · 1 scenario Resolved 1/);
+  assert.match(text, /Resolved is RECAP's own oracle; SREGym's grader gives the benchmark's verdict separately \(Evaluations\)\./);
+  assert.doesNotMatch(text, /[34] runs/, "no column adds the simulator and a cluster, or two clusters");
+  // Each column's accessible name says source and target.
+  const groups = withAttr(card, "role", "group").map((g) => g.attrs["aria-label"]);
+  assert.ok(groups.includes("Local LLM · Live target · Kind (local Kubernetes)"));
+  assert.ok(groups.includes("Local LLM · Simulated target"));
 });
 
 test("a run that recorded no source, target or wall time reads Not recorded", () => {
@@ -529,9 +722,10 @@ test("a run that recorded no source, target or wall time reads Not recorded", ()
   const row = textOf(between(html, 'href="#/timeline?run=run-m1old00001"', "</li>"));
   assert.match(row, /SOURCE NOT RECORDED \/ TARGET NOT RECORDED/);
   assert.match(row, /Duration: Not recorded/);
-  const card = textOf(between(html, "Outcomes by data source</h2>", "Access</h2>"));
-  assert.match(card, /Source not recorded .*1 run · 1 scenario Resolved 1/);
+  const card = textOf(between(html, "Outcomes by data source</h2>", "Active environment</h2>"));
+  assert.match(card, /Source not recorded · Target not recorded SOURCE NOT RECORDED \/ TARGET NOT RECORDED 1 run · 1 scenario Resolved 1/);
   assert.match(card, /whose decision source was not recorded/);
+  assert.match(card, /These runs did not record which environment they ran against\./);
 });
 
 test("the breakdown says when it counted only the newest runs", () => {
@@ -580,12 +774,11 @@ test("active incidents: listed first, with their state, liveness and a link to t
 
 test("access: reads are open, acting needs the operator token, and the tab's state is shown", () => {
   const html = overview();
-  const card = textOf(between(html, "Access</h2>", "Not built yet: M5</h2>"));
+  const card = textOf(between(html, "Access</h2>", "Decision providers</h2>"));
   assert.match(card, /Reading every page Open/);
   assert.match(card, /Acting: start a run or a replay, approve or reject a fix, cancel a run, start an evaluation Operator token required/);
   assert.match(card, /This browser tab Signed out/);
-  const signedIn: SessionState = { kind: "signed_in", operator: "owner" };
-  const inHtml = overview({ session: signedIn });
+  const inHtml = overview({ session: SIGNED_IN });
   assert.match(textOf(inHtml), /This browser tab Signed in as owner/);
   assert.doesNotMatch(inHtml, /Bearer/);
   // The session state is derived without ever exposing the token.
@@ -596,19 +789,230 @@ test("access: reads are open, acting needs the operator token, and the tab's sta
   assert.doesNotMatch(JSON.stringify(sessionState("tok-secret", polled({ operator: "owner" }))), /tok-secret/);
 });
 
-test("M5 gaps list what the server reports as planned and link the plan", () => {
+test("active environment on the simulator: the adapter's own facts, its scenarios, and no stale M5 card", () => {
   const html = overview();
-  const card = between(html, "Not built yet: M5</h2>", "Decision providers</h2>");
+  assert.doesNotMatch(html, /Not built yet: M5|documentation only|m5-integration-plan/);
+  const card = between(html, "Active environment</h2>", "Access</h2>");
   const text = textOf(card);
-  assert.match(text, /SREGym adapter Planned · M5/);
-  assert.match(text, /Kind \(local Kubernetes\) adapter Planned · M5/);
-  assert.doesNotMatch(text, /Evaluation mode/, "every evaluation mode is implemented since M5");
-  assert.match(text, /documentation only: nothing in it is built, installed or provisioned/);
-  const plan = tags(card, "a").find((a) => a.attrs.href === "https://github.com/codeit-ronit/recap/blob/main/docs/m5-integration-plan.md");
-  assert.ok(plan, "links docs/m5-integration-plan.md");
-  assert.equal(plan?.attrs.target, "_blank");
-  assert.equal(plan?.attrs.rel, "noopener noreferrer");
+  assert.match(text, /The target every incident on this server runs against \(GET \/system\)/);
+  assert.match(text, /Simulated shop SIMULATED TARGET Deterministic local simulation of a five-service shop/);
+  assert.match(text, /Environment RECAP simulated shop Namespace shop Adapter SimulatedEnvironment \(kind simulated \)/);
+  assert.match(text, /Actions it supports rollback, restart, delete_namespace/);
+  assert.match(text, /Scenarios 17 scenarios ambiguous-incident Checkout and frontend failing together/);
+  assert.match(text, /Safety policy policy-v1 Recovery oracle simulated-health-oracle/);
+  assert.doesNotMatch(text, /Time a fix may take to settle/, "the simulator recovers the moment a fix is applied");
+  assert.match(text, /A simulated target runs inside the server: the check only confirms it\./);
+  // No real-cluster guide for the simulator, and no planned list when nothing is planned.
+  assert.ok(!hrefs(card).some((href) => href.includes("infra/kind") || href.includes("integrations/sregym")));
+  assert.doesNotMatch(text, /Listed as planned/);
+  // Scenario titles only: never a scenario's evaluation labels.
+  assert.doesNotMatch(text, /family|expected/);
 });
+
+test("active environment lists what the server still calls planned, and only then", () => {
+  const planned: dto.AdapterStatus = { kind: "nomad", adapter: null, configured: false, status: "planned", operational: false, milestone: "M9", detail: "no adapter in this repository" };
+  const html = overview({ system: polled({ ...SYSTEM, environment_adapters: [...SYSTEM.environment_adapters, planned] }) });
+  const text = textOf(between(html, "Active environment</h2>", "Access</h2>"));
+  assert.match(text, /Listed as planned \(not built\) nomad adapter Planned · M9 no adapter in this repository/);
+});
+
+test("active environment: the scenarios load on their own, and say so when they cannot", () => {
+  const loading = textOf(between(overview({ scenarios: polled(undefined) }), "Active environment</h2>", "Access</h2>"));
+  assert.match(loading, /Scenarios Loading…/);
+  const failed = textOf(between(overview({ scenarios: polled(undefined, new ApiError("boom", 500, "/scenarios", null, false)) }), "Active environment</h2>", "Access</h2>"));
+  assert.match(failed, /Scenarios Not loaded \(GET \/scenarios failed\)/);
+  const none = textOf(between(overview({ scenarios: polled([]) }), "Active environment</h2>", "Access</h2>"));
+  assert.match(none, /Scenarios none: no incident can run here/);
+});
+
+test("on a Kind server: a live notice, a real-cluster call to action instead of the demo, and the cluster's facts", () => {
+  const html = clusterOverview(KIND_SYSTEM);
+  const text = textOf(html);
+  // Never presented as simulated; the notice names the target.
+  assert.match(text, /Live environment: Kind \(local Kubernetes\) Kind cluster recap-m5, namespace recap-demo: not simulated\. An approved action changes this real system; nothing on this page changes it\./);
+  assert.doesNotMatch(text, /this page only reads|SIMULATED TARGET|SIMULATED ENVIRONMENT/);
+  // No simulated demo: the header and the first card lead to a real-cluster run.
+  assert.doesNotMatch(text, /Start the demo|Open the replay panel/);
+  assert.ok(!hrefs(html).some((href) => href.includes("panel=replay")));
+  const header = between(html, '<header class="page-header"', "</header>");
+  assert.match(textOf(header), /Run a real-cluster incident/);
+  assert.ok(hrefs(header).includes("#/live"));
+  const card = between(html, "Run a real-cluster incident</h2>", "System readiness");
+  const cardText = textOf(card);
+  assert.match(cardText, /Kind cluster recap-m5 · namespace recap-demo · not a simulation/);
+  assert.match(cardText, /Nothing it proposes runs until a person approves that exact action\./);
+  assert.match(cardText, /An approved action changes the cluster This target's actions \(rollback, restart\) each change one Deployment in namespace recap-demo \./);
+  assert.match(cardText, /To approve, the operator types the target service's exact name, in the Incident Lab's approval dialog or at the console\. A rejection changes nothing\./);
+  assert.match(cardText, /Starting a run already changes the cluster: RECAP's reset puts the demo app back on its baseline and applies the scenario's fault/);
+  assert.match(cardText, /Starting a run needs the operator token/);
+  assert.ok(hrefs(card).includes("#/live"));
+  assert.ok(hrefs(card).includes(github("infra/kind/README.md")));
+  // Readiness: Kind is the configured, operational adapter; the simulator and SREGym are not.
+  assert.match(textOf(between(html, "Kind (local Kubernetes)</span>", "</li>")), /configured Active Operational/);
+  assert.match(textOf(between(html, ">Simulated shop</span>", "</li>")), /Available Not operational/);
+  assert.match(textOf(between(html, ">SREGym</span>", "</li>")), /Available Not operational/);
+  const operational = tags(between(html, "Kind (local Kubernetes)</span>", "</li>"), "span").find((s) => (s.attrs.title ?? "").includes("does not contact the cluster"));
+  assert.ok(operational, "Operational says GET /system did not contact the cluster");
+});
+
+test("on a Kind server the active environment shows the cluster, its scenarios, settle time and guide", () => {
+  const html = clusterOverview(KIND_SYSTEM);
+  const card = between(html, "Active environment</h2>", "Access</h2>");
+  const text = textOf(card);
+  assert.match(text, /Kind \(local Kubernetes\) LIVE TARGET · kind Local Kind cluster recap-m5 \(context kind-recap-m5\), not production/);
+  assert.match(text, /Environment Kind cluster recap-m5 Namespace recap-demo Adapter KubernetesEnvironment \(kind kind \)/);
+  assert.match(text, /Actions it supports rollback, restart Scenarios 4 scenarios kind-bad-release Frontend errors after a backend release/);
+  assert.match(text, /Safety policy policy-kind-v1 Recovery oracle kind-health-oracle Time a fix may take to settle up to 180 s, checked every 5 s/);
+  assert.match(text, /GET \/system describes this target without contacting it\. Check now asks the server to reach it as a run would/);
+  assert.match(text, /Nothing is changed and no run starts\./);
+  assert.match(text, /Not checked from this page yet\./);
+  assert.ok(hrefs(card).includes(github("infra/kind/README.md")));
+  assert.doesNotMatch(text, /Listed as planned/);
+});
+
+test("on a Kind server outcomes and recent runs are labelled as live-target runs", () => {
+  const html = clusterOverview(KIND_SYSTEM);
+  const runs = between(html, 'class="ov-runs-list"', "</ol>");
+  assert.equal(count(runs, "LIVE TARGET · kind"), 4);
+  assert.equal(count(runs, "SIMULATED TARGET"), 0);
+  assert.match(textOf(runs), /LOCAL LLM qwen3:8b \/ LIVE TARGET · kind/);
+  const outcomes = textOf(between(html, "Outcomes by data source</h2>", "Active environment</h2>"));
+  assert.match(outcomes, /Local LLM · Live target · Kind \(local Kubernetes\) LOCAL LLM \/ LIVE TARGET · kind 4 runs · 1 scenario Resolved 1 Failed 1 Approval rejected 2/);
+  // The empty-folder hint points at this cluster's scenarios, not at a demo.
+  const empty = textOf(clusterOverview(KIND_SYSTEM, { runs: polled(page([], 0)) }));
+  assert.match(empty, /No runs yet This server's data folder holds no run yet\. Run one of this target's scenarios in the Incident Lab\./);
+  assert.doesNotMatch(empty, /Start the demo/);
+});
+
+test("on a SREGym server: SREGym's harness owns the problem and its grader is separate", () => {
+  const html = clusterOverview(SREGYM_SYSTEM);
+  const text = textOf(html);
+  assert.match(text, /Live environment: SREGym SREGym on Kind cluster kind, namespace hotel-reservation: not simulated\./);
+  const card = textOf(between(html, "Run a real-cluster incident</h2>", "System readiness"));
+  assert.match(card, /SREGym on Kind cluster kind · namespace hotel-reservation · not a simulation/);
+  assert.match(card, /SREGym's own harness deploys the app and injects the problem before a run; RECAP's reset changes nothing\./);
+  assert.match(card, /SREGym's own grader gives the benchmark's verdict separately from RECAP's oracle\./);
+  assert.doesNotMatch(card, /applies the scenario's fault/);
+  assert.ok(hrefs(html).includes(github("integrations/sregym/README.md")));
+  const environment = textOf(between(html, "Active environment</h2>", "Access</h2>"));
+  assert.match(environment, /SREGym LIVE TARGET · sregym SREGym 1\.1 on its own Kind cluster kind/);
+  assert.match(environment, /Adapter SREGymEnvironment \(kind sregym \)/);
+  assert.match(environment, /Scenarios 1 scenario sregym-misconfig-app-hotel-res/);
+  assert.match(environment, /Safety policy policy-sregym-hotel-v2 Recovery oracle sregym-health-oracle Time a fix may take to settle up to 240 s/);
+  assert.match(textOf(between(html, ">SREGym</span>", "</li>")), /configured Active Operational/);
+  assert.match(textOf(between(html, "Kind (local Kubernetes)</span>", "</li>")), /Available Not operational/);
+});
+
+// --- the Check now button ---------------------------------------------------------------------
+
+function checkPanel(check: EnvironmentCheckState, session: SessionState = SIGNED_IN, kind = "kind", simulated = false): string {
+  return render(<EnvironmentCheckPanel kind={kind} simulated={simulated} check={check} onCheck={() => undefined} session={session} now={NOW} />);
+}
+
+const checkButton = (html: string) => tags(html, "button")[0];
+
+test("check now: signed out, the button waits for the operator token and nothing was checked", () => {
+  const html = checkPanel(NO_CHECK, { kind: "signed_out" });
+  assert.ok("disabled" in checkButton(html).attrs);
+  assert.match(textOf(html), /Check now Needs the operator token \(Sign in, top right\)\. Not checked from this page yet\./);
+  assert.equal(withAttr(html, "role", "alert").length, 0);
+});
+
+test("check now: signed in, the button is ready and calls the check when pressed", () => {
+  const html = checkPanel(NO_CHECK);
+  assert.ok(!("disabled" in checkButton(html).attrs));
+  assert.equal(checkButton(html).attrs.type, "button");
+  assert.doesNotMatch(textOf(html), /Needs the operator token/);
+  // The button's own handler is the page's onCheck (pressed here without a browser).
+  let pressed = 0;
+  const tree = EnvironmentCheckPanel({ kind: "kind", simulated: false, check: NO_CHECK, onCheck: () => (pressed += 1), session: SIGNED_IN, now: NOW });
+  const button = findElement(tree, (el) => el.type === "button");
+  assert.ok(button, "the panel has a button");
+  (button?.props as { onClick: () => void } | undefined)?.onClick();
+  assert.equal(pressed, 1);
+});
+
+test("check now: while a check runs the button is busy, and an earlier answer stays visible", () => {
+  const html = checkPanel({ running: true, result: null, error: null });
+  assert.ok("disabled" in checkButton(html).attrs);
+  assert.match(textOf(html), /Checking… Checking the target…/);
+  const again = textOf(checkPanel({ running: true, result: PASSED, error: null }));
+  assert.match(again, /Checking the target… Check passed/);
+});
+
+test("check now: a passed check shows each check, the target and when it ran", () => {
+  const html = checkPanel({ running: false, result: PASSED, error: null });
+  const text = textOf(html);
+  assert.match(text, /Check passed Kind \(local Kubernetes\) \(not simulated\) · checked 12 s ago/);
+  assert.match(text, /Passed preflight credentials pinned to this cluster; API server and versions answer as expected/);
+  const time = tags(html, "time")[0];
+  assert.equal(time.attrs.dateTime, "2026-10-26T05:29:48.000000Z");
+  // The answer is announced politely; nothing is an alert.
+  assert.ok(withAttr(html, "role", "status").length >= 1);
+  assert.equal(withAttr(html, "role", "alert").length, 0);
+  assert.doesNotMatch(text, /Not checked from this page yet/);
+});
+
+test("check now: a failed check says which check failed and why, in words", () => {
+  const text = textOf(checkPanel({ running: false, result: FAILED, error: null }));
+  assert.match(text, /Check failed Kind \(local Kubernetes\) \(not simulated\) · checked 12 s ago/);
+  assert.match(text, /Failed preflight no answer within 20 s \(tunnel down\?\)/);
+  const simulated = textOf(
+    checkPanel(
+      { running: false, result: { checked_at: PASSED.checked_at, environment_kind: "simulated", simulated: true, ok: true, checks: [{ name: "simulated environment", ok: true, detail: "local and in-process" }] }, error: null },
+      SIGNED_IN,
+      "simulated",
+      true,
+    ),
+  );
+  assert.match(simulated, /A simulated target runs inside the server: the check only confirms it\./);
+  assert.match(simulated, /Check passed Simulated shop \(simulated\) · checked 12 s ago Passed simulated environment local and in-process/);
+  // A live adapter this repository does not describe: no cluster credentials are claimed.
+  const custom = textOf(checkPanel(NO_CHECK, SIGNED_IN, "custom.module:Adapter"));
+  assert.match(custom, /Check now asks the server to run the adapter's own preflight, if it has one\./);
+  assert.doesNotMatch(custom, /cluster/);
+});
+
+test("check now: 401 asks to sign in; another failure shows the server's words; nothing was changed either way", () => {
+  const unauthorized = checkPanel({ running: false, result: null, error: new ApiError(SIGN_IN_HINT, 401, "/environment/check", null, false) });
+  const text = textOf(unauthorized);
+  assert.match(text, /Sign in to run the check · HTTP 401/);
+  assert.ok(text.includes(SIGN_IN_HINT));
+  assert.match(text, /No answer from the target, and nothing on it was changed\./);
+  assert.equal(withAttr(unauthorized, "role", "alert").length, 1);
+  assert.ok(!("disabled" in checkButton(unauthorized).attrs), "the button stays ready for after sign-in");
+  const failed = textOf(checkPanel({ running: false, result: null, error: new ApiError("the environment adapter could not be built", 500, "/environment/check", null, false) }));
+  assert.match(failed, /The check could not run · HTTP 500 the environment adapter could not be built No answer from the target/);
+  const offline = textOf(checkPanel({ running: false, result: null, error: new ApiError("Cannot reach the RECAP API.", 0, "/environment/check", null, true) }));
+  assert.match(offline, /The check could not run Cannot reach the RECAP API\. No answer from the target/);
+  assert.doesNotMatch(offline, /HTTP 0/);
+});
+
+test("check now: the Overview passes its check state and session to the active environment card", () => {
+  const html = clusterOverview(KIND_SYSTEM, { session: SIGNED_IN, check: { running: false, result: PASSED, error: null } });
+  const card = between(html, "Active environment</h2>", "Access</h2>");
+  assert.match(textOf(card), /Check passed Kind \(local Kubernetes\) \(not simulated\) · checked 12 s ago/);
+  assert.ok(!("disabled" in tags(card, "button")[0].attrs));
+  const signedOut = between(clusterOverview(KIND_SYSTEM), "Active environment</h2>", "Access</h2>");
+  assert.ok("disabled" in tags(signedOut, "button")[0].attrs);
+});
+
+/** The first element in a returned element tree that matches (host elements only; components are not rendered). */
+function findElement(node: ReactNode, match: (el: ReactElement) => boolean): ReactElement | null {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = findElement(child, match);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (!node || typeof node !== "object" || !("props" in node)) return null;
+  const el = node as ReactElement<{ children?: ReactNode }>;
+  if (match(el)) return el;
+  return findElement(el.props.children, match);
+}
+
+// --- providers, states, escaping ---------------------------------------------------------------
 
 test("providers: class, model, readiness and per-run selection; keys only as set or missing", () => {
   const html = overview();
@@ -636,27 +1040,32 @@ test("providers: class, model, readiness and per-run selection; keys only as set
 test("empty and error states say why, and failed requests offer a retry", () => {
   const empty = overview({ runs: polled(page([], 0)) });
   const text = textOf(empty);
-  assert.match(text, /No runs yet This server's data folder holds no run yet\./);
+  assert.match(text, /No runs yet This server's data folder holds no run yet\. Start the demo above, or run a scenario in the Incident Lab\./);
   assert.match(text, /Nothing to count yet No run has been recorded, so there is no outcome to count\./);
   const failing = new ApiError("Internal Server Error", 500, "/providers", null, false);
   const broken = overview({ providers: polled(undefined, failing), system: polled(undefined, new ApiError("boom", 500, "/system", null, false)) });
   const brokenText = textOf(broken);
   assert.match(brokenText, /Could not load GET \/providers · HTTP 500 Internal Server Error/);
   assert.match(brokenText, /Could not load GET \/system · HTTP 500 boom/);
-  assert.ok(withAttr(broken, "role", "alert").length >= 4, "readiness, access, M5 gaps and providers each report the failure");
+  assert.ok(withAttr(broken, "role", "alert").length >= 4, "readiness, active environment, access and providers each report the failure");
   assert.ok(count(brokenText, "Retry") >= 4);
-  // No notice is invented while /system is unknown.
-  assert.doesNotMatch(brokenText, /Simulated environment · this page only reads/);
+  // No notice is invented while /system is unknown, and no real-cluster claim either.
+  assert.doesNotMatch(brokenText, /Simulated environment · this page only reads|Live environment:|Run a real-cluster incident/);
   const noProviders = overview({ providers: polled([]) });
   assert.match(textOf(noProviders), /No provider configured configs\/providers\.yaml lists no decision provider\./);
 });
 
-test("a live environment adapter is never presented as simulated", () => {
-  const live = { ...SYSTEM, environment: { ...SYSTEM.environment, is_simulated: false, kind: "kind" }, environment_kind: "kind", simulation_notice: null };
-  const html = overview({ system: polled(live) });
+test("a live environment adapter is never presented as simulated, whatever its kind", () => {
+  const custom = { ...KIND_SYSTEM, environment: { ...KIND_SYSTEM.environment, kind: "custom.module:Adapter", name: "a custom target" }, environment_kind: "custom.module:Adapter" };
+  const html = overview({ system: polled(custom) });
   const text = textOf(html);
-  assert.match(text, /Live environment adapter: kind/);
-  assert.doesNotMatch(text, /this page only reads/);
+  assert.match(text, /Live environment: custom\.module:Adapter a custom target, namespace recap-demo: not simulated\./);
+  assert.doesNotMatch(text, /this page only reads|Start the demo/);
+  // It is live, but this repository does not describe it: no cluster, Deployment, guide or
+  // start note is invented for it.
+  assert.equal(count(text, "Run an incident on the live target"), 2, "header and card");
+  assert.match(text, /An approved action changes this real system This target's actions \(rollback, restart\) change it\./);
+  assert.doesNotMatch(text, /real-cluster|Deployment|Starting a run already changes|SREGym's own harness deploys/);
 });
 
 test("hostile text from the server is escaped, never markup or a link", () => {
@@ -676,6 +1085,21 @@ test("hostile text from the server is escaped, never markup or a link", () => {
   const text = textOf(html);
   assert.ok(text.includes(evil), "the text is shown, escaped");
   assert.ok(text.includes('<b onmouseover="alert(3)">hi</b>'));
+});
+
+test("hostile text in the environment, its scenarios and a check answer is escaped too", () => {
+  const evil = "<script>alert(1)</script>";
+  const system = { ...KIND_SYSTEM, environment: { ...KIND_SYSTEM.environment, name: evil, description: '<img src=x onerror="alert(2)">', namespace: '<iframe src="y">' } };
+  const html = clusterOverview(system, {
+    scenarios: polled([{ id: evil, title: '<a href="javascript:alert(3)">x</a>' }]),
+    check: { running: false, result: { ...FAILED, checks: [{ name: evil, ok: false, detail: '<img src=x onerror="alert(4)">' }] }, error: null },
+  });
+  assert.equal(tags(html, "script").length, 0);
+  assert.equal(tags(html, "img").length, 0);
+  assert.equal(tags(html, "iframe").length, 0);
+  assert.equal(withAttr(html, "onerror").length, 0);
+  assert.ok(hrefs(html).every((href) => !/^\s*javascript:/i.test(href)));
+  assert.ok(textOf(html).includes(`${evil} · namespace <iframe src="y"> · not a simulation`));
 });
 
 // --- Architecture & Learning ------------------------------------------------------------------
@@ -733,28 +1157,38 @@ test("each step shows the status /system reports; the controller has none of its
   assert.match(text, /Step 6: MCP tool gateway trusted code Active MCP over stdio/);
   assert.match(text, /Step 9: Authorized write trusted code Active Ed25519-signed, single-use capabilities/);
   assert.match(text, /Trace sinks Active OpenTelemetry Disabled/);
-  // The target environment's planned adapters are drawn as planned, never active.
+  // Every adapter of this repository is implemented: none is drawn as planned.
   const env = between(html, 'id="amap-tab-environment"', "</button>");
-  assert.match(textOf(env), /Simulated shop Active SREGym Planned · M5 Kind \(local Kubernetes\) Planned · M5/);
-  assert.equal(count(env, 'class="amap-part is-planned"'), 2);
+  assert.match(textOf(env), /Simulated shop Active SREGym Available Kind \(local Kubernetes\) Available/);
+  assert.equal(count(env, "is-planned"), 0);
+  assert.match(text, /A part the server lists as planned is dashed and never shown as active\./);
+  assert.doesNotMatch(text, /\(M5\)/);
 });
 
-test("the target environment's panel: adapters with their status, operational or not, and the M5 plan", () => {
+test("the target environment's panel: adapters with their status, the targets, and what M5 verified", () => {
   const html = architecture("environment");
-  const panel = between(html, 'id="amap-panel"', "Live wiring</h2>");
+  const panel = between(html, 'id="amap-panel"', "How a real Kubernetes action is authorized</h2>");
   const text = textOf(panel);
   assert.match(text, /Around every step untrusted data Target environment/);
   assert.match(text, /Simulated shop adapter configured Active Operational class SimulatedEnvironment/);
-  assert.match(text, /SREGym adapter Planned · M5 Not operational class SREGymEnvironment interface only/);
-  assert.match(text, /Kind \(local Kubernetes\) adapter Planned · M5 Not operational no adapter in this repository/);
-  assert.match(text, /nothing in RECAP runs on a real cluster/);
-  assert.ok(hrefs(panel).includes("https://github.com/codeit-ronit/recap/blob/main/docs/m5-integration-plan.md"));
-  assert.ok(hrefs(panel).includes("https://github.com/codeit-ronit/recap/tree/main/integrations/sregym"));
+  assert.match(text, /SREGym adapter Available Not operational class SREGymEnvironment a SREGym 1\.1 problem on SREGym's own Kind cluster/);
+  assert.match(text, /Kind \(local Kubernetes\) adapter Available Not operational class KubernetesEnvironment a local Kind cluster/);
+  assert.match(text, /What was built and verified on each real cluster, run by run, failures included/);
+  assert.match(text, /On each target Simulated shop this server A deterministic, in-process simulation/);
+  assert.match(text, /Kind \(local Kubernetes\) A Kind cluster RECAP's owner controls/);
+  assert.match(text, /SREGym SREGym 1\.1's own Kind cluster, whose harness deploys a benchmark application and injects the problem/);
+  for (const stale of [/nothing in RECAP runs on a real cluster/, /planned for M5/, /documentation only/i, /interface only/]) assert.doesNotMatch(text, stale);
+  const links = hrefs(panel);
+  assert.ok(links.includes(github("docs/m5-progress.md")));
+  assert.ok(links.includes(github("integrations/sregym/")));
+  assert.ok(links.includes(github("recap/environments/kubernetes/")));
+  assert.ok(links.includes(github("docs/decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md")));
+  assert.ok(!links.includes(github("docs/m5-integration-plan.md")), "the panel points at what was built, not the plan");
 });
 
 test("a step's panel explains it: what it does, server facts, code, ADRs, trace events, where to see it", () => {
   const html = architecture("verifier");
-  const panel = between(html, 'id="amap-panel"', "Live wiring</h2>");
+  const panel = between(html, 'id="amap-panel"', "How a real Kubernetes action is authorized</h2>");
   const text = textOf(panel);
   assert.match(text, /Step 7 of 11 trusted code Evidence verifier/);
   assert.match(text, /Status in GET \/system Verifier Active evidence-rule-verifier-v1/);
@@ -762,6 +1196,7 @@ test("a step's panel explains it: what it does, server facts, code, ADRs, trace 
   assert.match(text, /An open disagreement sends one question back to the router \(step 4\)\./);
   assert.match(text, /This server \(GET \/system\) Verifier evidence-rule-verifier-v1/);
   assert.match(text, /In a run's trace verification\.merge verification\.evidence/);
+  assert.doesNotMatch(text, /On each target/, "a step that works the same everywhere has no per-target notes");
   const links = hrefs(panel);
   assert.ok(links.includes("https://github.com/codeit-ronit/recap/blob/main/recap/agents/verifier.py"));
   assert.ok(links.includes("https://github.com/codeit-ronit/recap/blob/main/docs/decisions/0021-evidence-rules-settle-disagreements-never-votes.md"));
@@ -775,7 +1210,7 @@ test("a step's panel explains it: what it does, server facts, code, ADRs, trace 
 });
 
 test("the specialists' panel names the default provider from /system and who may be picked", () => {
-  const text = textOf(between(architecture("specialists"), 'id="amap-panel"', "Live wiring</h2>"));
+  const text = textOf(between(architecture("specialists"), 'id="amap-panel"', "How a real Kubernetes action is authorized</h2>"));
   assert.match(text, /LLMProvider Active deterministic-scripted-policy the scripted baseline: not an LLM/);
   assert.match(text, /New runs use, unless they pick another provider: SCRIPTED BASELINE deterministic-scripted-policy/);
   assert.match(text, /Providers a run may pick deterministic, ollama, replay/);
@@ -783,10 +1218,94 @@ test("the specialists' panel names the default provider from /system and who may
 });
 
 test("the episode panel shows which partitions each kind of run reads and writes", () => {
-  const text = textOf(between(architecture("episode"), 'id="amap-panel"', "Live wiring</h2>"));
+  const text = textOf(between(architecture("episode"), 'id="amap-panel"', "How a real Kubernetes action is authorized</h2>"));
   assert.match(text, /Scripted baseline reads train, demo · writes demo/);
   assert.match(text, /Local LLM reads train, live · writes live/);
   assert.match(text, /Replay reads train, live · writes nothing/);
+});
+
+test("on a Kind server the flow marks Kind as this server's target, with its own probe and write limits", () => {
+  const env = between(architecture("alert", polled(KIND_SYSTEM)), 'id="amap-tab-environment"', "</button>");
+  assert.match(textOf(env), /Target environment untrusted data Active Kind cluster recap-m5 · kind Simulated shop Available SREGym Available Kind \(local Kubernetes\) Active/);
+  const oracle = textOf(between(architecture("oracle", polled(KIND_SYSTEM)), 'id="amap-panel"', "How a real Kubernetes action is authorized</h2>"));
+  assert.match(oracle, /Recovery oracle .*RecoveryOracle Active kind-health-oracle/);
+  assert.match(oracle, /On each target Simulated shop Reads the simulated shop's noise-free health/);
+  assert.match(oracle, /Kind \(local Kubernetes\) this server As its own recap-oracle identity: a complete rollout, readiness, and its own HTTP probe of each service/);
+  assert.equal(count(oracle, "this server"), 1);
+  assert.match(oracle, /Oracle kind-health-oracle/);
+  const write = textOf(between(architecture("write", polled(KIND_SYSTEM)), 'id="amap-panel"', "How a real Kubernetes action is authorized</h2>"));
+  assert.match(write, /Kind \(local Kubernetes\) this server The Kubernetes adapter verifies the capability and its own rules, then writes as recap-writer/);
+  assert.match(write, /Actions it supports rollback, restart/);
+  const approval = textOf(between(architecture("approval", polled(KIND_SYSTEM)), 'id="amap-panel"', "How a real Kubernetes action is authorized</h2>"));
+  assert.match(approval, /Approving needs the service's name typed yes \(not simulated\)/);
+  assert.match(approval, /Kind \(local Kubernetes\) this server Only the target service's exact name approves/);
+  const environment = between(architecture("environment", polled(KIND_SYSTEM)), 'id="amap-panel"', "How a real Kubernetes action is authorized</h2>");
+  assert.match(textOf(environment), /Kind \(local Kubernetes\) adapter configured Active Operational class KubernetesEnvironment/);
+  assert.match(textOf(environment), /Simulated shop adapter Available Not operational/);
+  assert.match(textOf(environment), /This server's target: How the Kind demo cluster, its identities and its limits are set up/);
+  assert.ok(hrefs(environment).includes(github("infra/kind/README.md")));
+  assert.match(textOf(environment), /Adapter class KubernetesEnvironment Namespace recap-demo Simulated no Safety policy version policy-kind-v1/);
+});
+
+test("on a SREGym server the flow says SREGym's harness owns the fault, no probe, and a separate grader", () => {
+  const alert = textOf(between(architecture("alert", polled(SREGYM_SYSTEM)), 'id="amap-panel"', "How a real Kubernetes action is authorized</h2>"));
+  assert.match(alert, /SREGym this server SREGym's own harness deploys the app and injects the problem before the run\. RECAP's reset changes nothing/);
+  assert.match(alert, /Environment SREGym on Kind cluster kind \(kind sregym\) Simulated no/);
+  const oracle = textOf(between(architecture("oracle", polled(SREGYM_SYSTEM)), 'id="amap-panel"', "How a real Kubernetes action is authorized</h2>"));
+  assert.match(oracle, /SREGym this server No probe and no metrics there, so: a complete rollout, readiness, and containers that stayed up a minute with no exit in the last five\./);
+  assert.match(oracle, /SREGym's own grader gives the benchmark's verdict separately; it is recorded by hand, never counted as RECAP's success\./);
+  const write = textOf(between(architecture("write", polled(SREGYM_SYSTEM)), 'id="amap-panel"', "How a real Kubernetes action is authorized</h2>"));
+  assert.match(write, /SREGym this server .*SREGym's cluster has no admission policy, so RBAC is the only limit there\./);
+  const environment = between(architecture("environment", polled(SREGYM_SYSTEM)), 'id="amap-panel"', "How a real Kubernetes action is authorized</h2>");
+  assert.match(textOf(environment), /SREGym adapter configured Active Operational class SREGymEnvironment/);
+  assert.match(textOf(environment), /Kind \(local Kubernetes\) adapter Available Not operational/);
+  assert.ok(hrefs(environment).includes(github("integrations/sregym/README.md")));
+});
+
+test("how a real Kubernetes action is authorized: each step in order, with its code and this server's target", () => {
+  const html = architecture("alert", polled(KIND_SYSTEM));
+  const card = between(html, "How a real Kubernetes action is authorized</h2>", "Live wiring</h2>");
+  const text = textOf(card);
+  assert.match(text, /This server's target is a real cluster \(Kind cluster recap-m5, namespace recap-demo\): every approved write on it passes each step below\./);
+  const titles = [
+    "One exact proposal",
+    "The verifier's checks",
+    "A person types the service's name",
+    "A signed, single-use capability",
+    "The writer's limits",
+    "Dry run, write, read-back, audit",
+    "The independent oracle",
+  ];
+  let at = -1;
+  for (const title of titles) {
+    const next = text.indexOf(title);
+    assert.ok(next > at, `${title} comes next`);
+    at = next;
+  }
+  assert.equal(tags(card, "ol").length, 1);
+  assert.equal(count(card, 'class="amap-auth-step"'), 7);
+  assert.match(text, /The operator types the target service's exact name, at the console or in this dashboard/);
+  assert.match(text, /On the Kind demo an admission policy also checks each patch's shape; SREGym's cluster has RBAC only\./);
+  assert.match(text, /A server-side dry run first, then the write, a read-back of the Deployment, and an audit row for the run, whatever the outcome\./);
+  assert.match(text, /On SREGym, SREGym's own grader gives the benchmark's verdict separately\./);
+  const links = hrefs(card);
+  for (const path of ["recap/environments/kubernetes/engine.py", "recap/safety/approvals.py", "recap/safety/capabilities.py", "infra/kind/manifests/", "infra/sregym/recap-rbac.yaml"]) {
+    assert.ok(links.includes(github(path)), `links ${path}`);
+  }
+  // On the simulator the card says which steps apply there; without /system it claims nothing.
+  const simulated = textOf(between(architecture("alert"), "How a real Kubernetes action is authorized</h2>", "Live wiring</h2>"));
+  assert.match(
+    simulated,
+    /This server's target is simulated \(RECAP simulated shop\): a proposal, the verifier's checks, a person's approval and a signed capability apply there too, then the simulator's own write boundary changes only its own state\./,
+  );
+  const unknown = textOf(between(architecture("alert", polled(undefined)), "How a real Kubernetes action is authorized</h2>", "Live wiring</h2>"));
+  assert.doesNotMatch(unknown, /This server's target/);
+  assert.match(unknown, /One exact proposal/);
+  // A live adapter this repository does not describe is not told these Kubernetes steps are its own.
+  const custom = { ...KIND_SYSTEM, environment: { ...KIND_SYSTEM.environment, kind: "custom.module:Adapter", name: "a custom target" }, environment_kind: "custom.module:Adapter" };
+  const other = textOf(between(architecture("alert", polled(custom)), "How a real Kubernetes action is authorized</h2>", "Live wiring</h2>"));
+  assert.match(other, /This server's target \(a custom target\) is not simulated, and it is not one of this repository's Kubernetes targets: the steps below describe the Kind demo and SREGym only\./);
+  assert.doesNotMatch(other, /every approved write on it passes/);
 });
 
 test("the page links the walkthrough and the ADR index, and lists the live wiring with versions", () => {
@@ -800,9 +1319,15 @@ test("the page links the walkthrough and the ADR index, and lists the live wirin
   assert.match(textOf(wiring), /Code version 673bb8ad878a/);
   // A long interface name may wrap only after a "." or "_".
   assert.match(wiring, /TargetEnvironment\.<wbr\/>execute_<wbr\/>authorized/);
-  const learn = textOf(between(html, "Learn more</h2>", "</section>"));
+  const learnHtml = between(html, "Learn more</h2>", "</section>");
+  const learn = textOf(learnHtml);
   assert.match(learn, /End-to-end walkthrough/);
-  assert.match(learn, /M5 integration plan .*Documentation only\./);
+  assert.match(learn, /M5: RECAP on a real Kubernetes target \(opens on GitHub\) What was built and verified on the Kind demo cluster and on SREGym's cluster/);
+  assert.match(learn, /The Kind demo cluster \(opens on GitHub\) Its demo services, RECAP's four identities, the RBAC, the admission policy and the kill switch\./);
+  assert.match(learn, /The SREGym adapter \(opens on GitHub\) How RECAP works a SREGym problem/);
+  assert.match(learn, /M5 integration plan \(opens on GitHub\) The design for a real Kubernetes target, Kind first, then SREGym, written before the work\./);
+  assert.doesNotMatch(learn, /Documentation only/i);
+  for (const path of ["docs/m5-progress.md", "infra/kind/README.md", "integrations/sregym/README.md"]) assert.ok(hrefs(learnHtml).includes(github(path)));
 });
 
 test("a planned component is drawn dashed and never active", () => {
@@ -827,8 +1352,11 @@ test("without /system the flow still teaches, and its statuses say why they are 
   assert.match(text, /Retry/);
   assert.match(text, /Step 1: Alert untrusted data Status unavailable/);
   assert.doesNotMatch(between(failed, 'role="tablist"', 'id="amap-panel"'), /Active/);
-  // The learning content stays: what it does, code and ADRs.
+  // The learning content stays: what it does, how each target does it, code and ADRs; no
+  // target is marked as this server's.
   assert.match(text, /The alert's words are data, never instructions/);
+  assert.match(text, /On each target Simulated shop RECAP resets the simulated shop/);
+  assert.equal(count(failed, ">this server</span>"), 0);
   assert.ok(hrefs(failed).includes("https://github.com/codeit-ronit/recap/blob/main/docs/decisions/0007-replaceable-environment-adapter.md"));
 });
 
@@ -838,6 +1366,11 @@ test("server text in the wiring is escaped", () => {
   assert.equal(tags(html, "script").length, 0);
   assert.equal(withAttr(html, "onerror").length, 0);
   assert.ok(textOf(html).includes("<script>alert(1)</script>"));
+  // The environment's own words in the authorization card are escaped too.
+  const hostile = { ...KIND_SYSTEM, environment: { ...KIND_SYSTEM.environment, name: "<script>alert(3)</script>" } };
+  const card = between(architecture("alert", polled(hostile)), "How a real Kubernetes action is authorized</h2>", "Live wiring</h2>");
+  assert.equal(tags(card, "script").length, 0);
+  assert.ok(textOf(card).includes("<script>alert(3)</script>"));
 });
 
 test("the page selects the step a deep link names", () => {

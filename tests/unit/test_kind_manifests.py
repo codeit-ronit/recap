@@ -542,12 +542,13 @@ def test_no_secret_shapes_or_local_paths_in_the_kind_files() -> None:
         assert not any(p in lowered for p in ("/users/", "/home/", "/var/folders/")), path.name
 
 
-def test_the_readme_names_every_file_and_says_nothing_was_run() -> None:
+def test_the_readme_names_every_file_and_where_it_ran() -> None:
     readme = (KIND / "README.md").read_text(encoding="utf-8")
     for path in kind_files():
         if path.name != "README.md":
             assert f"`{path.relative_to(KIND).as_posix()}`" in readme, path
-    assert "Nothing in this folder has been run" in readme
+    assert "Run on a real cluster in M5" in readme  # and what is still to check, said so
+    assert "Still to check" in readme
 
 
 # --- scripts ---------------------------------------------------------------------------------

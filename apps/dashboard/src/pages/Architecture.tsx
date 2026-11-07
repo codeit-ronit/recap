@@ -16,6 +16,8 @@ import {
   AROUND_NODES,
   DOCS,
   FLOW_STEPS,
+  KUBERNETES_AUTHORIZATION,
+  TARGET_KINDS,
   TRUST_LABELS,
   adapterLook,
   adapterName,
@@ -26,18 +28,22 @@ import {
   nextNodeId,
   nodeFacts,
   nodeStatus,
+  operationalLook,
   providerSource,
   repoUrl,
   selectedNodeId,
+  targetGuide,
 } from "../view/system";
 import type { ArchNode, ArchNodeId, StatusLook, Trust } from "../view/system";
 
 /**
  * Architecture & Learning: the flow one incident takes through RECAP, drawn from what this
  * server runs. Each step shows the status GET /system reports for its components (active,
- * available, planned, ...); selecting it explains what it does, where its code lives, the
- * decisions (ADRs) behind it and the trace events it writes. The explanations are RECAP's own
- * documentation; every status and fact is the server's.
+ * available, planned, ...); selecting it explains what it does, how each target (the
+ * simulated shop, the Kind demo cluster, SREGym's cluster) does it, where its code lives, the
+ * decisions (ADRs) behind it and the trace events it writes. Below the flow: how a write to a
+ * real Kubernetes cluster is authorized. The explanations are RECAP's own documentation;
+ * every status and fact is the server's.
  */
 
 type Loaded<T> = Pick<Polled<T>, "data" | "error" | "loading" | "refresh">;
@@ -277,6 +283,44 @@ function ComponentLine({ id, system }: { id: string; system: dto.SystemView }) {
   );
 }
 
+/** Where the real-cluster targets are set up, and what M5 verified on them. */
+function TargetDocs({ kind }: { kind: string | null }) {
+  const guide = targetGuide(kind);
+  return (
+    <p className="amap-muted">
+      {guide ? (
+        <>
+          This server's target: <DocLink path={guide.path}>{guide.title}</DocLink>.{" "}
+        </>
+      ) : null}
+      What was built and verified on each real cluster, run by run, failures included: <DocLink path={DOCS.m5Progress} />.
+    </p>
+  );
+}
+
+/** How each target does a step, where they differ; the configured one is marked (GET /system). */
+function TargetNotes({ node, system }: { node: ArchNode; system: dto.SystemView | null }) {
+  const notes = node.onTarget;
+  if (!notes) return null;
+  const configured = system?.environment_kind ?? null;
+  return (
+    <section className="amap-section">
+      <h4 className="mini-title">On each target</h4>
+      <dl className="amap-targets">
+        {TARGET_KINDS.filter((kind) => notes[kind]).map((kind) => (
+          <div key={kind} className={kind === configured ? "amap-target is-current" : "amap-target"}>
+            <dt>
+              {adapterName(kind)}
+              {kind === configured ? <span className="amap-tag">this server</span> : null}
+            </dt>
+            <dd>{notes[kind]}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+}
+
 function StatusSection({ node, system, failed }: { node: ArchNode; system: dto.SystemView | null; failed: boolean }) {
   let body: ReactNode;
   if (!node.components.length) {
@@ -304,6 +348,7 @@ function StatusSection({ node, system, failed }: { node: ArchNode; system: dto.S
         <ul className="amap-components">
           {system.environment_adapters.map((adapter) => {
             const look = adapterLook(adapter);
+            const operational = operationalLook(adapter);
             return (
               <li key={adapter.kind} className={adapter.status === "planned" ? "amap-component is-planned" : "amap-component"}>
                 <span className="amap-component-head">
@@ -313,9 +358,10 @@ function StatusSection({ node, system, failed }: { node: ArchNode; system: dto.S
                   <span className="chip-row">
                     <StatusToken tone={look.tone} icon={look.icon} label={look.label} title={look.title} size="sm" />
                     <StatusToken
-                      tone={adapter.operational ? "ok" : "neutral"}
-                      icon={adapter.operational ? "check" : "minus"}
-                      label={adapter.operational ? "Operational" : "Not operational"}
+                      tone={operational.tone}
+                      icon={operational.icon}
+                      label={operational.label}
+                      title={operational.title}
                       size="sm"
                       variant="outline"
                     />
@@ -332,11 +378,7 @@ function StatusSection({ node, system, failed }: { node: ArchNode; system: dto.S
           })}
         </ul>
       ) : null}
-      {node.id === "environment" ? (
-        <p className="amap-muted">
-          The M5 plan: <DocLink path={DOCS.m5Plan} /> (documentation only: nothing in it is built, installed or provisioned).
-        </p>
-      ) : null}
+      {node.id === "environment" ? <TargetDocs kind={system?.environment_kind ?? null} /> : null}
       {node.id === "specialists" && system ? <DefaultProvider system={system} /> : null}
     </section>
   );
@@ -389,6 +431,8 @@ export function NodeDetail({ node, system, failed = false }: { node: ArchNode; s
           </p>
         ) : null}
       </section>
+
+      <TargetNotes node={node} system={system} />
 
       {facts.length ? (
         <section className="amap-section">
@@ -527,8 +571,61 @@ const LEARN: readonly { path: string; title: string; about: string }[] = [
   { path: DOCS.architecture, title: "Architecture", about: "The components in depth, their trust boundaries, and how to swap the infrastructure." },
   { path: DOCS.threatModel, title: "Threat model", about: "Every threat RECAP defends against, where the defense lives and the test that proves it." },
   { path: DOCS.demoWalkthrough, title: "Demo walkthrough", about: "A short tour of the recorded real-model replay, and what it does and does not prove." },
-  { path: DOCS.m5Plan, title: "M5 integration plan", about: "Kind first, then SREGym: the plan for a real Kubernetes target. Documentation only." },
+  {
+    path: DOCS.m5Progress,
+    title: "M5: RECAP on a real Kubernetes target",
+    about: "What was built and verified on the Kind demo cluster and on SREGym's cluster, run by run, failures included, and its limits.",
+  },
+  { path: DOCS.kindTarget, title: "The Kind demo cluster", about: "Its demo services, RECAP's four identities, the RBAC, the admission policy and the kill switch." },
+  {
+    path: DOCS.sregymTarget,
+    title: "The SREGym adapter",
+    about: "How RECAP works a SREGym problem: SREGym's harness owns the fault, RECAP has three identities of its own, SREGym's grader gives the verdict.",
+  },
+  { path: DOCS.m5Plan, title: "M5 integration plan", about: "The design for a real Kubernetes target, Kind first, then SREGym, written before the work." },
 ];
+
+/** Whether the steps below apply to this server's target, in one sentence (GET /system). */
+function chainScope(system: dto.SystemView): string {
+  const env = system.environment;
+  if (env.is_simulated) {
+    return `This server's target is simulated (${env.name}): a proposal, the verifier's checks, a person's approval and a signed capability apply there too, then the simulator's own write boundary changes only its own state.`;
+  }
+  if (targetGuide(system.environment_kind)) {
+    return `This server's target is a real cluster (${env.name}, namespace ${env.namespace}): every approved write on it passes each step below.`;
+  }
+  return `This server's target (${env.name}) is not simulated, and it is not one of this repository's Kubernetes targets: the steps below describe the Kind demo and SREGym only.`;
+}
+
+/**
+ * How a write to a real cluster is authorized, step by step (RECAP's documentation), and
+ * whether this server's target is one (GET /system).
+ */
+export function AuthorizationChain({ system }: { system: dto.SystemView | null }) {
+  return (
+    <>
+      {system ? <p className="amap-muted">{chainScope(system)}</p> : null}
+      <ol className="amap-auth">
+        {KUBERNETES_AUTHORIZATION.map((step, i) => (
+          <li key={step.title} className="amap-auth-step">
+            <span className="amap-step" aria-hidden="true">
+              {i + 1}
+            </span>
+            <div className="amap-auth-body">
+              <span className="amap-auth-title">{step.title}</span>
+              <span className="amap-auth-text">{step.text}</span>
+              <span className="amap-auth-links">
+                {step.links.map((path) => (
+                  <DocLink key={path} path={path} />
+                ))}
+              </span>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </>
+  );
+}
 
 export function LearnLinks() {
   return (
@@ -588,12 +685,19 @@ export function ArchitectureView({
             <TrustTag trust="readonly" />
             <TrustTag trust="human" />
           </span>
-          <span className="amap-legend-note">Planned parts (M5) are dashed and never shown as active.</span>
+          <span className="amap-legend-note">A part the server lists as planned is dashed and never shown as active.</span>
         </div>
         {failed && system.error ? (
           <ErrorView error={system.error} title="Could not load GET /system: statuses are not shown" onRetry={system.refresh} />
         ) : null}
         <FlowMap system={system.data ?? null} failed={failed} selected={selected} onSelect={onSelect} />
+      </Card>
+
+      <Card
+        title="How a real Kubernetes action is authorized"
+        subtitle="On the Kind demo cluster and on SREGym's cluster, an approved fix reaches the cluster only through each of these steps, in order"
+      >
+        <AuthorizationChain system={system.data ?? null} />
       </Card>
 
       <Card title="Live wiring" subtitle="Every interface, the implementation behind it and its status, as GET /system reports them">

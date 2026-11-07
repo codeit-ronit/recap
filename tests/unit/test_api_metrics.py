@@ -1,0 +1,543 @@
+"""Optional Prometheus metrics (apps/api/metrics.py): off by default, a well-formed text
+format, labels from closed sets only, and counts that follow what runs really did.
+
+A strict reader of the text format below checks every exposition these tests read: each
+family is declared (HELP, then TYPE) before its samples, label syntax and escaping are exact,
+and histograms are cumulative and end at +Inf with their count.
+"""
+
+from __future__ import annotations
+
+import math
+import re
+import time
+from collections import defaultdict
+from collections.abc import Callable
+from datetime import timedelta
+from typing import Any
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from starlette.routing import Route
+
+from apps.api.main import create_app
+from apps.api.metrics import (
+    ACTION_OUTCOMES,
+    FINAL_STATES,
+    HTTP_METHODS,
+    INCIDENT_BUCKETS,
+    LATENCY_BUCKETS,
+    OTHER,
+    PROMETHEUS_TEXT,
+    PROVIDER_CLASSES,
+    TOOL_OUTCOMES,
+    ApiMetrics,
+    Counter,
+    RequestMetrics,
+    render_text,
+)
+from recap.core.config import Settings
+from recap.core.ids import utcnow
+from recap.core.models import TraceEvent
+from recap.runtime import Runtime
+from recap.telemetry.tracer import TraceCategory as C
+from tests.e2e.test_api_contracts import GOLDEN, GOLDEN_SCENARIO
+from tests.helpers import OPERATOR_HEADERS, OPERATOR_TOKEN
+
+# --- a strict reader of the text exposition format -----------------------------------------
+
+Series = tuple[str, tuple[tuple[str, str], ...]]  # sample name, its (label, value) pairs sorted
+
+SAMPLE_LINE = re.compile(r"(?P<name>[a-zA-Z_:][a-zA-Z0-9_:]*)(?P<labels>\{.*\})? (?P<value>\S+)")
+LABEL_PAIR = re.compile(r'(?P<name>[a-zA-Z_][a-zA-Z0-9_]*)="(?P<value>(?:[^"\\\n]|\\[\\"n])*)"')
+UNESCAPED = {"\\\\": "\\", '\\"': '"', "\\n": "\n"}
+# What a run's own ids look like (recap/core/ids.py new_id), and an evidence id.
+AN_ID = re.compile(r"\b(?:run|inc|prop|apr|evt|call)-[0-9a-f]{6,}|\bev-\d+-\d+")
+
+
+def parse(text: str) -> dict[Series, float]:
+    """Every sample of an exposition, after checking the format strictly."""
+    assert text.endswith("\n") and "\n\n" not in text
+    helped: set[str] = set()
+    kinds: dict[str, str] = {}
+    samples: dict[Series, float] = {}
+    for line in text.splitlines():
+        if line.startswith("# HELP "):
+            name, _, help_text = line.removeprefix("# HELP ").partition(" ")
+            assert name not in helped and help_text, line
+            helped.add(name)
+        elif line.startswith("# TYPE "):
+            name, kind = line.removeprefix("# TYPE ").split(" ")
+            assert name in helped and name not in kinds, line  # HELP first, one TYPE each
+            assert kind in {"counter", "gauge", "histogram"}, line
+            kinds[name] = kind
+        else:
+            match = SAMPLE_LINE.fullmatch(line)
+            assert match, f"not a sample line: {line!r}"
+            family = _family(match["name"], kinds)
+            assert family is not None, f"a sample of an undeclared family: {line!r}"
+            assert kinds[family] != "counter" or family.endswith("_total"), line
+            series = (match["name"], tuple(sorted(_labels(match["labels"] or "").items())))
+            assert series not in samples, f"the same series twice: {line!r}"
+            samples[series] = float(match["value"])
+            assert not math.isnan(samples[series]), line
+    _check_histograms(samples, kinds)
+    return samples
+
+
+def _family(name: str, kinds: dict[str, str]) -> str | None:
+    if name in kinds:
+        return name
+    for suffix in ("_bucket", "_sum", "_count"):
+        base = name.removesuffix(suffix)
+        if name.endswith(suffix) and kinds.get(base) == "histogram":
+            return base
+    return None
+
+
+def _labels(text: str) -> dict[str, str]:
+    if not text:
+        return {}
+    assert text.startswith("{") and text.endswith("}"), text
+    body, labels, position = text[1:-1], {}, 0
+    while position < len(body):
+        match = LABEL_PAIR.match(body, position)
+        assert match, f"bad label syntax at {body[position:]!r}"
+        assert match["name"] not in labels, body
+        labels[match["name"]] = re.sub(r'\\[\\"n]', lambda m: UNESCAPED[m[0]], match["value"])
+        position = match.end()
+        if position < len(body):
+            assert body[position] == ",", body
+            position += 1
+    return labels
+
+
+def _check_histograms(samples: dict[Series, float], kinds: dict[str, str]) -> None:
+    for family in (name for name, kind in kinds.items() if kind == "histogram"):
+        buckets: dict[tuple[tuple[str, str], ...], list[tuple[float, float]]] = defaultdict(list)
+        for (name, labels), value in samples.items():
+            if name == f"{family}_bucket":
+                rest = tuple(pair for pair in labels if pair[0] != "le")
+                buckets[rest].append((float(dict(labels)["le"]), value))
+        for rest, points in buckets.items():
+            counts = [count for _, count in sorted(points)]
+            assert counts == sorted(counts), f"{family} buckets are not cumulative"
+            assert max(bound for bound, _ in points) == math.inf
+            assert samples[(f"{family}_count", rest)] == counts[-1]
+            assert (f"{family}_sum", rest) in samples
+
+
+def value(samples: dict[Series, float], name: str, **labels: str) -> float | None:
+    """One series' value; None when the exposition does not have it."""
+    return samples.get((name, tuple(sorted(labels.items()))))
+
+
+def total(samples: dict[Series, float], name: str, **labels: str) -> float:
+    """The sum of every series of `name` whose labels include `labels`."""
+    wanted = set(labels.items())
+    return sum(v for (n, pairs), v in samples.items() if n == name and wanted <= set(pairs))
+
+
+def assert_bounded(text: str, app: FastAPI, settings: Settings) -> None:
+    """Every label value comes from its closed set, and nothing id-like or secret is shown."""
+    allowed: dict[str, set[str]] = {
+        "method": set(HTTP_METHODS),
+        "route": {route.path for route in app.routes if isinstance(route, Route)},
+        "status_class": {"2xx", "3xx", "4xx", "5xx"},
+        "state": set(FINAL_STATES),
+        "tool": set(settings.policies.tools),
+        "outcome": {*TOOL_OUTCOMES, *ACTION_OUTCOMES},
+        "provider_class": set(PROVIDER_CLASSES),
+        "direction": {"in", "out"},
+        "verified": {"true", "false"},
+        "kind": {"simulated", "kind", "sregym"},
+        "simulated": {"true", "false"},
+    }
+    bounds = {*LATENCY_BUCKETS, *INCIDENT_BUCKETS, math.inf}
+    for name, labels in parse(text):
+        for label, text_value in labels:
+            if label == "le":
+                assert float(text_value) in bounds, (name, text_value)
+            else:
+                assert text_value in allowed[label] | {OTHER}, (name, label, text_value)
+    assert AN_ID.search(text) is None
+    for secret in (OPERATOR_TOKEN, str(settings.paths.data_dir), str(settings.paths.root)):
+        found = secret in text  # a boolean, so a failure never prints the secret
+        assert not found
+    assert "Bearer" not in text
+
+
+# --- helpers for runs through the API -------------------------------------------------------
+
+
+def wait_for(predicate: Callable[[], Any], timeout: float = 90.0) -> Any:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        found = predicate()
+        if found:
+            return found
+        time.sleep(0.05)
+    raise AssertionError("condition not met in time")
+
+
+def run_with_approval(client: TestClient, scenario: str, **config: Any) -> dict[str, Any]:
+    """Start a run, approve its exact proposal as the operator, and return GET /runs/{id}."""
+    started = client.post("/incidents/run", json={"scenario_id": scenario, "config": config})
+    assert started.status_code == 202, started.text
+    run_id = started.json()["run_id"]
+
+    def own_request() -> list[dict[str, Any]]:
+        return [r for r in client.get("/approvals/pending").json() if r["run_id"] == run_id]
+
+    [request] = wait_for(own_request)
+    decided = client.post(
+        f"/approvals/{request['proposal_id']}",
+        json={"decision": "approved", "proposal_digest": request["proposal_digest"]},
+    )
+    assert decided.status_code == 200, decided.text
+
+    def finished() -> dict[str, Any] | None:
+        body: dict[str, Any] = client.get(f"/runs/{run_id}").json()
+        return body if body["status"] == "finished" else None
+
+    return wait_for(finished)  # type: ignore[no-any-return]
+
+
+def event(
+    category: str,
+    payload: dict[str, Any],
+    *,
+    run_id: str = "run-0123456789",
+    at: Any = None,
+    duration_ms: float | None = None,
+) -> TraceEvent:
+    return TraceEvent(
+        event_id="evt-0123456789",
+        run_id=run_id,
+        seq=1,
+        stage="INVESTIGATING",
+        ts=at or utcnow(),
+        category=category,
+        payload=payload,
+        duration_ms=duration_ms,
+    )
+
+
+# --- off by default ---------------------------------------------------------------------------
+
+
+def test_metrics_are_off_unless_recap_metrics_is_set(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("RECAP_METRICS", raising=False)
+    runtime = Runtime(settings)
+    app = create_app(runtime)
+    with TestClient(app, headers=OPERATOR_HEADERS) as client:
+        absent = client.get("/metrics")
+        sinks_while_up = list(runtime.extra_sinks)
+    assert absent.status_code == 404
+    assert "RECAP_METRICS=1" in absent.json()["detail"]
+    assert sinks_while_up == []  # no run is counted
+    assert not [m for m in app.user_middleware if m.cls is RequestMetrics]  # no request timed
+
+    monkeypatch.setenv("RECAP_METRICS", "0")
+    with TestClient(create_app(runtime), headers=OPERATOR_HEADERS) as client:
+        assert client.get("/metrics").status_code == 404
+
+
+def test_recap_metrics_1_turns_them_on_outside_the_typed_api_contract(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RECAP_METRICS", "1")
+    runtime = Runtime(settings)
+    with TestClient(create_app(runtime), headers=OPERATOR_HEADERS) as client:
+        shown = client.get("/metrics")
+        sinks_while_up = list(runtime.extra_sinks)
+        paths = client.get("/openapi.json").json()["paths"]
+
+    assert shown.status_code == 200
+    assert shown.headers["content-type"] == PROMETHEUS_TEXT
+    samples = parse(shown.text)
+    assert value(samples, "recap_active_incidents") == 0
+    for state in FINAL_STATES:  # a closed set of outcomes is shown at 0 from the start
+        assert value(samples, "recap_incidents_finished_total", state=state) == 0
+    assert len(sinks_while_up) == 1 and runtime.extra_sinks == []  # taken out when it stops
+    assert "/metrics" not in paths  # not part of the typed JSON contract (recap-api-v1)
+
+
+# --- the format -------------------------------------------------------------------------------
+
+
+def test_label_values_and_help_text_are_escaped_and_read_back_exactly() -> None:
+    family = Counter("demo_total", "A help text with a backslash \\ and a\nline feed.", ("value",))
+    family.inc(value='say "hi"\\now\nplease')
+    family.inc(2.5, value="plain")
+
+    text = render_text([family])
+
+    assert "# HELP demo_total A help text with a backslash \\\\ and a\\nline feed.\n" in text
+    assert "# TYPE demo_total counter\n" in text
+    assert 'demo_total{value="say \\"hi\\"\\\\now\\nplease"} 1\n' in text
+    assert 'demo_total{value="plain"} 2.5\n' in text
+    samples = parse(text)
+    assert value(samples, "demo_total", value='say "hi"\\now\nplease') == 1  # exactly as given
+    with pytest.raises(KeyError):
+        family.inc(other="label")  # a series always has exactly its family's labels
+
+
+# --- request metrics --------------------------------------------------------------------------
+
+
+def test_a_request_is_counted_by_its_route_template_never_its_path(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RECAP_METRICS", "1")
+    app = create_app(Runtime(settings))
+    with TestClient(app, headers=OPERATOR_HEADERS) as client:
+        for n in range(30):
+            assert client.get(f"/runs/run-abc{n:07d}").status_code == 404
+        assert client.get("/runs/run-abc123/timeline", params={"after_seq": 5}).status_code == 404
+        client.get("/no/such/page-abc")
+        client.request("BREW", "/health")
+        refused = client.post("/runs/run-abc123/cancel", headers={"Origin": "http://evil.example"})
+        text = client.get("/metrics").text
+
+    samples = parse(text)
+    requests = "recap_api_requests_total"
+    assert value(samples, requests, method="GET", route="/runs/{run_id}", status_class="4xx") == 30
+    timeline = "/runs/{run_id}/timeline"
+    assert value(samples, requests, method="GET", route=timeline, status_class="4xx") == 1
+    # Refused before routing (a page on another origin), yet counted under its template.
+    assert refused.status_code == 403
+    cancel = "/runs/{run_id}/cancel"
+    assert value(samples, requests, method="POST", route=cancel, status_class="4xx") == 1
+    assert total(samples, requests, method=OTHER) == 1  # BREW is not an HTTP method we count
+    durations = "recap_api_request_duration_seconds_count"
+    assert value(samples, durations, method="GET", route="/runs/{run_id}") == 30
+    assert "abc" not in text and "evil" not in text and "page" not in text
+    assert_bounded(text, app, settings)
+
+
+def test_a_request_the_app_fails_on_is_counted_as_the_500_it_gets() -> None:
+    metrics = ApiMetrics(enabled=True)
+    app = FastAPI()
+    app.add_middleware(RequestMetrics, metrics=metrics)
+
+    @app.get("/boom/{item_id}")
+    def boom(item_id: str) -> None:
+        raise RuntimeError("a bug in an endpoint")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        assert client.get("/boom/item-123").status_code == 500
+
+    samples = parse(metrics.render())
+    route = "/boom/{item_id}"
+    requests = "recap_api_requests_total"
+    assert value(samples, requests, method="GET", route=route, status_class="5xx") == 1
+    assert (
+        value(samples, "recap_api_request_duration_seconds_count", method="GET", route=route) == 1
+    )
+
+
+# --- what run events say ----------------------------------------------------------------------
+
+
+def test_run_events_are_counted_into_closed_label_sets(settings: Settings) -> None:
+    metrics = ApiMetrics(enabled=True)
+    runtime = Runtime(settings)
+    created = utcnow()
+    with metrics.watching(runtime):
+        assert runtime.extra_sinks == [metrics]
+        for item in [
+            event(C.STATE, {"from": None, "to": "CREATED"}, at=created),
+            event(C.TOOL_RESULT, {"tool": "get_service_logs", "ok": True}, duration_ms=12.5),
+            # A name a model or a server made up, and one that is not even text.
+            event(C.TOOL_RESULT, {"tool": "exfiltrate run-0123456789", "ok": False}),
+            event(C.TOOL_RESULT, {"tool": ["not", "a", "name"], "ok": "yes"}),
+            # A worker asking for a write is denied: a tool call, not a fix.
+            event(
+                C.POLICY,
+                {"tool": "execute_rollback", "verdict": "DENY", "caller": "telemetry_investigator"},
+            ),
+            # The controller's fix, denied by the policy: blocked before anything was sent.
+            event(
+                C.POLICY, {"tool": "delete_namespace", "verdict": "DENY", "caller": "controller"}
+            ),
+            event(
+                C.POLICY,
+                {
+                    "tool": "execute_rollback",
+                    "verdict": "APPROVAL_REQUIRED",
+                    "caller": "controller",
+                },
+            ),
+            event(C.VERIFY_EVIDENCE, {"proposal_check": {"ok": False}, "enforced": True}),
+            event(C.VERIFY_EVIDENCE, {"proposal_check": {"ok": False}, "enforced": False}),
+            event(C.APPROVAL_DECIDED, {"decision": "rejected"}),
+            event(C.APPROVAL_DECIDED, {"decision": "expired"}),
+            event(C.APPROVAL_DECIDED, {"decision": "refused"}),  # a late answer; another follows
+            event(C.APPROVAL_DECIDED, {"decision": "approved"}),
+            event(C.MITIGATION, {"tool": "execute_rollback", "ok": True}, duration_ms=300.0),
+            event(C.MITIGATION, {"tool": "restart_service", "ok": False}, duration_ms=10_000.0),
+            event(C.VERIFY_RECOVERY, {"verified": True}),
+            event(C.VERIFY_RECOVERY, {"verified": False}),
+            event(C.LLM_CALL, {"origin": "local_llm", "input_tokens": 1200, "output_tokens": 300}),
+            event(C.LLM_CALL, {"origin": "replay", "input_tokens": 50, "output_tokens": None}),
+            event(C.LLM_CALL, {"origin": "said by a model", "input_tokens": True}),
+            event(
+                C.STATE, {"from": "VERIFYING", "to": "RESOLVED"}, at=created + timedelta(seconds=42)
+            ),
+            event(C.STATE, {"from": None, "to": "CREATED"}, run_id="run-fedcba9876", at=created),
+        ]:
+            metrics.write(item)
+        text = metrics.render()
+    assert runtime.extra_sinks == []
+
+    samples = parse(text)
+    assert value(samples, "recap_active_incidents") == 1  # the second run is still going
+    assert value(samples, "recap_incidents_finished_total", state="RESOLVED") == 1
+    assert value(samples, "recap_incident_duration_seconds_sum", state="RESOLVED") == 42
+    bucket = "recap_incident_duration_seconds_bucket"
+    assert value(samples, bucket, state="RESOLVED", le="30") == 0
+    assert value(samples, bucket, state="RESOLVED", le="60") == 1
+
+    calls = "recap_tool_calls_total"
+    assert value(samples, calls, tool="get_service_logs", outcome="ok") == 1
+    assert value(samples, calls, tool=OTHER, outcome="error") == 2
+    assert value(samples, calls, tool="execute_rollback", outcome="denied") == 1
+    assert value(samples, calls, tool="delete_namespace", outcome="denied") == 1
+    assert value(samples, calls, tool="execute_rollback", outcome="ok") == 1  # the write
+    assert value(samples, calls, tool="restart_service", outcome="error") == 1
+    seconds = "recap_tool_call_duration_seconds"
+    assert value(samples, f"{seconds}_sum", tool="get_service_logs") == 0.0125
+    assert value(samples, f"{seconds}_bucket", tool="restart_service", le="10") == 1
+
+    actions = {o: value(samples, "recap_actions_total", outcome=o) for o in ACTION_OUTCOMES}
+    assert actions == {"executed": 1, "refused": 1, "blocked": 2, "rejected": 1, "expired": 1}
+    assert value(samples, "recap_recovery_verifications_total", verified="true") == 1
+    assert value(samples, "recap_recovery_verifications_total", verified="false") == 1
+
+    requests = "recap_model_requests_total"
+    assert value(samples, requests, provider_class="local_llm") == 1
+    assert value(samples, requests, provider_class="replay") == 1
+    assert value(samples, requests, provider_class=OTHER) == 1
+    tokens = "recap_model_tokens_total"
+    assert value(samples, tokens, provider_class="local_llm", direction="in") == 1200
+    assert value(samples, tokens, provider_class="local_llm", direction="out") == 300
+    assert value(samples, tokens, provider_class="replay", direction="in") == 50
+    assert value(samples, tokens, provider_class="replay", direction="out") is None  # unreported
+    assert total(samples, tokens, provider_class=OTHER) == 0  # True is not a token count
+
+    assert value(samples, "recap_environment_info", kind="simulated", simulated="true") == 1
+    app = create_app(runtime)
+    assert_bounded(text, app, settings)
+
+
+@pytest.mark.parametrize(
+    ("kind", "is_simulated", "labels"),
+    [
+        ("kind", False, {"kind": "kind", "simulated": "false"}),
+        ("sregym", False, {"kind": "sregym", "simulated": "false"}),
+        ("tests.fakes:FakeEnvironment", True, {"kind": OTHER, "simulated": "true"}),
+        (None, None, None),  # the adapter cannot describe itself: the target is left out
+    ],
+)
+def test_the_target_is_named_as_it_is_and_a_live_one_never_as_simulated(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str | None,
+    is_simulated: bool | None,
+    labels: dict[str, str] | None,
+) -> None:
+    monkeypatch.setenv("RECAP_METRICS", "1")
+    runtime = Runtime(settings)
+    if kind is None:
+
+        def broken() -> Any:
+            raise RuntimeError("cannot describe")
+
+        monkeypatch.setattr(runtime, "environment_info", broken)
+    else:
+        info = runtime.environment_info().model_copy(
+            update={"kind": kind, "is_simulated": is_simulated}
+        )
+        monkeypatch.setattr(runtime, "environment_info", lambda: info)
+    with TestClient(create_app(runtime), headers=OPERATOR_HEADERS) as client:
+        shown = client.get("/metrics")
+
+    assert shown.status_code == 200
+    targets = [dict(pairs) for name, pairs in parse(shown.text) if name == "recap_environment_info"]
+    assert targets == ([labels] if labels else [])
+
+
+# --- runs through the API ---------------------------------------------------------------------
+
+
+@pytest.mark.e2e
+def test_a_scripted_run_through_the_api_moves_the_incident_tool_and_action_counters(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RECAP_METRICS", "1")
+    app = create_app(Runtime(settings))
+    with TestClient(app, headers=OPERATOR_HEADERS) as client:
+        before = parse(client.get("/metrics").text)
+        body = run_with_approval(client, "bad-deployment", approval_mode="manual")
+        text = client.get("/metrics").text
+
+    record = body["record"]
+    assert record["state"] == "RESOLVED"
+    after = parse(text)
+    assert value(before, "recap_incidents_finished_total", state="RESOLVED") == 0
+    assert value(after, "recap_incidents_finished_total", state="RESOLVED") == 1
+    assert value(after, "recap_incident_duration_seconds_count", state="RESOLVED") == 1
+    assert value(after, "recap_active_incidents") == 0
+
+    calls = "recap_tool_calls_total"
+    # Every call the gateway sent, the one write among them: as many as the run's own record.
+    sent = total(after, calls, outcome="ok") + total(after, calls, outcome="error")
+    assert sent == record["usage"]["tool_calls"] > 1
+    assert value(after, calls, tool="execute_rollback", outcome="ok") == 1
+    assert total(after, "recap_tool_call_duration_seconds_count") == sent
+
+    actions = {o: value(after, "recap_actions_total", outcome=o) for o in ACTION_OUTCOMES}
+    assert actions == {"executed": 1, "refused": 0, "blocked": 0, "rejected": 0, "expired": 0}
+    assert value(after, "recap_recovery_verifications_total", verified="true") == 1
+    # The scripted baseline is not a model: no model request and no token is claimed.
+    assert total(after, "recap_model_requests_total") == 0
+    assert total(after, "recap_model_tokens_total") == 0
+
+    requests = "recap_api_requests_total"
+    assert value(after, requests, method="POST", route="/incidents/run", status_class="2xx") == 1
+    approvals = "/approvals/{proposal_id}"
+    assert value(after, requests, method="POST", route=approvals, status_class="2xx") == 1
+    assert value(after, "recap_environment_info", kind="simulated", simulated="true") == 1
+    assert_bounded(text, app, settings)
+
+
+@pytest.mark.e2e
+def test_a_replayed_model_run_counts_its_recorded_requests_and_tokens_as_replay(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The committed qwen3:8b two-specialist recording, replayed offline: its requests and the
+    tokens the server reported then are counted, under provider_class="replay" only."""
+    monkeypatch.setenv("RECAP_METRICS", "1")
+    app = create_app(Runtime(settings))
+    with TestClient(app, headers=OPERATOR_HEADERS) as client:
+        body = run_with_approval(client, GOLDEN_SCENARIO, provider="replay", replay_fixture=GOLDEN)
+        usage = client.get(f"/runs/{body['record']['run_id']}/usage").json()
+        text = client.get("/metrics").text
+
+    assert body["record"]["state"] == "RESOLVED"
+    [model] = usage["models"]
+    samples = parse(text)
+    requests = "recap_model_requests_total"
+    assert value(samples, requests, provider_class="replay") == model["requests"] == 14
+    assert total(samples, requests) == model["requests"]  # never counted as live inference
+    tokens = "recap_model_tokens_total"
+    assert value(samples, tokens, provider_class="replay", direction="in") == model["input_tokens"]
+    assert (
+        value(samples, tokens, provider_class="replay", direction="out") == (model["output_tokens"])
+    )
+    assert value(samples, "recap_incidents_finished_total", state="RESOLVED") == 1
+    assert_bounded(text, app, settings)

@@ -844,3 +844,27 @@ test("liveModelTokenUse labels a running run's model tokens", () => {
   assert.equal(noLimit.note, "reported by the model server so far; limit not recorded");
 });
 
+
+// --- M5: a live target's approval note and the oracle's probes ------------------------------------------------
+
+test("a decision's note (how it came, RECAP's words) reads in the event's line; a decision without one reads as before", () => {
+  const note = "dashboard or API; typed the target service's name; answered 41.2 s after the request";
+  const line = describeEvent(event("approval.decided", { decision: "approved", actor: "operator:local-operator", approval_id: "apr-84ec57cc5a", proposal_id: "prop-9f461dcb40", note }));
+  assert.equal(lineText(line), `Approval approved by operator:local-operator · apr-84ec57cc5a · ${note}`);
+  assert.equal(line.tone, "ok");
+  assert.deepEqual(quotes(line), [], "the note is RECAP's own text, not quoted model text");
+  const plain = describeEvent(event("approval.decided", { decision: "rejected", actor: "console-user", approval_id: "apr-1", note: "" }));
+  assert.equal(lineText(plain), "Approval rejected by console-user · apr-1");
+});
+
+test("the oracle's line says live or simulated, and how often it probed (only as recorded)", () => {
+  const live = describeEvent(
+    event("verification.recovery", { oracle: "kind-health-oracle", healthy_before: false, healthy_after: true, verified: true, unhealthy_after: [], simulated: false, probes: 2, waited_seconds: 10.859 }),
+  );
+  assert.equal(lineText(live), "Recovery verified by kind-health-oracle · healthy before no → after yes · live target · 2 probes over 10.9 s");
+  const simulated = describeEvent(event("verification.recovery", { oracle: "simulated-health-oracle", healthy_before: false, healthy_after: true, verified: true, simulated: true, probes: 1, waited_seconds: 0 }));
+  assert.equal(lineText(simulated), "Recovery verified by simulated-health-oracle · healthy before no → after yes · simulated · 1 probe");
+  // A run before M5 recorded neither the probes nor (sometimes) the target: nothing is added.
+  const older = describeEvent(event("verification.recovery", { oracle: "simulated-health-oracle", healthy_before: false, healthy_after: false, verified: false, unhealthy_after: ["cart"] }));
+  assert.equal(lineText(older), "NOT recovered by simulated-health-oracle · healthy before no → after no · still unhealthy: cart");
+});

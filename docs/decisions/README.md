@@ -35,9 +35,10 @@ these notes explain why RECAP looks the way it does.
 | [0021](0021-evidence-rules-settle-disagreements-never-votes.md) | Evidence rules settle the agents' disagreements, never votes | accepted | Claims merged by version and dependency; V1-grounding, V6 on the target, V7 without tie-breaks; typed disagreement records; an open conflict gets one follow-up question, then a person; leads point the next round at a failing dependency nothing explains yet; VP4 restore points (M3). |
 | [0027](0027-a-typed-read-only-api-over-the-run-records.md) | A typed, read-only API over the persisted run records, and a safe per-run provider choice | accepted | Versioned views (schema `recap-api-v1`) built only from what a run persisted, naming every gap; a client picks a run's provider only among the owner's allowed choices, never a paid one (M4). |
 | [0028](0028-content-addressed-recordings-and-replay-by-manifest-id.md) | Committed recordings are content-addressed and replayed by manifest id, never against a real system | accepted | `fixtures/recordings/MANIFEST.json` pins each recording's SHA-256; an altered or unknown file is refused; a replay needs a simulated target and a fresh approval (M4). |
-| [0029](0029-one-evaluation-record-per-run-and-modes-that-never-share-a-number.md) | One evaluation record per run, modes that never share a number, and a named reason for every run that did not recover | accepted | `EvalRecord` from the run's own record and trace; batches of one mode (scripted, replay, real model; Kubernetes is M5); success only with the oracle's verified recovery; generic failure categories (M4). |
+| [0029](0029-one-evaluation-record-per-run-and-modes-that-never-share-a-number.md) | One evaluation record per run, modes that never share a number, and a named reason for every run that did not recover | accepted | `EvalRecord` from the run's own record and trace; batches of one mode (scripted, replay, real model; `real_kubernetes` since M5); success only with the oracle's verified recovery; generic failure categories (M4). |
 | [0030](0030-mission-control-reads-only-typed-server-facts.md) | Mission Control shows only typed server facts, one screen per question, and makes the replay watchable without changing it | accepted | Types generated from the API's models; provenance on every run (scripted, replay of a recorded real-LLM run, live model; simulated target); untrusted text escaped and labelled; an approval dialog that cannot be dismissed; `replay_pace` (M4). |
 | [0031](0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md) | RECAP on an external benchmark's cluster: the harness owns the fault, a release is an image tag, and pod failures can date an onset | accepted | SREGym's external-harness mode (reset changes nothing, first revisions as baseline); image tags as rollback keys into the Deployment's own history; "not measured" instead of a guessed metric; V2's onset from the first pod-failure warning when no metric or tagged log exists (M5). |
+| [0032](0032-a-real-kubernetes-target-behind-the-same-interface.md) | A real Kubernetes target behind the same interface: typed kubectl, one identity per role, a pinned cluster, and a person who types the service's name | accepted | `KubernetesEnvironment` chosen by a target profile (`RECAP_TARGET`); typed operations, never a command string; reader, writer, oracle and scenario identities with short-lived tokens; cluster pinning and a namespace lease; dry run, write, read-back and audit; a typed service name for every live write, at the console or in the dashboard; an oracle with its own identity (M5). |
 
 ## How the decisions fit together
 
@@ -80,11 +81,14 @@ these notes explain why RECAP looks the way it does.
   numbers apart, and names why every failed run failed.
 - **0030** is the dashboard on top of them: it shows only what the typed API says, where each
   fact came from, model and tool text as harmless data, and a replay slow enough to watch.
-- **0031** takes RECAP onto an external benchmark's cluster (M5, SREGym): the benchmark owns
+- **0032** takes RECAP onto a real Kubernetes cluster (M5): one more adapter behind the same
+  interface, typed `kubectl` operations, one least-privilege identity per role, a pinned
+  cluster, a typed service name before every live write, and an oracle with its own identity.
+- **0031** extends it to an external benchmark's cluster (M5, SREGym): the benchmark owns
   the fault, a release may be an image tag, what is not measured is said so, and the first
   pod-failure warning can date a bad release's onset where no metric or tagged log exists.
 
-The [threat model](../threat-model.md) builds on 0004, 0005, 0007, 0014 and 0015. It lists
+The [threat model](../threat-model.md) builds on 0004, 0005, 0007, 0014, 0015 and 0032. It lists
 every threat RECAP defends against, where the defense lives in the code, and the test that
 proves it. [flow.md](../flow.md) follows one incident through all of these decisions.
 

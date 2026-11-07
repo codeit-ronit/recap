@@ -11,7 +11,9 @@ treats everything the server says about its tools (descriptions, schemas, hints)
 
 `call_tool` never raises for tool-level problems (bad arguments, unknown tool, environment
 error, timeout, broken connection). They come back as `RawToolResult(ok=False, error=...)`, so
-the gateway records every outcome as data instead of crashing the incident run.
+the gateway records every outcome as data instead of crashing the incident run. A closed
+connection (the server process exited) is also remembered in `lost`: no later call can reach
+the target, and the controller ends the run instead of asking for a fix it cannot send.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from types import TracebackType
 
 from mcp import Client, MCPError, StdioServerParameters
 from mcp.server.mcpserver import MCPServer
-from mcp.types import REQUEST_TIMEOUT, CallToolResult, TextContent, Tool
+from mcp.types import CONNECTION_CLOSED, REQUEST_TIMEOUT, CallToolResult, TextContent, Tool
 
 from recap.core.config import REPO_ROOT, EnvironmentConfig
 from recap.core.models import DiscoveredTool, RawToolResult
@@ -41,6 +43,7 @@ class McpToolClient:
         self.transport_name = transport_name
         self.server_info: dict[str, str] = {}  # name, version, protocol_version once connected
         self.calls_made = 0
+        self.lost: str | None = None  # why the server is gone, once a call found it closed
         self._client: Client | None = None
 
     @classmethod
@@ -118,7 +121,10 @@ class McpToolClient:
                 timeout=timeout_seconds,
             )
         except Exception as exc:  # e.g. timeout, server process gone, invalid reply
-            return RawToolResult(ok=False, error=_failure_reason(exc, timeout_seconds))
+            reason = _failure_reason(exc, timeout_seconds)
+            if isinstance(exc, MCPError) and exc.code == CONNECTION_CLOSED:
+                self.lost = reason  # the server process is gone: no later call can succeed
+            return RawToolResult(ok=False, error=reason)
         return _raw_result(result)
 
     def _connected(self) -> Client:

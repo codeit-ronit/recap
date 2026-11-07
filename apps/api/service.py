@@ -380,6 +380,12 @@ def check_run_request(
         raise RunRefused(404, f"unknown scenario '{scenario_id}'")
     if not config.safety_enabled:
         raise RunRefused(400, "safety cannot be disabled from the API; use the eval runner")
+    if config.approval_mode == "auto" and not runtime.environment_info().is_simulated:
+        raise RunRefused(
+            400,
+            "on a live target a person approves every write: the simulation auto-approver "
+            "is refused (approval_mode 'manual')",
+        )
     settings = runtime.settings
     default = settings.providers.default
     fixtures, problem = _manifest(manifest)

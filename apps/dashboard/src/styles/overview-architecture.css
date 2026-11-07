@@ -506,6 +506,109 @@
   text-align: right;
 }
 
+/* Active environment: what the configured adapter says about itself, and the check */
+.ov-env-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+.ov-env-name {
+  min-width: 0;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.ov-env-about {
+  margin: var(--space-2) 0 0;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.ov-env-facts {
+  display: flex;
+  flex-direction: column;
+  margin: var(--space-3) 0 0;
+  font-size: var(--fs-sm);
+}
+.ov-env-facts > div {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+}
+.ov-env-facts > div:last-child {
+  border-bottom: 0;
+}
+.ov-env-facts dt {
+  color: var(--muted);
+}
+.ov-env-facts dd {
+  margin: 0;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.ov-check {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+.ov-check .mini-title,
+.ov-check p {
+  margin: 0;
+}
+.ov-check-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+.ov-check-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.ov-check-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+}
+.ov-check-items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ov-check-items li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ov-check-detail {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+.ov-check-failure {
+  margin: 0;
+}
+
 /* Decision providers */
 .ov-providers {
   display: flex;
@@ -1082,6 +1185,71 @@
   overflow-wrap: anywhere;
 }
 
+/* A step on each target; the configured one is marked "this server". */
+.amap-targets {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+}
+.amap-target {
+  padding: var(--space-2) var(--space-3);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+.amap-target.is-current {
+  border-color: var(--accent-line);
+}
+.amap-target dt {
+  font-weight: 600;
+}
+.amap-target dt .amap-tag {
+  margin-left: var(--space-2);
+}
+.amap-target dd {
+  margin: 2px 0 0;
+  color: var(--text-2);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+
+/* How a real Kubernetes action is authorized: numbered steps, each with its code. */
+.amap-auth {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.amap-auth-step {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.amap-auth-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.amap-auth-title {
+  font-weight: 600;
+}
+.amap-auth-text {
+  color: var(--text-2);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+.amap-auth-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--space-3);
+  font-size: var(--fs-sm);
+}
+
 /* Learn more */
 .amap-learn {
   display: grid;
@@ -1179,7 +1347,8 @@
   .amap-wire {
     grid-template-columns: minmax(0, 1fr) auto;
   }
-  .ov-demo-facts > div {
+  .ov-demo-facts > div,
+  .ov-env-facts > div {
     grid-template-columns: minmax(0, 1fr);
     gap: 0;
   }

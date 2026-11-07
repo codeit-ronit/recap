@@ -960,8 +960,11 @@ export function describeEvent(e: TraceEvent, ctx: FeedContext = {}): EventLine {
     }
 
     case "approval.decided": {
-      const q = p as ApprovalDecidedPayload;
+      // `note` is RECAP's own record of how the answer came (e.g. "interactive terminal; typed
+      // the target service's name; answered after 167.8 s"): a terminal and a timing, not a person.
+      const q = p as ApprovalDecidedPayload & { note?: unknown };
       const decision = str(q.decision, "?");
+      const note = str(q.note);
       return {
         icon: "key",
         tone: decision === "approved" ? "ok" : "bad",
@@ -971,6 +974,7 @@ export function describeEvent(e: TraceEvent, ctx: FeedContext = {}): EventLine {
           q.actor ? ` by ${q.actor}` : "",
           q.approval_id ? " · " : "",
           q.approval_id ? code(q.approval_id) : "",
+          note ? ` · ${note}` : "",
         ],
       };
     }
@@ -1100,8 +1104,11 @@ export function describeEvent(e: TraceEvent, ctx: FeedContext = {}): EventLine {
     }
 
     case "verification.recovery": {
-      const q = p as RecoveryPayload;
+      // M5: how often the oracle probed, and how long it waited for a live target to settle.
+      const q = p as RecoveryPayload & { probes?: unknown; waited_seconds?: unknown };
       const still = arr<string>(q.unhealthy_after);
+      const probes = num(q.probes);
+      const waited = num(q.waited_seconds);
       return {
         icon: "heart",
         tone: q.verified ? "ok" : "bad",
@@ -1112,7 +1119,9 @@ export function describeEvent(e: TraceEvent, ctx: FeedContext = {}): EventLine {
           code(str(q.oracle, "oracle")),
           ` · healthy before ${yesNo(q.healthy_before)} → after ${yesNo(q.healthy_after)}`,
           still.length ? ` · still unhealthy: ${still.join(", ")}` : "",
-          q.simulated ? " · simulated" : "",
+          q.simulated === true ? " · simulated" : q.simulated === false ? " · live target" : "",
+          probes !== null ? ` · ${plural(probes, "probe")}` : "",
+          probes !== null && probes > 1 && waited !== null ? ` over ${waited.toFixed(1)} s` : "",
         ],
       };
     }

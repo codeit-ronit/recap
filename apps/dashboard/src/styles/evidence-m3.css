@@ -190,6 +190,33 @@ a.ed-evlink:hover {
   gap: 4px 6px;
   font-size: var(--fs-md);
 }
+/* Where the observations were read: a row of its own under the counts (cluster names are long). */
+.ed-facts > .ed-fact-target {
+  grid-column: 1 / -1;
+}
+.ed-target {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  font-size: var(--fs-md);
+}
+/* An observation's provenance: which target it was read from, and how. */
+.ed-provenance {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 4px;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.ed-provenance.is-live {
+  color: var(--text-2);
+}
+.ed-provenance.is-live > .icon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--bad-text);
+}
 
 /* Notices above the decision. */
 .ed-notice-text {

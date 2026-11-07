@@ -1,6 +1,6 @@
 # Real model on a real Kubernetes cluster (kind): qwen3:8b, prompts-v4.7
 
-> **Real model on a real Kubernetes cluster (Kind). REAL target: a Kubernetes cluster, not production.** N = 6: counts, not rates; no statistical claim.
+> **Real model on a real Kubernetes cluster. REAL target: a Kubernetes cluster (kind), not production.** N = 6: counts, not rates; no statistical claim.
 
 - Batch `2026-11-03-real-kubernetes-qwen3-8b-prompts-v4.7` (mode `real_kubernetes`), created 2026-11-03T07:11:18.169030+00:00
 - Plan: none (see methods)

@@ -82,6 +82,8 @@ import type {
   TextAuthor,
   VerifierStep,
 } from "../view/findings";
+import { liveTargetWords, settleWords, summaryTarget, targetFacts, targetPlace } from "../view/lab";
+import type { TargetFacts, TargetFields } from "../view/lab";
 import { isOverlayPath, knowledgeOverlays, overlayChunkIds, searchesOf } from "../view/retrieval";
 import {
   EMPTY_LOG,
@@ -311,6 +313,17 @@ function Parts({ parts, author }: { parts: readonly LinePart[]; author: TextAuth
 }
 
 /**
+ * Who wrote an incident's symptoms: the simulator's alerting, or, on a live target (its first event
+ * says is_simulated false), the probe RECAP measured the cluster with (incident.metadata.source,
+ * e.g. recap-kind-probe). Runs before M5 recorded no live target: they all ran on the simulator.
+ */
+function alertAuthor(p: StatePayload): string {
+  const source = str(obj(p.incident?.metadata).source);
+  if (p.environment?.is_simulated === false) return `the alert (measured on the live target${source ? ` by ${source}` : ""})`;
+  return "the alert (simulated alerting)";
+}
+
+/**
  * One event as a line. describeEvent (format.ts) words every category; two lines it would show as
  * RECAP's own words are taken apart here: the alert's symptoms (the alert wrote them) and a
  * lifecycle reason that names the diagnosis (it repeats a claim an agent wrote).
@@ -328,7 +341,7 @@ function lineOf(event: TraceEvent, ctx: FeedContext): Line {
         parts: [
           "Incident created",
           ...(service ? [" — alert on ", { code: service }] : []),
-          ...(symptoms.length ? [" · symptoms ", { quote: symptoms.join("; "), author: "the alert (simulated alerting)" }] : []),
+          ...(symptoms.length ? [" · symptoms ", { quote: symptoms.join("; "), author: alertAuthor(p) }] : []),
         ],
       };
     }
@@ -392,8 +405,32 @@ function sourceOf(summary: dto.RunSummary | null, record: RunRecord | null) {
   return { provider: record?.provider_info ?? null, environment: record ? (record.environment ?? null) : null };
 }
 
+/** The run's own target: its record's environment (name, namespace), else the summary's kind. */
+function runTargetOf(summary: dto.RunSummary | null, record: RunRecord | null): TargetFields | null {
+  return record?.environment ?? summaryTarget(summary);
+}
+
+/** Where the run's tools read and its fix wrote: "Kind cluster recap-m5, namespace recap-demo" and a "live · kind" token. */
+function TargetFact({ target }: { target: TargetFacts }) {
+  if (target.state === "unknown") return <NotRecorded />;
+  const place = targetPlace(target);
+  return (
+    <span className="tl-target">
+      {place ? <span>{place}</span> : null}
+      <StatusToken
+        size="sm"
+        tone={target.state === "live" ? "bad" : "warn"}
+        icon={target.state === "live" ? "alert" : "flask"}
+        label={target.state === "live" ? `live · ${target.kind || "kind not reported"}` : "simulated"}
+        title={target.description || undefined}
+      />
+    </span>
+  );
+}
+
 function RunFacts({ summary, record, view, entries, replay, pace }: RunFactsProps) {
   const source = sourceOf(summary, record);
+  const target = targetFacts(runTargetOf(summary, record));
   const provenance = summary?.replay ?? null;
   const counts = view.counts ?? {};
   const totals = requestTotals(entries);
@@ -455,6 +492,12 @@ function RunFacts({ summary, record, view, entries, replay, pace }: RunFactsProp
           <dt>Run ID</dt>
           <dd>
             <Mono>{view.run_id}</Mono>
+          </dd>
+        </div>
+        <div>
+          <dt>Target</dt>
+          <dd>
+            <TargetFact target={target} />
           </dd>
         </div>
       </dl>
@@ -553,6 +596,8 @@ interface ViewContext {
   start: number | null;
   /** Describing events: RECAP's notes on each agent's model requests, red-team overlays. */
   feed: FeedContext;
+  /** Where the run's tools read and its fix wrote: the simulated shop, a live cluster, or not recorded. */
+  target: TargetFacts;
 }
 
 /** What each routing signal means (documentation for the signals table). */
@@ -1132,6 +1177,37 @@ function PolicyChip({ entry }: { entry: dto.TimelineEntry }) {
   );
 }
 
+/**
+ * Where a tool call was answered: RECAP's runbook index, or the environment's MCP server; on a live
+ * target the server read the real cluster (its namespace named), so the chip says so.
+ */
+function ToolSourceChip({ local, target }: { local: boolean; target: TargetFacts }) {
+  if (local) {
+    return (
+      <Chip tone="info" title="search_runbooks is answered by RECAP's own runbook index, not the environment's MCP server">
+        RECAP's index
+      </Chip>
+    );
+  }
+  if (target.state === "live") {
+    const { place, real } = liveTargetWords(target);
+    return (
+      <Chip
+        outline
+        tone="bad"
+        title={`A read-only tool on RECAP's MCP server, answered live from ${place} (${real}). Investigators may only call read tools (R7-worker-read-only).`}
+      >
+        MCP · live{target.namespace ? ` · ${target.namespace}` : ""}
+      </Chip>
+    );
+  }
+  return (
+    <Chip outline title="A read-only tool on the environment's MCP server">
+      MCP
+    </Chip>
+  );
+}
+
 /** One tool call: the call, the gateway's verdict, and its result (with the evidence it recorded). */
 function ToolLine({ tool, ctx }: { tool: ToolStep; ctx: ViewContext }) {
   const call = tool.call ? obj(tool.call.payload) : {};
@@ -1151,15 +1227,7 @@ function ToolLine({ tool, ctx }: { tool: ToolStep; ctx: ViewContext }) {
       <div className="tl-sline-body">
         <div className="tl-sline-head">
           <code className="mono tl-call">{local ? tool.tool : `${tool.tool}(${fmtArgs(tool.call ? args : {})})`}</code>
-          {local ? (
-            <Chip tone="info" title="search_runbooks is answered by RECAP's own runbook index, not the environment's MCP server">
-              RECAP's index
-            </Chip>
-          ) : (
-            <Chip outline title="A read-only tool on the environment's MCP server">
-              MCP
-            </Chip>
-          )}
+          <ToolSourceChip local={local} target={ctx.target} />
           {tool.policy ? <PolicyChip entry={tool.policy} /> : null}
         </div>
         {free ? (
@@ -2047,8 +2115,12 @@ function flowItem(entry: dto.TimelineEntry, segment: Segment, ctx: ViewContext):
       };
     }
     case "approval_decided": {
-      const q = p as ApprovalDecidedPayload;
+      // The note is RECAP's own record of how the answer came ("interactive terminal; typed the
+      // target service's name; answered after 167.8 s"): it proves a terminal (or a token holder)
+      // and a timing, not who the person was.
+      const q = p as ApprovalDecidedPayload & { note?: unknown };
       const decision = str(q.decision, "?");
+      const note = str(q.note);
       return {
         icon: "key",
         tone: decision === "approved" ? "ok" : "bad",
@@ -2058,33 +2130,62 @@ function flowItem(entry: dto.TimelineEntry, segment: Segment, ctx: ViewContext):
             {q.actor ? ` by ${q.actor}` : ""}
           </>
         ),
-        body: q.approval_id ? (
-          <span className="muted small">
-            approval <Mono>{q.approval_id}</Mono>
-          </span>
-        ) : undefined,
+        body:
+          q.approval_id || note ? (
+            <span className="tl-flow-detail">
+              {q.approval_id ? (
+                <span className="muted small">
+                  approval <Mono>{q.approval_id}</Mono>
+                </span>
+              ) : null}
+              {note ? (
+                <span
+                  className="small"
+                  title="RECAP's record of how the decision came: it shows a terminal (or the API) and a timing, not who the person was"
+                >
+                  <span className="muted">how: </span>
+                  {note}
+                </span>
+              ) : null}
+            </span>
+          ) : undefined,
       };
     }
     case "write_started": {
       const q = p as MitigationExecutedPayload;
+      const params = obj(q.params);
+      const live = ctx.target.state === "live";
       return {
         icon: "zap",
         tone: "accent",
         title: (
           <>
             Sending <Mono>{`${str(q.tool, "?")} on ${str(q.target, "?")}`}</Mono>
+            {Object.keys(params).length ? <Mono>{` (${fmtArgs(params)})`}</Mono> : null}
           </>
         ),
-        body: q.approval_id ? (
-          <span className="muted small">
-            the gateway's write, with approval <Mono>{q.approval_id}</Mono>
-          </span>
-        ) : undefined,
+        body:
+          q.approval_id || live ? (
+            <span className="tl-flow-detail">
+              {q.approval_id ? (
+                <span className="muted small">
+                  the gateway's write, with approval <Mono>{q.approval_id}</Mono>
+                </span>
+              ) : null}
+              {live ? (
+                <span className="small">
+                  to the live target <strong>{liveTargetWords(ctx.target).place}</strong> ({liveTargetWords(ctx.target).real}, not a simulation)
+                </span>
+              ) : null}
+            </span>
+          ) : undefined,
       };
     }
     case "write_executed": {
       const q = p as MitigationExecutedPayload;
-      const effects = arr<string>(q.side_effects);
+      const effects = arr<string>(q.side_effects).filter((effect) => typeof effect === "string" && effect);
+      const params = obj(q.params);
+      const live = ctx.target.state === "live";
       return {
         icon: "zap",
         tone: q.ok === false ? "bad" : "ok",
@@ -2092,12 +2193,28 @@ function flowItem(entry: dto.TimelineEntry, segment: Segment, ctx: ViewContext):
           <>
             {q.ok === false ? "The write failed: " : "Executed "}
             <Mono>{`${str(q.tool, "?")} on ${str(q.target, "?")}`}</Mono>
+            {Object.keys(params).length ? <Mono>{` (${fmtArgs(params)})`}</Mono> : null}
             <span className="muted"> · {fmtMs(entry.duration_ms)}</span>
           </>
         ),
         body: (
           <span className="tl-flow-detail">
-            {effects.length ? <span>{effects.join("; ")}</span> : null}
+            {effects.length && live ? (
+              // A Kubernetes write is confirmed by reading the Deployment back: its new generation
+              // and the image its pods now run (recap/environments/kubernetes/engine.py).
+              <span className="tl-effects">
+                <span className="tl-note-label">What changed on {liveTargetWords(ctx.target).place}, as RECAP read it back</span>
+                <ul className="tl-effect-list">
+                  {effects.map((effect, i) => (
+                    <li key={i}>
+                      <code className="mono">{effect}</code>
+                    </li>
+                  ))}
+                </ul>
+              </span>
+            ) : effects.length ? (
+              <span>{effects.join("; ")}</span>
+            ) : null}
             {q.error ? <span className="text-bad">{q.error}</span> : null}
             {entry.evidence_ids.length ? (
               <span>
@@ -2112,6 +2229,8 @@ function flowItem(entry: dto.TimelineEntry, segment: Segment, ctx: ViewContext):
     case "oracle": {
       const q = p as RecoveryPayload;
       const still = arr<string>(q.unhealthy_after);
+      // How often and how long it probed (M5): a live target gets a settle window, the simulator one probe.
+      const settle = settleWords(p, ctx.target);
       return {
         icon: "heart",
         tone: q.verified ? "ok" : "bad",
@@ -2124,7 +2243,7 @@ function flowItem(entry: dto.TimelineEntry, segment: Segment, ctx: ViewContext):
           <span className="muted">
             healthy before {yesNo(q.healthy_before)} → after {yesNo(q.healthy_after)}
             {still.length ? ` · still unhealthy: ${still.join(", ")}` : ""}
-            {q.simulated ? " · simulated environment" : ""}
+            {settle ? ` · ${settle}` : q.simulated === true ? " · simulated environment" : q.simulated === false ? " · live target" : ""}
           </span>
         ),
       };
@@ -2578,6 +2697,7 @@ export function TraceExplorerView({ runId, trace, detail, log, filters, onFilter
     replay,
     start: traceStart(entries),
     feed,
+    target: targetFacts(runTargetOf(summary, record)),
   };
   const roundSegments = segments.filter((s) => s.kind === "round");
 

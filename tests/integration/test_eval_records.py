@@ -393,7 +393,8 @@ def test_a_real_cluster_batch_never_calls_its_target_simulated() -> None:
         batch_id="b", title="t", created_at=T0, mode="real_kubernetes", records=[record]
     )
     text = batch_markdown(batch)
-    assert "REAL target: a Kubernetes cluster, not production." in text
+    assert batch.targets == ["kind"] and record.target == "kind"
+    assert "REAL target: a Kubernetes cluster (kind), not production." in text
     assert "SIMULATED" not in text
 
 

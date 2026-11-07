@@ -6,9 +6,14 @@
  * Counts are written "k of N", never as percentages. A value a record does not hold reads as
  * not recorded; nothing is estimated in its place.
  *
+ * What the runs worked on (the simulated shop, the Kind demo cluster or SREGym's own cluster)
+ * is read from the batch's and the record's own `target`, and a benchmark grader's verdicts
+ * (SREGym's) are counted apart from RECAP's verified recoveries, never merged into them.
+ *
  * Pure functions with type-only imports, so tests/evaluations.test.ts loads this file in Node.
  */
 
+import type { TargetFields } from "../components/DataSourceBadge";
 import type { BatchOutcomes, BatchSummary, EvalMode, EvalModeInfo, EvalRecord, EvalsView, StageTiming } from "../dto";
 import type { Tone } from "../format";
 
@@ -59,9 +64,11 @@ export const MODE_GUIDE: Readonly<Record<EvalMode, ModeGuide>> = {
   },
   real_kubernetes: {
     tab: "Real Kubernetes",
-    decisions: "A real model now, on a real Kubernetes cluster (the Kind demo cluster), with a person approving every write",
-    shows: "What that model did on real faults in a real cluster, judged by the cluster's own health, one sample per run",
-    doesNotShow: "A success rate, or how it would do under production traffic",
+    decisions:
+      "A real model now, on a real Kubernetes cluster (the Kind demo cluster or SREGym's own cluster), with a person approving every write",
+    shows:
+      "What that model did on real faults in a real cluster, judged by RECAP's oracle from the cluster's own health, one sample per run. On SREGym's cluster, SREGym's own grader adds its verdict, kept apart",
+    doesNotShow: "A success rate, a benchmark score, or how it would do under production traffic",
     madeBy: "scripts/live_eval.py --from-data",
     icon: "package",
   },
@@ -117,6 +124,78 @@ export function modeTabNote(view: Pick<EvalsView, "modes" | "batches">, mode: Ev
   if (info?.status === "planned") return "planned";
   const n = batchesOf(view, mode).length;
   return `${n} ${n === 1 ? "batch" : "batches"}`;
+}
+
+// --- targets: what the runs worked on --------------------------------------------------------------
+
+export interface EvalTarget {
+  /** The record's own value: "simulated", or a real cluster's kind ("kind", "sregym"); "" when not recorded. */
+  key: string;
+  /** In words: "Simulated shop", "Kind demo cluster", "SREGym's own cluster". */
+  label: string;
+  /** False for a real cluster. */
+  simulated: boolean;
+  /** One plain sentence. */
+  about: string;
+}
+
+/** The targets evaluation records name (EvalRecord.target), in words: help text, not data. */
+export const TARGETS: Readonly<Record<string, EvalTarget>> = {
+  simulated: {
+    key: "simulated",
+    label: "Simulated shop",
+    simulated: true,
+    about: "RECAP's deterministic simulation of a five-service shop: no real system is changed.",
+  },
+  kind: {
+    key: "kind",
+    label: "Kind demo cluster",
+    simulated: false,
+    about: "RECAP's two-service demo app on a real Kind cluster the owner runs: real pods, real reads and writes, faults RECAP injects. Not production.",
+  },
+  sregym: {
+    key: "sregym",
+    label: "SREGym's own cluster",
+    simulated: false,
+    about: "SREGym's hotel-reservation app on SREGym's own Kind cluster, with a problem SREGym's harness injected. Not production.",
+  },
+};
+
+/** A target a record names, in words. Any other value is a real cluster's kind, named as it is. */
+export function targetInfo(target: string): EvalTarget {
+  if (Object.prototype.hasOwnProperty.call(TARGETS, target)) return TARGETS[target];
+  return { key: target, label: target, simulated: false, about: "A target that is not simulated, which this dashboard has no description of." };
+}
+
+/** A real cluster whose kind the record does not name (a real_kubernetes record made before targets were recorded). */
+const UNNAMED_CLUSTER: EvalTarget = {
+  key: "",
+  label: "A real cluster (which one: not recorded)",
+  simulated: false,
+  about: "The record does not name its cluster; its mode holds only runs against a real cluster.",
+};
+
+/**
+ * What a record's run worked on: its own `target`, else what its mode allows. The record builder
+ * (evals/categorize.py) refuses a real cluster's run in every mode but real_kubernetes, and a
+ * simulated run in real_kubernetes, so a record made before M5 (no target) is still placed.
+ */
+export function recordTarget(record: Pick<EvalRecord, "mode" | "target">): EvalTarget {
+  if (record.target) return targetInfo(record.target);
+  return record.mode === "real_kubernetes" ? UNNAMED_CLUSTER : TARGETS.simulated;
+}
+
+/** A batch's targets: its own list, else what its mode allows (a batch made before M5 names none). */
+export function batchTargets(batch: Pick<BatchSummary, "mode" | "targets">): EvalTarget[] {
+  const named = (batch.targets ?? []).filter(Boolean);
+  return named.length ? named.map(targetInfo) : [recordTarget({ mode: batch.mode, target: "" })];
+}
+
+/** DataSourceBadge's environment fields for a target: SIMULATED TARGET, or LIVE TARGET · its kind. */
+export function targetFields(target: EvalTarget): TargetFields {
+  return target.simulated
+    ? { kind: "simulated", is_simulated: true, name: target.label, description: target.about }
+    : { kind: target.key || undefined, is_simulated: false };
 }
 
 // --- numbers --------------------------------------------------------------------------------------
@@ -216,7 +295,7 @@ export const FAILURE_INFO: Readonly<Record<string, CategoryInfo>> = {
     icon: "stop",
   },
   approval_rejected: {
-    label: "Approval rejected",
+    label: "Approval rejected or expired",
     meaning: "The approver said no, or the approval request expired.",
     tone: "warn",
     icon: "stop",
@@ -361,6 +440,56 @@ export function failureGroups(outcomes: Pick<BatchOutcomes, "failures_by_categor
       count,
       records: records.filter((r) => !r.success && (r.failure || "uncategorized") === category),
     }));
+}
+
+// --- a benchmark grader's own verdicts (kept apart from RECAP's outcome) ------------------------------
+
+export interface VerdictView {
+  /** "pass", "fail" or "not graded" (the server's keys), or a key this dashboard does not know. */
+  key: string;
+  label: string;
+  tone: Tone;
+  icon: OutcomeIcon;
+}
+
+const VERDICTS: Readonly<Record<string, VerdictView>> = {
+  pass: { key: "pass", label: "Passed", tone: "ok", icon: "check" },
+  fail: { key: "fail", label: "Failed", tone: "bad", icon: "x" },
+  "not graded": { key: "not graded", label: "Not graded", tone: "neutral", icon: "minus" },
+};
+
+const VERDICT_ORDER = Object.keys(VERDICTS);
+
+/** A benchmark verdict in words (null: not graded). */
+export function verdictView(verdict: string | null | undefined): VerdictView {
+  const key = verdict || "not graded";
+  if (Object.prototype.hasOwnProperty.call(VERDICTS, key)) return VERDICTS[key];
+  return { key, label: key, tone: "neutral", icon: "minus" };
+}
+
+/**
+ * The grader's verdicts over a batch (BatchOutcomes.benchmark_verdicts, counted by the server
+ * over every record): passed, failed and not graded always (0 when none), then any other key.
+ * Empty when the batch names no grader. They are the grader's, never RECAP's successes.
+ */
+export function benchmarkVerdictCounts(
+  batch: Pick<BatchSummary, "benchmark"> & { outcomes: Pick<BatchOutcomes, "benchmark_verdicts"> },
+): [VerdictView, number][] {
+  if (!batch.benchmark) return [];
+  const counts = batch.outcomes.benchmark_verdicts ?? {};
+  const other = Object.keys(counts)
+    .filter((key) => !VERDICT_ORDER.includes(key))
+    .sort();
+  return [...VERDICT_ORDER, ...other].map((key) => [verdictView(key), counts[key] ?? 0]);
+}
+
+/**
+ * A record's benchmark verdict, or null when its batch names no grader and the record holds no
+ * verdict (most batches: there is nothing to show then).
+ */
+export function recordVerdict(record: Pick<EvalRecord, "benchmark_verdict">, benchmark: string | null | undefined): VerdictView | null {
+  if (!benchmark && !record.benchmark_verdict) return null;
+  return verdictView(record.benchmark_verdict);
 }
 
 // --- groups: configurations and scenarios --------------------------------------------------------
@@ -644,16 +773,33 @@ export const CLI_COMMANDS: Readonly<Record<EvalMode, readonly CliCommand[]>> = {
   ],
   real_kubernetes: [
     {
-      title: "One run on the Kind cluster, approved by you",
+      title: "One run on the Kind demo cluster, approved by you",
       command:
-        "RECAP_TARGET=kind-demo RECAP_DATA_DIR=$HOME/recap-kind-runs .venv/bin/python scripts/demo.py --scenario kind-bad-release --provider ollama-vm --approve ask",
-      note: "About half an hour with the model on a VM without a GPU. Needs the cluster and its tunnel (infra/aws/ec2.sh up, then tunnel). The fix waits until you type the target service's name.",
+        "bash infra/aws/ec2.sh hold env RECAP_TARGET=kind-demo RECAP_DATA_DIR=$HOME/recap-kind-runs .venv/bin/python scripts/demo.py --scenario kind-bad-release --provider ollama-vm --approve ask",
+      note: "About half an hour with the model on a VM without a GPU. Needs the cluster and its tunnel (infra/aws/ec2.sh up, then tunnel); hold keeps this machine awake and the VM marked in use while the run waits for you. The fix waits until you type the target service's name.",
     },
     {
-      title: "Build the batch from those runs",
+      title: "Build the Kind batch from those runs",
       command:
         "RECAP_TARGET=kind-demo .venv/bin/python scripts/live_eval.py --from-data --data-dir $HOME/recap-kind-runs --out /tmp/recap-kind-batch",
       note: "No model is called: every finished real-model run in that folder, read with the Kind target's profile. A folder that mixes the simulator with a cluster is refused.",
+    },
+    {
+      title: "One run on SREGym's cluster, approved by you",
+      command:
+        "bash infra/aws/ec2.sh hold env RECAP_TARGET=sregym-hotel RECAP_DATA_DIR=$HOME/recap-sregym-runs .venv/bin/python scripts/demo.py --scenario sregym-misconfig-app-hotel-res --provider ollama-vm --approve ask",
+      note: "Needs SREGym's cluster with its problem deployed, RECAP's own identities on it and the tunnel (infra/sregym/README.md, in that order). The fix waits until you type the target service's name.",
+    },
+    {
+      title: "SREGym's own verdict, after RECAP's fix",
+      command: "bash infra/aws/ec2.sh ssh 'cd ~/recap && bash infra/sregym/sregym.sh grade misconfig_app_hotel_res'",
+      note: "Runs SREGym's mitigation oracle (run-oracle.py) on the VM. Its verdict is the benchmark's, not RECAP's: copy it by hand into the batch (below).",
+    },
+    {
+      title: "Build the SREGym batch, with the grader's verdicts",
+      command:
+        'RECAP_TARGET=sregym-hotel .venv/bin/python scripts/live_eval.py --from-data --data-dir $HOME/recap-sregym-runs --out /tmp/recap-sregym-batch --benchmark "SREGym 1.1 mitigation oracle (run-oracle.py), recorded by hand" --benchmark-verdict RUN_ID=pass',
+      note: "No model is called. --benchmark names the grader; give one --benchmark-verdict RUN_ID=pass or RUN_ID=fail per graded run, copied from its output. A run without one reads not graded, and no verdict is ever merged into RECAP's own outcome.",
     },
   ],
 };

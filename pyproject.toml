@@ -56,6 +56,7 @@ files = [
     "recap/providers/catalog.py",
     "recap/environments/kubernetes",
     "apps/api",
+    "scripts/api_load_test.py",
     "evals/records.py",
     "evals/categorize.py",
     "evals/runner.py",

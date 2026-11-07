@@ -18,29 +18,46 @@ import {
   REPLAY_PACES,
   STAGE_HELP,
   approvalPhase,
+  approvalTarget,
+  approveGate,
+  attemptLabel,
   clampPace,
+  decisionBody,
   feedStart,
   fixtureRouting,
   fixtureSource,
   fmtBytes,
   fmtOffset,
+  healthWords,
   initialProvider,
   integrityView,
+  labIntro,
   launchView,
+  liveTargetWords,
   mergeBySeq,
   missingPrerequisites,
+  namesTarget,
   oracleView,
   outcomeView,
   providerChoices,
   rationaleAuthor,
   readinessView,
+  recoverySignals,
+  replayBlockedNote,
   replayRunBody,
   resumeDelay,
   runBanner,
   runConfigBody,
+  scenarioIntro,
+  settleWords,
   sortScenarios,
+  stageHelp,
   stageTimes,
   statesOf,
+  summaryTarget,
+  tamper,
+  targetFacts,
+  targetPlace,
   transportView,
   trustedRiskOf,
   withOverrides,
@@ -505,4 +522,182 @@ test("hostile text passes through the helpers unchanged (components escape it)",
   assert.deepEqual(launchView(fixture({ launchable: false, not_launchable_because: [hostile] })).reasons, [hostile]);
   const choices = providerChoices([{ ...PROVIDERS[2], selection_rule: hostile }]);
   assert.equal(choices.unavailable[0].reason, hostile);
+});
+
+// --- a live target (M5): where actions land, the typed name, the live words ------------------------------
+
+/** The Kind target as GET /system and the run's first event report it (configs/targets/kind-demo). */
+const KIND = {
+  kind: "kind",
+  name: "Kind cluster recap-m5",
+  namespace: "recap-demo",
+  is_simulated: false,
+  description: "Local Kind cluster recap-m5 (context kind-recap-m5), not production.",
+  stabilization_timeout_seconds: 180,
+};
+const SHOP = { kind: "simulated", name: "RECAP simulated shop", namespace: "shop", is_simulated: true, stabilization_timeout_seconds: 0 };
+
+test("the target is read from what the server reported: simulated, live or not reported, never guessed", () => {
+  assert.deepEqual(targetFacts(KIND), {
+    state: "live",
+    kind: "kind",
+    name: "Kind cluster recap-m5",
+    namespace: "recap-demo",
+    description: "Local Kind cluster recap-m5 (context kind-recap-m5), not production.",
+    settleSeconds: 180,
+  });
+  assert.equal(targetFacts(SHOP).state, "simulated");
+  assert.equal(targetFacts(SHOP).settleSeconds, null, "the simulator gets no settle window");
+  assert.equal(targetFacts(null).state, "unknown");
+  assert.equal(targetFacts({ kind: "kind", name: "x" }).state, "unknown", "a kind alone does not say live or simulated");
+  assert.equal(targetPlace(targetFacts(KIND)), "Kind cluster recap-m5, namespace recap-demo");
+  assert.equal(targetPlace(targetFacts({ is_simulated: false, kind: "kind" })), "");
+  assert.deepEqual(liveTargetWords(targetFacts(KIND)), { place: "Kind cluster recap-m5, namespace recap-demo", real: "a real cluster" });
+  assert.deepEqual(liveTargetWords(targetFacts({ is_simulated: false, kind: "other" })), { place: "the live other", real: "a real system" });
+  assert.deepEqual(summaryTarget({ environment_kind: "kind", environment_simulated: false }), { is_simulated: false, kind: "kind" });
+  assert.equal(summaryTarget({ environment_kind: null, environment_simulated: null }), null);
+});
+
+test("an approval acts on the live target if either the run or the server says live; else on what is known", () => {
+  assert.equal(approvalTarget(KIND, SHOP), KIND);
+  assert.equal(approvalTarget(SHOP, KIND), KIND, "a typed name is never skipped because one source said simulated");
+  assert.equal(approvalTarget(SHOP, null), SHOP);
+  assert.equal(approvalTarget(null, SHOP), SHOP);
+  assert.equal(approvalTarget({ kind: "kind" }, null), null, "a source that does not say simulated or not counts for nothing");
+  assert.equal(approvalTarget(null, undefined), null);
+});
+
+test("the typed name must be the proposal's target exactly, as the server compares it (spaces around it aside)", () => {
+  assert.ok(namesTarget("backend", "backend"));
+  assert.ok(namesTarget("  backend\t", "backend"));
+  for (const typed of ["Backend", "BACKEND", "back end", "backend2", "y", "yes", "", "   "]) assert.ok(!namesTarget(typed, "backend"), typed);
+  assert.ok(!namesTarget("", ""), "an empty target is never named");
+  assert.ok(!namesTarget(null, "backend"));
+  assert.ok(!namesTarget("backend", null));
+});
+
+test("Approve waits for the name on a live target, for GET /system while it is asked, and never when nothing can be decided", () => {
+  const open = { canDecide: true, checking: false, needsName: true, service: "backend" };
+  assert.deepEqual(approveGate({ ...open, typed: "" }), { blocked: true, why: "Type backend above to enable Approve" });
+  assert.deepEqual(approveGate({ ...open, typed: "Backend" }), { blocked: true, why: "Type backend above to enable Approve" });
+  assert.deepEqual(approveGate({ ...open, typed: "backend" }), { blocked: false, why: null });
+  assert.deepEqual(approveGate({ ...open, needsName: false, typed: "" }), { blocked: false, why: null }, "the simulated shop: one click");
+  assert.deepEqual(approveGate({ ...open, checking: true, typed: "backend" }), { blocked: true, why: "Checking which environment this approval acts on (GET /system)…" });
+  assert.deepEqual(approveGate({ ...open, canDecide: false, typed: "backend" }), { blocked: true, why: null });
+  assert.deepEqual(approveGate({ ...open, service: "", typed: "" }), { blocked: true, why: "Type the target service's name above to enable Approve" });
+});
+
+test("the decision body: the exact digest, the typed name with an approval only, and the binding test's other digest", () => {
+  const digest = "917e98b72d1e4684f6aa77928897a945f90517f991a244aecdb3ae9f9e9c5239";
+  assert.deepEqual(decisionBody(digest, { decision: "approved", confirmTarget: " backend " }), { decision: "approved", proposal_digest: digest, confirm_target: "backend" });
+  assert.deepEqual(decisionBody(digest, { decision: "approved" }), { decision: "approved", proposal_digest: digest });
+  assert.deepEqual(decisionBody(digest, { decision: "approved", confirmTarget: "   " }), { decision: "approved", proposal_digest: digest });
+  assert.deepEqual(decisionBody(digest, { decision: "rejected", confirmTarget: "backend" }), { decision: "rejected", proposal_digest: digest }, "a rejection never sends the name");
+  const tampered = decisionBody(digest, { decision: "approved", tampered: true });
+  assert.notEqual(tampered.proposal_digest, digest);
+  assert.equal(tampered.proposal_digest, tamper(digest));
+  assert.equal(tamper("ab0"), "ab1");
+  assert.equal(tamper(""), "0");
+  assert.deepEqual(
+    [attemptLabel({ decision: "approved" }), attemptLabel({ decision: "rejected" }), attemptLabel({ decision: "approved", tampered: true })],
+    ["approve", "reject", "approve with a tampered digest"],
+  );
+});
+
+test("a decision's note (how it came, RECAP's words) is read from approval.decided", () => {
+  const events = goldenTrace();
+  const note = "interactive terminal; typed the target service's name; answered after 167.8 s; login name kept in the local decision log";
+  events.push(ev("approval.decided", { decision: "approved", actor: "console-user", approval_id: "apr-84ec57cc5a", proposal_id: "prop-0d046a159f", note }, "2026-11-03T13:13:08Z"));
+  const phase = approvalPhase(events);
+  assert.ok(phase.kind === "decided" && phase.note === note && phase.actor === "console-user");
+  events.push(ev("approval.decided", { decision: "rejected", proposal_id: "prop-0d046a159f", note: "" }, "2026-11-03T13:14:00Z"));
+  const plain = approvalPhase(events);
+  assert.ok(plain.kind === "decided" && plain.note === null);
+});
+
+test("stage captions name the run's own target: the simulated shop, the live cluster, or neither", () => {
+  assert.match(stageHelp("INVESTIGATING", SHOP), /read-only tools on the simulated shop/);
+  assert.match(stageHelp("MITIGATING", SHOP), /to the simulated shop, once/);
+  assert.match(stageHelp("VERIFYING", SHOP), /whether the shop recovered/);
+  const live = ["INVESTIGATING", "AWAITING_APPROVAL", "MITIGATING", "VERIFYING"].map((s) => stageHelp(s, KIND));
+  for (const caption of live) assert.doesNotMatch(caption, /simulated|shop/, caption);
+  assert.match(live[0], /read-only tools on Kind cluster recap-m5, namespace recap-demo, a real cluster/);
+  assert.match(live[1], /approving takes the target service's name, typed/);
+  assert.match(live[2], /to Kind cluster recap-m5, namespace recap-demo, once: this changes a real cluster\./);
+  assert.match(live[3], /probes Kind cluster recap-m5, namespace recap-demo until its services are healthy or the target's settle window \(up to 180 s\) ends/);
+  assert.equal(stageHelp("INVESTIGATING", null), STAGE_HELP.INVESTIGATING);
+  assert.doesNotMatch(STAGE_HELP.INVESTIGATING + STAGE_HELP.MITIGATING + STAGE_HELP.VERIFYING, /simulated|shop/, "the target-neutral words claim no target");
+  assert.equal(stageHelp("RESOLVED", KIND), STAGE_HELP.RESOLVED);
+  assert.equal(stageHelp(null, KIND), "");
+});
+
+test("the resolved sentence names where the recovery happened; other outcomes read the same on any target", () => {
+  assert.equal(outcomeView("resolved", SHOP).sentence, "The independent oracle verified that the simulated shop recovered.");
+  assert.equal(outcomeView("resolved", KIND).sentence, "The independent oracle verified that Kind cluster recap-m5, namespace recap-demo recovered: a real cluster, not a simulation.");
+  assert.equal(outcomeView("resolved").sentence, "The independent oracle verified the recovery.");
+  assert.equal(outcomeView("approval_rejected", KIND).sentence, outcomeView("approval_rejected").sentence);
+});
+
+test("the Lab's header, scenario card and replay note follow the server's target", () => {
+  assert.match(labIntro(SHOP), /acts only on the simulated shop\.$/);
+  const live = labIntro(KIND);
+  assert.match(live, /^Start an incident on this server's live target/);
+  assert.match(live, /The target is Kind cluster recap-m5, namespace recap-demo \(kind\): a real cluster, not a simulation/);
+  assert.doesNotMatch(live, /simulated shop|Replay a recorded/);
+  assert.match(labIntro(null), /the target shows here once GET \/system reports it\.$/);
+  assert.match(scenarioIntro(SHOP), /^Inject a scenario's fault into the simulated shop/);
+  assert.match(scenarioIntro(KIND), /^This target's scenarios \(GET \/scenarios\), on Kind cluster recap-m5, namespace recap-demo: a real cluster\./);
+  assert.doesNotMatch(scenarioIntro(null), /simulated/);
+  assert.match(replayBlockedNote(KIND) ?? "", /RECAP refuses a replay against it before it starts, because a recorded model's fix must never reach a real system/);
+  assert.equal(replayBlockedNote(SHOP), null);
+  assert.equal(replayBlockedNote(null), null);
+});
+
+test("a run on a live (or not reported) target always asks a person and sends no simulated latency", () => {
+  const config: RunConfigInput = { strategy: "adaptive", use_rag: true, use_memory: true, approval_mode: "auto", tool_latency_ms: 120 };
+  const live = runConfigBody(config, "ollama-vm", "deterministic", targetFacts(KIND));
+  assert.equal(live.approval_mode, "manual");
+  assert.equal(live.tool_latency_ms, null);
+  assert.equal(live.provider, "ollama-vm");
+  assert.equal(runConfigBody(config, null, null, targetFacts(null)).approval_mode, "manual");
+  const simulated = runConfigBody(config, null, null, targetFacts(SHOP));
+  assert.deepEqual([simulated.approval_mode, simulated.tool_latency_ms], ["auto", 120], "the simulated shop: as chosen");
+  assert.deepEqual([runConfigBody(config, null, null).approval_mode, config.approval_mode], ["auto", "auto"], "no target given: unchanged, input untouched");
+});
+
+test("how long the oracle probed: a live target's settle window, the simulator's single probe, nothing invented", () => {
+  const live = { oracle: "kind-health-oracle", verified: true, simulated: false, probes: 2, waited_seconds: 10.859 };
+  assert.equal(settleWords(live, targetFacts(KIND)), "live target · 2 probes over 10.9 s (settle window 180 s)");
+  assert.equal(settleWords({ simulated: false, probes: 9, waited_seconds: 66.931 }, targetFacts({ ...KIND, stabilization_timeout_seconds: 240 })), "live target · 9 probes over 66.9 s (settle window 240 s)");
+  assert.equal(settleWords({ simulated: false, probes: 1, waited_seconds: 0.4 }), "live target · 1 probe");
+  assert.equal(settleWords({ simulated: true, probes: 1, waited_seconds: 0 }, targetFacts(SHOP)), "simulated target · 1 probe");
+  assert.equal(settleWords({ simulated: true }, targetFacts(SHOP)), "", "a run before M5 recorded no probes");
+  assert.equal(settleWords(null), "");
+});
+
+test("the oracle's observations: one row per service, changed ones first, values as recorded", () => {
+  const h = (status: string, ready: number, replicas: number, rate: number | null) => ({ service: "x", status, ready_replicas: ready, replicas, error_rate: rate });
+  const rows = recoverySignals({
+    before: { frontend: h("Running", 2, 2, 0.3), backend: h("Running", 2, 2, 0.2523), cache: h("Running", 1, 1, null) },
+    after: { frontend: h("Running", 2, 2, 0), backend: h("Running", 2, 2, 0), cache: h("Running", 1, 1, null) },
+  });
+  assert.deepEqual(rows.map((r) => [r.service, r.changed]), [["frontend", true], ["backend", true], ["cache", false]]);
+  assert.equal(healthWords(rows[1].before), "Running · 2/2 ready · errors 25.2%");
+  assert.equal(healthWords(rows[0].after), "Running · 2/2 ready · errors 0%");
+  assert.equal(healthWords(rows[2].after), "Running · 1/1 ready");
+  assert.equal(healthWords(null), NOT_RECORDED);
+  // A service only one side saw, and an empty or malformed record.
+  const partial = recoverySignals({ before: {}, after: { geo: h("Running", 1, 1, null) } });
+  assert.deepEqual([partial[0].before, partial[0].changed], [null, true]);
+  assert.deepEqual(recoverySignals(null), []);
+  assert.deepEqual(recoverySignals({ before: "x", after: [] }), []);
+  assert.equal(healthWords({ status: NOT_RECORDED, ready: null, replicas: null, errorRate: null }), NOT_RECORDED);
+});
+
+test("a live run's banner names its cluster; the simulated one keeps its words", () => {
+  const live = runBanner({ origin: "local_llm", kind: "llm", model: "qwen3:8b" }, KIND);
+  assert.equal(live.label, "LIVE LOCAL LLM · LIVE TARGET · kind");
+  assert.match(live.explanation, /It acts on Kind cluster recap-m5, namespace recap-demo: a real cluster, not a simulation, and an approved action changes it\./);
+  assert.doesNotMatch(live.explanation, /simulated/);
+  assert.match(runBanner({ origin: "scripted" }, SHOP).explanation, /Every action changes only RECAP's simulated shop\./);
 });

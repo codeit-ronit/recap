@@ -28,6 +28,8 @@ import { findingOutcomeLabel, findingOutcomeTone, fmtDateTime, fmtInt, fmtTime, 
 import { PAGE_LABELS, hrefFor, navigate, usePolling, useRunSelection } from "../hooks";
 import type { PageProps } from "../hooks";
 import type { RunSummary } from "../types";
+import { liveTargetWords, summaryTarget, targetFacts, targetPlace } from "../view/lab";
+import type { TargetFacts, TargetFields } from "../view/lab";
 import {
   EVIDENCE_KIND_LABELS,
   NOT_RECORDED,
@@ -49,6 +51,7 @@ import {
   policyVerdictsOf,
   prettyJson,
   proposalChecksOf,
+  provenanceOf,
   quotedRuleLines,
   readDisagreement,
   recordsDisagreements,
@@ -352,7 +355,35 @@ function RuleLines({
 
 // --- run bar and notices --------------------------------------------------------------------------
 
-function RunBar({ view, summary, kind }: { view: EvidenceView; summary: RunSummary | undefined; kind: AuthorKind | null }) {
+/** Where the run's observations were read: a live cluster by name and namespace, or the simulated shop. */
+function TargetValue({ target }: { target: TargetFacts }) {
+  if (target.state === "unknown") return <span className="not-recorded">{NOT_RECORDED}</span>;
+  const place = targetPlace(target);
+  return (
+    <span className="ed-target">
+      <StatusToken
+        size="sm"
+        tone={target.state === "live" ? "bad" : "warn"}
+        icon={target.state === "live" ? "alert" : "flask"}
+        label={target.state === "live" ? `live · ${target.kind || "kind not reported"}` : "simulated"}
+        title={target.description || undefined}
+      />
+      {place ? <span className="ed-fact-note">{place}</span> : null}
+    </span>
+  );
+}
+
+function RunBar({
+  view,
+  summary,
+  kind,
+  target,
+}: {
+  view: EvidenceView;
+  summary: RunSummary | undefined;
+  kind: AuthorKind | null;
+  target: TargetFacts;
+}) {
   // GET /runs sends the typed M4 summary (provider class, environment): the badge reads only those fields.
   const source = summary ? summarySource(summary as unknown as SummarySourceFields) : null;
   const flagged = view.registry.filter((e) => e.flags.includes("prompt_injection_suspected")).length;
@@ -408,6 +439,12 @@ function RunBar({ view, summary, kind }: { view: EvidenceView; summary: RunSumma
             ) : (
               <span className="muted">none</span>
             )}
+          </dd>
+        </div>
+        <div className="ed-fact-target">
+          <dt>Observed on</dt>
+          <dd>
+            <TargetValue target={target} />
           </dd>
         </div>
       </dl>
@@ -1230,17 +1267,21 @@ function EvidenceDetail({
   trustNote,
   patterns,
   use,
+  target,
 }: {
   item: EvidenceItem;
   runId: string;
   trustNote: string | undefined;
   patterns: string[];
   use: RegistryUse;
+  /** The run's own target: where a tool's answer was read. */
+  target: TargetFacts;
 }) {
   const formatted = useMemo(() => prettyJson(item.content), [item.content]);
   const [mode, setMode] = useState<"formatted" | "recorded">("formatted");
   const showFormatted = mode === "formatted" && formatted !== null;
   const untrusted = isUntrustedClass(item.trust_class);
+  const provenance = provenanceOf(item, target);
   return (
     <div className="ed-detail">
       <div className="ed-detail-main">
@@ -1273,7 +1314,15 @@ function EvidenceDetail({
         <div className="kv-row">
           <dt>Source</dt>
           <dd>
-            <code className="mono ed-ref">{item.source_ref}</code>
+            <span className="cell-stack">
+              <code className="mono ed-ref">{item.source_ref}</code>
+              {provenance ? (
+                <span className={target.state === "live" ? "ed-provenance is-live" : "ed-provenance"}>
+                  {target.state === "live" ? <Icon name="alert" size={12} /> : null}
+                  {provenance}
+                </span>
+              ) : null}
+            </span>
           </dd>
         </div>
         <div className="kv-row">
@@ -1362,7 +1411,19 @@ function offsetOf(rows: readonly RegistryRow[], id: string | null, limit: number
   return index > 0 ? Math.floor(index / limit) * limit : 0;
 }
 
-function Registry({ view, runId, focusId, diagnosisBasis }: { view: EvidenceView; runId: string; focusId: string | null; diagnosisBasis: CheckView | null }) {
+function Registry({
+  view,
+  runId,
+  focusId,
+  diagnosisBasis,
+  target,
+}: {
+  view: EvidenceView;
+  runId: string;
+  focusId: string | null;
+  diagnosisBasis: CheckView | null;
+  target: TargetFacts;
+}) {
   const rows = useMemo<RegistryRow[]>(
     () => view.registry.map((item) => ({ item, kind: evidenceKind(item), use: registryUse(item, diagnosisBasis) })),
     [view.registry, diagnosisBasis],
@@ -1563,6 +1624,7 @@ function Registry({ view, runId, focusId, diagnosisBasis }: { view: EvidenceView
                           trustNote={view.trust_classes[item.trust_class]}
                           patterns={patternsById.get(item.id) ?? []}
                           use={use}
+                          target={target}
                         />
                       </td>
                     </tr>
@@ -1593,13 +1655,17 @@ function Registry({ view, runId, focusId, diagnosisBasis }: { view: EvidenceView
   );
 }
 
-function RegistryCard({ view, runId, focusId }: { view: EvidenceView; runId: string; focusId: string | null }) {
+function RegistryCard({ view, runId, focusId, target }: { view: EvidenceView; runId: string; focusId: string | null; target: TargetFacts }) {
   const diagnosis = useMemo(() => splitReport(view.final_report).diagnosis, [view.final_report]);
   const classes = Object.entries(view.trust_classes);
+  const where =
+    target.state === "live"
+      ? ` The agents' tool calls read ${liveTargetWords(target).place} live: ${liveTargetWords(target).real}, and what it returned is still untrusted data.`
+      : "";
   return (
     <Card
       title={`Evidence registry (${fmtInt(view.registry.length)})`}
-      subtitle="Every observation the run recorded: the tool and agent behind it, how far it can be trusted and how the verifier used it. Expand a row for the original observation."
+      subtitle={`Every observation the run recorded: the tool and agent behind it, how far it can be trusted and how the verifier used it. Expand a row for the original observation and where it was read.${where}`}
     >
       {classes.length ? (
         <details className="ed-legend">
@@ -1616,7 +1682,7 @@ function RegistryCard({ view, runId, focusId }: { view: EvidenceView; runId: str
           </dl>
         </details>
       ) : null}
-      <Registry view={view} runId={runId} focusId={focusId} diagnosisBasis={diagnosis} />
+      <Registry view={view} runId={runId} focusId={focusId} diagnosisBasis={diagnosis} target={target} />
     </Card>
   );
 }
@@ -1629,32 +1695,46 @@ export function EvidenceBody({
   runId,
   summary,
   focusId = null,
+  environment,
 }: {
   view: EvidenceView;
   runId: string;
   summary?: RunSummary;
   focusId?: string | null;
+  /** The run's own target (GET /runs/{id} record.environment); left out, the summary's kind only. */
+  environment?: TargetFields | null;
 }) {
   const known = useMemo(() => new Set(view.registry.map((item) => item.id)), [view.registry]);
   const kind = runAuthorKind(view);
+  // GET /runs sends the typed M4 summary: its environment kind and whether it is simulated.
+  const target = targetFacts(environment ?? summaryTarget(summary as unknown as SummarySourceFields | undefined));
   return (
     <>
-      <RunBar view={view} summary={summary} kind={kind} />
+      <RunBar view={view} summary={summary} kind={kind} target={target} />
       <RunNotices view={view} runId={runId} known={known} />
       <DecisionCard view={view} runId={runId} known={known} kind={kind} />
       <ChainCard view={view} runId={runId} known={known} kind={kind} />
       <DisagreementsCard view={view} runId={runId} known={known} />
       <ActionCard view={view} runId={runId} known={known} />
-      <RegistryCard view={view} runId={runId} focusId={focusId} />
+      <RegistryCard view={view} runId={runId} focusId={focusId} target={target} />
     </>
   );
 }
 
+/** Ask for the run's record again while a just-started run has none yet (its environment is in it). */
+function recordInterval(detail: { status: string; record: unknown } | undefined): number | null {
+  return detail && !detail.record && detail.status === "running" ? 3000 : null;
+}
+
 function EvidenceRun({ runId, summary, focusId }: { runId: string; summary: RunSummary | undefined; focusId: string | null }) {
   const polled = usePolling(() => api.evidenceView(runId), evidenceInterval, [runId]);
+  // The evidence view names no environment: the run's record does (which cluster and namespace
+  // its tools read). Without it, the page still says live or simulated from the run's summary.
+  const detail = usePolling(() => api.runView(runId), recordInterval, [runId]);
+  const environment = detail.data?.record?.environment ?? null;
   return (
     <PolledView polled={polled} loadingLabel="Loading this run's evidence and verdicts…" errorTitle="Could not load the run's evidence (GET /runs/{id}/evidence)">
-      {(view) => <EvidenceBody view={view} runId={runId} summary={summary} focusId={focusId} />}
+      {(view) => <EvidenceBody view={view} runId={runId} summary={summary} focusId={focusId} environment={environment} />}
     </PolledView>
   );
 }

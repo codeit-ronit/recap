@@ -265,11 +265,26 @@
 .stat-grid.evl-tiles {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
+/* With a benchmark grader's verdicts: a fourth tile, beside RECAP's own counts. */
+.stat-grid.evl-tiles.evl-tiles-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
 .evl-tiles .stat-value {
   font-variant-numeric: tabular-nums;
 }
-.evl-states .stat-label {
+.evl-states .stat-label,
+.evl-verdicts .stat-label {
   margin-bottom: var(--space-2);
+}
+/* The grader's tile is dashed: its verdicts are not RECAP's. */
+.stat-tile.evl-verdicts {
+  border-style: dashed;
+  border-color: var(--border-2);
+}
+.evl-verdicts .stat-note {
+  margin-top: var(--space-2);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 .evl-state-list {
   display: flex;
@@ -791,6 +806,9 @@
   .evl-guide {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .stat-grid.evl-tiles.evl-tiles-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 920px) {
@@ -816,7 +834,8 @@
   .evl-guide {
     grid-template-columns: minmax(0, 1fr);
   }
-  .stat-grid.evl-tiles {
+  .stat-grid.evl-tiles,
+  .stat-grid.evl-tiles.evl-tiles-4 {
     grid-template-columns: minmax(0, 1fr);
   }
   .evl-launch {

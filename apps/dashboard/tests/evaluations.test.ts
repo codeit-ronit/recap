@@ -3,7 +3,9 @@
  * (never percentages), the small-sample warning, failure categories with their runs, the
  * configuration matrix of the scripted benchmark, and the record cells (reported tokens vs
  * RECAP's estimate, model time and wait only when recorded). Records are trimmed from the
- * published batches in evals/reports/batches/ (simulated shop).
+ * published batches in evals/reports/batches/: the simulated shop's, and M5's two
+ * real_kubernetes batches (the Kind demo cluster's, and SREGym's own cluster's with SREGym's
+ * grader's verdicts, kept apart from RECAP's).
  */
 
 import assert from "node:assert/strict";
@@ -15,9 +17,12 @@ import {
   MODE_GUIDE,
   MODE_ORDER,
   NOT_RECORDED,
+  TARGETS,
   aboutMinutes,
   approvalSeconds,
+  batchTargets,
   batchesOf,
+  benchmarkVerdictCounts,
   categoryInfo,
   configurationMatrix,
   expectedEntries,
@@ -38,14 +43,19 @@ import {
   pickBatch,
   providerClasses,
   recordOutcome,
+  recordTarget,
+  recordVerdict,
   retrievalLabel,
   sampleNote,
   scenarioGroups,
   stageNote,
   stateCounts,
+  targetFields,
+  targetInfo,
   timeView,
   tokenView,
   toolCallRows,
+  verdictView,
 } from "../src/view/evals.ts";
 
 // --- fixtures (shaped exactly like src/dto.ts) ------------------------------------------------------
@@ -104,6 +114,8 @@ function record(overrides: Partial<EvalRecord> = {}): EvalRecord {
     started_at: "2026-10-25T11:09:41.298467Z",
     ended_at: "2026-10-25T11:32:41.120536Z",
     recording: "20261025-110941-ollama-d09ac9.jsonl",
+    target: "simulated",
+    benchmark_verdict: null,
     ...overrides,
   };
 }
@@ -151,13 +163,33 @@ function summary(overrides: Partial<BatchSummary> = {}): BatchSummary {
     models: ["qwen3:8b"],
     prompt_versions: ["prompts-v4.7"],
     n: 2,
-    outcomes: { n: 2, successes: 1, by_final_state: { RESOLVED: 1, FAILED: 1 }, failures_by_category: { wrong_mechanism: 1 } },
+    outcomes: { n: 2, successes: 1, by_final_state: { RESOLVED: 1, FAILED: 1 }, failures_by_category: { wrong_mechanism: 1 }, benchmark_verdicts: {} },
     methods: [],
     limitations: [],
     source: "published",
+    targets: ["simulated"],
+    benchmark: null,
     ...overrides,
   };
 }
+
+/** M5's SREGym batch as the server sums it: N = 5, one verified recovery, SREGym's grader apart. */
+const SREGYM_GRADER = "SREGym 1.1 mitigation oracle (run-oracle.py), recorded by hand";
+const SREGYM = summary({
+  batch_id: "2026-11-03-real-kubernetes-sregym-qwen3-8b-prompts-v4.7",
+  mode: "real_kubernetes",
+  title: "Real model on a real Kubernetes cluster (sregym): qwen3:8b, prompts-v4.7",
+  n: 5,
+  outcomes: {
+    n: 5,
+    successes: 1,
+    by_final_state: { BLOCKED: 2, FAILED: 2, RESOLVED: 1 },
+    failures_by_category: { safety_blocked: 1, approval_rejected: 1, wrong_mechanism: 2 },
+    benchmark_verdicts: { fail: 1, "not graded": 3, pass: 1 },
+  },
+  targets: ["sregym"],
+  benchmark: SREGYM_GRADER,
+});
 
 const VIEW: EvalsView = {
   schema_version: "recap-api-v1",
@@ -183,6 +215,15 @@ test("the four modes are tabs in the documented order, each with its own guide",
   assert.match(MODE_GUIDE.scripted_regression.decisions, /not an LLM/);
   assert.match(MODE_GUIDE.real_kubernetes.decisions, /a person approving every write/);
   assert.equal(MODE_GUIDE.real_kubernetes.madeBy, "scripts/live_eval.py --from-data");
+});
+
+test("the real cluster's mode covers both clusters and keeps SREGym's grader apart (no separate sregym mode)", () => {
+  const guide = MODE_GUIDE.real_kubernetes;
+  assert.match(guide.decisions, /the Kind demo cluster or SREGym's own cluster/);
+  assert.match(guide.shows, /judged by RECAP's oracle/);
+  assert.match(guide.shows, /SREGym's own grader adds its verdict, kept apart/);
+  assert.match(guide.doesNotShow, /a benchmark score/);
+  assert.ok(!(MODE_ORDER as readonly string[]).includes("sregym"), "SREGym's runs are real_kubernetes records, told apart by their target");
 });
 
 test("the route's mode is kept only when it is a known mode", () => {
@@ -219,6 +260,51 @@ test("batches are picked per mode, newest first, and never across modes", () => 
   assert.equal(pickBatch(real, "scripted")?.batch_id, "new", "a batch of another mode is never shown on this tab");
   assert.equal(pickBatch(real, null)?.batch_id, "new");
   assert.equal(pickBatch([], "x"), null);
+});
+
+// --- targets -------------------------------------------------------------------------------------------
+
+test("a record's target in words: the simulated shop, the Kind demo cluster, SREGym's own cluster", () => {
+  assert.deepEqual(
+    ["simulated", "kind", "sregym"].map((key) => [targetInfo(key).label, targetInfo(key).simulated]),
+    [
+      ["Simulated shop", true],
+      ["Kind demo cluster", false],
+      ["SREGym's own cluster", false],
+    ],
+  );
+  assert.match(TARGETS.kind.about, /Not production/);
+  assert.match(TARGETS.sregym.about, /SREGym's harness injected/);
+  // Any other value is a real cluster's kind (the record builder writes "simulated" or the live kind).
+  assert.deepEqual([targetInfo("eks").label, targetInfo("eks").simulated], ["eks", false]);
+});
+
+test("a record made before M5 names no target: its mode places it, because the record builder refuses a mix", () => {
+  assert.equal(recordTarget({ mode: "real_llm", target: "" }).key, "simulated");
+  assert.equal(recordTarget({ mode: "scripted_regression", target: "" }).simulated, true);
+  const unnamed = recordTarget({ mode: "real_kubernetes", target: "" });
+  assert.deepEqual([unnamed.key, unnamed.simulated], ["", false]);
+  assert.match(unnamed.label, /real cluster \(which one: not recorded\)/);
+  assert.equal(recordTarget({ mode: "real_kubernetes", target: "sregym" }).label, "SREGym's own cluster");
+});
+
+test("a batch's targets come from its own list, else from its mode", () => {
+  assert.deepEqual(batchTargets({ mode: "real_kubernetes", targets: ["kind"] }).map((t) => t.label), ["Kind demo cluster"]);
+  assert.deepEqual(batchTargets(SREGYM).map((t) => t.label), ["SREGym's own cluster"]);
+  assert.deepEqual(batchTargets({ mode: "real_llm", targets: [] }).map((t) => t.key), ["simulated"], "a batch made before M5");
+  assert.deepEqual(batchTargets({ mode: "real_kubernetes", targets: [] }).map((t) => [t.key, t.simulated]), [["", false]]);
+});
+
+test("the badge's fields: SIMULATED for the shop, LIVE with its kind for a cluster, never the reverse", () => {
+  assert.deepEqual(targetFields(TARGETS.simulated), {
+    kind: "simulated",
+    is_simulated: true,
+    name: "Simulated shop",
+    description: TARGETS.simulated.about,
+  });
+  assert.deepEqual(targetFields(TARGETS.kind), { kind: "kind", is_simulated: false });
+  assert.deepEqual(targetFields(TARGETS.sregym), { kind: "sregym", is_simulated: false });
+  assert.deepEqual(targetFields(recordTarget({ mode: "real_kubernetes", target: "" })), { kind: undefined, is_simulated: false });
 });
 
 test("a tab's note counts its batches or says the mode is planned (from the server's status)", () => {
@@ -319,6 +405,56 @@ test("failure groups use the server's counts, most frequent first, each with its
     ],
   );
   assert.deepEqual(failureGroups({ failures_by_category: {} }, records), []);
+});
+
+test("an expired approval is named with a rejection, since one category covers both", () => {
+  assert.equal(FAILURE_INFO.approval_rejected.label, "Approval rejected or expired");
+  assert.match(FAILURE_INFO.approval_rejected.meaning, /expired/);
+});
+
+// --- a benchmark grader's verdicts --------------------------------------------------------------------
+
+test("SREGym's verdicts are counted apart: passed, failed and not graded, as 'k of N' of the same runs", () => {
+  const counts = benchmarkVerdictCounts(SREGYM);
+  assert.deepEqual(
+    counts.map(([view, k]) => [view.key, view.label, view.tone, k]),
+    [
+      ["pass", "Passed", "ok", 1],
+      ["fail", "Failed", "bad", 1],
+      ["not graded", "Not graded", "neutral", 3],
+    ],
+  );
+  assert.equal(
+    counts.reduce((sum, [, k]) => sum + k, 0),
+    SREGYM.n,
+    "every run is counted once: graded or not",
+  );
+  assert.equal(SREGYM.outcomes.successes, 1, "RECAP's own count stays its own");
+});
+
+test("a batch without a grader has no verdicts; a missing key is 0 and an unknown one is kept, not guessed", () => {
+  assert.deepEqual(benchmarkVerdictCounts(summary()), []);
+  assert.deepEqual(benchmarkVerdictCounts({ benchmark: null, outcomes: { benchmark_verdicts: { pass: 2 } } }), [], "no grader named: nothing shown");
+  const partial = benchmarkVerdictCounts({ benchmark: "some grader", outcomes: { benchmark_verdicts: { pass: 2, skipped: 1 } } });
+  assert.deepEqual(
+    partial.map(([view, k]) => [view.key, k]),
+    [
+      ["pass", 2],
+      ["fail", 0],
+      ["not graded", 0],
+      ["skipped", 1],
+    ],
+  );
+  assert.equal(partial[3][0].label, "skipped");
+});
+
+test("a record's verdict shows only where a grader is named or a verdict exists", () => {
+  assert.equal(recordVerdict(record(), null), null, "most batches: nothing to show");
+  assert.equal(recordVerdict(record({ benchmark_verdict: "pass" }), SREGYM_GRADER)?.label, "Passed");
+  assert.equal(recordVerdict(record({ benchmark_verdict: "fail" }), SREGYM_GRADER)?.tone, "bad");
+  assert.equal(recordVerdict(record({ benchmark_verdict: null }), SREGYM_GRADER)?.label, "Not graded");
+  assert.equal(recordVerdict(record({ benchmark_verdict: "pass" }), null)?.label, "Passed", "a verdict is never hidden");
+  assert.equal(verdictView(null).key, "not graded");
 });
 
 test("final states are listed most frequent first", () => {
@@ -491,6 +627,15 @@ test("the terminal commands are the documented ones, with the free-plan consent 
   const cluster = CLI_COMMANDS.real_kubernetes.map((c) => c.command);
   assert.ok(cluster.some((c) => c.includes("scripts/demo.py") && c.includes("--approve ask")), "a person approves each run's fix");
   assert.ok(cluster.some((c) => c.startsWith("RECAP_TARGET=kind-demo ") && c.includes("--from-data")));
+  // Both clusters: SREGym's runs, its own grader, and its batch with the grader's verdicts.
+  assert.ok(cluster.some((c) => c.includes("RECAP_TARGET=sregym-hotel") && c.includes("--scenario sregym-misconfig-app-hotel-res") && c.includes("--approve ask")));
+  assert.ok(cluster.some((c) => c.includes("sregym.sh grade misconfig_app_hotel_res")));
+  const sregymBatch = cluster.find((c) => c.startsWith("RECAP_TARGET=sregym-hotel ") && c.includes("--from-data"));
+  assert.ok(sregymBatch);
+  assert.match(sregymBatch, /--benchmark "SREGym 1\.1 mitigation oracle \(run-oracle\.py\), recorded by hand"/);
+  assert.match(sregymBatch, /--benchmark-verdict RUN_ID=pass$/);
+  assert.doesNotMatch(sregymBatch, /\|/, "no shell pipe in a command meant to be copied");
+  assert.match(CLI_COMMANDS.real_kubernetes.find((c) => c.command === sregymBatch)?.note ?? "", /no verdict is ever merged into RECAP's own outcome/);
   const all = Object.values(CLI_COMMANDS).flat();
   for (const c of all) {
     assert.doesNotMatch(c.command, /API_KEY=|gsk_|Bearer|token/i, c.command);
