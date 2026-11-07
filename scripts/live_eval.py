@@ -386,9 +386,10 @@ def real_llm_batch(
     methods: list[str],
     extra_limitations: list[str],
     mode: EvalMode = "real_llm",
+    target: str | None = None,
 ) -> EvalBatch:
-    """Real-model runs as one batch (`real_llm`, or `real_kubernetes` on a real cluster),
-    with how to read it."""
+    """Real-model runs as one batch (`real_llm`, or `real_kubernetes` on a real cluster,
+    `target` naming which), with how to read it."""
     return make_batch(
         batch_id=batch_id,
         mode=mode,
@@ -397,7 +398,7 @@ def real_llm_batch(
         created_at=created_at_of(records, started),
         plan=plan,
         methods=[*methods, *common_methods(records)],
-        limitations=[*sample_limitations(records, mode), *extra_limitations],
+        limitations=[*sample_limitations(records, mode, target), *extra_limitations],
     )
 
 
@@ -423,7 +424,9 @@ def common_methods(records: list[EvalRecord]) -> list[str]:
     ]
 
 
-def sample_limitations(records: list[EvalRecord], mode: EvalMode = "real_llm") -> list[str]:
+def sample_limitations(
+    records: list[EvalRecord], mode: EvalMode = "real_llm", target: str | None = None
+) -> list[str]:
     """What a small real-model batch cannot show (always shown with it)."""
     per_scenario: dict[str, int] = {}
     for record in records:
@@ -433,6 +436,7 @@ def sample_limitations(records: list[EvalRecord], mode: EvalMode = "real_llm") -
         f"N = {len(records)} ({counts or 'no runs'}): each run is one sample of one "
         "configuration. These are counts, not success rates, and no statistical claim is made.",
         TARGETS.get(mode, TARGETS["real_llm"]),
+        *([LIVE_TARGETS[target]] if target in LIVE_TARGETS else []),
         REPEATS.get(mode, REPEATS["real_llm"]),
         _review_limitation(records),
     ]
@@ -451,9 +455,16 @@ REPEATS: dict[str, str] = {
 TARGETS: dict[str, str] = {
     "real_llm": "The target is RECAP's SIMULATED shop, not a real cluster (runs against a real "
     "cluster are the real_kubernetes mode).",
-    "real_kubernetes": "The target is a real Kubernetes cluster (Kind): two demo services and "
-    "the faults RECAP's scenarios inject, with real pods, real reads and real writes, but not "
-    "production traffic, and one small cluster.",
+    "real_kubernetes": "The target is a real Kubernetes cluster (Kind, on the owner's VM): real "
+    "pods, real reads and real writes, but not production traffic, and one small cluster.",
+}
+
+# Which real cluster (sample_limitations, by the target's kind).
+LIVE_TARGETS: dict[str, str] = {
+    "kind": "The Kind demo: two demo services and the faults RECAP's scenarios inject.",
+    "sregym": "SREGym's own cluster: its hotel-reservation application and the problem "
+    "SREGym's harness injected. SREGym's mitigation oracle gives the benchmark's verdict, "
+    "which these records do not hold (see the notes below).",
 }
 
 
@@ -575,7 +586,7 @@ def rebuild(args: argparse.Namespace) -> int:
     ]
     model, prompts = kinds[0]
     first = created_at_of(records, utcnow())
-    slug = mode.replace("_", "-")
+    slug = mode.replace("_", "-") + (f"-{_slug(live)}" if live else "")  # the cluster, too
     batch_id = args.batch_id or f"{first:%Y-%m-%d}-{slug}-{_slug(model)}-{_slug(prompts)}"
     title = (
         f"Real model on a real Kubernetes cluster ({live}): {model}, {prompts}"
@@ -601,6 +612,7 @@ def rebuild(args: argparse.Namespace) -> int:
             *args.limitation,
         ],
         mode=mode,
+        target=live or None,
     )
     args.out.mkdir(parents=True, exist_ok=True)
     write_outputs(batch, args.out, data_dir)

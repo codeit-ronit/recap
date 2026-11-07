@@ -1,0 +1,873 @@
+{
+  "run_id": "run-9d7f47104d",
+  "scenario_id": "sregym-misconfig-app-hotel-res",
+  "config": {
+    "strategy": "adaptive",
+    "use_rag": true,
+    "retrieval": null,
+    "use_memory": false,
+    "memory_write": true,
+    "memory_read_partitions": [
+      "train",
+      "live"
+    ],
+    "memory_write_partition": "live",
+    "safety_enabled": true,
+    "approval_mode": "manual",
+    "planner": "default",
+    "provider": "ollama-vm",
+    "replay_fixture": null,
+    "replay_pace": 0.0,
+    "seed": null,
+    "budget": null,
+    "tool_latency_ms": null,
+    "label": ""
+  },
+  "incident": {
+    "incident_id": "inc-dcb327afa2",
+    "scenario_id": "sregym-misconfig-app-hotel-res",
+    "service": "geo",
+    "affected_services": [
+      "geo"
+    ],
+    "symptoms": [
+      "geo: 0 of 1 replicas ready (readiness failing)",
+      "geo: a container is in CrashLoopBackOff (crash loop)"
+    ],
+    "created_at": "2026-11-07T05:44:36.886329Z",
+    "environment": "sregym",
+    "metadata": {
+      "source": "recap-kind-probe",
+      "namespace": "hotel-reservation"
+    },
+    "budget": {
+      "max_steps": 30,
+      "max_tool_calls": 30,
+      "max_elapsed_seconds": 3600.0,
+      "max_estimated_tokens": 120000,
+      "max_parallel_agents": 2,
+      "max_model_tokens": 200000
+    }
+  },
+  "state": "RESOLVED",
+  "history": [
+    {
+      "state": "CREATED",
+      "at": "2026-11-07T05:44:36.891620Z",
+      "reason": "incident created"
+    },
+    {
+      "state": "RETRIEVING",
+      "at": "2026-11-07T05:44:37.421269Z",
+      "reason": "gather runbooks and past experience"
+    },
+    {
+      "state": "INVESTIGATING",
+      "at": "2026-11-07T05:44:37.422335Z",
+      "reason": "investigate with read-only tools"
+    },
+    {
+      "state": "PROPOSING",
+      "at": "2026-11-07T05:53:10.530223Z",
+      "reason": "diagnosis: The geo service is experiencing a crash loop due to a recent deployment."
+    },
+    {
+      "state": "AWAITING_APPROVAL",
+      "at": "2026-11-07T05:56:52.677061Z",
+      "reason": "approval required for execute_rollback"
+    },
+    {
+      "state": "MITIGATING",
+      "at": "2026-11-07T05:58:54.581347Z",
+      "reason": "execute_rollback on geo"
+    },
+    {
+      "state": "VERIFYING",
+      "at": "2026-11-07T05:59:00.206424Z",
+      "reason": "independent oracle checks recovery"
+    },
+    {
+      "state": "RESOLVED",
+      "at": "2026-11-07T06:00:07.139174Z",
+      "reason": "oracle verified recovery (sregym)"
+    }
+  ],
+  "environment": {
+    "kind": "sregym",
+    "name": "SREGym on Kind cluster kind",
+    "namespace": "hotel-reservation",
+    "is_simulated": false,
+    "supported_actions": [
+      "rollback",
+      "restart"
+    ],
+    "description": "SREGym 1.1 on its own Kind cluster kind (context kind-kind), not production: 19 Deployments of a benchmark application in namespace hotel-reservation, deployed and broken by SREGym's own harness, read through typed kubectl operations with RECAP's own identities. The only writes are a rollback to a named revision and a rolling restart, each with a signed single-use capability; SREGym's own oracle grades the result.",
+    "stabilization_timeout_seconds": 240.0,
+    "stabilization_poll_seconds": 5.0
+  },
+  "provider": "ollama-vm:qwen3:8b",
+  "provider_info": {
+    "name": "ollama-vm:qwen3:8b",
+    "kind": "llm",
+    "origin": "local_llm",
+    "model": "qwen3:8b",
+    "description": "The same open-weight model, served by Ollama on the owner's own AWS VM (no GPU) and reached through an SSH tunnel (infra/aws/ec2.sh tunnel). Self-hosted: no third party, no per-request charge.",
+    "mode": "tools",
+    "prompt_version": "prompts-v4.7",
+    "replay_of": null,
+    "recording": "data/recordings/20261107-054426-ollama-vm-cc678a.jsonl",
+    "red_team": false,
+    "server": {
+      "ollama_version": "0.34.4",
+      "capabilities": [
+        "completion",
+        "tools",
+        "thinking"
+      ],
+      "context_length": 40960,
+      "parameter_size": "8.2B",
+      "quantization": "Q4_K_M",
+      "weights": "sha256:a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f"
+    }
+  },
+  "strategies": [
+    {
+      "mode": "single",
+      "reason": "clear single-service incident",
+      "rule_id": "RT7-default",
+      "selected_agents": [
+        "investigator"
+      ],
+      "provider": "ollama-vm:qwen3:8b",
+      "budget": {
+        "investigator": 10
+      },
+      "signals": {
+        "services_affected": 1,
+        "symptom_categories": [
+          "availability"
+        ],
+        "memory_hits": 0,
+        "top_memory_similarity": 0.0,
+        "familiar_success": false,
+        "memory_conflict": false,
+        "prior_failed_attempts": 0,
+        "escalation": false,
+        "disagreement": false,
+        "remaining_tool_calls": 30,
+        "remaining_steps": 30,
+        "max_parallel_agents": 2
+      },
+      "round": 1
+    }
+  ],
+  "findings": [
+    {
+      "agent_role": "investigator",
+      "evidence_ids": [
+        "ev-9d7f47-001",
+        "ev-9d7f47-002",
+        "ev-9d7f47-003",
+        "ev-9d7f47-004"
+      ],
+      "doc_refs": [
+        "runbook-memory-pressure#symptoms-1",
+        "runbook-k8s-crash-loops-and-rollouts#diagnosis-crash-loop-or-image-pull-1",
+        "guide-k8s-dependency-failures#fix-the-dependency-not-the-caller-1",
+        "guide-reading-signals#readiness-and-restarts-1"
+      ],
+      "hypotheses": [
+        {
+          "claim": "The geo service is experiencing a crash loop due to a recent deployment.",
+          "mechanism": "bad_deployment",
+          "target_service": "geo",
+          "supporting_evidence_ids": [
+            "ev-9d7f47-001",
+            "ev-9d7f47-002"
+          ],
+          "contradicting_evidence_ids": [],
+          "status": "proposed",
+          "details": {
+            "version": "20260912.1"
+          },
+          "origin": "investigation",
+          "proposed_by": "investigator",
+          "confidence_note": "The CrashLoopBackOff event and readiness probe failure support this claim. Further investigation into memory pressure or dependency failures is needed."
+        }
+      ],
+      "proposed_next_steps": [
+        "Check memory pressure metrics for the geo service.",
+        "Investigate dependencies of the geo service for any failures."
+      ],
+      "outcome": "hypothesis",
+      "usage": {
+        "steps": 4,
+        "tool_calls": 4,
+        "estimated_tokens": 15345,
+        "actual_input_tokens": 15266,
+        "actual_output_tokens": 356,
+        "external_cost_usd": 0.0,
+        "is_estimate": false,
+        "unreported_calls": 0,
+        "model_requests": 4
+      },
+      "summary": "The geo service is experiencing a crash loop due to a recent deployment, which may be caused by memory pressure or a failure in its dependencies. The CrashLoopBackOff event and the readiness probe failure indicate that the service is crashing and restarting repeatedly.",
+      "error": null,
+      "started_at": "2026-11-07T05:44:37.422987Z",
+      "finished_at": "2026-11-07T05:53:10.527851Z",
+      "round": 1,
+      "partial": false
+    }
+  ],
+  "verification": {
+    "status": "supported",
+    "best": {
+      "claim": "The geo service is experiencing a crash loop due to a recent deployment.",
+      "mechanism": "bad_deployment",
+      "target_service": "geo",
+      "supporting_evidence_ids": [
+        "ev-9d7f47-001",
+        "ev-9d7f47-002"
+      ],
+      "contradicting_evidence_ids": [],
+      "status": "supported",
+      "details": {
+        "version": "20260912.1"
+      },
+      "origin": "investigation",
+      "proposed_by": "investigator",
+      "confidence_note": "The CrashLoopBackOff event and readiness probe failure support this claim. Further investigation into memory pressure or dependency failures is needed."
+    },
+    "checks": [
+      {
+        "hypothesis": {
+          "claim": "The geo service is experiencing a crash loop due to a recent deployment.",
+          "mechanism": "bad_deployment",
+          "target_service": "geo",
+          "supporting_evidence_ids": [
+            "ev-9d7f47-001",
+            "ev-9d7f47-002"
+          ],
+          "contradicting_evidence_ids": [],
+          "status": "supported",
+          "details": {
+            "version": "20260912.1"
+          },
+          "origin": "investigation",
+          "proposed_by": "investigator",
+          "confidence_note": "The CrashLoopBackOff event and readiness probe failure support this claim. Further investigation into memory pressure or dependency failures is needed."
+        },
+        "passed": [
+          "every cited evidence ID exists in this run (2 checked)",
+          "deployment evidence shows geo 20260912.1 deployed 37 min before the alert",
+          "geo's pods first report CrashLoopBackOff 37 min before the alert",
+          "errors on geo began 0 min after 20260912.1 was deployed (allowed window -5..+30 min)",
+          "0 of 1 ERROR lines of geo blame a dependency (under 50%)",
+          "the claim cites 2 of the 3 evidence items its rules relied on"
+        ],
+        "failed": [],
+        "rule_ids": [
+          "V1-structural",
+          "V2-deploy-timing",
+          "V2-upstream-dominance",
+          "V1-grounding"
+        ],
+        "proposers": [
+          "investigator"
+        ],
+        "basis_evidence_ids": [
+          "ev-9d7f47-003",
+          "ev-9d7f47-001",
+          "ev-9d7f47-002"
+        ],
+        "detail": "20260912.1"
+      }
+    ],
+    "unknown_evidence_ids": [],
+    "merged_evidence_ids": [
+      "ev-9d7f47-001",
+      "ev-9d7f47-002",
+      "ev-9d7f47-003",
+      "ev-9d7f47-004"
+    ],
+    "focus_services": [],
+    "summary": "Best supported root cause: bad deployment on geo (1 supported).",
+    "disagreements": [],
+    "leads": []
+  },
+  "retrieved_docs": [
+    {
+      "chunk": {
+        "chunk_id": "runbook-memory-pressure#symptoms-1",
+        "doc_path": "fixtures/knowledge/runbook-memory-pressure.md",
+        "title": "Runbook: memory pressure and crash loops",
+        "heading": "Symptoms",
+        "text": "- `OOMKilled` events: a container exceeded its memory limit and was killed.\n- `BackOff` events and a `CrashLoopBackOff` status while the pod keeps restarting.\n- Readiness probe failures, so fewer replicas are ready than desired.\n- The memory metric climbs toward the limit; logs show heap warnings and\n  `OutOfMemoryError` lines.\n- The error rate rises because the remaining replicas take all the traffic.",
+        "checksum": "e8dd49ce9fda",
+        "provenance": {
+          "source": "fixtures/knowledge",
+          "kind": "synthetic runbook authored for RECAP V1",
+          "license": "MIT (this repository)"
+        },
+        "token_estimate": 102
+      },
+      "score": 9.726066407084307,
+      "rank": 1,
+      "retriever": "bm25",
+      "reranker": "lexical-heading-boost",
+      "signals": {
+        "bm25_rank": 1.0,
+        "bm25": 9.4632
+      }
+    },
+    {
+      "chunk": {
+        "chunk_id": "runbook-k8s-crash-loops-and-rollouts#diagnosis-crash-loop-or-image-pull-1",
+        "doc_path": "fixtures/knowledge-overlays/kubernetes/runbook-k8s-crash-loops-and-rollouts.md",
+        "title": "Runbook: Kubernetes rollouts that stall and pods that crash loop",
+        "heading": "Diagnosis: crash loop or image pull",
+        "text": "1. Call `get_k8s_like_events` for the service. `CrashLoopBackOff` means the code starts and\n   exits; `BackOff` after an `OOMKilled` termination means memory (see the readiness and\n   memory runbook); `ImagePullBackOff` means the image itself.\n2. For a crash loop, read `get_service_logs`: the last lines before each exit name the\n   error. An exception tagged with a release, such as `[build <release>]` or\n   `(version=<release>)`, points at the code of that release.\n3. For an image-pull back-off the logs are empty. Compare the newest revision with the one\n   before it in `get_recent_deployments`.\n4. Compare times with `get_recent_deployments` and the `error_rate` metric. A crash loop\n   that begins within minutes of the service's own release makes that release a suspect. A\n   crash loop on a service that was not released points elsewhere: memory, configuration, or\n   a dependency it needs at start-up.",
+        "checksum": "140aaf4db2f6",
+        "provenance": {
+          "source": "fixtures/knowledge-overlays/kubernetes",
+          "kind": "synthetic runbook authored for RECAP V1",
+          "license": "MIT (this repository)"
+        },
+        "token_estimate": 229
+      },
+      "score": 9.296998202447192,
+      "rank": 2,
+      "retriever": "bm25",
+      "reranker": "lexical-heading-boost",
+      "signals": {
+        "bm25_rank": 3.0,
+        "bm25": 8.8077
+      }
+    },
+    {
+      "chunk": {
+        "chunk_id": "guide-k8s-dependency-failures#fix-the-dependency-not-the-caller-1",
+        "doc_path": "fixtures/knowledge-overlays/kubernetes/guide-k8s-dependency-failures.md",
+        "title": "Guide: Kubernetes failures that come from a dependency",
+        "heading": "Fix the dependency, not the caller",
+        "text": "Rolling back or restarting a caller whose only problem is a failing dependency changes\nnothing, and it adds a second change to an incident that is already confusing. RECAP calls\nthis a dependency failure and never acts on it directly. Once the deepest failing service is\nknown, diagnose it with the matching runbook (a stalled rollout, a crash loop, readiness or\nmemory pressure) and fix that service.",
+        "checksum": "66d3615895a7",
+        "provenance": {
+          "source": "fixtures/knowledge-overlays/kubernetes",
+          "kind": "synthetic runbook authored for RECAP V1",
+          "license": "MIT (this repository)"
+        },
+        "token_estimate": 101
+      },
+      "score": 8.939790529964746,
+      "rank": 3,
+      "retriever": "bm25",
+      "reranker": "lexical-heading-boost",
+      "signals": {
+        "bm25_rank": 2.0,
+        "bm25": 8.9398
+      }
+    },
+    {
+      "chunk": {
+        "chunk_id": "guide-reading-signals#readiness-and-restarts-1",
+        "doc_path": "fixtures/knowledge/guide-reading-signals.md",
+        "title": "Guide: reading health signals",
+        "heading": "Readiness and restarts",
+        "text": "Ready replicas show how many pods may receive traffic. A rising restart count together\nwith failing readiness probes means pods are crashing and coming back, often because they\nrun out of memory.",
+        "checksum": "486855642ce8",
+        "provenance": {
+          "source": "fixtures/knowledge",
+          "kind": "synthetic runbook authored for RECAP V1",
+          "license": "MIT (this repository)"
+        },
+        "token_estimate": 49
+      },
+      "score": 8.825024926027153,
+      "rank": 4,
+      "retriever": "bm25",
+      "reranker": "lexical-heading-boost",
+      "signals": {
+        "bm25_rank": 4.0,
+        "bm25": 8.5865
+      }
+    },
+    {
+      "chunk": {
+        "chunk_id": "runbook-bad-deployment#remediation-1",
+        "doc_path": "fixtures/knowledge/runbook-bad-deployment.md",
+        "title": "Runbook: bad deployment",
+        "heading": "Remediation",
+        "text": "Mechanism: bad_deployment\nRecommended action: execute_rollback\n\nUse the propose_rollback dry run first. It reports the current version and the last\nhealthy revision a rollback would restore, without changing anything. Roll back to that\nrevision only after a human approves the exact action: this incident, this service and\nthis target version.",
+        "checksum": "092b2a6f0fd0",
+        "provenance": {
+          "source": "fixtures/knowledge",
+          "kind": "synthetic runbook authored for RECAP V1",
+          "license": "MIT (this repository)"
+        },
+        "token_estimate": 86
+      },
+      "score": 14.833340057244891,
+      "rank": 1,
+      "retriever": "bm25",
+      "reranker": "lexical-heading-boost",
+      "signals": {
+        "bm25_rank": 1.0,
+        "bm25": 12.7143
+      }
+    },
+    {
+      "chunk": {
+        "chunk_id": "runbook-memory-pressure#remediation-1",
+        "doc_path": "fixtures/knowledge/runbook-memory-pressure.md",
+        "title": "Runbook: memory pressure and crash loops",
+        "heading": "Remediation",
+        "text": "Mechanism: resource_pressure\nRecommended action: restart_service\n\nA rolling restart replaces pods one at a time, so the service keeps serving traffic. It\nis reversible and safe when the service has at least two replicas, and it still needs an\napproval bound to the exact service and incident. A restart does NOT fix a bad release:\nthe new pods run the same broken code and fail again.",
+        "checksum": "e8dd49ce9fda",
+        "provenance": {
+          "source": "fixtures/knowledge",
+          "kind": "synthetic runbook authored for RECAP V1",
+          "license": "MIT (this repository)"
+        },
+        "token_estimate": 96
+      },
+      "score": 10.60123015434005,
+      "rank": 2,
+      "retriever": "bm25",
+      "reranker": "lexical-heading-boost",
+      "signals": {
+        "bm25_rank": 2.0,
+        "bm25": 9.7858
+      }
+    }
+  ],
+  "retrieval": {
+    "mode": "bm25",
+    "embedder": null,
+    "server": null,
+    "embedding_requests": 0,
+    "embedding_input_tokens": null,
+    "replayed_requests": 0,
+    "agent_searches": 0
+  },
+  "memory_hits": [],
+  "proposals": [
+    {
+      "action": "execute_rollback",
+      "target": "geo",
+      "params": {
+        "to_version": "sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a"
+      },
+      "rationale": "The verified root cause is a bad deployment of the geo service, which is causing a crash loop. The evidence shows that the deployment version 20260912.1 introduced the issue, and the service is in a CrashLoopBackOff state. The recommended action for a bad deployment is to execute a rollback to a previous version. The rollback should be done to the last healthy revision, which can be determined by the get_k8s_like_events and get_recent_deployments evidence.",
+      "evidence_ids": [
+        "ev-9d7f47-001",
+        "ev-9d7f47-002",
+        "ev-9d7f47-003"
+      ],
+      "expected_health_change": "The rollback should resolve the crash loop by reverting to a previous version of the service that was functioning correctly, thereby restoring the readiness of the replicas and stopping the CrashLoopBackOff state.",
+      "rollback_hint": "The rollback should be executed to the last healthy revision, which is the version before the deployment that introduced the issue.",
+      "risk_level": "reversible_write",
+      "hypothesis_claim": "The geo service is experiencing a crash loop due to a recent deployment.",
+      "source": "llm",
+      "citations": [
+        "runbook-bad-deployment#remediation-1",
+        "runbook-k8s-crash-loops-and-rollouts#diagnosis-crash-loop-or-image-pull-1",
+        "runbook-memory-pressure#symptoms-1",
+        "runbook-memory-pressure#remediation-1"
+      ],
+      "proposal_id": "prop-4e9e45f1e0",
+      "incident_id": "inc-dcb327afa2",
+      "created_at": "2026-11-07T05:56:52.671186Z"
+    }
+  ],
+  "safety_decisions": [
+    {
+      "verdict": "APPROVAL_REQUIRED",
+      "reasons": [
+        "reversible write: needs a human approval bound to this exact proposal"
+      ],
+      "rule_ids": [
+        "R1-tool-name-format",
+        "R2-known-tool",
+        "R3-safety-scope",
+        "R4-args-valid",
+        "R5-namespace-allowlist",
+        "R6-service-allowlist",
+        "R7-worker-read-only",
+        "R8-read-allow",
+        "R9-destructive-deny",
+        "R10-high-risk-deny",
+        "R14-remediation-catalog",
+        "R11-reversible-approval"
+      ],
+      "tool_name": "execute_rollback",
+      "risk": "reversible_write",
+      "caller": "controller",
+      "policy_version": "policy-sregym-hotel-v2",
+      "decided_at": "2026-11-07T05:56:52.673253Z"
+    }
+  ],
+  "pending_approval": null,
+  "approvals": [
+    {
+      "approval_id": "apr-21dae2eb3e",
+      "incident_id": "inc-dcb327afa2",
+      "proposal_id": "prop-4e9e45f1e0",
+      "proposal_digest": "189dbaf6b0192262c847432b491548632bcb8b99889a2099a17c8438f2361b86",
+      "scope": "single_action",
+      "decision": "approved",
+      "actor": "console-user",
+      "decided_at": "2026-11-07T05:58:54.573580Z",
+      "expires_at": "2026-11-07T06:11:52.678139Z",
+      "consumed_at": "2026-11-07T05:58:58.321360Z"
+    }
+  ],
+  "actions": [
+    {
+      "action": "execute_rollback",
+      "target": "geo",
+      "params": {
+        "to_version": "sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a"
+      },
+      "result": "recovered",
+      "at": "2026-11-07T06:00:07.139105Z",
+      "note": ""
+    }
+  ],
+  "recovery": {
+    "healthy_before": false,
+    "healthy_after": true,
+    "observed_signals": {
+      "before": {
+        "frontend": {
+          "service": "frontend",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "search": {
+          "service": "search",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "geo": {
+          "service": "geo",
+          "status": "CrashLoopBackOff",
+          "ready_replicas": 0,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "rate": {
+          "service": "rate",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "profile": {
+          "service": "profile",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "recommendation": {
+          "service": "recommendation",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "reservation": {
+          "service": "reservation",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "user": {
+          "service": "user",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "mongodb-geo": {
+          "service": "mongodb-geo",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "mongodb-rate": {
+          "service": "mongodb-rate",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "mongodb-profile": {
+          "service": "mongodb-profile",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "mongodb-recommendation": {
+          "service": "mongodb-recommendation",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "mongodb-reservation": {
+          "service": "mongodb-reservation",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "mongodb-user": {
+          "service": "mongodb-user",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "memcached-rate": {
+          "service": "memcached-rate",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "memcached-profile": {
+          "service": "memcached-profile",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "memcached-reserve": {
+          "service": "memcached-reserve",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "consul": {
+          "service": "consul",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "jaeger": {
+          "service": "jaeger",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        }
+      },
+      "after": {
+        "frontend": {
+          "service": "frontend",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "search": {
+          "service": "search",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "geo": {
+          "service": "geo",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "rate": {
+          "service": "rate",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "profile": {
+          "service": "profile",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "recommendation": {
+          "service": "recommendation",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "reservation": {
+          "service": "reservation",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "user": {
+          "service": "user",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "mongodb-geo": {
+          "service": "mongodb-geo",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "mongodb-rate": {
+          "service": "mongodb-rate",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "mongodb-profile": {
+          "service": "mongodb-profile",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "mongodb-recommendation": {
+          "service": "mongodb-recommendation",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "mongodb-reservation": {
+          "service": "mongodb-reservation",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "mongodb-user": {
+          "service": "mongodb-user",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "memcached-rate": {
+          "service": "memcached-rate",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "memcached-profile": {
+          "service": "memcached-profile",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "memcached-reserve": {
+          "service": "memcached-reserve",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "consul": {
+          "service": "consul",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        },
+        "jaeger": {
+          "service": "jaeger",
+          "status": "Running",
+          "ready_replicas": 1,
+          "replicas": 1,
+          "error_rate": null
+        }
+      }
+    },
+    "oracle_name": "sregym-health-oracle",
+    "verified": true,
+    "checked_at": "2026-11-07T06:00:07.137485Z",
+    "services_checked": [
+      "frontend",
+      "search",
+      "geo",
+      "rate",
+      "profile",
+      "recommendation",
+      "reservation",
+      "user",
+      "mongodb-geo",
+      "mongodb-rate",
+      "mongodb-profile",
+      "mongodb-recommendation",
+      "mongodb-reservation",
+      "mongodb-user",
+      "memcached-rate",
+      "memcached-profile",
+      "memcached-reserve",
+      "consul",
+      "jaeger"
+    ]
+  },
+  "episode_id": "ep-9da7f7f0ef",
+  "usage": {
+    "steps": 5,
+    "tool_calls": 5,
+    "estimated_tokens": 4960,
+    "actual_input_tokens": 18437,
+    "actual_output_tokens": 736,
+    "external_cost_usd": 0.0,
+    "is_estimate": false,
+    "unreported_calls": 0,
+    "model_requests": 5
+  },
+  "outcome_note": "oracle verified recovery (sregym)",
+  "error": null,
+  "versions": {
+    "recap": "0.5.0",
+    "schema": "recap.v1",
+    "prompt_version": "prompts-v4.7",
+    "config_hash": "b73d12f6840d561a",
+    "fixture_hash": "fa169bb935f82124",
+    "code_version": "1ceeb329ba37",
+    "policy_version": "policy-sregym-hotel-v2",
+    "router": "rules-router-v1",
+    "verifier": "evidence-rule-verifier-v1",
+    "provider": "ollama-vm:qwen3:8b",
+    "provider_origin": "local_llm",
+    "recording": "data/recordings/20261107-054426-ollama-vm-cc678a.jsonl",
+    "environment": "sregym",
+    "seed": 0,
+    "knowledge_overlays": [
+      "fixtures/knowledge-overlays/kubernetes"
+    ],
+    "transport": "mcp-stdio"
+  },
+  "created_at": "2026-11-07T05:44:36.891688Z",
+  "updated_at": "2026-11-07T06:00:07.275301Z"
+}
