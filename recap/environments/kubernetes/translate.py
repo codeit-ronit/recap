@@ -278,6 +278,28 @@ def crash_looping(pods: Iterable[Mapping[str, Any]]) -> bool:
     return "CrashLoopBackOff" in _waiting_reasons(pods)
 
 
+CRASH_BACKOFF_CAP_SECONDS = 300  # the kubelet's longest wait between a crashed container's starts
+
+
+def recently_crashed(
+    pods: Iterable[Mapping[str, Any]], now: datetime, window: float = CRASH_BACKOFF_CAP_SECONDS
+) -> bool:
+    """Was a container restarted after an error exit less than `window` seconds ago? A crash
+    loop between two crashes: running for a moment, and not "CrashLoopBackOff" right then.
+    An out-of-memory kill is left to the memory signals."""
+    for pod in pods:
+        for status in container_statuses(pod):
+            terminated = _dict(_dict(status.get("lastState")).get("terminated"))
+            if _int(status.get("restartCount")) < 1 or _int(terminated.get("exitCode")) == 0:
+                continue
+            if terminated.get("reason") == "OOMKilled":
+                continue
+            exited = parse_time(terminated.get("finishedAt"))
+            if exited is not None and (now - exited).total_seconds() < window:
+                return True
+    return False
+
+
 def image_pull_failing(pods: Iterable[Mapping[str, Any]]) -> bool:
     return any(reason in IMAGE_PULL_REASONS for reason in _waiting_reasons(pods))
 
@@ -319,13 +341,17 @@ def settled(
 
 
 def agent_status(
-    deployment: Mapping[str, Any] | None, pods: list[dict[str, Any]], stuck: bool
+    deployment: Mapping[str, Any] | None,
+    pods: list[dict[str, Any]],
+    stuck: bool,
+    now: datetime | None = None,
 ) -> ServiceStatus:
-    """What a dashboard would show: CrashLoopBackOff, Running if pods run, otherwise Unknown
-    (pending pods, image-pull failures, a stuck rollout), Deleted if the Deployment is gone."""
+    """What a dashboard would show: CrashLoopBackOff (also between two crashes, given `now`),
+    Running if pods run, otherwise Unknown (pending pods, image-pull failures, a stuck
+    rollout), Deleted if the Deployment is gone."""
     if deployment is None:
         return "Deleted"
-    if crash_looping(pods):
+    if crash_looping(pods) or (now is not None and recently_crashed(pods, now)):
         return "CrashLoopBackOff"
     if stuck or image_pull_failing(pods):
         return "Unknown"

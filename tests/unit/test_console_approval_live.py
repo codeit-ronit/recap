@@ -21,6 +21,8 @@ import io
 import re
 import sqlite3
 import sys
+import threading
+import time
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -229,10 +231,39 @@ async def test_an_expired_request_is_not_asked_again(
     late = request.expires_at + timedelta(seconds=1)
     monkeypatch.setattr(approvals, "utcnow", lambda: late)
 
-    with pytest.raises(ApprovalError, match="expired"):
-        await decide_at_console(store, "", "api", request=request)  # "api" is never read
+    console = await decide_at_console(store, "", "api", request=request)
 
+    assert console.prompts == []  # nothing is read: no answer can count any more
+    assert any("No answer before the request expired" in line for line in console.printed)
     assert store.get_request("prop-1").status == ApprovalStatus.EXPIRED
+
+
+async def test_a_prompt_nobody_answers_gives_up_when_the_request_expires(
+    store: ApprovalStore,
+) -> None:
+    """Seen in M5 (run-6ffe22367d): nobody answered, and the run waited at the prompt four
+    hours past the request's expiry, until someone came back. The prompt now gives up at the
+    expiry and records nothing; the store expires the request, and a late line is ignored."""
+    request = store.create_request(make_proposal(), run_id="run-1", ttl_seconds=1)
+    printed: list[str] = []
+    released = threading.Event()
+
+    def nobody(prompt: str) -> str:
+        released.wait(10)  # nobody at the terminal (released when the test is done)
+        return "api"
+
+    channel = ConsoleApprovalChannel(
+        store, input_fn=nobody, output_fn=printed.append, environment=KIND
+    )
+    started = time.monotonic()
+    await channel.notify(request)
+    waited = time.monotonic() - started
+    released.set()  # the late answer: nothing reads it any more
+
+    assert waited < 5
+    assert any("No answer before the request expired" in line for line in printed)
+    assert store.get_request("prop-1").status == ApprovalStatus.EXPIRED
+    assert [event.kind for event in store.events("prop-1")] == ["requested", "expired"]
 
 
 async def test_spaces_around_the_name_are_not_part_of_it(store: ApprovalStore) -> None:
