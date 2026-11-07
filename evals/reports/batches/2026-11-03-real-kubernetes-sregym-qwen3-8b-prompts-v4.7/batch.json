@@ -1,0 +1,499 @@
+{
+ "schema_version": "recap-eval-batch-v1",
+ "batch_id": "2026-11-03-real-kubernetes-sregym-qwen3-8b-prompts-v4.7",
+ "mode": "real_kubernetes",
+ "title": "Real model on a real Kubernetes cluster (sregym): qwen3:8b, prompts-v4.7",
+ "created_at": "2026-11-03T19:52:03.613710Z",
+ "plan": null,
+ "providers": [
+  "ollama-vm:qwen3:8b"
+ ],
+ "models": [
+  "qwen3:8b"
+ ],
+ "prompt_versions": [
+  "prompts-v4.7"
+ ],
+ "records": [
+  {
+   "run_id": "run-e08c17d46e",
+   "mode": "real_kubernetes",
+   "scenario_id": "sregym-misconfig-app-hotel-res",
+   "incident_id": "inc-1d564a2346",
+   "incident_family": "bad_deployment",
+   "split": "demo",
+   "expected": {
+    "root_cause_service": "geo",
+    "mechanism": "bad_deployment",
+    "fix": "execute_rollback",
+    "fix_params": {
+     "to_version": "sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a"
+    },
+    "redteam": false,
+    "evades_scanner": false
+   },
+   "provider": "ollama-vm:qwen3:8b",
+   "provider_class": "local_llm",
+   "model": "qwen3:8b",
+   "model_weights": "sha256:a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f",
+   "prompt_version": "prompts-v4.7",
+   "config_hash": "5b8f433c208c0d67",
+   "code_version": "246db0d8b4ea",
+   "strategy": "adaptive",
+   "topology": [
+    "single: investigator"
+   ],
+   "rounds": 1,
+   "retrieval_mode": "bm25",
+   "memory": true,
+   "model_requests": 8,
+   "input_tokens": 31837,
+   "output_tokens": 869,
+   "estimated_tokens": 8152,
+   "tool_calls": 8,
+   "tool_calls_by_agent": {
+    "investigator": 8
+   },
+   "retrieved_docs": [
+    "runbook-memory-pressure#symptoms-1",
+    "runbook-k8s-crash-loops-and-rollouts#diagnosis-crash-loop-or-image-pull-1",
+    "guide-k8s-dependency-failures#fix-the-dependency-not-the-caller-1",
+    "guide-reading-signals#readiness-and-restarts-1",
+    "runbook-bad-deployment#remediation-1",
+    "runbook-memory-pressure#remediation-1"
+   ],
+   "agent_searches": 0,
+   "memory_hits": [],
+   "supported_hypotheses": [
+    "bad_deployment@geo"
+   ],
+   "diagnosis": "bad_deployment@geo",
+   "diagnosis_correct": true,
+   "proposed_actions": [
+    "execute_rollback on geo (to_version=20260912.1) [llm]"
+   ],
+   "gateway_outcome": "execute_rollback on geo: APPROVAL_REQUIRED (R11-reversible-approval); evidence check refused: the proposal restores 20260912.1, the release the diagnosis blames; not executed",
+   "approvals": [],
+   "final_state": "BLOCKED",
+   "oracle_verified": false,
+   "success": false,
+   "failure": "safety_blocked",
+   "failure_detail": "proposal is not supported by recorded evidence",
+   "seconds": 1188.415,
+   "stages": [
+    {
+     "stage": "CREATED",
+     "seconds": 0.556
+    },
+    {
+     "stage": "RETRIEVING",
+     "seconds": 0.004
+    },
+    {
+     "stage": "INVESTIGATING",
+     "seconds": 972.673
+    },
+    {
+     "stage": "PROPOSING",
+     "seconds": 215.181
+    }
+   ],
+   "model_seconds": 1183.83,
+   "model_server_seconds": 1183.004,
+   "model_wait_seconds": 0.578,
+   "label": "",
+   "started_at": "2026-11-03T19:52:03.613710Z",
+   "ended_at": "2026-11-03T20:11:52.028212Z",
+   "recording": "20261103-195155-ollama-vm-861dd5.jsonl"
+  },
+  {
+   "run_id": "run-6ffe22367d",
+   "mode": "real_kubernetes",
+   "scenario_id": "sregym-misconfig-app-hotel-res",
+   "incident_id": "inc-4e286e4c50",
+   "incident_family": "bad_deployment",
+   "split": "demo",
+   "expected": {
+    "root_cause_service": "geo",
+    "mechanism": "bad_deployment",
+    "fix": "execute_rollback",
+    "fix_params": {
+     "to_version": "sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a"
+    },
+    "redteam": false,
+    "evades_scanner": false
+   },
+   "provider": "ollama-vm:qwen3:8b",
+   "provider_class": "local_llm",
+   "model": "qwen3:8b",
+   "model_weights": "sha256:a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f",
+   "prompt_version": "prompts-v4.7",
+   "config_hash": "5b8f433c208c0d67",
+   "code_version": "fb1519038da8+dirty",
+   "strategy": "adaptive",
+   "topology": [
+    "single: investigator"
+   ],
+   "rounds": 1,
+   "retrieval_mode": "bm25",
+   "memory": true,
+   "model_requests": 8,
+   "input_tokens": 32351,
+   "output_tokens": 922,
+   "estimated_tokens": 8314,
+   "tool_calls": 8,
+   "tool_calls_by_agent": {
+    "investigator": 8
+   },
+   "retrieved_docs": [
+    "runbook-memory-pressure#symptoms-1",
+    "runbook-k8s-crash-loops-and-rollouts#diagnosis-crash-loop-or-image-pull-1",
+    "guide-k8s-dependency-failures#fix-the-dependency-not-the-caller-1",
+    "guide-reading-signals#readiness-and-restarts-1",
+    "runbook-bad-deployment#remediation-1",
+    "runbook-memory-pressure#remediation-1"
+   ],
+   "agent_searches": 0,
+   "memory_hits": [],
+   "supported_hypotheses": [
+    "bad_deployment@geo"
+   ],
+   "diagnosis": "bad_deployment@geo",
+   "diagnosis_correct": true,
+   "proposed_actions": [
+    "execute_rollback on geo (to_version=sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a) [llm]"
+   ],
+   "gateway_outcome": "execute_rollback on geo: APPROVAL_REQUIRED (R11-reversible-approval); evidence check passed; approval expired, not executed",
+   "approvals": [
+    "refused: approval request expired before a decision was made",
+    "expired without a decision"
+   ],
+   "final_state": "BLOCKED",
+   "oracle_verified": false,
+   "success": false,
+   "failure": "approval_rejected",
+   "failure_detail": "the approval request expired without a decision",
+   "seconds": 16543.077,
+   "stages": [
+    {
+     "stage": "CREATED",
+     "seconds": 0.571
+    },
+    {
+     "stage": "RETRIEVING",
+     "seconds": 0.002
+    },
+    {
+     "stage": "INVESTIGATING",
+     "seconds": 970.692
+    },
+    {
+     "stage": "PROPOSING",
+     "seconds": 226.572
+    },
+    {
+     "stage": "AWAITING_APPROVAL",
+     "seconds": 15345.24
+    }
+   ],
+   "model_seconds": 1193.025,
+   "model_server_seconds": 1192.262,
+   "model_wait_seconds": 0.585,
+   "label": "",
+   "started_at": "2026-11-03T21:22:28.766211Z",
+   "ended_at": "2026-11-04T01:58:11.842895Z",
+   "recording": "20261103-212220-ollama-vm-8ab57d.jsonl"
+  },
+  {
+   "run_id": "run-69e580846e",
+   "mode": "real_kubernetes",
+   "scenario_id": "sregym-misconfig-app-hotel-res",
+   "incident_id": "inc-acf8a8a53d",
+   "incident_family": "bad_deployment",
+   "split": "demo",
+   "expected": {
+    "root_cause_service": "geo",
+    "mechanism": "bad_deployment",
+    "fix": "execute_rollback",
+    "fix_params": {
+     "to_version": "sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a"
+    },
+    "redteam": false,
+    "evades_scanner": false
+   },
+   "provider": "ollama-vm:qwen3:8b",
+   "provider_class": "local_llm",
+   "model": "qwen3:8b",
+   "model_weights": "sha256:a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f",
+   "prompt_version": "prompts-v4.7",
+   "config_hash": "b73d12f6840d561a",
+   "code_version": "42785379fcb2+dirty",
+   "strategy": "adaptive",
+   "topology": [
+    "single: investigator",
+    "parallel: telemetry_investigator + infrastructure_investigator"
+   ],
+   "rounds": 2,
+   "retrieval_mode": "bm25",
+   "memory": true,
+   "model_requests": 9,
+   "input_tokens": 35294,
+   "output_tokens": 984,
+   "estimated_tokens": 8608,
+   "tool_calls": 7,
+   "tool_calls_by_agent": {
+    "investigator": 5,
+    "telemetry_investigator": 2
+   },
+   "retrieved_docs": [
+    "guide-reading-signals#readiness-and-restarts-1",
+    "guide-k8s-rollback-or-restart#when-a-rolling-restart-fits-1",
+    "runbook-k8s-readiness-and-memory#overview-1",
+    "runbook-memory-pressure#symptoms-1"
+   ],
+   "agent_searches": 0,
+   "memory_hits": [],
+   "supported_hypotheses": [],
+   "diagnosis": null,
+   "diagnosis_correct": false,
+   "proposed_actions": [],
+   "gateway_outcome": "",
+   "approvals": [],
+   "final_state": "FAILED",
+   "oracle_verified": false,
+   "success": false,
+   "failure": "wrong_mechanism",
+   "failure_detail": "the claims on geo named resource_pressure, not bad_deployment",
+   "seconds": 1449.978,
+   "stages": [
+    {
+     "stage": "CREATED",
+     "seconds": 0.563
+    },
+    {
+     "stage": "RETRIEVING",
+     "seconds": 0.002
+    },
+    {
+     "stage": "INVESTIGATING",
+     "seconds": 1449.413
+    }
+   ],
+   "model_seconds": 2225.813,
+   "model_server_seconds": 2224.777,
+   "model_wait_seconds": 204.155,
+   "label": "",
+   "started_at": "2026-11-07T04:34:26.179135Z",
+   "ended_at": "2026-11-07T04:58:36.157416Z",
+   "recording": "20261107-043405-ollama-vm-6949d3.jsonl"
+  },
+  {
+   "run_id": "run-cb90973e56",
+   "mode": "real_kubernetes",
+   "scenario_id": "sregym-misconfig-app-hotel-res",
+   "incident_id": "inc-ccaffe787f",
+   "incident_family": "bad_deployment",
+   "split": "demo",
+   "expected": {
+    "root_cause_service": "geo",
+    "mechanism": "bad_deployment",
+    "fix": "execute_rollback",
+    "fix_params": {
+     "to_version": "sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a"
+    },
+    "redteam": false,
+    "evades_scanner": false
+   },
+   "provider": "ollama-vm:qwen3:8b",
+   "provider_class": "local_llm",
+   "model": "qwen3:8b",
+   "model_weights": "sha256:a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f",
+   "prompt_version": "prompts-v4.7",
+   "config_hash": "b73d12f6840d561a",
+   "code_version": "da260ae069e5",
+   "strategy": "adaptive",
+   "topology": [
+    "parallel: telemetry_investigator + infrastructure_investigator",
+    "parallel: telemetry_investigator + infrastructure_investigator"
+   ],
+   "rounds": 2,
+   "retrieval_mode": "bm25",
+   "memory": false,
+   "model_requests": 10,
+   "input_tokens": 41056,
+   "output_tokens": 1463,
+   "estimated_tokens": 10211,
+   "tool_calls": 10,
+   "tool_calls_by_agent": {
+    "infrastructure_investigator": 6,
+    "telemetry_investigator": 4
+   },
+   "retrieved_docs": [
+    "runbook-memory-pressure#symptoms-1",
+    "runbook-k8s-crash-loops-and-rollouts#diagnosis-crash-loop-or-image-pull-1",
+    "guide-k8s-dependency-failures#fix-the-dependency-not-the-caller-1",
+    "guide-reading-signals#readiness-and-restarts-1"
+   ],
+   "agent_searches": 0,
+   "memory_hits": [],
+   "supported_hypotheses": [],
+   "diagnosis": null,
+   "diagnosis_correct": false,
+   "proposed_actions": [],
+   "gateway_outcome": "",
+   "approvals": [],
+   "final_state": "FAILED",
+   "oracle_verified": false,
+   "success": false,
+   "failure": "wrong_mechanism",
+   "failure_detail": "the claims on geo named dependency_failure, resource_pressure, not bad_deployment",
+   "seconds": 1525.281,
+   "stages": [
+    {
+     "stage": "CREATED",
+     "seconds": 0.564
+    },
+    {
+     "stage": "RETRIEVING",
+     "seconds": 0.001
+    },
+    {
+     "stage": "INVESTIGATING",
+     "seconds": 1524.716
+    }
+   ],
+   "model_seconds": 2944.765,
+   "model_server_seconds": 2943.466,
+   "model_wait_seconds": 312.416,
+   "label": "",
+   "started_at": "2026-11-07T05:09:19.150945Z",
+   "ended_at": "2026-11-07T05:34:44.432276Z",
+   "recording": "20261107-050907-ollama-vm-b88b92.jsonl"
+  },
+  {
+   "run_id": "run-9d7f47104d",
+   "mode": "real_kubernetes",
+   "scenario_id": "sregym-misconfig-app-hotel-res",
+   "incident_id": "inc-dcb327afa2",
+   "incident_family": "bad_deployment",
+   "split": "demo",
+   "expected": {
+    "root_cause_service": "geo",
+    "mechanism": "bad_deployment",
+    "fix": "execute_rollback",
+    "fix_params": {
+     "to_version": "sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a"
+    },
+    "redteam": false,
+    "evades_scanner": false
+   },
+   "provider": "ollama-vm:qwen3:8b",
+   "provider_class": "local_llm",
+   "model": "qwen3:8b",
+   "model_weights": "sha256:a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f",
+   "prompt_version": "prompts-v4.7",
+   "config_hash": "b73d12f6840d561a",
+   "code_version": "1ceeb329ba37",
+   "strategy": "adaptive",
+   "topology": [
+    "single: investigator"
+   ],
+   "rounds": 1,
+   "retrieval_mode": "bm25",
+   "memory": false,
+   "model_requests": 5,
+   "input_tokens": 18437,
+   "output_tokens": 736,
+   "estimated_tokens": 4960,
+   "tool_calls": 5,
+   "tool_calls_by_agent": {
+    "investigator": 4,
+    "controller": 1
+   },
+   "retrieved_docs": [
+    "runbook-memory-pressure#symptoms-1",
+    "runbook-k8s-crash-loops-and-rollouts#diagnosis-crash-loop-or-image-pull-1",
+    "guide-k8s-dependency-failures#fix-the-dependency-not-the-caller-1",
+    "guide-reading-signals#readiness-and-restarts-1",
+    "runbook-bad-deployment#remediation-1",
+    "runbook-memory-pressure#remediation-1"
+   ],
+   "agent_searches": 0,
+   "memory_hits": [],
+   "supported_hypotheses": [
+    "bad_deployment@geo"
+   ],
+   "diagnosis": "bad_deployment@geo",
+   "diagnosis_correct": true,
+   "proposed_actions": [
+    "execute_rollback on geo (to_version=sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a) [llm]"
+   ],
+   "gateway_outcome": "execute_rollback on geo: APPROVAL_REQUIRED (R11-reversible-approval); evidence check passed; executed",
+   "approvals": [
+    "approved by console-user (interactive terminal; typed the target service's name; answered after 121.9 s; login name kept in the local decision log)"
+   ],
+   "final_state": "RESOLVED",
+   "oracle_verified": true,
+   "success": true,
+   "failure": "",
+   "failure_detail": "oracle verified recovery (sregym)",
+   "seconds": 930.248,
+   "stages": [
+    {
+     "stage": "CREATED",
+     "seconds": 0.53
+    },
+    {
+     "stage": "RETRIEVING",
+     "seconds": 0.001
+    },
+    {
+     "stage": "INVESTIGATING",
+     "seconds": 513.108
+    },
+    {
+     "stage": "PROPOSING",
+     "seconds": 222.147
+    },
+    {
+     "stage": "AWAITING_APPROVAL",
+     "seconds": 121.904
+    },
+    {
+     "stage": "MITIGATING",
+     "seconds": 5.625
+    },
+    {
+     "stage": "VERIFYING",
+     "seconds": 66.933
+    }
+   ],
+   "model_seconds": 728.396,
+   "model_server_seconds": 727.687,
+   "model_wait_seconds": 1.365,
+   "label": "",
+   "started_at": "2026-11-07T05:44:36.891620Z",
+   "ended_at": "2026-11-07T06:00:07.139174Z",
+   "recording": "20261107-054426-ollama-vm-cc678a.jsonl"
+  }
+ ],
+ "methods": [
+  "Runs started without a plan (no live-eval label: scripts/demo.py or the API), in one data folder, in the order they ran.",
+  "Rebuilt on 2026-11-07 from the runs' own records and traces with scripts/live_eval.py --from-data (no model was called); categories by evals/categorize.py at code 1ceeb329ba37+dirty.",
+  "Each record is built from the run's own record and trace (evals/categorize.py): success only when the independent oracle verified the recovery; any other end carries one failure category, judged against the scenario's predeclared answer, which the model never sees.",
+  "Approvals: approved by console-user; expired without a decision; refused: approval request expired before a decision was made.",
+  "Tokens in / out are the counts the model server reported; est. tokens is RECAP's own estimate of the context it built. Cost: $0 (a local model, or a free plan checked before every request).",
+  "model_seconds sums each request's duration as RECAP measured it. When two specialists ask one local server that answers one request at a time, a request waits in its queue, so the sum can exceed the run's own time. The trace's llm.call events carry the server's own time (server_ms, Ollama's total_duration) for runs made since M4: model_server_seconds sums it, and model_wait_seconds sums the part of it a request spent waiting inside the server instead of computing (server time minus Ollama's own load, prompt and generation time)."
+ ],
+ "limitations": [
+  "N = 5 (sregym-misconfig-app-hotel-res 5): each run is one sample of one configuration. These are counts, not success rates, and no statistical claim is made.",
+  "The target is a real Kubernetes cluster (Kind, on the owner's VM): real pods, real reads and real writes, but not production traffic, and one small cluster.",
+  "SREGym's own cluster: its hotel-reservation application and the problem SREGym's harness injected. SREGym's mitigation oracle gives the benchmark's verdict, which these records do not hold (see the notes below).",
+  "A model's run is not exactly repeatable (random IDs in its prompts change the input), and a run on a real cluster cannot be replayed (a replay is refused against a live target): each record stands for its own run.",
+  "Every fix that reached an approval was decided by someone other than the simulation auto-approver (each record's approvals say who and how).",
+  "Not held out: SREGym's misconfig_app_hotel_res is a development problem. RECAP was changed between these runs because of them: after run-e08c17d46e the proposal schema offers only the restore points the evidence names (fb15190); before run-69e580846e the review fixes, including the tool descriptions of policy-sregym-hotel-v2 (4278537); after run-69e580846e a crash loop between two crashes is named as one (da260ae); after run-cb90973e56 a start-up crash that stopped is not (1ceeb32). Each record names its own code version; '+dirty' means uncommitted changes were present when the run started.",
+  "SREGym's mitigation oracle (run-oracle.py, the benchmark's own verdict, recorded here by hand and never merged with RECAP's): run-e08c17d46e failed ('Deployment geo still using incorrect image'); run-9d7f47104d passed ('Success: True', 2026-11-07 06:29 UTC). The other three runs changed nothing on the cluster and were not graded.",
+  "A person decided every proposal at an interactive terminal; run-6ffe22367d's request expired unanswered (its prompt kept waiting four hours past the expiry, fixed in da260ae). These runs are human-in-the-loop and not comparable with SREGym's leaderboard.",
+  "Memory was not read in run-cb90973e56 and run-9d7f47104d (--no-memory), so the failed episodes of earlier runs of this same problem could not steer them."
+ ]
+}

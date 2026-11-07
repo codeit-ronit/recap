@@ -100,3 +100,51 @@ simulated), and the export lists text that read like an instruction.
 **W4 done:** a real model's investigation and recovery on the real cluster with a fresh
 approval (twice), blocked and failed runs that changed nothing, a dependency investigation
 (frontend's errors traced to backend) and a run with malicious diagnostic content.
+
+## W5: RECAP on a genuine SREGym problem (2026-11-03 to 2026-11-07)
+
+**What was built:** the SREGym adapter, RECAP's Kubernetes adapter in external-harness mode
+([ADR 0031](decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md)).
+SREGym 1.1 (commit `a90b43cc`, applications `afd5b947`) deploys its hotel-reservation app on
+its own four-node Kind cluster and injects the problem; RECAP's reset changes nothing. A
+release is an image tag, only a key into a Deployment's own history. There is no probe or
+metric, so health is rollout, readiness and containers that stay up, and V2 dates a bad
+release's onset from its own pods' failure events. On the VM: `infra/sregym/sregym.sh`
+(pinned tools, the cluster, RECAP's three identities, SREGym's grader). In the repository: the
+profile `configs/targets/sregym-hotel/` and the scenario `fixtures/sregym-scenarios/`.
+
+**Verified on SREGym's cluster** (problem `misconfig_app_hotel_res`, `qwen3:8b` on the VM,
+prompts-v4.7, the owner deciding at the terminal):
+
+| Run | Code | Result | What happened |
+|---|---|---|---|
+| `run-e08c17d46e` | `246db0d` | BLOCKED; SREGym: fail | the right diagnosis (geo's release `20260912.1`), but the model proposed rolling geo back to that same release and VP4 refused it. Since `fb15190` the proposal schema offers only the restore points the evidence names |
+| `run-6ffe22367d` | `fb15190` | BLOCKED, expired | the right diagnosis and proposal; nobody approved within 15 minutes, and the console prompt kept waiting four hours past the expiry (fixed in `da260ae`: it gives up at the expiry) |
+| `run-69e580846e` | `4278537` | FAILED, safely | the alert was measured while geo was briefly up between two crashes, so it said only "readiness failing"; retrieval found readiness and memory guides, and the model claimed memory pressure, which nothing on this target can support. Since `da260ae` a crash loop between two crashes is named as one |
+| `run-cb90973e56` | `da260ae` | FAILED, safely | `da260ae`'s five-minute rule also counted search's start-up crashes after SREGym's redeploy: two affected services, and a cross-service investigation that chased dependencies. Since `1ceeb32` only a container not yet up a minute after an error exit counts |
+| `run-9d7f47104d` | `1ceeb32` | **RESOLVED; SREGym: pass** | one investigator, 5 model requests (18,437 in / 736 out tokens); the verifier supported a bad deployment of geo `20260912.1`; the model proposed rolling geo back to `sha-d2c036bc…`; the owner typed `geo` 121.9 s after the prompt; the writer restored that revision's image, digest included (generation 2 to 3); RECAP's oracle verified the recovery once the new container had run a minute; SREGym's `run-oracle.py` then said "Success: True", with geo's pod 30 minutes up without a restart |
+
+Before runs 3 to 5 a read-only rehearsal (every read, the rollback dry run and the oracle,
+no model and no write) checked the target on the live cluster.
+
+**Fixed along the way:** the review of W5 (18 findings, `4278537`): RECAP's oracle no longer
+calls a crash loop healthy during a brief start, a release records its restart ReplicaSets,
+log reads keep repeated lines, restore points must look like image tags, the problem is
+labelled a development problem (not held out), `ec2.sh hold` keeps the VM in use for a run
+(2 hours at most), one cluster runs at a time, and the docs no longer call SREGym a stub.
+
+**Published:** `run-9d7f47104d` in `evals/live/2026-11-07-qwen3-8b-sregym-human-approved-prompts-v4.7/`
+(SREGym's grader output is quoted in `evals/live/README.md`), and all five runs as the batch
+`evals/reports/batches/2026-11-03-real-kubernetes-sregym-qwen3-8b-prompts-v4.7/`: 1 success,
+1 safety-blocked, 1 expired approval, 2 wrong mechanism. SREGym's cluster was deleted after
+grading and the VM stopped.
+
+**Limits:** one problem and five runs, not held out (RECAP was fixed on it between runs), each
+fix approved by a person: no benchmark score and nothing comparable with SREGym's
+leaderboard. No held-out SREGym problem was run.
+
+**W5 done:** a version-pinned SREGym integration, a reproducible invocation
+(`infra/sregym/README.md`), honest artifacts for every run, and one genuine end-to-end recovery
+that SREGym's own grader passed.
+
+**Next:** W6, Mission Control, reliability, documentation and the release candidate.

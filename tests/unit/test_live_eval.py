@@ -426,13 +426,14 @@ async def test_runs_on_a_real_cluster_make_a_real_kubernetes_batch(
     batch = load_batch(Path(out) / "batch.json")
     assert batch.mode == "real_kubernetes"
     assert [r.run_id for r in batch.records] == [first.run_id, second.run_id]
-    assert batch.batch_id == (
-        f"{batch.created_at:%Y-%m-%d}-real-kubernetes-qwen3-8b-{PROMPT_VERSION}"
+    assert batch.batch_id == (  # the cluster in the id: a SREGym batch of the same day differs
+        f"{batch.created_at:%Y-%m-%d}-real-kubernetes-kind-qwen3-8b-{PROMPT_VERSION}"
     )
     assert batch.title.startswith("Real model on a real Kubernetes cluster (kind): qwen3:8b")
     assert batch.records[0].expected["fix_params"] == {"to_version": "v1.0.0"}  # Kind's answer
     assert note in batch.limitations
-    assert any("real Kubernetes cluster (Kind)" in line for line in batch.limitations)
+    assert any("real Kubernetes cluster (Kind" in line for line in batch.limitations)
+    assert any(line.startswith("The Kind demo: two demo services") for line in batch.limitations)
     assert not any("SIMULATED shop" in line for line in batch.limitations)
     assert any("cannot be replayed" in line for line in batch.limitations)  # refused when live
 
