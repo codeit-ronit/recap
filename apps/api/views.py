@@ -386,11 +386,18 @@ def origin_labels(origin: str | None, *, committed_fixture: bool = False) -> lis
     }.get(origin or "", [])
 
 
+def environment_run_label(is_simulated: bool, kind: str) -> str:
+    """What a run's target was: SIMULATED ENVIRONMENT, or LIVE ENVIRONMENT (<kind>)."""
+    return "SIMULATED ENVIRONMENT" if is_simulated else f"LIVE ENVIRONMENT ({kind})"
+
+
 def run_labels(record: RunRecord, replay: ReplayProvenance | None) -> list[str]:
     """Labels a screen must show with this run. Each comes from a recorded fact."""
     labels: list[str] = []
-    if record.environment is not None and record.environment.is_simulated:
-        labels.append("SIMULATED ENVIRONMENT")
+    if record.environment is not None:
+        labels.append(
+            environment_run_label(record.environment.is_simulated, record.environment.kind)
+        )
     origin = record.provider_info.origin if record.provider_info else None
     committed = replay is not None and replay.committed_fixture
     return labels + origin_labels(origin, committed_fixture=committed)
@@ -1729,10 +1736,17 @@ def batch_summary(batch: EvalBatch, source: BatchSource) -> BatchSummary:
             successes=sum(1 for r in records if r.success),
             by_final_state=dict(Counter(r.final_state or "not recorded" for r in records)),
             failures_by_category=dict(failures),
+            benchmark_verdicts=(
+                dict(Counter(r.benchmark_verdict or "not graded" for r in records))
+                if batch.benchmark
+                else {}
+            ),
         ),
         methods=list(batch.methods),
         limitations=list(batch.limitations),
         source=source,
+        targets=list(batch.targets),
+        benchmark=batch.benchmark,
     )
 
 

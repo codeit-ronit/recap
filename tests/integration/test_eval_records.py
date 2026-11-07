@@ -679,10 +679,31 @@ def test_a_published_batch_keeps_its_promises(path: Path) -> None:
     assert publish_problems(batch) == []
 
 
+# Fields added in M5, unset in batches written before them.
+NEW_BATCH_FIELDS = {"targets": [], "benchmark": None}
+NEW_RECORD_FIELDS = {"target": "", "benchmark_verdict": None}
+
+
+def _as_written(dumped: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:
+    """`dumped` without the M5 fields that `raw` predates and that read back unset."""
+
+    def drop(data: dict[str, Any], written: dict[str, Any], new: dict[str, Any]) -> None:
+        for key, unset in new.items():
+            if key not in written and data.get(key) == unset:
+                data.pop(key, None)
+
+    drop(dumped, raw, NEW_BATCH_FIELDS)
+    for record, written in zip(dumped.get("records", []), raw.get("records", []), strict=True):
+        drop(record, written, NEW_RECORD_FIELDS)
+    return dumped
+
+
 def test_published_batches_round_trip_unchanged() -> None:
+    """Reading a published batch loses and changes nothing (fields added since it was written
+    read back unset)."""
     for path in published():
         raw = json.loads(path.read_text(encoding="utf-8"))
-        assert json.loads(load_batch(path).model_dump_json()) == raw
+        assert _as_written(json.loads(load_batch(path).model_dump_json()), raw) == raw
 
 
 def test_a_shuffled_trace_gives_the_same_categories() -> None:

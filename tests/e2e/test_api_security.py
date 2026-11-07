@@ -19,14 +19,18 @@ from apps.api.auth import OperatorAuth, allowed_hosts_from_environment, origin_a
 from apps.api.main import create_app
 from recap.core.config import Settings
 from recap.core.models import ApprovalRequest, ApprovalStatus, MitigationProposal
+from recap.environments.kubernetes import KubernetesEnvironment
+from recap.environments.kubernetes.preflight import PreflightError
 from recap.runtime import Runtime
 from tests.helpers import OPERATOR_HEADERS
+from tests.unit.test_kind_engine import WRITE_OPS, kind_options
 
 WRITE_ENDPOINTS = [
     ("/incidents/run", {"scenario_id": "bad-deployment"}),
     ("/approvals/prop-x", {"decision": "approved", "proposal_digest": "0" * 64}),
     ("/evals/run", {}),
     ("/runs/run-x/cancel", None),
+    ("/environment/check", None),
 ]
 
 
@@ -120,6 +124,85 @@ def test_a_rejection_through_the_api_revokes_an_unused_approval(settings: Settin
 
     assert revoked.status_code == 200 and revoked.json()["decision"] == "rejected"
     assert again.status_code == 409 and "not pending" in again.json()["detail"]
+
+
+def live(runtime: Runtime, monkeypatch: pytest.MonkeyPatch) -> None:
+    """This runtime's target is a real cluster (only what the approval endpoint asks)."""
+    info = runtime.environment_info().model_copy(update={"is_simulated": False, "kind": "kind"})
+    monkeypatch.setattr(runtime, "environment_info", lambda: info)
+
+
+def test_a_live_approval_needs_the_target_services_exact_name(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """M5: on a real cluster the dashboard asks what the console asks: the target service's
+    exact name. One click, or a wrong name, decides nothing."""
+    runtime = Runtime(settings)
+    live(runtime, monkeypatch)
+    request = open_request(runtime)
+    url = f"/approvals/{request.proposal_id}"
+    digest = request.proposal_digest
+    with TestClient(create_app(runtime), headers=OPERATOR_HEADERS) as client:
+        bare = client.post(url, json={"decision": "approved", "proposal_digest": digest})
+        wrong = client.post(
+            url,
+            json={"decision": "approved", "proposal_digest": digest, "confirm_target": "check"},
+        )
+        pending = runtime.approvals.get_request(request.proposal_id).status
+        named = client.post(
+            url,
+            json={"decision": "approved", "proposal_digest": digest, "confirm_target": "checkout"},
+        )
+        log = client.get(f"{url}/events").json()
+
+    assert bare.status_code == wrong.status_code == 400
+    assert "type the target service's exact name" in bare.json()["detail"]
+    assert pending == ApprovalStatus.PENDING  # nothing was decided by either
+    assert named.status_code == 200 and named.json()["decision"] == "approved"
+    assert [e["kind"] for e in log] == ["requested", "approved"]
+    assert log[-1]["detail"].startswith("dashboard or API; typed the target service's name;")
+
+
+def test_a_live_rejection_needs_no_name(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = Runtime(settings)
+    live(runtime, monkeypatch)
+    request = open_request(runtime)
+    body = {"decision": "rejected", "proposal_digest": request.proposal_digest}
+    with TestClient(create_app(runtime), headers=OPERATOR_HEADERS) as client:
+        rejected = client.post(f"/approvals/{request.proposal_id}", json=body)
+
+    assert rejected.status_code == 200 and rejected.json()["decision"] == "rejected"
+    note = runtime.approvals.events(request.proposal_id)[-1].detail
+    assert note.startswith("dashboard or API; answered") and "typed" not in note
+
+
+def test_the_environment_check_reaches_the_target_and_changes_nothing(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """POST /environment/check: a real cluster's adapter runs its own preflight, the way a
+    reset first reaches the cluster; nothing is written and no run starts."""
+    runtime = Runtime(settings)
+    with TestClient(create_app(runtime), headers=OPERATOR_HEADERS) as client:
+        simulated = client.post("/environment/check").json()
+    assert simulated["ok"] and simulated["simulated"]
+    assert simulated["checks"][0]["name"] == "simulated environment"
+
+    kind = KubernetesEnvironment("readiness-check", **kind_options(tmp_path))
+    monkeypatch.setattr(runtime, "environment_factory", lambda config, run_id: kind)
+    with TestClient(create_app(runtime), headers=OPERATOR_HEADERS) as client:
+        reached = client.post("/environment/check").json()
+
+        async def refused() -> None:
+            raise PreflightError("the cluster's CA differs from the recorded fingerprint")
+
+        monkeypatch.setattr(kind, "preflight", refused)
+        failed = client.post("/environment/check").json()
+
+    assert reached["ok"] and not reached["simulated"] and reached["environment_kind"] == "kind"
+    assert not [c for c in kind.state.commands() if c["op"] in WRITE_OPS]  # nothing changed
+    assert not failed["ok"] and "recorded fingerprint" in failed["checks"][0]["detail"]
 
 
 def test_a_write_from_a_page_on_another_origin_is_refused(settings: Settings) -> None:

@@ -32,6 +32,7 @@ from scripts.live_eval import (
     main,
     running_in_ci,
     summarize,
+    with_benchmark_verdicts,
 )
 from tests.adversarial.test_m3_adversarial import case_insensitive
 from tests.e2e.test_runbook_search import Searcher, live_run
@@ -434,6 +435,8 @@ async def test_runs_on_a_real_cluster_make_a_real_kubernetes_batch(
     assert note in batch.limitations
     assert any("real Kubernetes cluster (Kind" in line for line in batch.limitations)
     assert any(line.startswith("The Kind demo: two demo services") for line in batch.limitations)
+    assert batch.targets == ["kind"] and {r.target for r in batch.records} == {"kind"}
+    assert batch.benchmark is None and {r.benchmark_verdict for r in batch.records} == {None}
     assert not any("SIMULATED shop" in line for line in batch.limitations)
     assert any("cannot be replayed" in line for line in batch.limitations)  # refused when live
 
@@ -447,3 +450,21 @@ def test_a_batch_says_whether_a_person_reviewed_its_fixes() -> None:
     assert "someone other than" in live_eval._review_limitation([person])
     assert "1 of the 2" in live_eval._review_limitation([auto, person])
     assert "no run tested the approval step" in live_eval._review_limitation([unasked])
+
+
+def test_a_benchmarks_own_verdicts_are_recorded_apart_from_recaps() -> None:
+    """M5: SREGym's grader gives the benchmark's verdict, recorded by hand per run; it never
+    becomes RECAP's success, and a verdict for a run the batch does not hold is refused."""
+    records = [
+        EvalRecord(run_id="run-a", mode="real_kubernetes", scenario_id="s", success=False),
+        EvalRecord(run_id="run-b", mode="real_kubernetes", scenario_id="s", success=True),
+    ]
+    graded = with_benchmark_verdicts(records, ["run-a=fail", "run-b=pass"], "the grader")
+    assert [(r.benchmark_verdict, r.success) for r in graded] == [("fail", False), ("pass", True)]
+    for verdicts, benchmark, why in [
+        (["run-a=pass"], None, "needs --benchmark"),
+        (["run-a=maybe"], "g", "RUN=pass or RUN=fail"),
+        (["run-z=pass"], "g", "no such run in this batch: run-z"),
+    ]:
+        with pytest.raises(ValueError, match=why):
+            with_benchmark_verdicts(records, verdicts, benchmark)

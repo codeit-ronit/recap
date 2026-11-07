@@ -763,6 +763,21 @@ export interface ReplaysView extends Versioned {
   how_to_launch: string;
 }
 
+export interface EnvironmentCheckItem extends ApiModel {
+  name: string;
+  ok: boolean;
+  detail: string;
+}
+
+/** POST /environment/check: can the configured target be reached right now? A real cluster runs its adapter's own preflight (pinned credentials, API server, versions, clock); nothing is changed and no run starts. */
+export interface EnvironmentCheck extends ApiModel {
+  checked_at: string;
+  environment_kind: string;
+  simulated: boolean;
+  ok: boolean;
+  checks: EnvironmentCheckItem[];
+}
+
 export interface EvalModeInfo extends ApiModel {
   mode: EvalMode;
   status: "implemented" | "planned";
@@ -775,6 +790,7 @@ export interface BatchOutcomes extends ApiModel {
   successes: number;
   by_final_state: Record<string, number>;
   failures_by_category: Record<string, number>;
+  benchmark_verdicts: Record<string, number>;
 }
 
 export interface BatchSummary extends ApiModel {
@@ -791,6 +807,8 @@ export interface BatchSummary extends ApiModel {
   methods: string[];
   limitations: string[];
   source: BatchSource;
+  targets: string[];
+  benchmark: string | null;
 }
 
 export interface EvalsView extends Versioned {
@@ -854,6 +872,8 @@ export interface EvalRecord {
   started_at: string | null;
   ended_at: string | null;
   recording: string | null;
+  target: string;
+  benchmark_verdict: "pass" | "fail" | null;
 }
 
 /** How long one stage of a run took, from its state transitions. */
