@@ -56,8 +56,9 @@ results would mean the same thing on both targets.
 6. **A person approves every write on a live target by typing the service's name.** At the
    console an Enter alone asks again, and the prompt ends at the request's expiry. Through the
    dashboard or the API, an approval without the exact name decides nothing. The decision log
-   records how and when. The simulation auto-approver, replays and hosted models are refused
-   on a live target.
+   records how and when. The simulation auto-approver and replays are refused on a live
+   target. So is a paid model, always, and a free hosted plan unless the owner sets
+   `RECAP_ALLOW_HOSTED_MODEL_ON_LIVE_TARGET=1`.
 7. **An independent oracle.** It uses its own identity and is never an MCP tool. It checks
    that the rollout is complete and the replicas ready, and it runs its own HTTP probe (two
    rounds). Where a target has no probe, it waits for containers that stayed up a minute with

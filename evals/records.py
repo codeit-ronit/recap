@@ -9,9 +9,10 @@ their numbers are never mixed:
                        proves the recorded decisions still pass RECAP's path, not a new run
   real_llm             a real model (local, or a verified free plan) on simulated incidents
                        (scripts/live_eval.py)
-  real_kubernetes      a real model on a real Kubernetes cluster (M5: the Kind demo cluster),
-                       with real faults, a person's approval for every write and the
-                       cluster's own health as the oracle (scripts/live_eval.py --from-data)
+  real_kubernetes      a real model on a real Kubernetes cluster (M5: the Kind demo cluster or
+                       SREGym's own, told apart by `target`), with real faults, a person's
+                       approval for every write and the cluster's own health as the oracle
+                       (scripts/live_eval.py --from-data)
 
 A record says only what the run's record and trace say. A run counts as a success only when
 the independent oracle verified the recovery; anything else carries a failure category.
