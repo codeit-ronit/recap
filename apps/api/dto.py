@@ -892,7 +892,7 @@ class AdapterStatus(ApiModel):
     adapter: str | None  # the class, when one exists in this repository
     configured: bool  # configs/environment.yaml names this kind
     status: ComponentState
-    operational: bool  # can it run an incident here and now?
+    operational: bool  # can it run an incident on this server (only the configured adapter)?
     milestone: str | None  # when a planned adapter is due (M5)
     detail: str
 
@@ -1020,6 +1020,24 @@ class ReplaysView(Versioned):
 # ======================================================================================
 
 
+class EnvironmentCheckItem(ApiModel):
+    name: str
+    ok: bool
+    detail: str
+
+
+class EnvironmentCheck(ApiModel):
+    """POST /environment/check: can the configured target be reached right now? A real
+    cluster runs its adapter's own preflight (pinned credentials, API server, versions,
+    clock); nothing is changed and no run starts."""
+
+    checked_at: datetime
+    environment_kind: str
+    simulated: bool
+    ok: bool
+    checks: list[EnvironmentCheckItem] = Field(default_factory=list)
+
+
 class EvalModeInfo(ApiModel):
     mode: EvalMode
     status: Literal["implemented", "planned"]
@@ -1033,6 +1051,9 @@ class BatchOutcomes(ApiModel):
     successes: int
     by_final_state: dict[str, int] = Field(default_factory=dict)
     failures_by_category: dict[str, int] = Field(default_factory=dict)
+    # A benchmark grader's own verdicts ("pass", "fail", "not graded"), when the batch names
+    # one (BatchSummary.benchmark): the benchmark's numbers, never added to successes.
+    benchmark_verdicts: dict[str, int] = Field(default_factory=dict)
 
 
 class BatchSummary(ApiModel):
@@ -1049,6 +1070,8 @@ class BatchSummary(ApiModel):
     methods: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
     source: BatchSource  # in git, or this machine's data folder
+    targets: list[str] = Field(default_factory=list)  # "simulated", or a real cluster's kind
+    benchmark: str | None = None  # the grader behind outcomes.benchmark_verdicts
 
 
 class EvalsView(Versioned):

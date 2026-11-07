@@ -387,6 +387,7 @@ def real_llm_batch(
     extra_limitations: list[str],
     mode: EvalMode = "real_llm",
     target: str | None = None,
+    benchmark: str | None = None,
 ) -> EvalBatch:
     """Real-model runs as one batch (`real_llm`, or `real_kubernetes` on a real cluster,
     `target` naming which), with how to read it."""
@@ -399,6 +400,7 @@ def real_llm_batch(
         plan=plan,
         methods=[*methods, *common_methods(records)],
         limitations=[*sample_limitations(records, mode, target), *extra_limitations],
+        benchmark=benchmark,
     )
 
 
@@ -421,6 +423,27 @@ def common_methods(records: list[EvalRecord]) -> list[str]:
         "M4: model_server_seconds sums it, and model_wait_seconds sums the part of it a "
         "request spent waiting inside the server instead of computing (server time minus "
         "Ollama's own load, prompt and generation time).",
+    ]
+
+
+def with_benchmark_verdicts(
+    records: list[EvalRecord], verdicts: list[str], benchmark: str | None
+) -> list[EvalRecord]:
+    """The records with the benchmark verdicts given as RUN=pass|fail (refused: ValueError)."""
+    if verdicts and not benchmark:
+        raise ValueError("--benchmark-verdict needs --benchmark, naming the grader")
+    given: dict[str, str] = {}
+    for item in verdicts:
+        run_id, _, verdict = item.partition("=")
+        if verdict not in ("pass", "fail"):
+            raise ValueError(f"{item!r}: a verdict is RUN=pass or RUN=fail")
+        given[run_id] = verdict
+    unknown = sorted(set(given) - {r.run_id for r in records})
+    if unknown:
+        raise ValueError(f"no such run in this batch: {', '.join(unknown)}")
+    return [
+        r.model_copy(update={"benchmark_verdict": given[r.run_id]}) if r.run_id in given else r
+        for r in records
     ]
 
 
@@ -584,6 +607,11 @@ def rebuild(args: argparse.Namespace) -> int:
         )
         for run in finished
     ]
+    try:
+        records = with_benchmark_verdicts(records, args.benchmark_verdict, args.benchmark)
+    except ValueError as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return EXIT_REFUSED
     model, prompts = kinds[0]
     first = created_at_of(records, utcnow())
     slug = mode.replace("_", "-") + (f"-{_slug(live)}" if live else "")  # the cluster, too
@@ -613,6 +641,7 @@ def rebuild(args: argparse.Namespace) -> int:
         ],
         mode=mode,
         target=live or None,
+        benchmark=args.benchmark,
     )
     args.out.mkdir(parents=True, exist_ok=True)
     write_outputs(batch, args.out, data_dir)
@@ -668,6 +697,18 @@ async def main(argv: list[str] | None = None) -> int:
         action="append",
         default=[],
         help="a limitation the runs' records cannot state themselves (--from-data; repeatable)",
+    )
+    parser.add_argument(
+        "--benchmark",
+        help="the grader behind --benchmark-verdict, as it should be named (--from-data)",
+    )
+    parser.add_argument(
+        "--benchmark-verdict",
+        action="append",
+        default=[],
+        metavar="RUN=pass|fail",
+        help="a benchmark grader's own verdict on one run, recorded by hand; kept apart from "
+        "RECAP's oracle and never merged into success (--from-data; repeatable)",
     )
     parser.add_argument(
         "--publish", action="store_true", help="also publish the batch in evals/reports/batches/"

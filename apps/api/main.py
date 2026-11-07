@@ -49,6 +49,7 @@ from apps.api.dto import (
     SCHEMA_HEADER,
     TOTAL_HEADER,
     BatchView,
+    EnvironmentCheck,
     EvalsView,
     EvidenceView,
     ProviderView,
@@ -67,6 +68,7 @@ from apps.api.service import RunManager, RunReader, RunRefused, check_run_reques
 from apps.api.views import RunFilters, environment_label
 from recap import __version__
 from recap.core.errors import ApprovalError, ConfigError
+from recap.core.ids import utcnow
 from recap.core.models import (
     Approval,
     IncidentState,
@@ -95,6 +97,9 @@ class ApprovalRequestBody(BaseModel):
 
     decision: Literal["approved", "rejected"]
     proposal_digest: str  # must match the exact proposal the human reviewed
+    # On a target that is not simulated, approving needs the target service's exact name,
+    # typed by the operator, as at the console. A rejection never needs it.
+    confirm_target: str | None = Field(default=None, max_length=128)
 
 
 class EvalRequest(BaseModel):
@@ -206,6 +211,12 @@ def create_app(
         """Which implementation is plugged into each interface, its real status (a stub is
         "planned", never "active"), feature flags and versions."""
         return reader(request).system()
+
+    @app.post("/environment/check", response_model=EnvironmentCheck)
+    async def environment_check(request: Request, who: OperatorRequired) -> Any:
+        """Can the configured target be reached right now? A real cluster runs its adapter's
+        own preflight (operator only: it uses RECAP's cluster credentials); nothing changes."""
+        return (await manager(request).environment_check()).model_dump(mode="json")
 
     @app.get("/providers", response_model=list[ProviderView])
     async def providers(request: Request) -> Any:
@@ -374,17 +385,34 @@ def create_app(
 
         A rejection also revokes an approval that was not used yet: "no" wins until the
         gateway uses the approval, right before it sends the write. The approver recorded is
-        the authenticated operator.
+        the authenticated operator. On a target that is not simulated (a real cluster), an
+        approval needs the target service's exact name in `confirm_target`, as the console
+        asks for it (M5): anything else decides nothing (400). The decision log then says how
+        the decision came, and when; it proves a token holder and a timing, not a person.
         """
-        approvals = manager(request).runtime.approvals
-        if approvals.get_request(proposal_id) is None:
+        runtime = manager(request).runtime
+        pending = runtime.approvals.get_request(proposal_id)
+        if pending is None:
             raise HTTPException(404, f"no approval request for proposal '{proposal_id}'")
+        note = ""
+        if not runtime.environment_info().is_simulated:
+            named = (body.confirm_target or "").strip() == pending.proposal.target
+            if body.decision == "approved" and not named:
+                raise HTTPException(
+                    400,
+                    "on a live target, type the target service's exact name to approve "
+                    "(nothing was decided)",
+                )
+            waited = (utcnow() - pending.requested_at).total_seconds()
+            typed = "typed the target service's name; " if body.decision == "approved" else ""
+            note = f"dashboard or API; {typed}answered {waited:.1f} s after the request"
         try:
-            approval: Approval = approvals.decide(
+            approval: Approval = runtime.approvals.decide(
                 proposal_id,
                 decision=body.decision,
                 proposal_digest=body.proposal_digest,
                 actor=who.actor,
+                note=note,
             )
         except ApprovalError as exc:
             raise HTTPException(409, str(exc)) from exc

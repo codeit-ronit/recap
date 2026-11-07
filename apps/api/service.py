@@ -29,6 +29,8 @@ from pydantic import BaseModel, ValidationError
 from apps.api.dto import (
     API_SCHEMA,
     BatchSource,
+    EnvironmentCheck,
+    EnvironmentCheckItem,
     ExportProvenance,
     FixtureIntegrity,
     RunDetail,
@@ -41,6 +43,7 @@ from apps.api.views import (
     LocalPaths,
     RunFilters,
     batch_view,
+    environment_run_label,
     evals_view,
     evidence_view,
     origin_labels,
@@ -63,7 +66,7 @@ from evals.runner import (
 )
 from recap.core.config import REPO_ROOT, Settings
 from recap.core.errors import ConfigError
-from recap.core.ids import new_id
+from recap.core.ids import new_id, utcnow
 from recap.core.models import TERMINAL_STATES, Evidence, RunConfig, RunRecord, TraceEvent
 from recap.providers.recordings import MANIFEST, FixtureInfo, list_fixtures, sha256_of
 from recap.runtime import Runtime
@@ -74,6 +77,7 @@ from recap.telemetry.tracer import TraceCategory
 KEEPALIVE_SECONDS = 15
 RUN_SCAN_LIMIT = 10_000  # GET /runs filters and counts at most this many of the newest runs
 EVENT_PAGE = 5_000  # trace events read from SQLite per query
+ENVIRONMENT_CHECK_SECONDS = 20.0  # POST /environment/check: the preflight's whole time
 
 
 def sse_frame(event: TraceEvent, paths: LocalPaths | None = None) -> str:
@@ -105,6 +109,48 @@ class RunManager:
         self.eval_task: asyncio.Task[EvalReport] | None = None
         self.eval_dir: Path | None = None
         self.eval_log: list[str] = []
+
+    # --- the configured target -------------------------------------------------------------
+
+    async def environment_check(self) -> EnvironmentCheck:
+        """Reach the configured target the way a run's reset would first reach it, and change
+        nothing: a real cluster's adapter runs its own preflight (each kubeconfig's server and
+        CA fingerprint, the version skew, the monitoring clock), bounded in time."""
+        settings = self.runtime.settings
+        environment = self.runtime.environment_factory(settings.environment, "readiness-check")
+        info = environment.describe()
+        if info.is_simulated:
+            item = EnvironmentCheckItem(
+                name="simulated environment", ok=True, detail="local and in-process"
+            )
+        else:
+            preflight = getattr(environment, "preflight", None)
+            if preflight is None:
+                item = EnvironmentCheckItem(
+                    name="preflight", ok=False, detail="this adapter has no preflight to run"
+                )
+            else:
+                try:
+                    async with asyncio.timeout(ENVIRONMENT_CHECK_SECONDS):
+                        await preflight()
+                    item = EnvironmentCheckItem(
+                        name="preflight",
+                        ok=True,
+                        detail="credentials pinned to this cluster; API server and versions "
+                        "answer as expected",
+                    )
+                except TimeoutError:
+                    detail = f"no answer within {ENVIRONMENT_CHECK_SECONDS:g} s (tunnel down?)"
+                    item = EnvironmentCheckItem(name="preflight", ok=False, detail=detail)
+                except Exception as exc:  # any refusal is the answer, said as it is
+                    item = EnvironmentCheckItem(name="preflight", ok=False, detail=str(exc)[:300])
+        return EnvironmentCheck(
+            checked_at=utcnow(),
+            environment_kind=info.kind,
+            simulated=info.is_simulated,
+            ok=item.ok,
+            checks=[item],
+        )
 
     # --- incident runs ---------------------------------------------------------------------
 
@@ -536,7 +582,8 @@ class RunReader:
         name = config.provider or settings.providers.default
         spec = settings.providers.providers[name]
         committed = config.replay_fixture is not None  # checked against the manifest already
-        labels = ["SIMULATED ENVIRONMENT"] if self.runtime.environment_info().is_simulated else []
+        target = self.runtime.environment_info()
+        labels = [environment_run_label(target.is_simulated, target.kind)]
         started = RunStarted(
             run_id=run_id,
             scenario_id=scenario_id,

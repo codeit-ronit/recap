@@ -97,9 +97,14 @@ async def _local(spec: ProviderSettings, mock_http: httpx.MockTransport | None) 
         models = body.get("models", []) if isinstance(body, dict) else []
         installed = [str(m.get("name")) for m in models if isinstance(m, dict)]
     except (httpx.HTTPError, ValueError, AttributeError):
+        start = (
+            "start the VM and open its tunnel: infra/aws/ec2.sh up, then infra/aws/ec2.sh tunnel"
+            if spec.runs_on == "owner_vm"
+            else "start it with: OLLAMA_NO_CLOUD=1 ollama serve"
+        )
         return info | {
             "status": "unavailable",
-            "detail": f"no Ollama server at {base}; start it with: OLLAMA_NO_CLOUD=1 ollama serve",
+            "detail": f"no Ollama server at {base}; {start}",
             "installed": [],
         }
     if spec.model not in installed:

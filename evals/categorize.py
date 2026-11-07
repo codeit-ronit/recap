@@ -195,6 +195,7 @@ def record_from_run(
         prompt_version=info.prompt_version if info else None,
         config_hash=str(record.versions.get("config_hash", "")),
         code_version=_text_or_none(record.versions.get("code_version")),
+        target=target.kind if target is not None and not target.is_simulated else "simulated",
         strategy=record.config.strategy,
         topology=topology(record, trace),
         rounds=len(record.strategies) or len(_rounds(trace)),

@@ -117,6 +117,10 @@ class EvalRecord(Contract):
     started_at: datetime | None = None
     ended_at: datetime | None = None
     recording: str | None = None  # the recording's id or file name, never a local path
+    target: str = ""  # what the run worked on: "simulated", or a real cluster's kind (M5)
+    # A benchmark's own grader (SREGym's run-oracle.py), recorded by hand after the run: the
+    # benchmark's verdict, kept apart from RECAP's (`success`) and never merged into it.
+    benchmark_verdict: Literal["pass", "fail"] | None = None
 
 
 class EvalBatch(Contract):
@@ -134,6 +138,8 @@ class EvalBatch(Contract):
     records: list[EvalRecord] = Field(default_factory=list)
     methods: list[str] = Field(default_factory=list)  # how the runs were made and judged
     limitations: list[str] = Field(default_factory=list)  # what the numbers do not show
+    targets: list[str] = Field(default_factory=list)  # its records' targets ("simulated", "kind")
+    benchmark: str | None = None  # the grader behind the records' benchmark_verdict
 
     @property
     def n(self) -> int:
@@ -150,6 +156,7 @@ def make_batch(
     plan: str | None = None,
     methods: Iterable[str] = (),
     limitations: Iterable[str] = (),
+    benchmark: str | None = None,
 ) -> EvalBatch:
     """A batch of ONE mode, with its providers, models and prompt versions read from its records.
 
@@ -172,6 +179,8 @@ def make_batch(
         records=kept,
         methods=list(methods),
         limitations=list(limitations),
+        targets=sorted({r.target for r in kept if r.target}),
+        benchmark=benchmark,
     )
 
 

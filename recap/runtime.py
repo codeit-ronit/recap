@@ -480,12 +480,11 @@ class Runtime:
                     "adapter": adapter,
                     "configured": is_configured,
                     "status": status,
+                    # Only the configured adapter can run an incident on this server: every
+                    # run uses it. Whether a real cluster answers is POST /environment/check.
                     "operational": implemented
-                    and (
-                        self._environment_operational(scenarios)
-                        if is_configured
-                        else kind not in LIVE_ADAPTERS
-                    ),
+                    and is_configured
+                    and self._environment_operational(scenarios),
                     "milestone": None if implemented else "M5",
                     "detail": detail,
                 }
