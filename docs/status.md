@@ -960,7 +960,7 @@ tests. Nothing was installed or provisioned; `GET /system` showed Kind and SREGy
 
 ---
 
-## M5: real Kubernetes targets, a Kind demo cluster and SREGym (2026-11-02 to 2026-11-07, release candidate 0.6.0)
+## M5: real Kubernetes targets, a Kind demo cluster and SREGym (2026-11-02 to 2026-11-07, release 0.6.0)
 
 M5 takes RECAP from its simulated shop to real Kubernetes clusters, behind the same
 `TargetEnvironment` interface ([ADR 0032](decisions/0032-a-real-kubernetes-target-behind-the-same-interface.md)).

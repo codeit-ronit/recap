@@ -11,7 +11,7 @@ Up to 0.5.0 everything ran against a **simulated** environment. 0.6.0 (M5) adds 
 Kubernetes targets: a Kind demo cluster and SREGym's own cluster, on the owner's VM; the owner
 approved every real-model fix that ran there. Nothing here ran in production.
 
-## [0.6.0] — release candidate, not tagged — M5: real Kubernetes incident recovery and SREGym
+## [0.6.0] — 2026-11-07 — M5: real Kubernetes incident recovery and SREGym
 
 RECAP now works on real Kubernetes clusters, behind the same interface as its simulator
 ([ADR 0032](docs/decisions/0032-a-real-kubernetes-target-behind-the-same-interface.md)). A

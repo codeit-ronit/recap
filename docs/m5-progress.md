@@ -188,5 +188,5 @@ the Kind batch's seventh record (3 verified recoveries in 7).
 - **Docs.** ADR 0032; the M5 report ([m5-report.md](m5-report.md)); the README, status,
   evaluation, architecture, flow and threat-model documents brought to M5; CHANGELOG 0.6.0.
 
-**Next:** the release candidate's checks and a final review; then the owner decides on pushing
-and tagging.
+**Released** as v0.6.0 on 2026-11-07, with the owner's approval, after the release candidate's
+checks and two independent reviews (the second re-checked the live-approval fix).
