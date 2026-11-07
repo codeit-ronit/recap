@@ -10,7 +10,7 @@ status and labelled so, log levels from the app's line format, every time in UTC
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -352,3 +352,34 @@ def test_the_demo_apps_rpc_phrasing_is_what_the_parsers_read() -> None:
 )
 def test_times_are_parsed_to_utc_with_nanoseconds_cut(text: str | None, expected: Any) -> None:
     assert translate.parse_time(text) == expected
+
+
+def test_a_start_up_crash_that_stopped_is_not_a_crash_loop() -> None:
+    """Seen on SREGym (run-cb90973e56): after a deploy, search crashed twice at start-up until
+    its database answered, and then ran. Counted as crash-looping, it made a second affected
+    service and sent the investigation the wrong way."""
+    now = datetime(2026, 11, 7, 5, 10, tzinfo=UTC)
+
+    def restarted(up_seconds: int, reason: str = "Error") -> dict[str, Any]:
+        started = now - timedelta(seconds=up_seconds)
+        return {
+            "status": {
+                "containerStatuses": [
+                    {
+                        "restartCount": 2,
+                        "state": {"running": {"startedAt": started.isoformat()}},
+                        "lastState": {
+                            "terminated": {
+                                "reason": reason,
+                                "exitCode": 1,
+                                "finishedAt": (started - timedelta(seconds=15)).isoformat(),
+                            }
+                        },
+                    }
+                ]
+            }
+        }
+
+    assert translate.recently_crashed([restarted(5)], now)  # up 5 s after a crash: still looping
+    assert not translate.recently_crashed([restarted(140)], now)  # up 2 minutes: it recovered
+    assert not translate.recently_crashed([restarted(5, "OOMKilled")], now)  # memory's signal
