@@ -171,14 +171,22 @@ def assert_bounded(text: str, app: FastAPI, settings: Settings) -> None:
 # --- helpers for runs through the API -------------------------------------------------------
 
 
-def wait_for(predicate: Callable[[], Any], timeout: float = 90.0) -> Any:
+def wait_for(
+    predicate: Callable[[], Any],
+    timeout: float = 180.0,
+    describe: Callable[[], str] | None = None,
+) -> Any:
+    """The predicate's first truthy answer. A shared CI runner is far slower than a laptop
+    (this module once timed out there at 90 s, never locally), so the wait is generous, and
+    a timeout says where things stood."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         found = predicate()
         if found:
             return found
         time.sleep(0.05)
-    raise AssertionError("condition not met in time")
+    where = f": {describe()}" if describe is not None else ""
+    raise AssertionError(f"condition not met in {timeout:g} s{where}")
 
 
 def run_with_approval(client: TestClient, scenario: str, **config: Any) -> dict[str, Any]:
@@ -199,9 +207,16 @@ def run_with_approval(client: TestClient, scenario: str, **config: Any) -> dict[
 
     def finished() -> dict[str, Any] | None:
         body: dict[str, Any] = client.get(f"/runs/{run_id}").json()
-        return body if body["status"] == "finished" else None
+        return body if body["status"] in ("finished", "error") else None  # error: stop at once
 
-    return wait_for(finished)  # type: ignore[no-any-return]
+    def where() -> str:
+        body = client.get(f"/runs/{run_id}").json()
+        record = body.get("record") or {}
+        return f"status {body['status']}, state {record.get('state')}, error {body.get('error')}"
+
+    body = wait_for(finished, describe=where)
+    assert body["status"] == "finished", f"the run ended in error: {body.get('error')}"
+    return body  # type: ignore[no-any-return]
 
 
 def event(
