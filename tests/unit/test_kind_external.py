@@ -235,7 +235,7 @@ async def test_a_crash_loop_never_reads_as_recovered_while_a_start_runs(
     at(20)  # waiting to restart
     await env.reset("test-external-geo", 11)
     at(55)  # 5 s into a start: Running and Ready, the rollout complete
-    assert (await env.observe_health("geo")).status == "CrashLoopBackOff"  # it crashed 45 s ago
+    assert (await env.observe_health("geo")).status == "CrashLoopBackOff"  # up 5 s since a crash
     assert (await env.health_check()).services["geo"].status == "Unknown"
 
     at(60)
@@ -251,8 +251,9 @@ async def test_the_alert_names_a_crash_loop_even_while_a_start_runs(
 ) -> None:
     """Seen in M5 (run-69e580846e): the alert was measured while geo was briefly up between
     two crashes, so it said only "readiness failing"; the runbook search then found readiness
-    and memory guides, and the model blamed memory. A container restarted after an error exit
-    in the last five minutes is in a crash loop, whatever the instant shows."""
+    and memory guides, and the model blamed memory. A container that has not stayed up a
+    minute since it restarted after an error exit is in a crash loop, whatever the instant
+    shows."""
     clock = [utcnow()]
     monkeypatch.setattr(engine, "utcnow", lambda: clock[0])
     env = environment(tmp_path, fake_data_dir=str(crash_lasting(tmp_path, 10)))

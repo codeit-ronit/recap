@@ -278,15 +278,17 @@ def crash_looping(pods: Iterable[Mapping[str, Any]]) -> bool:
     return "CrashLoopBackOff" in _waiting_reasons(pods)
 
 
-CRASH_BACKOFF_CAP_SECONDS = 300  # the kubelet's longest wait between a crashed container's starts
+CRASH_SETTLE_SECONDS = 60  # a container restarted after a crash is in its loop until up this long
 
 
 def recently_crashed(
-    pods: Iterable[Mapping[str, Any]], now: datetime, window: float = CRASH_BACKOFF_CAP_SECONDS
+    pods: Iterable[Mapping[str, Any]], now: datetime, settle: float = CRASH_SETTLE_SECONDS
 ) -> bool:
-    """Was a container restarted after an error exit less than `window` seconds ago? A crash
-    loop between two crashes: running for a moment, and not "CrashLoopBackOff" right then.
-    An out-of-memory kill is left to the memory signals."""
+    """Is a container running for less than `settle` seconds since it restarted after an
+    error exit? A crash loop between two crashes: running for a moment, and not
+    "CrashLoopBackOff" right then. One that stayed up longer is not counted (the hotel app's
+    services crash at start-up until their databases answer, then run). An out-of-memory kill
+    is left to the memory signals."""
     for pod in pods:
         for status in container_statuses(pod):
             terminated = _dict(_dict(status.get("lastState")).get("terminated"))
@@ -294,8 +296,9 @@ def recently_crashed(
                 continue
             if terminated.get("reason") == "OOMKilled":
                 continue
-            exited = parse_time(terminated.get("finishedAt"))
-            if exited is not None and (now - exited).total_seconds() < window:
+            running = _dict(_dict(status.get("state")).get("running"))
+            started = parse_time(running.get("startedAt"))
+            if started is not None and (now - started).total_seconds() < settle:
                 return True
     return False
 
