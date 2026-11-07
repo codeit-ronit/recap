@@ -1,6 +1,6 @@
 # Real model on a real Kubernetes cluster (sregym): qwen3:8b, prompts-v4.7
 
-> **Real model on a real Kubernetes cluster (Kind). REAL target: a Kubernetes cluster, not production.** N = 5: counts, not rates; no statistical claim.
+> **Real model on a real Kubernetes cluster. REAL target: a Kubernetes cluster (sregym), not production.** N = 5: counts, not rates; no statistical claim.
 
 - Batch `2026-11-03-real-kubernetes-sregym-qwen3-8b-prompts-v4.7` (mode `real_kubernetes`), created 2026-11-03T19:52:03.613710+00:00
 - Plan: none (see methods)

@@ -201,9 +201,10 @@ EVAL_MODES: list[EvalModeInfo] = [
     EvalModeInfo(
         mode="real_kubernetes",
         status="implemented",
-        description="A real model on a real Kubernetes cluster (the Kind demo cluster, M5): "
-        "real faults, a person's approval for every write, and the cluster's own health as "
-        "the oracle.",
+        description="A real model on a real Kubernetes cluster (the Kind demo cluster or "
+        "SREGym's own, told apart by each batch's target; M5): real faults, a person's "
+        "approval for every write, and the cluster's own health as RECAP's oracle. A "
+        "benchmark grader's verdicts, when recorded, are kept apart.",
     ),
 ]
 

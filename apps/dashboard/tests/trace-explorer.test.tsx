@@ -3,7 +3,9 @@
  * GET /runs/{id}/timeline and GET /runs/{id} (src/dto.ts): a replay of a recorded real-model run
  * with two specialists over two rounds and an approved fix, a scripted run, hostile text, fields
  * the server did not record, the loading / error / empty states, the event log's paging and
- * filters, and a run with more than 1,000 events.
+ * filters, a run with more than 1,000 events, and a run on a real Kubernetes cluster (shaped like
+ * the published Kind run: live reads, the console approval's note, the write's read-back and the
+ * oracle's probes).
  */
 
 import assert from "node:assert/strict";
@@ -806,4 +808,143 @@ test("a request bar has one part per recorded share and stays hidden from screen
   const hosted = render(<RequestBar split={requestSplit(modelRequest({ server_ms: null, outside_server_ms: null, server_compute_ms: null, server_wait_ms: null }))} />);
   assert.equal(count(hosted, "tl-reqbar-part"), 1);
   assert.match(hosted, /whole request \(not broken down\)/);
+});
+
+// --- a run on a real Kubernetes cluster (M5) ---------------------------------------------------------------
+
+/** The Kind target the run recorded (its first event and record.environment). */
+const KIND_ENVIRONMENT = {
+  kind: "kind",
+  name: "Kind cluster recap-m5",
+  namespace: "recap-demo",
+  is_simulated: false,
+  supported_actions: ["rollback", "restart"],
+  description: "Local Kind cluster recap-m5 (context kind-recap-m5), not production: 2 demo services in namespace recap-demo.",
+  stabilization_timeout_seconds: 180,
+  stabilization_poll_seconds: 5,
+};
+
+const CONSOLE_NOTE = "interactive terminal; typed the target service's name; answered after 167.8 s; login name kept in the local decision log";
+
+/**
+ * Shaped like the published Kind run (evals/live/2026-11-03-qwen3-8b-kind-human-approved-prompts-v4.7,
+ * run-047aac6eb0): qwen3:8b on the owner's VM, a read of backend's Kubernetes events, a rollback of
+ * backend to v1.0.0 approved at the console, its read-back and the Kind oracle's two probes.
+ */
+function kindEntries(): dto.TimelineEntry[] {
+  const e = tracer();
+  const local = (over: Partial<dto.ModelRequest> = {}) =>
+    modelRequest({ provider: "ollama-vm", origin: "local_llm", replayed: false, input_tokens: 3988, output_tokens: 306, duration_ms: 221800, server_ms: 221700, outside_server_ms: 100, server_compute_ms: 221000, server_wait_ms: 700, ...over });
+  const r1 = local({ response_kind: "tool_request" });
+  const propose = local({ purpose: "propose", mode: "json", response_kind: "final_proposal", input_tokens: 4371, output_tokens: 299, duration_ms: 247700 });
+  const digest = "917e98b72d1e4684f6aa77928897a945f90517f991a244aecdb3ae9f9e9c5239";
+  return [
+    e({ at: 0, category: "state.transition", kind: "lifecycle", stage: "CREATED", untrusted_text: true, payload: { from: null, to: "CREATED", reason: "incident created from alert", incident: { service: "frontend", symptoms: ["frontend: HTTP error rate 0.30 over 10 probe requests (first failure: HTTP 502)"], metadata: { source: "recap-kind-probe", namespace: "recap-demo" } }, environment: KIND_ENVIRONMENT } }),
+    e({ at: 684, category: "tool.discovery", kind: "tool_discovery", stage: "CREATED", payload: { transport: "mcp-stdio", advertised: ["get_k8s_like_events", "execute_rollback"], usable: ["get_k8s_like_events", "execute_rollback"], unknown_tools: [], missing_tools: [], annotation_mismatches: [] } }),
+    e({ at: 700, category: "routing.decision", kind: "routing", round: 1, payload: { round: 1, mode: "single", rule_id: "RT7-default", reason: "default", agents: [INFRA] } }),
+    e({ at: 700, category: "agent.start", kind: "agent_start", round: 1, agent: INFRA, payload: { role: INFRA, round: 1 } }),
+    e({ at: 701, category: "llm.call", kind: "model_request", round: 1, agent: INFRA, step: 1, ok: true, duration_ms: r1.duration_ms, model_request: r1, untrusted_text: true, payload: llmPayload(r1, 1) }),
+    e({ at: 702, category: "agent.decision", kind: "agent_decision", round: 1, agent: INFRA, step: 1, untrusted_text: true, payload: { step: 1, action: "call_tools", tool_calls: [{ tool_name: "get_k8s_like_events", args: { service: "backend", limit: 10 } }] } }),
+    e({ at: 702, category: "policy.decision", kind: "policy", round: 1, agent: INFRA, tool: "get_k8s_like_events", verdict: "ALLOW", payload: { tool: "get_k8s_like_events", verdict: "ALLOW", reasons: ["read-only tool: allowed automatically"], rule_ids: ["R1-tool-name-format", "R5-namespace-allowlist", "R7-worker-read-only", "R8-read-allow"], caller: INFRA, risk: "read" } }),
+    e({ at: 703, category: "tool.call", kind: "tool_call", round: 1, agent: INFRA, tool: "get_k8s_like_events", invocation_id: "call-k8s-events", untrusted_text: true, payload: { invocation_id: "call-k8s-events", tool: "get_k8s_like_events", caller: INFRA, args: { service: "backend", limit: 10 } } }),
+    e({ at: 1426, category: "tool.result", kind: "tool_result", round: 1, agent: INFRA, tool: "get_k8s_like_events", invocation_id: "call-k8s-events", ok: true, evidence_ids: ["ev-047aac-r1i06"], untrusted_text: true, payload: { invocation_id: "call-k8s-events", tool: "get_k8s_like_events", caller: INFRA, ok: true, error: null, evidence_id: "ev-047aac-r1i06", truncated: false, duration_ms: 722.7, flags: [] } }),
+    e({ at: 1430, category: "agent.finish", kind: "agent_finish", round: 1, agent: INFRA, evidence_ids: ["ev-047aac-r1i06"], untrusted_text: true, payload: { role: INFRA, round: 1, steps: 1, tool_calls: 1, outcome: "hypothesis" } }),
+    e({ at: 1431, category: "verification.evidence", kind: "verification", round: 1, verdict: "supported", payload: { status: "supported", summary: "Bad deployment on backend (v1.1.0) is supported.", best: { claim: "backend v1.1.0 broke it", mechanism: "bad_deployment", target_service: "backend" }, checks: [] } }),
+    e({ at: 1432, category: "state.transition", kind: "lifecycle", stage: "PROPOSING", payload: { from: "INVESTIGATING", to: "PROPOSING", reason: "diagnosis: backend v1.1.0 broke it" } }),
+    e({ at: 1433, category: "llm.call", kind: "model_request", stage: "PROPOSING", ok: true, duration_ms: propose.duration_ms, model_request: propose, untrusted_text: true, payload: llmPayload(propose, null) }),
+    e({ at: 1434, category: "mitigation.proposed", kind: "proposal", stage: "PROPOSING", evidence_ids: ["ev-047aac-r1i06"], untrusted_text: true, payload: { proposal: { action: "execute_rollback", target: "backend", params: { to_version: "v1.0.0" }, rationale: "Roll backend back to v1.0.0.", evidence_ids: ["ev-047aac-r1i06"], risk_level: "reversible_write", source: "llm", citations: [], proposal_id: "prop-9f461dcb40" }, digest, notes: [], trusted_risk: "reversible_write" } }),
+    e({ at: 1435, category: "policy.decision", kind: "policy", stage: "PROPOSING", agent: "controller", tool: "execute_rollback", verdict: "APPROVAL_REQUIRED", payload: { tool: "execute_rollback", verdict: "APPROVAL_REQUIRED", reasons: ["reversible write: needs a human approval bound to this exact proposal"], rule_ids: ["R1-tool-name-format", "R11-reversible-approval"], caller: "controller", risk: "reversible_write" } }),
+    e({ at: 1436, category: "approval.requested", kind: "approval_requested", stage: "AWAITING_APPROVAL", payload: { proposal_id: "prop-9f461dcb40", digest, expires_at: "2026-11-03T13:25:20.513252+00:00", channel: "console" } }),
+    e({ at: 169236, category: "approval.decided", kind: "approval_decided", stage: "AWAITING_APPROVAL", verdict: "approved", payload: { decision: "approved", actor: "console-user", approval_id: "apr-84ec57cc5a", proposal_id: "prop-9f461dcb40", note: CONSOLE_NOTE } }),
+    e({ at: 169240, category: "policy.decision", kind: "policy", stage: "MITIGATING", agent: "controller", tool: "execute_rollback", verdict: "ALLOW", payload: { tool: "execute_rollback", verdict: "ALLOW", reasons: ["approval apr-84ec57cc5a matches this exact proposal and is unused and unexpired"], rule_ids: ["R11-reversible-approval", "R12-approval-binding"], caller: "controller", risk: "reversible_write" } }),
+    e({ at: 169241, category: "mitigation.started", kind: "write_started", stage: "MITIGATING", agent: "controller", tool: "execute_rollback", invocation_id: "call-c2ffb01a1f", payload: { invocation_id: "call-c2ffb01a1f", tool: "execute_rollback", target: "backend", params: { to_version: "v1.0.0" }, approval_id: "apr-84ec57cc5a", proposal_digest: digest } }),
+    e({ at: 171172, category: "mitigation.executed", kind: "write_executed", stage: "MITIGATING", agent: "controller", tool: "execute_rollback", invocation_id: "call-c2ffb01a1f", ok: true, evidence_ids: ["ev-047aac-011"], duration_ms: 1931.23, payload: { invocation_id: "call-c2ffb01a1f", tool: "execute_rollback", target: "backend", params: { to_version: "v1.0.0" }, approval_id: "apr-84ec57cc5a", proposal_digest: digest, ok: true, error: null, side_effects: ["backend generation 14 -> 15", "backend pod template image: recap-demo/backend:v1.0.0"], evidence_id: "ev-047aac-011", safety_enabled: true, run_cancelled: false } }),
+    e({ at: 182032, category: "verification.recovery", kind: "oracle", stage: "VERIFYING", ok: true, verdict: "verified", payload: { oracle: "kind-health-oracle", healthy_before: false, healthy_after: true, verified: true, unhealthy_after: [], simulated: false, probes: 2, waited_seconds: 10.859 } }),
+    e({ at: 182207, category: "run.summary", kind: "summary", stage: "RESOLVED", payload: { state: "RESOLVED", outcome_note: "oracle verified recovery (kind)", recovered: true, unsafe_attempts: 0, unsafe_blocked: 0, unsafe_executed: 0, simulated: false } }),
+  ];
+}
+
+function kindExplorer(): string {
+  const entries = kindEntries();
+  const view = timelineView(entries, {
+    run_id: "run-047aac6eb0",
+    notes: [],
+    lanes: [laneOf(INFRA, 1, 700, 1430, { mode: "single" })],
+    rounds: [{ round: 1, mode: "single", rule_id: "RT7-default", reason: "default", agents: [INFRA], focus_services: [], open_questions: [], leads: [], escalation: false, wall_ms: 730, sum_ms: 730, overlap_ms: 0, model_request_ms: 221800, verification_status: "supported" }],
+  });
+  const kindRecord = record(PLAIN, {
+    run_id: "run-047aac6eb0",
+    scenario_id: "kind-bad-release",
+    provider_info: { name: "ollama-vm:qwen3:8b", kind: "llm", origin: "local_llm", model: "qwen3:8b", description: "Ollama on the owner's VM", replay_of: null, red_team: false },
+    environment: KIND_ENVIRONMENT,
+    config: { replay_pace: 0 },
+    findings: [],
+    verification: null,
+  });
+  const kindSummary = summary({
+    run_id: "run-047aac6eb0",
+    scenario_id: "kind-bad-release",
+    outcome_note: "oracle verified recovery (kind)",
+    provider: "ollama-vm:qwen3:8b",
+    provider_class: "local_llm",
+    provider_kind: "llm",
+    environment_kind: "kind",
+    environment_simulated: false,
+    replay: null,
+    oracle: { oracle: "kind-health-oracle", verified: true, healthy_before: false, healthy_after: true, checked_at: "2026-11-03T13:13:24.213074Z", services_checked: ["frontend", "backend"] },
+    labels: ["LIVE ENVIRONMENT (kind)"],
+  });
+  return render(
+    <TraceExplorerView
+      runId="run-047aac6eb0"
+      trace={traceLoad(view)}
+      detail={polled(detail(PLAIN, { summary: kindSummary, record: kindRecord }))}
+      log={logLoad(view)}
+      filters={NO_FILTERS}
+      onFilter={() => undefined}
+      onClearFilters={() => undefined}
+    />,
+  );
+}
+
+test("a Kubernetes run: the live target named, its reads marked as live reads of the cluster", () => {
+  const html = kindExplorer();
+  const text = textOf(html);
+  assert.match(text, /LOCAL LLM qwen3:8b \/ LIVE TARGET · kind/);
+  assert.match(text, /Target Kind cluster recap-m5, namespace recap-demo live · kind/);
+  // The read of backend's Kubernetes events: a live read of the cluster, not a generic MCP call.
+  assert.match(text, /get_k8s_like_events\(service=backend, limit=10\) MCP · live · recap-demo Allow R8-read-allow/);
+  const chip = tags(html, "span").find((s) => (s.attrs.title ?? "").startsWith("A read-only tool on RECAP&#x27;s MCP server, answered live from") || (s.attrs.title ?? "").startsWith("A read-only tool on RECAP's MCP server, answered live from"));
+  assert.ok(chip, "the chip says where the call was answered");
+  assert.match(chip.attrs.title, /Kind cluster recap-m5, namespace recap-demo \(a real cluster\)/);
+  assert.match(text, /result → ev-047aac-r1i06/);
+  // The alert's symptoms are quoted as the probe's text, never as the simulator's alerting.
+  const titles = withAttr(html, "title").map((t) => t.attrs.title);
+  assert.ok(titles.some((t) => t.includes("written by the alert (measured on the live target by recap-kind-probe)")));
+  assert.ok(!titles.some((t) => t.includes("simulated alerting")));
+  assert.doesNotMatch(text, /simulated environment|SIMULATED TARGET/);
+});
+
+test("a Kubernetes run's fix: the console approval and how it came, the write's read-back, the oracle's probes", () => {
+  const text = textOf(kindExplorer());
+  assert.match(text, /Approval requested via console/);
+  assert.match(text, /Approval approved by console-user approval apr-84ec57cc5a how: interactive terminal; typed the target service's name; answered after 167\.8 s; login name kept in the local decision log/);
+  assert.match(text, /Sending execute_rollback on backend \(to_version=v1\.0\.0\) the gateway's write, with approval apr-84ec57cc5a to the live target Kind cluster recap-m5, namespace recap-demo \(a real cluster, not a simulation\)/);
+  assert.match(
+    text,
+    /Executed execute_rollback on backend \(to_version=v1\.0\.0\) · 1\.9\d? s What changed on Kind cluster recap-m5, namespace recap-demo, as RECAP read it back backend generation 14 -> 15 backend pod template image: recap-demo\/backend:v1\.0\.0 recorded as ev-047aac-011/,
+  );
+  assert.match(text, /Recovery oracle: recovered kind-health-oracle healthy before no → after yes · live target · 2 probes over 10\.9 s \(settle window 180 s\)/);
+  // The event log's one-line descriptions carry the note and the probes too.
+  assert.match(text, /Approval approved by console-user · apr-84ec57cc5a · interactive terminal; typed the target service's name/);
+  assert.match(text, /Recovery verified by kind-health-oracle · healthy before no → after yes · live target · 2 probes over 10\.9 s/);
+  assert.match(text, /Run finished: Resolved · oracle verified recovery \(kind\)/);
+});
+
+test("a simulated run's tool chip and oracle line read as before", () => {
+  const text = textOf(explorer());
+  assert.match(text, /get_service_metrics\(service=frontend, metric=error_rate, window_minutes=60\) MCP Allow R8-read-allow/);
+  assert.doesNotMatch(text, /MCP · live/);
+  assert.match(text, /Target RECAP simulated shop, namespace shop simulated/);
+  assert.match(text, /Recovery oracle: recovered simulated-health-oracle healthy before no → after yes · simulated environment/);
 });

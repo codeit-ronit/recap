@@ -1,13 +1,13 @@
 /**
- * Small React hooks: hash routing, polling, the live run event stream, run selection and
- * the operator sign-in state.
+ * Small React hooks: hash routing, polling, the live run event stream, run selection, the
+ * operator sign-in state and the server's configured environment (simulated or live).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, openRunStream, toApiError } from "./api";
 import { getToken, onTokenChange } from "./auth";
 import type { ApiError } from "./api";
-import type { RunSummary, SystemSummary, TraceEvent } from "./types";
+import type { EnvironmentInfo, RunSummary, SystemSummary, TraceEvent } from "./types";
 
 // ======================================================================================
 // Hash routing:  #/timeline?run=run-abc  ->  { page: "timeline", params: run=run-abc }
@@ -433,4 +433,37 @@ export function useOperatorToken(): string | null {
   const [token, setTokenState] = useState<string | null>(getToken);
   useEffect(() => onTokenChange(setTokenState), []);
   return token;
+}
+
+/** The environment GET /system last reported in this tab (shared by every useServerEnvironment). */
+let lastServerEnvironment: EnvironmentInfo | null = null;
+
+export interface ServerEnvironment {
+  /** null until GET /system answers (or when it reports none). */
+  environment: EnvironmentInfo | null;
+  error: ApiError | null;
+  /** True until the first answer (or error). */
+  loading: boolean;
+}
+
+/**
+ * The environment this server is configured for (GET /system `environment`): what a run started
+ * now acts on, and what the server checks an approval against. For components the page does not
+ * hand it to (the approval card on Safety & Approvals). Asked when the component mounts and every
+ * 30 s, like the shell; until the first answer, the last one this tab saw (null at first).
+ * `enabled` false: nothing is fetched (the caller already knows the environment).
+ */
+export function useServerEnvironment(enabled = true): ServerEnvironment {
+  const polled = usePolling(
+    enabled
+      ? () =>
+          api.system().then((system) => {
+            lastServerEnvironment = system.environment ?? null;
+            return lastServerEnvironment;
+          })
+      : null,
+    enabled ? 30_000 : null,
+    [enabled],
+  );
+  return { environment: enabled ? (polled.data ?? lastServerEnvironment) : null, error: polled.error, loading: polled.loading };
 }

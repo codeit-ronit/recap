@@ -263,6 +263,36 @@
 .lab-safety strong {
   color: var(--text);
 }
+.lab-safety-about {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+/* Where a run started here acts: above the scenarios, and again next to Start run. */
+.lab-target-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-bottom: var(--space-3);
+}
+.lab-target-line .status-token,
+.lab-run-target .status-token {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.lab-run-summary {
+  min-width: 0;
+}
+.lab-run-target {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-left: 6px;
+}
 
 /* --- the run: banner, outcome, links ---------------------------------------------------------- */
 
@@ -355,6 +385,47 @@
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+/* What the oracle observed before and after the fix, per service. */
+.lab-signals-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.table.lab-signals th[scope="row"] {
+  font-weight: 500;
+  text-align: left;
+}
+.table.lab-signals td,
+.table.lab-signals th {
+  font-size: 13px;
+  white-space: nowrap;
+}
+.lab-signals-more > summary {
+  cursor: pointer;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+.lab-signals-more[open] > summary {
+  margin-bottom: 6px;
+}
+
+/* A decision's record of how it came (RECAP's own words) and the live marker on the approval card. */
+.lab-decision-note {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.lab-approval-live {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: var(--space-3);
+  color: var(--text-2);
 }
 
 .lab-links {
@@ -519,6 +590,94 @@
 .modal-foot .lab-tamper {
   margin-right: auto;
 }
+
+/* --- a live target: the red block, and the target service's name typed before Approve ---------- */
+
+.approval-live {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--bad-line);
+  border-left-width: 4px;
+  border-radius: 10px;
+  background: var(--bad-soft);
+  color: var(--text-2);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+.approval-live > .icon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--bad-text);
+}
+.approval-live-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.approval-live-label {
+  color: var(--bad-text);
+  font-size: var(--fs-lg);
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  overflow-wrap: anywhere;
+}
+.approval-live-place {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  color: var(--text);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.approval-live-about {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.approval-live .mono {
+  overflow-wrap: anywhere;
+}
+
+.approval-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+.approval-confirm-label {
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+.approval-confirm-label code {
+  overflow-wrap: anywhere;
+}
+.input.approval-confirm-input {
+  width: 220px;
+  border-color: var(--bad-line);
+}
+.approval-confirm.is-named .input.approval-confirm-input {
+  border-color: var(--ok-line);
+}
+.approval-confirm-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.approval-confirm.is-named .approval-confirm-status {
+  color: var(--ok-text);
+}
+/* In the dialog's decision bar the name sits on its own line, right above the buttons. */
+.lab-foot-confirm {
+  flex-basis: 100%;
+  min-width: 0;
+}
 /* The server's answer to a decision, on its own line in the decision bar. */
 .lab-foot-answer {
   flex-basis: 100%;
@@ -622,6 +781,13 @@
   .lab-approval-command,
   .lab-approval-command code {
     font-size: var(--fs-lg);
+  }
+  .approval-live {
+    padding: var(--space-3);
+  }
+  .input.approval-confirm-input {
+    flex: 1 1 100%;
+    width: 100%;
   }
   /* The dialog's buttons share the width; the long binding test wraps on its own line. */
   .modal-foot .lab-foot-btn {

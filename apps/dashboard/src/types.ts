@@ -930,6 +930,8 @@ export interface ApprovalDecidedPayload {
   actor?: string;
   approval_id?: string;
   proposal_id?: string;
+  /** How the decision came (console or dashboard, typed name, after N s); may be absent. */
+  note?: string;
 }
 
 export interface MitigationExecutedPayload {
@@ -992,6 +994,9 @@ export interface RecoveryPayload {
   verified?: boolean;
   unhealthy_after?: string[];
   simulated?: boolean;
+  /** How many times the oracle was asked, and how long the target was given to settle. */
+  probes?: number;
+  waited_seconds?: number;
 }
 
 export interface DocRef {

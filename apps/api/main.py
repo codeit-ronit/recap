@@ -64,6 +64,7 @@ from apps.api.dto import (
     TimelineView,
     UsageView,
 )
+from apps.api.metrics import PROMETHEUS_TEXT, ApiMetrics, RequestMetrics
 from apps.api.service import RunManager, RunReader, RunRefused, check_run_request
 from apps.api.views import RunFilters, environment_label
 from recap import __version__
@@ -128,6 +129,7 @@ def create_app(
     apps/api/auth.py); `allowed_hosts` defaults to RECAP_ALLOWED_HOSTS or the loopback names.
     """
     hosts = allowed_hosts or allowed_hosts_from_environment()
+    metrics = ApiMetrics.from_environment()  # off unless RECAP_METRICS=1 (GET /metrics)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -136,7 +138,8 @@ def create_app(
         app.state.auth = auth or OperatorAuth.from_environment(
             app.state.manager.runtime.settings.paths.data_dir
         )
-        yield
+        with metrics.watching(app.state.manager.runtime):  # counts runs only when enabled
+            yield
 
     app = FastAPI(
         title="RECAP API",
@@ -167,6 +170,9 @@ def create_app(
         response: Response = await call_next(request)
         response.headers[SCHEMA_HEADER] = API_SCHEMA
         return response
+
+    if metrics.enabled:  # count and time every request (apps/api/metrics.py)
+        app.add_middleware(RequestMetrics, metrics=metrics)
 
     # Outermost: a request addressed to any other host name (DNS rebinding) gets 400.
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)
@@ -481,6 +487,16 @@ def create_app(
     def eval_batch(batch_id: str, request: Request) -> Any:
         """One batch with every record; a batch is found by its id, never by a path."""
         return found(reader(request).batch(batch_id), f"evaluation batch '{batch_id}'")
+
+    # --- operational metrics ------------------------------------------------------------------
+
+    @app.get("/metrics", include_in_schema=False)
+    def prometheus_metrics() -> Response:
+        """Prometheus text metrics, only with RECAP_METRICS=1 (else 404): counts and timings
+        with bounded labels, never an id, a prompt or model text (apps/api/metrics.py)."""
+        if not metrics.enabled:
+            raise HTTPException(404, "metrics are off: RECAP_METRICS=1 turns them on")
+        return Response(metrics.render(), media_type=PROMETHEUS_TEXT)
 
     # The built dashboard (npm run build) is served at / when present.
     if DASHBOARD_DIST.exists():

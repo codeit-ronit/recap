@@ -37,6 +37,8 @@ curl -H "Authorization: Bearer $(cat data/operator-token)" http://127.0.0.1:8000
 | GET | `/health` | liveness + environment `label`: `SIMULATED LOCAL ENVIRONMENT · V1` for a simulated environment, otherwise `LIVE ENVIRONMENT (<kind>) · V1` |
 | GET | `/system` | which implementation is plugged into each interface and its real status (`components`, `environment_adapters`: Kind and SREGym are implemented since M5, and operational only while configured), `features` (default retrieval and hybrid readiness, memory partitions and who reads and writes them, replay fixtures, which providers a client may pick, writes need the operator token) and `versions` |
 | GET | `/providers` | every configured decision provider: its class (`provider_class`), model, status (`ready`, `needs_setup`, `stopped`, `disabled`, `unavailable`), configured `limits` (free-tier caps included), honest `limitations`, whether a client may pick it for one run (`selectable`, `selection_rule`), whether a key is present (never its value) and usage. It runs no inference and calls no hosted API (it only asks a local Ollama server which models are installed) |
+| POST | `/environment/check` | **operator** · can the configured target be reached right now? A real cluster's adapter runs its own preflight (each kubeconfig's server and CA fingerprint, the version skew, the monitoring clock), bounded to 20 s; nothing changes and no run starts. `{checked_at, environment_kind, simulated, ok, checks: [{name, ok, detail}]}` |
+| GET | `/metrics` | only with `RECAP_METRICS=1` (otherwise 404): this server's operational counters in the Prometheus text format (requests, incidents, tool calls, model requests and tokens, actions, recovery verdicts), with bounded labels only, never an id, a prompt, model text or a credential ([metrics.py](metrics.py)); not in the OpenAPI schema |
 | GET | `/scenarios` | available scenarios (ground-truth fields are for evaluation only; agents never see them) |
 | GET | `/replays` | the committed recordings of real model runs (`fixtures/recordings/MANIFEST.json`): model, prompt version, agents, who approved the original fix, a short SHA-256, and whether each can be replayed here (`integrity`: `intact`, `altered` or `missing`; `launchable`, and why not) |
 | GET | `/auth/session` | **operator** · who the token belongs to (`{operator, actor}`); 401 without a valid token |
@@ -51,7 +53,7 @@ curl -H "Authorization: Bearer $(cat data/operator-token)" http://127.0.0.1:8000
 | GET | `/runs/{id}/events` | stored trace events (`?after_seq=`) |
 | GET | `/runs/{id}/stream` | **SSE**: replays stored events; for a run this server is running, then live ones until `run.summary`; resumes after `Last-Event-ID` or `after_seq` (below) |
 | GET | `/approvals/pending` | proposals waiting for a human |
-| POST | `/approvals/{proposal_id}` | **operator** · `{decision, proposal_digest}` — approve/reject ONE exact proposal; the approver recorded is the signed-in operator (an `actor` field is refused with 422). A rejection also revokes an approval that was not used yet; approving after a rejection, deciding an expired request, or rejecting after the gateway used the approval (right before sending the write) → 409 |
+| POST | `/approvals/{proposal_id}` | **operator** · `{decision, proposal_digest, confirm_target?}` — approve/reject ONE exact proposal; on a target that is not simulated, approving needs `confirm_target`, the proposal's target service typed exactly (otherwise 400 and nothing is decided), and the decision log records how and when it came; the approver recorded is the signed-in operator (an `actor` field is refused with 422). A rejection also revokes an approval that was not used yet; approving after a rejection, deciding an expired request, or rejecting after the gateway used the approval (right before sending the write) → 409 |
 | GET | `/approvals/{proposal_id}/events` | the proposal's append-only decision log (requested, approved, rejected, revoked, expired, consumed, refused) |
 | GET | `/approvals/events` | the newest decision-log entries across all proposals (`?limit=`) |
 | GET | `/memory` | experience episodes (`?partition=demo\|train\|live\|test`) |
@@ -106,8 +108,9 @@ wall time and overlap) are the replay's own.
 
 ## Starting a run: which provider
 
-`POST /incidents/run` refuses `safety_enabled: false` (400) and an unknown scenario (404). The
-`config.provider` a client may name for ONE run:
+`POST /incidents/run` refuses `safety_enabled: false` (400), an unknown scenario (404), and on a
+target that is not simulated the simulation auto-approver (`approval_mode: "auto"`, 400): a
+person approves every live write. The `config.provider` a client may name for ONE run:
 
 | Choice | Allowed? |
 |---|---|

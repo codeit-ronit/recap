@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { api, toApiError } from "../api";
 import { fmtArgs, fmtCountdown, fmtDateTime, humanize, riskTone, shortDigest, tsMs } from "../format";
 import { SIGN_IN_HINT } from "../auth";
 import type { EvidenceItem, PolicyVerdictView, ProposalCheckView } from "../dto";
-import { announceApprovalsChanged, hrefFor, useNow, useOperatorToken } from "../hooks";
+import { announceApprovalsChanged, hrefFor, useNow, useOperatorToken, useServerEnvironment } from "../hooks";
 import type { Approval, ApprovalRequest } from "../types";
+import { approveGate, attemptLabel, decisionBody, liveTargetWords, namesTarget, targetFacts } from "../view/lab";
+import type { DecisionChoice, TargetFacts, TargetFields } from "../view/lab";
 import "../styles/incident-lab.css";
 import { Chip, Mono } from "./Badge";
 import { KeyValues } from "./Card";
@@ -16,40 +18,46 @@ import { Modal } from "./Modal";
 import { StatusToken } from "./StatusToken";
 import { UntrustedText } from "./Untrusted";
 
+export { tamper } from "../view/lab";
+
 /** What the server answered to a decision sent from this tab. */
 export type DecisionOutcome =
   | { ok: true; approval: Approval }
   | { ok: false; status: number; message: string; attempt: string };
 
-/** Flip the last hex digit: a digest for a *different* proposal than the one shown. */
-export function tamper(digest: string): string {
-  if (!digest) return "0";
-  return digest.slice(0, -1) + (digest.endsWith("0") ? "1" : "0");
+/**
+ * Send ONE decision on one exact proposal: POST /approvals/{proposal_id} with its digest, and on a
+ * live target the service name the person typed (src/view/lab.ts decisionBody). Never throws: a
+ * refusal comes back as the server's status and message (409: the digest does not match, the
+ * request expired or was decided; 400: a live target's name was not typed exactly).
+ */
+export async function sendDecision(request: Pick<ApprovalRequest, "proposal_id" | "proposal_digest">, choice: DecisionChoice): Promise<DecisionOutcome> {
+  try {
+    const approval = await api.decideApproval(request.proposal_id, decisionBody(request.proposal_digest, choice));
+    return { ok: true, approval };
+  } catch (err) {
+    const e = toApiError(err);
+    return { ok: false, status: e.status, message: e.message, attempt: attemptLabel(choice) };
+  }
 }
 
 /**
  * Send a decision on ONE exact proposal: POST /approvals/{proposal_id} with its digest. The
  * server refuses (409) any digest that does not match, an expired request, or a second decision,
- * and records the signed-in operator as the approver (never a name the browser sends). Nothing
- * here ever decides by itself: only a click sends a decision.
+ * refuses (400) an approval on a live target without the target service's exact name, and
+ * records the signed-in operator as the approver (never a name the browser sends). Nothing here
+ * ever decides by itself: only a click sends a decision.
  */
 export function useApprovalDecision(request: ApprovalRequest, onDecided?: (approval: Approval) => void) {
   const [busy, setBusy] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<DecisionOutcome | null>(null);
 
-  async function send(decision: "approved" | "rejected", tampered = false) {
-    const attempt = tampered ? "approve with a tampered digest" : decision === "approved" ? "approve" : "reject";
-    setBusy(attempt);
+  async function send(choice: DecisionChoice) {
+    setBusy(attemptLabel(choice));
     try {
-      const approval = await api.decideApproval(request.proposal_id, {
-        decision,
-        proposal_digest: tampered ? tamper(request.proposal_digest) : request.proposal_digest,
-      });
-      setOutcome({ ok: true, approval });
-      onDecided?.(approval);
-    } catch (err) {
-      const e = toApiError(err);
-      setOutcome({ ok: false, status: e.status, message: e.message, attempt });
+      const answer = await sendDecision(request, choice);
+      setOutcome(answer);
+      if (answer.ok) onDecided?.(answer.approval);
     } finally {
       setBusy(null);
       announceApprovalsChanged();
@@ -90,6 +98,7 @@ export function DecisionResult({ outcome }: { outcome: DecisionOutcome | null })
         </strong>
         : {outcome.message}
         {outcome.status === 409 && outcome.attempt.includes("tampered") ? " The request stays pending: the binding held." : ""}
+        {outcome.status === 400 ? `${/[.!?]$/.test(outcome.message.trim()) ? "" : "."} The request stays pending.` : ""}
       </div>
     </div>
   );
@@ -147,10 +156,151 @@ function RiskTokens({ trusted, declared }: { trusted: string | null | undefined;
   );
 }
 
+// ==================================================================================================
+// The target an approval acts on: simulated (one click) or live (the service's name, typed)
+// ==================================================================================================
+
+export interface ApprovalTarget {
+  target: TargetFacts;
+  /** GET /system has not answered yet (the card asked it itself). */
+  checking: boolean;
+  /** Why the target is unknown, when GET /system failed. */
+  error: string | null;
+}
+
+/**
+ * The target a decision acts on. `environment` from the page (the Incident Lab knows the run's own
+ * and the server's), or, when the page passes none (Safety & Approvals), the server's environment
+ * from GET /system: what the server checks an approval against.
+ */
+export function useApprovalTarget(environment: TargetFields | null | undefined): ApprovalTarget {
+  const ask = environment === undefined;
+  const server = useServerEnvironment(ask);
+  const target = targetFacts(ask ? server.environment : environment);
+  return {
+    target,
+    checking: ask && target.state === "unknown" && server.loading,
+    error: ask && target.state === "unknown" && server.error ? server.error.message : null,
+  };
+}
+
+/**
+ * Approve is one click only on a target the server reported as simulated. On a live target, or
+ * one not reported, approving takes the target service's exact name, typed (the server refuses
+ * an approval without it on a live target: 400, nothing decided). While GET /system is still
+ * being asked, Approve waits.
+ */
+export function approveNeedsName(state: ApprovalTarget, outcome: DecisionOutcome | null = null): boolean {
+  // The server refused an approval for want of the name (its only 400 here): its target is live,
+  // whatever this tab last heard from GET /system, so the name is asked from now on.
+  const refusedForName = outcome?.ok === false && outcome.status === 400 && outcome.attempt === "approve";
+  return refusedForName || (state.target.state !== "simulated" && !state.checking);
+}
+
+/** The red LIVE block: which real cluster an approved action changes. */
+export function LiveTargetNotice({ target, action, service }: { target: TargetFacts; action: string; service: string }) {
+  const { real } = liveTargetWords(target);
+  return (
+    <div className="approval-live" role="note" aria-label="Live target">
+      <Icon name="alert" size={18} />
+      <div className="approval-live-text">
+        <div className="approval-live-label">LIVE TARGET · {target.kind || "kind not reported"}</div>
+        <div className="approval-live-place">
+          {target.name ? <span>{target.name}</span> : <span className="muted">name not reported</span>}
+          <span>
+            namespace {target.namespace ? <Mono>{target.namespace}</Mono> : <span className="muted">not reported</span>}
+          </span>
+        </div>
+        <div>
+          Not a simulation: an approved action changes this {real.replace(/^a /, "")}. Approving sends{" "}
+          <Mono>
+            {action} on {service}
+          </Mono>{" "}
+          to it once, through the safety gateway.
+        </div>
+        {target.description ? <div className="approval-live-about">{target.description}</div> : null}
+      </div>
+    </div>
+  );
+}
+
+/** GET /system did not say which target this is: approving takes the name, as on a live target. */
+function UnknownTargetNotice({ error }: { error: string | null }) {
+  return (
+    <div className="approval-response tone-neutral" role="note">
+      <Icon name="info" size={15} />
+      <div>
+        <strong>Target not reported.</strong> GET /system has not said whether this approval acts on a simulated or a live target
+        {error ? ` (${error})` : ""}, so approving takes the target service's name, as a live target requires. Reject needs no name.
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The typed confirmation of a live approval: the target service's exact name, compared as the
+ * server compares it (namesTarget). What is typed stays in this field: it is sent only with an
+ * approval, as confirm_target, and never shown anywhere else.
+ */
+export function ConfirmTargetField({
+  service,
+  typed,
+  onType,
+  disabled = false,
+}: {
+  service: string;
+  typed: string;
+  onType: (value: string) => void;
+  disabled?: boolean;
+}) {
+  const id = useId();
+  const named = namesTarget(typed, service);
+  const status = !service
+    ? "The proposal names no target service, so it cannot be approved here."
+    : named
+      ? "Matches the proposal's target: Approve is enabled."
+      : typed.trim()
+        ? "Does not match yet: type the exact name, case included."
+        : "Approving needs the target service's exact name, typed, as at the console. Reject needs no name.";
+  return (
+    <div className={named ? "approval-confirm is-named" : "approval-confirm"}>
+      <label htmlFor={id} className="approval-confirm-label">
+        Type <code className="mono">{service || "the target"}</code> to approve
+      </label>
+      <input
+        id={id}
+        className="input mono approval-confirm-input"
+        type="text"
+        value={typed}
+        onChange={(event) => onType(event.target.value)}
+        disabled={disabled || !service}
+        autoComplete="off"
+        autoCapitalize="none"
+        autoCorrect="off"
+        spellCheck={false}
+        aria-describedby={`${id}-status`}
+      />
+      <span id={`${id}-status`} className="approval-confirm-status" aria-live="polite">
+        {named ? <Icon name="check" size={13} /> : null}
+        {status}
+      </span>
+    </div>
+  );
+}
+
+// ==================================================================================================
+// The inline card (Safety & Approvals)
+// ==================================================================================================
+
 /**
  * A pending approval for ONE exact proposal, inline (the Safety & Approvals page). Approve/Reject
  * POST /approvals/{proposal_id} with the proposal's digest; the server refuses (409) any digest
  * that does not match, an expired request, or a second decision.
+ *
+ * On a live target the card says so (which cluster and namespace an approved action changes) and
+ * Approve waits for the target service's exact name, typed; the name is sent with the approval
+ * (confirm_target), and the server's refusal is shown if it differs. Reject needs no name. The
+ * target comes from `environment` when the page passes one, else from GET /system.
  *
  * Deciding needs the operator token (sign in, top right). A rejection also revokes an approval
  * that was not used yet: "no" wins until the gateway uses the approval, right before it sends
@@ -160,20 +310,28 @@ export function ApprovalCard({
   request,
   trustedRisk,
   onDecided,
+  environment,
 }: {
   request: ApprovalRequest;
   /** Risk tier from the trusted registry (mitigation.proposed event), if known. */
   trustedRisk?: string;
   onDecided?: (approval: Approval) => void;
+  /** The target the decision acts on; left out, the server's (GET /system). */
+  environment?: TargetFields | null;
 }) {
   const { busy, outcome, send } = useApprovalDecision(request, onDecided);
   const now = useNow(1000);
   const signedIn = useOperatorToken() !== null;
+  const targetState = useApprovalTarget(environment);
+  const { target, checking } = targetState;
+  const [typed, setTyped] = useState("");
   const p = request.proposal;
   const expired = tsMs(request.expires_at) <= now;
   const decided = outcome?.ok === true;
   const params = p.params ?? {};
   const disabled = !!busy || decided || expired || !signedIn;
+  const needsName = approveNeedsName(targetState, outcome);
+  const gate = approveGate({ canDecide: !disabled, checking, needsName, typed, service: p.target });
 
   return (
     <div className="approval">
@@ -189,6 +347,9 @@ export function ApprovalCard({
         </div>
         <Countdown expiresAt={request.expires_at} now={now} />
       </div>
+
+      {target.state === "live" ? <LiveTargetNotice target={target} action={p.action} service={p.target} /> : null}
+      {target.state === "unknown" && !checking ? <UnknownTargetNotice error={targetState.error} /> : null}
 
       <div className="approval-action">
         <code className="mono">{p.action}</code>
@@ -239,22 +400,32 @@ export function ApprovalCard({
 
       {signedIn ? null : <SignInNote />}
 
+      {needsName && !decided && !expired ? <ConfirmTargetField service={p.target} typed={typed} onType={setTyped} disabled={disabled} /> : null}
+
       <div className="approval-buttons">
-        <button type="button" className="btn btn-approve" disabled={disabled} onClick={() => void send("approved")}>
-          <Icon name="check" size={15} /> {busy === "approve" ? "Approving…" : "Approve this exact action"}
-        </button>
-        <button type="button" className="btn btn-reject" disabled={disabled} onClick={() => void send("rejected")}>
-          <Icon name="x" size={15} /> {busy === "reject" ? "Rejecting…" : "Reject"}
-        </button>
         <button
           type="button"
-          className="btn btn-ghost btn-small"
-          disabled={disabled}
-          title="Sends a digest for a different proposal. The server must refuse it with 409; the request stays pending."
-          onClick={() => void send("approved", true)}
+          className="btn btn-approve"
+          disabled={gate.blocked}
+          title={gate.why ?? undefined}
+          onClick={() => void send({ decision: "approved", confirmTarget: needsName ? typed : null })}
         >
-          Test binding: send a tampered digest (expect 409)
+          <Icon name="check" size={15} /> {busy === "approve" ? "Approving…" : "Approve this exact action"}
         </button>
+        <button type="button" className="btn btn-reject" disabled={disabled} onClick={() => void send({ decision: "rejected" })}>
+          <Icon name="x" size={15} /> {busy === "reject" ? "Rejecting…" : "Reject"}
+        </button>
+        {target.state === "simulated" && !needsName ? (
+          <button
+            type="button"
+            className="btn btn-ghost btn-small"
+            disabled={disabled}
+            title="Sends a digest for a different proposal. The server must refuse it with 409; the request stays pending."
+            onClick={() => void send({ decision: "approved", tampered: true })}
+          >
+            Test binding: send a tampered digest (expect 409)
+          </button>
+        ) : null}
       </div>
 
       <DecisionResult outcome={outcome} />
@@ -336,6 +507,17 @@ function CitedItem({ id, runId, item }: { id: string; runId: string; item: Evide
   );
 }
 
+/** The dialog's description: what nothing changes in until the person decides. */
+function modalDescription(target: TargetFacts): string {
+  const lead = "The safety policy will not let this change run until a person approves it.";
+  if (target.state === "simulated") return `${lead} Nothing changes in the simulated shop until you decide; Decide later keeps the request pending.`;
+  if (target.state === "live") {
+    const { place, real } = liveTargetWords(target);
+    return `${lead} This is a live target: nothing changes in ${place} until you decide, and approving changes ${real}. Decide later keeps the request pending.`;
+  }
+  return `${lead} Nothing changes until you decide; Decide later keeps the request pending.`;
+}
+
 /**
  * The approval decision for the Incident Lab, as a modal that cannot be dismissed by Escape or a
  * click outside: the decision is the point. It shows the exact action, target and params, the
@@ -344,6 +526,10 @@ function CitedItem({ id, runId, item }: { id: string; runId: string; item: Evide
  * its author, and the evidence it cites. Approve and Reject are explicit; "Decide later" closes
  * the dialog and the request stays pending (closing is never a decision). After a decision the
  * server's answer is shown until the operator closes the dialog.
+ *
+ * On a live target the dialog opens with the red LIVE block (kind, cluster, namespace) and the
+ * decision bar asks for the target service's exact name before Approve is enabled; the binding
+ * test (a tampered digest) is offered on the simulated shop only.
  */
 export function ApprovalModal({
   request,
@@ -356,6 +542,7 @@ export function ApprovalModal({
   author,
   evidence,
   closedReason,
+  environment,
 }: {
   request: ApprovalRequest;
   open: boolean;
@@ -373,10 +560,15 @@ export function ApprovalModal({
   evidence: CitedEvidence;
   /** Set when the request can no longer be decided here (the run ended or the request closed). */
   closedReason?: string | null;
+  /** The target the decision acts on (src/view/lab.ts approvalTarget); left out, the server's (GET /system). */
+  environment?: TargetFields | null;
 }) {
   const { busy, outcome, send } = useApprovalDecision(request, onDecided);
   const now = useNow(1000);
   const signedIn = useOperatorToken() !== null;
+  const targetState = useApprovalTarget(environment);
+  const { target, checking } = targetState;
+  const [typed, setTyped] = useState("");
   const focusRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const p = request.proposal;
@@ -386,6 +578,8 @@ export function ApprovalModal({
   const done = decided || expired || !!closedReason;
   const disabled = !!busy || done || !signedIn;
   const registry = evidence.registry;
+  const needsName = approveNeedsName(targetState, outcome);
+  const gate = approveGate({ canDecide: !disabled, checking, needsName, typed, service: p.target });
 
   // Once nothing can be decided any more, the way out takes focus (the buttons just disabled).
   useEffect(() => {
@@ -408,22 +602,35 @@ export function ApprovalModal({
   ) : (
     <>
       {answer}
-      <button
-        type="button"
-        className="btn btn-ghost btn-small lab-foot-btn lab-tamper"
-        disabled={disabled}
-        title="Sends a digest for a different proposal. The server must refuse it with 409; the request stays pending."
-        onClick={() => void send("approved", true)}
-      >
-        Test binding: send a tampered digest (expect 409)
-      </button>
+      {needsName ? (
+        <div className="lab-foot-confirm">
+          <ConfirmTargetField service={p.target} typed={typed} onType={setTyped} disabled={disabled} />
+        </div>
+      ) : null}
+      {target.state === "simulated" && !needsName ? (
+        <button
+          type="button"
+          className="btn btn-ghost btn-small lab-foot-btn lab-tamper"
+          disabled={disabled}
+          title="Sends a digest for a different proposal. The server must refuse it with 409; the request stays pending."
+          onClick={() => void send({ decision: "approved", tampered: true })}
+        >
+          Test binding: send a tampered digest (expect 409)
+        </button>
+      ) : null}
       <button type="button" className="btn btn-ghost lab-foot-btn" disabled={!!busy} onClick={onDefer}>
         Decide later
       </button>
-      <button type="button" className="btn btn-reject lab-foot-btn" disabled={disabled} onClick={() => void send("rejected")}>
+      <button type="button" className="btn btn-reject lab-foot-btn" disabled={disabled} onClick={() => void send({ decision: "rejected" })}>
         <Icon name="x" size={15} /> {busy === "reject" ? "Rejecting…" : "Reject"}
       </button>
-      <button type="button" className="btn btn-approve lab-foot-btn" disabled={disabled} onClick={() => void send("approved")}>
+      <button
+        type="button"
+        className="btn btn-approve lab-foot-btn"
+        disabled={gate.blocked}
+        title={gate.why ?? undefined}
+        onClick={() => void send({ decision: "approved", confirmTarget: needsName ? typed : null })}
+      >
         <Icon name="check" size={15} /> {busy === "approve" ? "Approving…" : "Approve this exact action"}
       </button>
     </>
@@ -435,11 +642,14 @@ export function ApprovalModal({
       onClose={onDefer}
       dismissible={false}
       size="large"
-      title="Approve this exact action?"
-      description="The safety policy will not let this change run until a person approves it. Nothing changes in the simulated shop until you decide; Decide later keeps the request pending."
+      title={target.state === "live" ? "Approve this exact action on the live target?" : "Approve this exact action?"}
+      description={modalDescription(target)}
       initialFocusRef={focusRef}
       footer={footer}
     >
+      {target.state === "live" ? <LiveTargetNotice target={target} action={p.action} service={p.target} /> : null}
+      {target.state === "unknown" && !checking && !done ? <UnknownTargetNotice error={targetState.error} /> : null}
+
       <div ref={focusRef} tabIndex={-1} className="lab-approval-action" role="group" aria-label="The proposed action">
         <div className="lab-approval-command">
           <code className="mono">{p.action}</code>
@@ -565,7 +775,11 @@ export function ApprovalModal({
 
       <Section
         title={`Evidence it cites (${p.evidence_ids.length})`}
-        hint="Observations from the run's read-only tool calls, as recorded. Tool output is untrusted data."
+        hint={
+          target.state === "live"
+            ? `Observations from the run's read-only tool calls on ${liveTargetWords(target).place}, as recorded. Tool output is untrusted data.`
+            : "Observations from the run's read-only tool calls, as recorded. Tool output is untrusted data."
+        }
       >
         {p.evidence_ids.length === 0 ? (
           <p className="muted">The proposal cites no evidence.</p>

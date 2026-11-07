@@ -3,11 +3,14 @@
  * and GET /runs (the typed views in ../dto):
  *
  *   - component, adapter and provider statuses as words, tones and icons (never color alone)
- *   - run outcomes counted PER DATA SOURCE (scripted, replay, local LLM, free hosted LLM),
- *     never added up into one number
- *   - active incidents, run durations, the M5 gaps the server reports
- *   - the map of RECAP's flow: each step's code modules, ADRs, trace events and the /system
- *     components whose status it shows
+ *   - the active environment (the simulated shop, the Kind demo cluster or SREGym's cluster)
+ *     and the answer of its readiness check (POST /environment/check)
+ *   - run outcomes counted PER DATA SOURCE AND TARGET (scripted, replay, local LLM, free
+ *     hosted LLM; the simulator or a real cluster), never added up into one number
+ *   - active incidents, run durations, anything the server still lists as planned
+ *   - the map of RECAP's flow: each step's code modules, ADRs, trace events, the /system
+ *     components whose status it shows and how each target does it, and how a real
+ *     Kubernetes action is authorized
  *
  * Every status and number comes from the server. A field the server did not record stays
  * null here ("Not recorded" on screen), never a default dressed as data. The flow map's
@@ -65,6 +68,9 @@ export const DOCS = {
   architecture: "docs/architecture.md",
   threatModel: "docs/threat-model.md",
   m5Plan: "docs/m5-integration-plan.md",
+  m5Progress: "docs/m5-progress.md",
+  kindTarget: "infra/kind/README.md",
+  sregymTarget: "integrations/sregym/README.md",
   demoWalkthrough: "docs/demo-walkthrough.md",
   learningNotes: "docs/learning-notes.md",
 } as const;
@@ -135,7 +141,61 @@ export function componentById(system: Pick<SystemView, "components"> | null | un
 }
 
 // ======================================================================================
-// M5 gaps: what the server reports as planned
+// The active environment (GET /system) and its check (POST /environment/check)
+// ======================================================================================
+
+/** The adapter kinds this repository implements (EnvironmentInfo.kind), in reading order. */
+export const TARGET_KINDS = ["simulated", "kind", "sregym"] as const;
+export type TargetKind = (typeof TARGET_KINDS)[number];
+
+/** The adapters that act on a real cluster (recap/runtime.py LIVE_ADAPTERS). */
+const LIVE_KINDS: ReadonlySet<string> = new Set(["kind", "sregym"]);
+
+/** The configured adapter's entry in GET /system, or null when the server lists none. */
+export function configuredAdapter(system: Pick<SystemView, "environment_adapters">): AdapterStatus | null {
+  return system.environment_adapters.find((adapter) => adapter.configured) ?? null;
+}
+
+/**
+ * Whether an adapter runs this server's incidents (AdapterStatus.operational: only the
+ * configured one does). GET /system never contacts a cluster, so for a real cluster this
+ * says where runs go, not that the cluster answers: POST /environment/check asks it.
+ */
+export function operationalLook(adapter: Pick<AdapterStatus, "operational" | "kind">): StatusLook {
+  if (!adapter.operational) {
+    return { label: "Not operational", tone: "neutral", icon: "minus", title: "This server's runs do not use it: every run uses the configured adapter." };
+  }
+  return LIVE_KINDS.has(adapter.kind)
+    ? {
+        label: "Operational",
+        tone: "ok",
+        icon: "check",
+        title: "Every run on this server uses it. GET /system does not contact the cluster: Check now (Overview, Active environment) does.",
+      }
+    : { label: "Operational", tone: "ok", icon: "check", title: "Every run on this server uses it." };
+}
+
+/** Where a real-cluster target is set up and explained; null for the simulator and unknown kinds. */
+export function targetGuide(kind: string | null | undefined): { path: string; title: string } | null {
+  switch (kind) {
+    case "kind":
+      return { path: DOCS.kindTarget, title: "How the Kind demo cluster, its identities and its limits are set up" };
+    case "sregym":
+      return { path: DOCS.sregymTarget, title: "How RECAP works a SREGym problem on SREGym's own cluster" };
+    default:
+      return null;
+  }
+}
+
+/** The answer of POST /environment/check, or one of its checks, as words: never color alone. */
+export function checkLook(ok: boolean): StatusLook {
+  return ok
+    ? { label: "Passed", tone: "ok", icon: "check", title: "The server reached the target as a run would. Nothing was changed." }
+    : { label: "Failed", tone: "bad", icon: "x", title: "The server could not reach the target as a run would (the detail says why). Nothing was changed." };
+}
+
+// ======================================================================================
+// Planned items: what the server still lists as not built
 // ======================================================================================
 
 export interface Gap {
@@ -149,9 +209,10 @@ export interface Gap {
 }
 
 /**
- * Everything the server lists as not built yet: planned environment adapters (Kind, SREGym),
- * planned components and planned evaluation modes. An empty list means the server reports
- * no planned item, not that M5 is done.
+ * Everything the server still lists as not built: planned environment adapters, planned
+ * components and planned evaluation modes. Since M5 a server of this repository lists none
+ * (Kind and SREGym are implemented), so the Overview shows the list only when it is not
+ * empty; an empty list means the server reports no planned item, nothing more.
  */
 export function plannedGaps(system: Pick<SystemView, "environment_adapters" | "components" | "features">): Gap[] {
   const gaps: Gap[] = [];
@@ -278,7 +339,7 @@ export const SOURCE_LABELS: Readonly<Record<SourceKey, string>> = {
 export const SOURCE_NOTES: Readonly<Record<SourceKey, string>> = {
   scripted: "Fixed playbooks, not an LLM: the regression baseline.",
   replay: "Recorded answers of an earlier real-model run, replayed offline: no model is called now.",
-  local_llm: "New inference by a model on this machine (Ollama).",
+  local_llm: "New inference by a self-hosted open-weight model (Ollama), on this machine or on the owner's own VM. No paid API.",
   free_hosted_llm: "New inference on a free hosted plan, behind RECAP's free-tier guard.",
   paid_llm: "A billed API. This project keeps it disabled.",
   unknown: "Runs whose decision source was not recorded (recorded before provider classes existed).",
@@ -329,8 +390,53 @@ export interface OutcomeCount {
   count: number;
 }
 
+/** Where a run's actions went, read only from what the run recorded (RunSummary). */
+export interface RunTarget {
+  /** What the breakdown groups by: "simulated", "live:<kind>", or "unknown" (not recorded). */
+  key: string;
+  /** RunSummary.environment_simulated; null when the run did not record it. */
+  simulated: boolean | null;
+  /** RunSummary.environment_kind; null when the run did not record it. */
+  kind: string | null;
+}
+
+/** The target of a run: the simulator, a real cluster of one kind, or not recorded (never a guess). */
+export function targetOf(run: Pick<RunSummary, "environment_simulated" | "environment_kind">): RunTarget {
+  const kind = typeof run.environment_kind === "string" && run.environment_kind.trim() ? run.environment_kind.trim() : null;
+  if (run.environment_simulated === true) return { key: "simulated", simulated: true, kind };
+  if (run.environment_simulated === false) return { key: `live:${kind ?? ""}`, simulated: false, kind };
+  return { key: "unknown", simulated: null, kind: null };
+}
+
+/** A target in words: "Simulated target", "Live target · Kind (local Kubernetes)", "Target not recorded". */
+export function targetLabel(target: Pick<RunTarget, "simulated" | "kind">): string {
+  if (target.simulated === true) return "Simulated target";
+  if (target.simulated === false) return `Live target · ${target.kind ? adapterName(target.kind) : "kind not reported"}`;
+  return "Target not recorded";
+}
+
+/** What a column's target adds to its source's note; null for the simulator (the usual case). */
+export function targetNote(target: Pick<RunTarget, "simulated" | "kind"> | null): string | null {
+  if (!target || target.simulated === true) return null;
+  if (target.simulated === null) return "These runs did not record which environment they ran against.";
+  if (target.kind === "sregym") {
+    return "These runs acted on SREGym's cluster, not a simulation. Resolved is RECAP's own oracle; SREGym's grader gives the benchmark's verdict separately (Evaluations).";
+  }
+  return LIVE_KINDS.has(target.kind ?? "")
+    ? "These runs acted on a real cluster, not a simulation."
+    : "These runs acted on a live target, not a simulation.";
+}
+
+/** Simulated first, then each real cluster by kind, then runs that recorded no target. */
+function targetRank(target: RunTarget | null): [number, string] {
+  if (!target || target.simulated === true) return [0, ""];
+  return target.simulated === false ? [1, target.kind ?? ""] : [2, ""];
+}
+
 export interface SourceBreakdown {
   source: SourceKey;
+  /** Where these runs acted; null for a source shown with no run at all (no target to name). */
+  target: RunTarget | null;
   total: number;
   /** Outcomes that occur, in OUTCOME_ORDER (unknown outcomes last). */
   outcomes: OutcomeCount[];
@@ -343,22 +449,34 @@ export interface SourceBreakdown {
 }
 
 /**
- * Run outcomes counted separately for every data source. Nothing is added across sources:
- * a scripted run, a replay of a recording and a new model run are different kinds of
- * evidence. Sources in ALWAYS_SHOWN appear even with no runs; the others only when present.
+ * Run outcomes counted separately for every data source AND target. Nothing is added across
+ * them: a scripted run, a replay of a recording and a new model run are different kinds of
+ * evidence, and a run on the simulator is not a run on a real cluster. Sources in
+ * ALWAYS_SHOWN appear even with no runs (one empty column, no target); the others, and each
+ * source's targets, only when present.
  */
-type CountedRun = Pick<RunSummary, "provider_class" | "provider_kind" | "outcome" | "scenario_id" | "replay">;
+type CountedRun = Pick<RunSummary, "provider_class" | "provider_kind" | "outcome" | "scenario_id" | "replay" | "environment_simulated" | "environment_kind">;
 
 export function outcomesBySource(runs: readonly CountedRun[]): SourceBreakdown[] {
-  const groups = new Map<SourceKey, CountedRun[]>();
+  const groups = new Map<string, { source: SourceKey; target: RunTarget | null; runs: CountedRun[] }>();
   for (const run of runs) {
-    const key = sourceOf(run);
-    const list = groups.get(key) ?? [];
-    list.push(run);
-    groups.set(key, list);
+    const source = sourceOf(run);
+    const target = targetOf(run);
+    const key = `${source}|${target.key}`;
+    const group = groups.get(key) ?? { source, target, runs: [] };
+    group.runs.push(run);
+    groups.set(key, group);
   }
-  return SOURCE_ORDER.filter((source) => ALWAYS_SHOWN.has(source) || groups.has(source)).map((source) => {
-    const list = groups.get(source) ?? [];
+  const present = new Set([...groups.values()].map((group) => group.source));
+  for (const source of SOURCE_ORDER) {
+    if (ALWAYS_SHOWN.has(source) && !present.has(source)) groups.set(`${source}|`, { source, target: null, runs: [] });
+  }
+  const ordered = [...groups.values()].sort((a, b) => {
+    const [rankA, kindA] = targetRank(a.target);
+    const [rankB, kindB] = targetRank(b.target);
+    return SOURCE_ORDER.indexOf(a.source) - SOURCE_ORDER.indexOf(b.source) || rankA - rankB || kindA.localeCompare(kindB);
+  });
+  return ordered.map(({ source, target, runs: list }) => {
     const counts = new Map<string, number>();
     for (const run of list) counts.set(run.outcome, (counts.get(run.outcome) ?? 0) + 1);
     const known = OUTCOME_ORDER.filter((o) => counts.has(o));
@@ -370,6 +488,7 @@ export function outcomesBySource(runs: readonly CountedRun[]): SourceBreakdown[]
     }
     return {
       source,
+      target,
       total: list.length,
       outcomes: [...known, ...other].map((outcome) => ({ outcome, count: counts.get(outcome) ?? 0 })),
       resolved: counts.get("resolved") ?? 0,
@@ -518,6 +637,17 @@ const ADR_LIST: readonly Adr[] = [
   { id: "0023", title: "Memory partitions by origin, and evidence-checked reuse", file: "0023-memory-partitions-by-origin-and-evidence-checked-reuse.md" },
   { id: "0027", title: "A typed, read-only API over the run records", file: "0027-a-typed-read-only-api-over-the-run-records.md" },
   { id: "0028", title: "Content-addressed recordings, replayed by manifest id", file: "0028-content-addressed-recordings-and-replay-by-manifest-id.md" },
+  {
+    id: "0029",
+    title: "One evaluation record per run, modes that never share a number, and a named reason for every run that did not recover",
+    file: "0029-one-evaluation-record-per-run-and-modes-that-never-share-a-number.md",
+  },
+  { id: "0030", title: "Mission Control shows only typed server facts, one screen per question", file: "0030-mission-control-reads-only-typed-server-facts.md" },
+  {
+    id: "0031",
+    title: "RECAP on an external benchmark's cluster: the harness owns the fault, a release is an image tag",
+    file: "0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md",
+  },
 ];
 
 export const ADRS: ReadonlyMap<string, Adr> = new Map(ADR_LIST.map((adr) => [adr.id, adr]));
@@ -549,6 +679,8 @@ export interface ArchNode {
   parts: ArchPart[];
   /** What it does, in short paragraphs (RECAP's documentation). */
   what: string[];
+  /** How each target does it, where the targets differ (RECAP's documentation). */
+  onTarget?: Partial<Readonly<Record<TargetKind, string>>>;
   /** Repository paths of its code (folders end with "/"). */
   modules: string[];
   adrs: string[];
@@ -573,11 +705,23 @@ export const ARCH_NODES: readonly ArchNode[] = [
     components: ["environment"],
     parts: [],
     what: [
-      "A run starts when the target environment is reset to a scenario and reports an alert: the affected service and its symptoms.",
+      "A run starts when the target environment has its scenario's problem in place and reports an alert: the affected service and its symptoms, as measured.",
       "The alert's words are data, never instructions: a model sees them only inside an untrusted-data wrapper. A scenario's evaluation labels (its failure family and expected fix) never leave the evaluation code.",
     ],
-    modules: ["recap/core/interfaces.py", "recap/environments/simulated/", "fixtures/scenarios/"],
-    adrs: ["0006", "0007", "0010"],
+    onTarget: {
+      simulated: "RECAP resets the simulated shop to the scenario, which raises its alert at once.",
+      kind: "RECAP's reset restores the demo app's baseline, applies the scenario's fault steps as its own scenario identity, then waits for the alert it measures: probe errors, replicas not ready, a crash loop or a stuck rollout.",
+      sregym: "SREGym's own harness deploys the app and injects the problem before the run. RECAP's reset changes nothing: it waits for the alert from the cluster's own state.",
+    },
+    modules: [
+      "recap/core/interfaces.py",
+      "recap/environments/simulated/",
+      "fixtures/scenarios/",
+      "recap/environments/kubernetes/scenario.py",
+      "fixtures/kind-scenarios/",
+      "fixtures/sregym-scenarios/",
+    ],
+    adrs: ["0006", "0007", "0010", "0031"],
     events: ["state.transition"],
     page: "live",
     next: "typed Incident",
@@ -722,6 +866,11 @@ export const ARCH_NODES: readonly ArchNode[] = [
       "The provider drafts one fix for the best supported claim. The safety policy judges it from trusted configuration (the proposer's own risk label is ignored): destructive actions are always denied, and a reversible fix needs a person's approval.",
       "An approval is bound to the proposal's digest (action, target and parameters), expires and is used once. A rejection wins until the approval is used. Through the API and this dashboard, deciding needs the operator token.",
     ],
+    onTarget: {
+      simulated: "At the console y or yes approves (anything else rejects); in this dashboard, the Approve button.",
+      kind: "Only the target service's exact name approves: typed at the console (anything else, y included, rejects) or in this dashboard's approval dialog (anything else decides nothing).",
+      sregym: "As on Kind: only the target service's exact name approves, typed at the console or in this dashboard's approval dialog.",
+    },
     modules: ["recap/safety/approvals.py", "recap/safety/policy.py", "apps/api/auth.py"],
     adrs: ["0005", "0015"],
     events: ["mitigation.proposed", "approval.requested", "approval.decided"],
@@ -741,11 +890,23 @@ export const ARCH_NODES: readonly ArchNode[] = [
       "Only the controller executes the approved fix, through the gateway, which signs a capability (Ed25519, one key per run) for exactly that action. The environment's write boundary verifies it first and refuses a write without a valid, unused, unexpired capability.",
       "A write-ahead event is traced before the write is sent.",
     ],
-    modules: ["recap/safety/capabilities.py", "recap/tools/gateway.py", "recap/tools/actions.py"],
-    adrs: ["0014", "0005"],
+    onTarget: {
+      simulated: "The simulated shop's write boundary verifies the capability, then changes only its own state (a per-run SQLite file).",
+      kind: "The Kubernetes adapter verifies the capability and its own rules, then writes as recap-writer: RBAC lets it patch only the two demo Deployments in its namespace, and an admission policy checks each patch's shape. A server-side dry run, the write, a read-back and an audit row (see How a real Kubernetes action is authorized, below).",
+      sregym: "The same adapter and steps, as RECAP's own recap-writer in SREGym's cluster: RBAC lets it patch only the app's named Deployments in one namespace. SREGym's cluster has no admission policy, so RBAC is the only limit there. A rollback restores a revision's own image tag.",
+    },
+    modules: [
+      "recap/safety/capabilities.py",
+      "recap/tools/gateway.py",
+      "recap/tools/actions.py",
+      "recap/environments/kubernetes/engine.py",
+      "infra/kind/manifests/",
+      "infra/sregym/recap-rbac.yaml",
+    ],
+    adrs: ["0014", "0005", "0031"],
     events: ["mitigation.started", "mitigation.executed"],
     page: "safety",
-    next: "health probe (never an MCP tool)",
+    next: "health check (never an MCP tool)",
   },
   {
     id: "oracle",
@@ -757,11 +918,16 @@ export const ARCH_NODES: readonly ArchNode[] = [
     components: ["oracle"],
     parts: [],
     what: [
-      "After a fix, the oracle probes the environment's health on its own channel, not through an MCP tool, and compares before with after. It only ever says yes or no, and its findings never reach a provider.",
+      "After a fix, the oracle checks the environment's health on its own channel, never through an MCP tool, and compares before with after. It only ever says yes or no, and its findings never reach a provider.",
       "A run counts as resolved only when the oracle verified the recovery.",
     ],
-    modules: ["recap/verification/oracle.py"],
-    adrs: ["0010", "0013"],
+    onTarget: {
+      simulated: "Reads the simulated shop's noise-free health straight from the simulator's state, through a trusted call that is not an MCP tool.",
+      kind: "As its own recap-oracle identity: a complete rollout, readiness, and its own HTTP probe of each service (not Prometheus, which the agents read), in two rounds a few seconds apart.",
+      sregym: "No probe and no metrics there, so: a complete rollout, readiness, and containers that stayed up a minute with no exit in the last five. SREGym's own grader gives the benchmark's verdict separately; it is recorded by hand, never counted as RECAP's success.",
+    },
+    modules: ["recap/verification/oracle.py", "recap/environments/kubernetes/probe.py", "recap/environments/kubernetes/rollout.py"],
+    adrs: ["0010", "0013", "0029", "0031"],
     events: ["verification.recovery"],
     page: "live",
     next: "final state",
@@ -789,17 +955,32 @@ export const ARCH_NODES: readonly ArchNode[] = [
     id: "environment",
     step: null,
     title: "Target environment",
-    summary: "The adapter behind every alert, tool read, authorized write and health probe",
+    summary: "The adapter behind every alert, tool read, authorized write and health check",
     icon: "package",
     trust: "untrusted",
     components: ["environment"],
     parts: [],
     what: [
-      "All infrastructure sits behind one TargetEnvironment adapter: today, the deterministic simulated shop. Swapping it means writing one adapter and changing configs/environment.yaml; the controller, gateway, retrieval, memory, router and agents keep their code.",
-      "Kind and SREGym are planned for M5. Neither is operational here, and nothing in RECAP runs on a real cluster.",
+      "All infrastructure sits behind one TargetEnvironment adapter, chosen by configuration: the deterministic simulated shop by default (configs/environment.yaml), or a real Kubernetes cluster through a target profile (RECAP_TARGET=kind-demo or sregym-hotel, configs/targets/). The controller, gateway, retrieval, memory, router and agents keep their code.",
+      "Each server runs every incident on its one configured adapter. GET /system describes it without contacting a cluster; the Overview's Check now asks the server to reach it.",
     ],
-    modules: ["recap/core/interfaces.py", "recap/environments/simulated/", "integrations/sregym/", "configs/environment.yaml"],
-    adrs: ["0006", "0007"],
+    onTarget: {
+      simulated: "A deterministic, in-process simulation of a five-service shop, its state in a per-run SQLite file. No real system is involved.",
+      kind: "A Kind cluster RECAP's owner controls, with two demo services, reached only through typed kubectl operations as four RBAC-limited identities (reader, writer, oracle, scenario), with Prometheus metrics and an HTTP probe of the oracle's own.",
+      sregym: "SREGym 1.1's own Kind cluster, whose harness deploys a benchmark application and injects the problem. RECAP works through three identities of its own (reader, writer, oracle), with no probe or metrics there, and rolls back by image tag.",
+    },
+    modules: [
+      "recap/core/interfaces.py",
+      "recap/environments/registry.py",
+      "recap/environments/simulated/",
+      "recap/environments/kubernetes/",
+      "integrations/sregym/",
+      "configs/environment.yaml",
+      "configs/targets/",
+      "infra/kind/",
+      "infra/sregym/",
+    ],
+    adrs: ["0006", "0007", "0031"],
     events: [],
     page: null,
   },
@@ -820,7 +1001,7 @@ export const ARCH_NODES: readonly ArchNode[] = [
       "The API serves typed, read-only views built only from what a run persisted, and names every field it did not record.",
     ],
     modules: ["recap/telemetry/tracer.py", "recap/telemetry/sinks.py", "recap/providers/recordings.py", "apps/api/views.py"],
-    adrs: ["0002", "0018", "0027", "0028"],
+    adrs: ["0002", "0018", "0027", "0028", "0030"],
     events: ["llm.call", "run.summary"],
     page: "timeline",
   },
@@ -919,10 +1100,17 @@ export function nodeFacts(node: ArchNode, system: SystemView): [string, string][
     case "verifier":
       return [["Verifier", v.verifier]];
     case "approval":
-      return [["Deciding needs the operator token", yesNo(f.writes_require_operator_token)]];
+      return [
+        ["Deciding needs the operator token", yesNo(f.writes_require_operator_token)],
+        // POST /approvals/{id} asks for it exactly when the target is not simulated.
+        ["Approving needs the service's name typed", system.environment.is_simulated ? "no (simulated target)" : "yes (not simulated)"],
+      ];
     case "write": {
       const boundary = componentById(system, "write_boundary");
-      return [["Write boundary", boundary ? boundary.implementation : "Not reported"]];
+      return [
+        ["Write boundary", boundary ? boundary.implementation : "Not reported"],
+        ["Actions it supports", system.environment.supported_actions.join(", ") || "none listed"],
+      ];
     }
     case "oracle":
       return [["Oracle", system.oracle]];
@@ -937,7 +1125,10 @@ export function nodeFacts(node: ArchNode, system: SystemView): [string, string][
     case "environment":
       return [
         ["Configured kind", system.environment_kind],
+        ["Adapter class", configuredAdapter(system)?.adapter ?? "Not reported"],
         ["Namespace", system.environment.namespace],
+        ["Simulated", yesNo(system.environment.is_simulated)],
+        ["Safety policy version", v.policy_version],
       ];
     case "telemetry":
       return [
@@ -947,3 +1138,58 @@ export function nodeFacts(node: ArchNode, system: SystemView): [string, string][
       ];
   }
 }
+
+// ======================================================================================
+// How a real Kubernetes action is authorized (Architecture & Learning)
+// ======================================================================================
+
+export interface AuthorizationStep {
+  title: string;
+  /** One or two plain sentences (RECAP's documentation of its own code). */
+  text: string;
+  /** Repository paths that implement it (folders end with "/"). */
+  links: string[];
+}
+
+/**
+ * What a write to a real cluster (the Kind demo or SREGym's) passes, in order, from the
+ * model's proposal to the oracle's verdict: the API and console approvals, the capability,
+ * KubernetesEnvironment.execute_authorized and the manifests that bound its writer.
+ */
+export const KUBERNETES_AUTHORIZATION: readonly AuthorizationStep[] = [
+  {
+    title: "One exact proposal",
+    text: "A model proposes one action on one service: a rollback to a named revision or a rolling restart. The safety policy judges it from trusted configuration, and a reversible write needs a person.",
+    links: ["recap/safety/policy.py"],
+  },
+  {
+    title: "The verifier's checks",
+    text: "Rules VP1 to VP4: the fix cites real evidence, targets the diagnosed service, names an action, and restores only a version the evidence names.",
+    links: ["recap/agents/verifier.py"],
+  },
+  {
+    title: "A person types the service's name",
+    text: "The approval is bound to the proposal's digest, expires and is used once. The operator types the target service's exact name, at the console or in this dashboard; a rejection wins until the approval is used.",
+    links: ["recap/safety/approvals.py"],
+  },
+  {
+    title: "A signed, single-use capability",
+    text: "The gateway signs an Ed25519 capability for exactly that action, service and parameters. The adapter verifies it and commits its nonce before touching the cluster, so it never works twice; it refuses any other action, and every write while its write switch is on.",
+    links: ["recap/safety/capabilities.py", "recap/environments/kubernetes/engine.py"],
+  },
+  {
+    title: "The writer's limits",
+    text: "The write goes out as recap-writer, a ServiceAccount whose RBAC lets it read and patch only the app's named Deployments in one namespace (and list their ReplicaSets, to find a revision). On the Kind demo an admission policy also checks each patch's shape; SREGym's cluster has RBAC only.",
+    links: ["infra/kind/manifests/", "infra/sregym/recap-rbac.yaml"],
+  },
+  {
+    title: "Dry run, write, read-back, audit",
+    text: "A server-side dry run first, then the write, a read-back of the Deployment, and an audit row for the run, whatever the outcome.",
+    links: ["recap/environments/kubernetes/engine.py"],
+  },
+  {
+    title: "The independent oracle",
+    text: "Only RECAP's oracle, reading the cluster as its own identity, says whether the service recovered. On SREGym, SREGym's own grader gives the benchmark's verdict separately.",
+    links: ["recap/verification/oracle.py", "recap/environments/kubernetes/probe.py"],
+  },
+];

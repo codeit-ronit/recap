@@ -100,8 +100,21 @@ test("a replay names the recorded model and the recording from replay_of, and sa
 test("the target comes from is_simulated: simulated, live, or not recorded", () => {
   assert.equal(describeTarget({ kind: "simulated", is_simulated: true }).label, "SIMULATED TARGET");
   assert.equal(describeTarget({ kind: "kind", is_simulated: false }).label, "LIVE TARGET · kind");
+  assert.equal(describeTarget({ kind: "sregym", is_simulated: false }).label, "LIVE TARGET · sregym");
   assert.equal(describeTarget({ kind: "simulated" }).label, "TARGET NOT RECORDED");
   assert.equal(describeTarget(null).label, "TARGET NOT RECORDED");
+  // Only is_simulated decides: a kind named like the simulator, but not simulated, is live.
+  assert.equal(describeTarget({ kind: "simulated", is_simulated: false }).label, "LIVE TARGET · simulated");
+  assert.equal(describeTarget({ kind: "kind", is_simulated: false }).tone, "bad");
+});
+
+test("a run of the self-hosted model on a real cluster reads LOCAL LLM / LIVE TARGET, from its summary", () => {
+  for (const kind of ["kind", "sregym"]) {
+    const run = summarySource({ provider_class: "local_llm", provider_kind: "llm", model: "qwen3:8b", environment_kind: kind, environment_simulated: false });
+    assert.equal(textOf(render(<DataSourceBadge {...run} />)), `LOCAL LLM qwen3:8b / LIVE TARGET · ${kind}`);
+    // A model on the owner's VM is still a self-hosted model: the badge says where it may run.
+    assert.match(describeSource(run.provider).title, /on this machine or the owner's own VM/);
+  }
 });
 
 test("the badge groups decision source and target under one accessible name", () => {
@@ -168,6 +181,14 @@ test("environmentStatus: simulated and live from GET /system, the /health label 
   assert.equal(live.state, "live");
   assert.equal(live.label, "LIVE ENVIRONMENT · sregym");
   assert.equal(live.tone, "bad");
+
+  // The M5 targets as GET /system names them: name, kind and namespace in the detail line.
+  const kind = environmentStatus({ kind: "kind", is_simulated: false, name: "Kind cluster recap-m5", namespace: "recap-demo" });
+  assert.equal(kind.label, "LIVE ENVIRONMENT · kind");
+  assert.equal(kind.detail, "Kind cluster recap-m5 · kind kind · namespace recap-demo");
+  const sregym = environmentStatus({ kind: "sregym", is_simulated: false, name: "SREGym on Kind cluster kind", namespace: "hotel-reservation" });
+  assert.equal(sregym.detail, "SREGym on Kind cluster kind · kind sregym · namespace hotel-reservation");
+  assert.match(sregym.title, /approved mitigations change a real system/);
 
   const reported = environmentStatus(undefined, { environment: "simulated", label: "SIMULATED LOCAL ENVIRONMENT · V1" });
   assert.equal(reported.state, "reported");

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { api, openRunStream, toApiError } from "../api";
 import type { ApiError } from "../api";
 import { ApprovalCountdown, ApprovalModal } from "../components/ApprovalCard";
@@ -59,14 +60,17 @@ import {
   INSPECT_PAGES,
   NOT_RECORDED,
   REPLAY_PACES,
-  STAGE_HELP,
   approvalPhase,
+  approvalTarget,
   fixtureRouting,
   fixtureSource,
   fmtBytes,
+  healthWords,
   initialProvider,
   integrityView,
+  labIntro,
   launchView,
+  liveTargetWords,
   mergeBySeq,
   missingPrerequisites,
   oracleView,
@@ -74,18 +78,26 @@ import {
   providerChoices,
   rationaleAuthor,
   readinessView,
+  recoverySignals,
+  replayBlockedNote,
   replayRunBody,
   resumeDelay,
   runBanner,
   runConfigBody,
+  scenarioIntro,
+  settleWords,
   sortScenarios,
+  stageHelp,
   stageTimes,
   statesOf,
+  summaryTarget,
+  targetFacts,
+  targetPlace,
   transportView,
   trustedRiskOf,
   withOverrides,
 } from "../view/lab";
-import type { LabTransport, RunBanner } from "../view/lab";
+import type { LabTransport, RunBanner, SignalRow, TargetFacts, TargetFields } from "../view/lab";
 import { knowledgeOverlays } from "../view/retrieval";
 import {
   checkDetail,
@@ -360,10 +372,12 @@ function ReplayCard({
   const launch = launchView(fixture);
   const titleId = `replay-${fixture.id}`;
   const busy = starting === fixture.id;
+  // A replay never acts on a live target (the controller refuses it): there, its source alone.
+  const replayTarget = environment && environment.is_simulated === false ? undefined : environment;
   return (
     <article className={launch.launchable ? "lab-replay" : "lab-replay blocked"} aria-labelledby={titleId}>
       <div className="lab-replay-head">
-        <DataSourceBadge provider={fixtureSource(fixture)} environment={environment} size="sm" label="What a replay of this recording is" />
+        <DataSourceBadge provider={fixtureSource(fixture)} environment={replayTarget} size="sm" label="What a replay of this recording is" />
         {fixture.tags.length ? (
           <span className="chip-row">
             {fixture.tags.map((tag) => (
@@ -485,12 +499,18 @@ export function ReplayLauncher({
   onReplay: (fixture: dto.FixtureView) => void;
 }) {
   const chosen = REPLAY_PACES.find((p) => p.value === pace) ?? REPLAY_PACES[0];
+  const blocked = replayBlockedNote(environment);
   return (
     <Card title="Replay a recorded incident" subtitle="Real model runs recorded earlier, played back offline against the simulated shop">
       <p className="lab-intro">
         A replay feeds RECAP the answers a real model gave in an earlier run, so the whole multi-agent investigation can be watched
         without a model, GPU or network. The simulated shop is really changed, and the fix waits for a person's approval again.
       </p>
+      {blocked ? (
+        <Notice tone="bad" icon="alert" title="No replay against this server's live target">
+          {blocked}
+        </Notice>
+      ) : null}
       <div className="field lab-pace">
         <span className="field-label" id="replay-pace-label">
           Pace
@@ -783,21 +803,30 @@ function SearchField({
   );
 }
 
+/**
+ * The run settings. Against a target that is not simulated (or not reported yet) a person always
+ * approves and there is no simulated latency: the auto-approver and the latency knob are not
+ * offered (runConfigBody never sends them there either).
+ */
 function ConfigForm({
   config,
   onChange,
   system,
+  target,
 }: {
   config: RunConfigInput;
   onChange: (config: RunConfigInput) => void;
   system: SystemSummary | undefined;
+  target: TargetFacts;
 }) {
   const set = <K extends keyof RunConfigInput>(key: K, value: RunConfigInput[K]) => onChange({ ...config, [key]: value });
+  const simulated = target.state === "simulated";
   const hints: Record<RunConfigInput["strategy"], string> = {
     adaptive: "The router picks one investigator or parallel specialists from observable signals and the remaining budget.",
     single: "Always one generalist investigator.",
     parallel: "Telemetry and infrastructure specialists run concurrently, then the verifier merges their evidence.",
   };
+  const approval = simulated ? config.approval_mode : "manual";
   return (
     <div className="config-grid">
       <div className="field">
@@ -805,17 +834,25 @@ function ConfigForm({
         <Segmented
           label="Approval mode"
           vertical
-          value={config.approval_mode}
+          value={approval}
           onChange={(v) => set("approval_mode", v)}
-          options={[
-            { value: "manual", label: "Manual: a person approves here" },
-            { value: "auto", label: "Auto: simulation auto-approver" },
-          ]}
+          options={
+            simulated
+              ? [
+                  { value: "manual", label: "Manual: a person approves here" },
+                  { value: "auto", label: "Auto: simulation auto-approver" },
+                ]
+              : [{ value: "manual", label: "Manual: a person approves here" }]
+          }
         />
         <span className="field-hint">
-          {config.approval_mode === "manual"
-            ? "A person approves the exact action (action, target and parameters) in a dialog before anything changes; the run waits at Awaiting approval."
-            : "The simulation's auto-approver approves instead of a person. The server allows it only against a simulated environment: never for real systems."}
+          {!simulated
+            ? target.state === "live"
+              ? "On this live target a person approves the exact action in a dialog, typing the target service's name, before anything changes. The controller refuses the auto-approver here."
+              : "Until GET /system reports the target, a run started here asks a person: the auto-approver works only against a simulated environment."
+            : approval === "manual"
+              ? "A person approves the exact action (action, target and parameters) in a dialog before anything changes; the run waits at Awaiting approval."
+              : "The simulation's auto-approver approves instead of a person. The server allows it only against a simulated environment: never for real systems."}
         </span>
       </div>
       <div className="field">
@@ -838,48 +875,95 @@ function ConfigForm({
         <Toggle checked={config.use_memory} onChange={(v) => set("use_memory", v)} label="Experience memory" hint="past episodes, checked against live evidence" />
       </div>
       <SearchField config={config} onChange={onChange} system={system} />
-      <div className="field">
-        <label className="field-label" htmlFor="latency">
-          Simulated tool latency (ms)
-        </label>
-        <input
-          id="latency"
-          className="input"
-          type="number"
-          min={0}
-          max={5000}
-          step={10}
-          value={config.tool_latency_ms ?? ""}
-          onChange={(e) => {
-            const value = Number.parseInt(e.target.value, 10);
-            set("tool_latency_ms", Number.isFinite(value) ? Math.max(0, Math.min(5000, value)) : null);
-          }}
-        />
-        <span className="field-hint">Higher latency makes the parallel overlap easier to see on the timeline.</span>
-      </div>
+      {simulated ? (
+        <div className="field">
+          <label className="field-label" htmlFor="latency">
+            Simulated tool latency (ms)
+          </label>
+          <input
+            id="latency"
+            className="input"
+            type="number"
+            min={0}
+            max={5000}
+            step={10}
+            value={config.tool_latency_ms ?? ""}
+            onChange={(e) => {
+              const value = Number.parseInt(e.target.value, 10);
+              set("tool_latency_ms", Number.isFinite(value) ? Math.max(0, Math.min(5000, value)) : null);
+            }}
+          />
+          <span className="field-hint">Higher latency makes the parallel overlap easier to see on the timeline.</span>
+        </div>
+      ) : null}
     </div>
   );
 }
 
+/** The target a run started here acts on, as one token: simulated, live (with where), or not reported. */
+export function TargetToken({ target, size = "md" }: { target: TargetFacts; size?: "sm" | "md" }) {
+  if (target.state === "live") {
+    return (
+      <StatusToken
+        tone="bad"
+        icon="alert"
+        size={size}
+        label={`LIVE TARGET · ${target.kind || "kind not reported"}`}
+        detail={targetPlace(target) || undefined}
+        title={target.description || "The server reports a live environment adapter: an approved action changes a real system."}
+      />
+    );
+  }
+  if (target.state === "simulated") {
+    return (
+      <StatusToken
+        tone="warn"
+        icon="flask"
+        size={size}
+        label="SIMULATED TARGET"
+        detail={targetPlace(target) || undefined}
+        title={target.description || "A simulated environment: no real system is changed."}
+      />
+    );
+  }
+  return <StatusToken tone="neutral" icon="minus" size={size} label="TARGET NOT REPORTED" title="GET /system has not reported the environment yet." />;
+}
+
 /** What keeps every run started here safe, in plain words (the environment from GET /system). */
-export function SafetyExplainer({ environment }: { environment: Pick<EnvironmentInfo, "is_simulated" | "kind" | "name" | "description"> | undefined }) {
-  const where = !environment
-    ? { tone: "neutral" as const, title: "Target not reported yet.", text: "Waiting for GET /system to report which environment runs act on." }
-    : environment.is_simulated
-      ? {
-          tone: "warn" as const,
-          title: "Simulated target.",
-          text: `${environment.name ? `${environment.name}: ` : ""}${environment.description || "RECAP's local simulation."} No real system is changed.`,
-        }
-      : {
-          tone: "bad" as const,
-          title: `Live target (${environment.kind}).`,
-          text: "The server reports a live environment adapter: an approved action changes a real system.",
-        };
+export function SafetyExplainer({ environment }: { environment: TargetFields | null | undefined }) {
+  const target = targetFacts(environment);
+  let where: { tone: "neutral" | "warn" | "bad"; title: string; text: ReactNode };
+  if (target.state === "unknown") {
+    where = { tone: "neutral", title: "Target not reported yet.", text: "Waiting for GET /system to report which environment runs act on." };
+  } else if (target.state === "simulated") {
+    where = {
+      tone: "warn",
+      title: "Simulated target.",
+      text: `${target.name ? `${target.name}: ` : ""}${target.description || "RECAP's local simulation."} No real system is changed.`,
+    };
+  } else {
+    const { real } = liveTargetWords(target);
+    where = {
+      tone: "bad",
+      title: `Live target (${target.kind || "kind not reported"}).`,
+      text: (
+        <>
+          {target.name || "Its name is not reported"}
+          {target.namespace ? (
+            <>
+              , namespace <Mono>{target.namespace}</Mono>
+            </>
+          ) : null}
+          : {real}, not a simulation. An approved action changes it, and a person approves each one by typing the target service's name.
+          {target.description ? <span className="lab-safety-about">{target.description}</span> : null}
+        </>
+      ),
+    };
+  }
   return (
     <ul className="lab-safety" aria-label="What keeps a run safe">
       <li className={`tone-${where.tone}`}>
-        <Icon name={environment && !environment.is_simulated ? "alert" : "flask"} size={16} />
+        <Icon name={target.state === "live" ? "alert" : "flask"} size={16} />
         <span>
           <strong>{where.title}</strong> {where.text}
         </span>
@@ -962,21 +1046,97 @@ export function InspectLinks({ runId }: { runId: string }) {
   );
 }
 
+/** One side of a service's health, as the oracle observed it (a missing side reads Not recorded). */
+function HealthCell({ side }: { side: SignalRow["before"] }) {
+  if (!side) return <span className="not-recorded">{NOT_RECORDED}</span>;
+  const healthy = side.status === "Running" && side.ready !== null && side.ready === side.replicas;
+  return <span className={healthy ? undefined : "text-warn"}>{healthWords(side)}</span>;
+}
+
+/**
+ * What the oracle itself observed before and after the fix (RecoveryResult.observed_signals): one
+ * row per service, the services that changed first; the unchanged ones fold away when there are
+ * many (SREGym's application has 19 Deployments). Ground truth from the environment's health
+ * check, never an agent's words.
+ */
+export function ObservedSignals({ rows }: { rows: SignalRow[] }) {
+  if (!rows.length) return null;
+  const changed = rows.filter((r) => r.changed);
+  const fold = rows.length > 6 && changed.length > 0;
+  const shown = fold ? changed : rows;
+  const rest = fold ? rows.filter((r) => !r.changed) : [];
+  const table = (list: SignalRow[], caption: string) => (
+    <div className="table-wrap">
+      <table className="table lab-signals">
+        <caption className="sr-only">{caption}</caption>
+        <thead>
+          <tr>
+            <th scope="col">Service</th>
+            <th scope="col">Before the fix</th>
+            <th scope="col">After the fix</th>
+          </tr>
+        </thead>
+        <tbody>
+          {list.map((row) => (
+            <tr key={row.service}>
+              <th scope="row">
+                <Mono>{row.service}</Mono>
+              </th>
+              <td>
+                <HealthCell side={row.before} />
+              </td>
+              <td>
+                <HealthCell side={row.after} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+  return (
+    <div className="lab-signals-block">
+      <span className="lab-fact-label">What the oracle observed</span>
+      {table(shown, "Each service's status, ready replicas and error rate before and after the fix, as the oracle observed them")}
+      {rest.length ? (
+        <details className="lab-signals-more">
+          <summary>
+            {rest.length} other service{rest.length === 1 ? "" : "s"} unchanged
+          </summary>
+          {table(rest, "The services whose observed health did not change")}
+        </details>
+      ) : null}
+      <span className="muted small">
+        Status and readiness from the environment's own health check; an error rate only where the target measures one.
+      </span>
+    </div>
+  );
+}
+
 /** How the run ended (summary.outcome) with the independent oracle's verdict, and where to look next. */
 export function OutcomeCard({
   runId,
   summary,
   record,
   loading,
+  environment,
+  recovery,
 }: {
   runId: string;
   summary: dto.RunSummary | null | undefined;
   record: RunRecord | null | undefined;
   /** Still waiting for the final checkpoint. */
   loading?: boolean;
+  /** The run's own target (its first event or record); left out, the record's or the summary's. */
+  environment?: TargetFields | null;
+  /** The run's verification.recovery event payload: how often, and how long, the oracle probed. */
+  recovery?: Record<string, unknown> | null;
 }) {
-  const outcome = outcomeView(summary?.outcome);
+  const target = environment ?? record?.environment ?? summaryTarget(summary);
+  const outcome = outcomeView(summary?.outcome, target);
   const oracle = oracleView(summary?.oracle ?? null);
+  const settle = settleWords(recovery, targetFacts(target));
+  const signals = recoverySignals(record?.recovery?.observed_signals);
   const approvals = record?.approvals ?? [];
   return (
     <Card title="Outcome" subtitle="From the run's record and the independent oracle's verdict" tone={summary ? outcome.tone : undefined}>
@@ -1023,6 +1183,7 @@ export function OutcomeCard({
                 <span className="small">
                   {oracle.before} before → {oracle.after} after · <Mono>{oracle.detail}</Mono>
                   {oracle.services.length ? <span className="muted"> · checked {oracle.services.join(", ")}</span> : null}
+                  {settle ? <span className="muted"> · {settle}</span> : null}
                 </span>
               ) : (
                 <span className="muted small">{oracle.detail}</span>
@@ -1050,6 +1211,7 @@ export function OutcomeCard({
               </span>
             </div>
           </div>
+          {summary.oracle ? <ObservedSignals rows={signals} /> : null}
           {summary.error ? (
             <Notice tone="bad" icon="x" title="Run error">
               {summary.error}
@@ -1443,6 +1605,9 @@ function RunPanel({
   const modelTokenLimit = num(obj(incident.budget).max_model_tokens);
   const banner = runBanner(provider, environment);
   const manual = record ? record.config.approval_mode === "manual" : null;
+  // What a decision acts on: the run's own target, else the server's (live wins: see approvalTarget).
+  const decideOn = approvalTarget(environment, system?.environment ?? null);
+  const decideTarget = targetFacts(decideOn);
 
   // --- approval ----------------------------------------------------------------------------
   const phase = approvalPhase(events);
@@ -1490,7 +1655,7 @@ function RunPanel({
   const transport = transportView(stream.transport, stream.resumes, stream.lastSeq, finished, events.length, !!stream.error);
   const caption = current ? (
     <>
-      <strong>{stateLabel(current)}.</strong> {STAGE_HELP[current] ?? ""}
+      <strong>{stateLabel(current)}.</strong> {stageHelp(current, environment)}
     </>
   ) : (
     "Waiting for the run's first event…"
@@ -1537,7 +1702,16 @@ function RunPanel({
         {stream.error ? <ErrorView error={stream.error} title="Live updates interrupted" /> : null}
       </Card>
 
-      {finished ? <OutcomeCard runId={runId} summary={runSummary} record={record} loading={detail.loading || detail.data?.status === "running"} /> : null}
+      {finished ? (
+        <OutcomeCard
+          runId={runId}
+          summary={runSummary}
+          record={record}
+          loading={detail.loading || detail.data?.status === "running"}
+          environment={environment}
+          recovery={lastOf(events, "verification.recovery")?.payload ?? null}
+        />
+      ) : null}
 
       <div className="run-grid">
         <Card title="Live event feed" subtitle="Real trace events from the controller, the agents and the gateway, newest at the bottom" flush>
@@ -1546,7 +1720,16 @@ function RunPanel({
         <div className="run-side">
           {waitingManual ? (
             shown && shown.proposal_id === phase.proposalId ? (
-              <Card tone="warn" title="Your approval is needed" subtitle="The run is paused until a person decides">
+              <Card tone={decideTarget.state === "live" ? "bad" : "warn"} title="Your approval is needed" subtitle="The run is paused until a person decides">
+                {decideTarget.state === "live" ? (
+                  <div className="lab-approval-live">
+                    <TargetToken target={decideTarget} size="sm" />
+                    <span className="small">
+                      Approving changes {liveTargetWords(decideTarget).place}, {liveTargetWords(decideTarget).real}: the dialog asks for the target
+                      service's exact name.
+                    </span>
+                  </div>
+                ) : null}
                 <div className="approval-action">
                   <code className="mono">{shown.proposal.action}</code>
                   <span className="muted">on</span>
@@ -1583,6 +1766,7 @@ function RunPanel({
               {phase.decision === "approved"
                 ? "The approved action now goes through the safety gateway, then the oracle checks the recovery."
                 : "The fix will not run."}
+              {phase.note ? <span className="lab-decision-note">How it came, as RECAP recorded it: {phase.note}.</span> : null}
             </Notice>
           ) : null}
           {finished ? (
@@ -1622,6 +1806,7 @@ function RunPanel({
             note: evidence.error ? `Could not load the run's evidence: ${evidence.error.message}` : undefined,
           }}
           closedReason={closedReason}
+          environment={decideOn}
         />
       ) : null}
     </div>
@@ -1668,6 +1853,8 @@ export function LiveRunPage({ route, system }: PageProps) {
   const scenario = sorted.find((s) => s.id === selected) ?? null;
   const choices = useMemo(() => providerChoices(providers.data ?? []), [providers.data]);
   const environment = system.data?.environment;
+  // Where a run started here acts: the server's target (GET /system).
+  const target = targetFacts(environment);
 
   const choose = (s: ScenarioInfo) => {
     setSelected(s.id);
@@ -1711,8 +1898,9 @@ export function LiveRunPage({ route, system }: PageProps) {
     setStarting(true);
     setStartError(null);
     try {
-      // `retrieval` is sent only when the operator chose a search, `provider` only when it is not the default.
-      const response = await api.startRun({ scenario_id: scenario.id, config: runConfigBody(config, backend, choices.defaultName) });
+      // `retrieval` is sent only when the operator chose a search, `provider` only when it is not the
+      // default; against a target that is not simulated, always manual approval and no simulated latency.
+      const response = await api.startRun({ scenario_id: scenario.id, config: runConfigBody(config, backend, choices.defaultName, target) });
       openRun(response.run_id);
     } catch (err) {
       setStartError(toApiError(err));
@@ -1729,10 +1917,7 @@ export function LiveRunPage({ route, system }: PageProps) {
 
   return (
     <>
-      <PageHeader
-        title="Incident Lab"
-        description="Replay a recorded real-model incident or start a new one, then watch RECAP investigate, propose a fix, wait for a person's approval and verify the recovery. Everything streams from the API and acts only on the simulated shop."
-      />
+      <PageHeader title="Incident Lab" description={labIntro(environment)} />
 
       {launcherOpen ? (
         <>
@@ -1750,15 +1935,25 @@ export function LiveRunPage({ route, system }: PageProps) {
 
           <Card
             title="Run a scenario"
-            subtitle="Inject a scenario's fault into the simulated shop and let RECAP handle it with the backend you choose (GET /scenarios)"
+            subtitle={scenarioIntro(environment)}
             actions={<Toggle checked={showTruth} onChange={setShowTruth} label="Show ground truth" hint="hidden from agents" />}
           >
+            <div className="lab-target-line">
+              <span className="muted small">Runs started here act on</span>
+              <TargetToken target={target} size="sm" />
+            </div>
             <PolledView
               polled={scenarios}
               loadingLabel="Loading scenarios…"
               errorTitle="Could not load the scenarios (GET /scenarios)"
               emptyTitle="No scenarios"
-              empty={(list) => (list.length ? null : "The environment reports no scenarios: check configs/environment.yaml and fixtures/scenarios.")}
+              empty={(list) =>
+                list.length
+                  ? null
+                  : target.state === "live"
+                    ? "This target reports no scenarios: check its profile's scenario folder (configs/targets/)."
+                    : "The environment reports no scenarios: check configs/environment.yaml and fixtures/scenarios."
+              }
             >
               {() => (
                 <>
@@ -1794,7 +1989,7 @@ export function LiveRunPage({ route, system }: PageProps) {
                 <p className="lab-help">Who makes the agents' decisions. Only backends this server lets a run pick are offered.</p>
                 <BackendChoice providers={providers} value={backend} onChange={setBackend} />
                 <h3 className="lab-subtitle">Settings</h3>
-                <ConfigForm config={config} onChange={setConfig} system={system.data} />
+                <ConfigForm config={config} onChange={setConfig} system={system.data} target={target} />
               </section>
               <section className="lab-setup-side" aria-labelledby="lab-safety-title">
                 <h3 id="lab-safety-title" className="lab-subtitle">
@@ -1805,16 +2000,24 @@ export function LiveRunPage({ route, system }: PageProps) {
               </section>
             </div>
             <div className="run-bar">
-              <div className="muted">
+              <div className="muted lab-run-summary">
                 {scenario ? (
                   <>
                     Scenario <Mono>{scenario.id}</Mono> · backend <Mono>{backend ?? "server default"}</Mono> · {config.strategy} · RAG{" "}
                     {config.use_rag ? "on" : "off"} · search {config.retrieval ? searchModeLabel(config.retrieval) : "server default"} · memory{" "}
-                    {config.use_memory ? "on" : "off"} · {config.approval_mode} approval · {config.tool_latency_ms ?? "default"} ms
+                    {config.use_memory ? "on" : "off"} ·{" "}
+                    {target.state === "simulated"
+                      ? `${config.approval_mode} approval · ${config.tool_latency_ms ?? "default"} ms`
+                      : target.state === "live"
+                        ? "manual approval (the target service's name, typed)"
+                        : "manual approval"}
                   </>
                 ) : (
                   "Select a scenario."
                 )}
+                <span className="lab-run-target">
+                  on <TargetToken target={target} size="sm" />
+                </span>
               </div>
               <div className="chip-row">
                 {runId ? (

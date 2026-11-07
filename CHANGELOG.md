@@ -7,7 +7,84 @@ change between versions). Version numbers were assigned on 2026-10-21, when this
 written: the package metadata reads 0.1.0 up to and including the v0.2.0 tag, and matches the
 version from v0.3.0 on.
 
-Everything below runs against a **simulated** environment; nothing repairs a real cluster.
+Up to 0.5.0 everything ran against a **simulated** environment. 0.6.0 (M5) adds real
+Kubernetes targets: a Kind demo cluster and SREGym's own cluster, on the owner's VM, with a
+person approving every write. Nothing here ran in production.
+
+## [0.6.0] — release candidate, not tagged — M5: real Kubernetes incident recovery and SREGym
+
+RECAP now works on real Kubernetes clusters, behind the same interface as its simulator
+([ADR 0032](docs/decisions/0032-a-real-kubernetes-target-behind-the-same-interface.md)). A
+real model investigates a real failure through RECAP's typed read tools; RECAP proposes one
+exact fix; a person approves it by typing the target service's name; a restricted identity
+applies it; and an oracle with its own identity checks the recovery. It ran on a Kind demo
+cluster and on one SREGym 1.1 problem, on the owner's AWS VM, with a self-hosted `qwen3:8b`.
+Three of eleven real-cluster runs ended in a verified recovery, and SREGym's own grader passed
+the SREGym one. These are counts, not rates, and the SREGym problem is not held out. The
+handoff report is [docs/m5-report.md](docs/m5-report.md).
+
+### Added
+
+- **Kubernetes adapter** (`recap/environments/kubernetes/`): typed `kubectl` operations, never
+  a command string; reader, writer, oracle and scenario identities with short-lived tokens;
+  cluster pinning (loopback API server, CA fingerprint, version skew, Prometheus clock) and a
+  namespace lease; one write path (rollback or restart: capability, dry run, write, read-back,
+  audit); a write switch; a fake cluster for offline tests. Chosen with `RECAP_TARGET`
+  (`configs/targets/kind-demo`, `configs/targets/sregym-hotel`); without it nothing changes.
+- **Kind demo target** (`infra/kind/`): a two-service app with Prometheus and traffic,
+  least-privilege RBAC and an admission policy for RECAP's writes, four scenarios with real
+  faults (a bad release, a dependency crash, a memory leak, logs with a planted instruction),
+  setup, reset, fault injection, token minting and cleanup scripts.
+- **SREGym target** ([ADR 0031](docs/decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md),
+  `integrations/sregym/`, `infra/sregym/`): SREGym 1.1 (commit `a90b43cc`) in its
+  external-harness mode on its own cluster; image tags as rollback keys into a Deployment's own
+  history; "not measured" instead of a guessed metric; a bad release's onset dated from its
+  own pods' failure events; SREGym's grader run separately (`sregym.sh grade`).
+- **The owner's VM** (`infra/aws/`): `ec2.sh` creates, starts, stops and deletes one EC2 VM for
+  the clusters and the model, opens the SSH tunnel and copies RECAP's identities; an idle guard
+  on the VM stops it when nothing uses it; `ec2.sh hold` keeps it up for one run (2 hours at
+  most). The model runs there as provider `ollama-vm` (self-hosted, $0 per request).
+- **Live approvals** at the console and in the dashboard: on a real cluster a person types the
+  target service's name; an Enter alone asks again; the prompt gives up at the request's expiry;
+  the decision log records how and when the answer came.
+- **`POST /environment/check`**: a real cluster's adapter runs its preflight, and nothing
+  changes.
+- **The `real_kubernetes` evaluation mode**: records name their target (`kind`, `sregym`), and a
+  batch can hold a benchmark grader's own verdicts, never merged with RECAP's. Two published
+  batches, failures included, and three exported runs in `evals/live/`.
+- **Mission Control on real targets**: the active environment and a readiness check, live
+  labels, the typed-name approval dialog, the clusters told apart in Evaluations, and the
+  Kubernetes authorization explained in Architecture & Learning.
+- **Reliability tests and metrics**: faults on Kubernetes and at runtime (slow rollouts,
+  cancellation, a failing tool server, concurrent runs, interruption), optional
+  Prometheus-format metrics (`RECAP_METRICS=1`, bounded labels) and a small in-process API load
+  test.
+
+### Changed
+
+- The proposal schema offers a release-tag target only among the restore points the evidence
+  names, and only values shaped like an image tag.
+- A crash loop between two crashes is named as one, and a start-up crash that stopped is not.
+  Where no probe exists, the oracle counts a service healthy only after its containers ran a
+  minute with no exit in the last five.
+- A release records the ReplicaSets of its restarts; a pod's log lines are read once.
+- `GET /system` reports only the configured adapter as operational; runs on a real cluster are
+  labelled `LIVE ENVIRONMENT (<kind>)`.
+
+### Security
+
+- No model ever gets a `kubectl` or shell tool, and RECAP never uses a cluster administrator's
+  credential or SREGym's agent tools. A hosted model may not see a live target's data (a paid
+  one never; a free plan only with the owner's explicit setting).
+- Redaction and the secret scan cover Kubernetes ServiceAccount tokens and kubeconfig keys.
+
+### Known limitations
+
+- Small samples, one SREGym problem that is not held out, and every fix approved by a person:
+  no benchmark score.
+- SREGym's writer is limited by RBAC only (no admission policy there), and the clocks on
+  SREGym's target go unchecked.
+- Published runs are files to read; Mission Control opens runs from its own data folder only.
 
 ## [0.5.0] — 2026-11-02 — M4: product control center, agent evaluations and release evidence
 

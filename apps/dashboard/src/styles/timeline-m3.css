@@ -954,6 +954,28 @@ details[open] > .tl-band-summary > .icon,
   gap: 6px;
   min-width: 0;
 }
+/* A live write's read-back (generation, image), one effect per line: images are long. */
+.tl-effects {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.tl-effect-list {
+  margin: 0;
+  padding-left: 16px;
+}
+.tl-effect-list code {
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+/* The run's target fact: where its tools read and its fix wrote. */
+.tl-target {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
 .tl-flow-more .tl-sline {
   margin-top: 2px;
 }

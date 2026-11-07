@@ -24,6 +24,7 @@ import type {
 } from "../dto";
 import type { Tone } from "../format";
 import type { AgentFinding, Evidence, Hypothesis, HypothesisCheck, ProviderInfo, TraceEvent, VerificationReport } from "../types";
+import type { TargetFacts } from "./lab";
 
 // --- defensive readers (local copies: this module imports no runtime values) ------------------
 
@@ -322,6 +323,7 @@ export function evidenceRoles(report: VerificationReport | null | undefined): Ma
 export const VERIFIER_RULES: Record<string, string> = {
   "V1-structural": "a target, a known mechanism, and cited evidence that exists in this run",
   "V1-grounding": "a supported claim cites at least one item its rules relied on",
+  "V1-consistency": "details that belong to another mechanism are reported, never used: the claim is judged as filed",
   "V2-deploy-timing": "bad deployment: the service's errors began 5 min before to 30 min after its deploy",
   "V2-upstream-dominance": "bad deployment: fewer than half of the service's ERROR lines blame a dependency not observed healthy",
   "V3-resource": "resource pressure: OOM kills or memory at 90% of its limit or more; OOM log lines only corroborate",
@@ -661,6 +663,39 @@ export function isUntrustedClass(trustClass: string): boolean {
   return trustClass !== "recap_trusted_text";
 }
 
+/**
+ * Where one observation came from, in a sentence (the registry row's detail): a tool's answer
+ * read from the run's own target (live from a named cluster and namespace, or from the simulated
+ * shop), the approved write's result, RECAP's runbook index, its experience memory, the alert or
+ * the oracle. null for a tool's answer when the run's target was not recorded: never guessed.
+ * The target is the run's own (GET /runs/{id} record.environment), as src/view/lab.ts reads it.
+ */
+export function provenanceOf(item: Pick<EvidenceItem, "source_type" | "tool">, target: TargetFacts): string | null {
+  const kind = evidenceKind(item);
+  if (kind === "runbook") return "RECAP's runbook index: a section of RECAP's own runbooks, not the target";
+  if (kind === "memory") return "RECAP's experience memory: what a past episode recorded, not the target now";
+  if (kind === "alert") return "The incident's alert";
+  if (kind === "oracle") return "RECAP's recovery oracle, from the environment's own health check";
+  if (item.source_type !== "tool") return null;
+  // A local copy of lab.ts targetPlace (this module imports no runtime values).
+  const place = [target.name, target.namespace ? `namespace ${target.namespace}` : ""].filter(Boolean).join(", ");
+  // Only the known read tools are called "read-only"; a tool this page does not know stays "a tool".
+  const how = kind === "other" ? "a tool call" : "a read-only tool call";
+  if (target.state === "live") {
+    const where = place || `the live ${target.kind || "target"}`;
+    const real = target.namespace ? "a real cluster" : "a real system";
+    return kind === "action"
+      ? `The approved write's result on ${where} (${real}), as the target answered it`
+      : `Read live from ${where} (${real}, not a simulation) by ${how} through RECAP's MCP server`;
+  }
+  if (target.state === "simulated") {
+    return kind === "action"
+      ? "The approved write's result on the simulated shop"
+      : `Read from the simulated shop${place ? ` (${place})` : ""} by ${how} through RECAP's MCP server`;
+  }
+  return null;
+}
+
 // --- matching a claim to the check that judged it ------------------------------------------------
 
 /** The remembered-claim rule: the verifier adds it to every check of a claim from memory (and only those). */
@@ -936,7 +971,7 @@ export const PROPOSAL_RULES: Record<string, string> = {
 
 /** What a rule id means (verifier rules, evidence-gate rules); undefined when unknown. */
 export function anyRuleNote(id: string): string | undefined {
-  return VERIFIER_RULES[id] ?? PROPOSAL_RULES[id] ?? (id === "V1-consistency" ? "details that belong to another mechanism are reported, never used" : undefined);
+  return VERIFIER_RULES[id] ?? PROPOSAL_RULES[id];
 }
 
 /**

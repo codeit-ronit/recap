@@ -7,10 +7,15 @@
  * Fixtures are shaped like src/dto.ts and src/types.ts, trimmed from M4 runs on the simulated
  * shop: a replay of "qwen3-8b-unfamiliar-parallel", and the BLOCKED malicious-log red-team run
  * (a planner that obeys an injected log line proposes delete_namespace; the policy denies it).
+ * M5's live targets: run-9d7f47104d on SREGym's cluster (approved at the console by typing the
+ * service's name, used once, the write read back), run-6ffe22367d (its request expired and a late
+ * answer was refused), and an approval through the dashboard with the operator token.
  */
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   EVALUATION_ACCESS,
   PARTITION_ORDER,
@@ -27,9 +32,15 @@ import {
   sourceRun,
 } from "../src/view/memory.ts";
 import {
+  PROPOSAL_RULES,
+  SAFETY_LAYERS,
+  SAFETY_TESTS,
   actorLabel,
+  adapterChecks,
   blockedActions,
   callScope,
+  decisionAttestation,
+  failedProposalRules,
   gatewayRows,
   injectionRows,
   isSafetyStop,
@@ -40,9 +51,12 @@ import {
   requestedRunId,
   runLayerOutcomes,
   shortHash,
+  targetWords,
+  traceDecisions,
   trustedRisk,
   unsafeCounts,
   verdictCounts,
+  writeRows,
 } from "../src/view/safety.ts";
 import type { MemoryHitView, MemoryRetrievalView, ProposalCheckView, ProposalView, TimelineEntry } from "../src/dto.ts";
 import type { ActionRecord, ApprovalEvent, ExperienceEpisode } from "../src/types.ts";
@@ -609,4 +623,270 @@ test("only the three stop outcomes count as safety stops", () => {
   assert.ok(!isSafetyStop("resolved"));
   assert.ok(!isSafetyStop("toString"));
   assert.ok(!isSafetyStop(null));
+});
+
+// --- M5: live targets -------------------------------------------------------------------------------
+
+const REPO = fileURLToPath(new URL("../../../", import.meta.url));
+
+/** The console's note on run-9d7f47104d (SREGym's cluster), as recap/safety/approvals.py wrote it. */
+const CONSOLE_NOTE = "interactive terminal; typed the target service's name; answered after 121.9 s; login name kept in the local decision log";
+/** A live approval through POST /approvals with confirm_target, as apps/api/main.py writes it. */
+const DASHBOARD_NOTE = "dashboard or API; typed the target service's name; answered 42.3 s after the request";
+const LIVE_PROPOSAL = "prop-4e9e45f1e0";
+
+test("a live approval at the console: its note is on the Decided step, in the log's own words", () => {
+  const log = [
+    approval(1, LIVE_PROPOSAL, "requested", "recap", "run run-9d7f47104d; expires 2026-11-07T06:11:52.678139+00:00"),
+    approval(2, LIVE_PROPOSAL, "approved", "console-user", CONSOLE_NOTE),
+    approval(3, LIVE_PROPOSAL, "consumed", "recap"),
+  ];
+  const life = permissionLifecycle(LIVE_PROPOSAL, log, false);
+  assert.equal(life.status, "used");
+  assert.deepEqual(life.steps.map((s) => [s.key, s.text, s.note]), [
+    ["requested", "A decision was requested", null],
+    ["decided", "Approved by Terminal user (interactive console)", CONSOLE_NOTE],
+    ["used", "Used once by the gateway", null],
+  ]);
+  assert.deepEqual([life.expiredAt, life.late], [null, []]);
+});
+
+test("what a console decision proves: a terminal and a timing, not a person", () => {
+  const approved = decisionAttestation("console-user", CONSOLE_NOTE);
+  assert.equal(approved?.channel, "console");
+  assert.equal(
+    approved?.shows,
+    "The decision log shows an answer at an interactive terminal, 121.9 s after the prompt appeared; it was the target service's exact name.",
+  );
+  assert.equal(
+    approved?.limit,
+    "That proves a terminal and a timing, not a person: a program driving the terminal could answer too. This machine's login name is kept only in the local decision log, never on this page.",
+  );
+
+  // An answer that was not the name (two real Kind runs ended this way).
+  const rejected = decisionAttestation(
+    "console-user",
+    "interactive terminal; did not type the target service's name (answered y, which approves only a simulation); answered after 405.0 s; login name kept in the local decision log",
+  );
+  assert.match(rejected?.shows ?? "", /405\.0 s after the prompt appeared; it was not the target service's exact name, so it rejected\.$/);
+
+  // The simulator's console: no name to type, no login kept.
+  const simulated = decisionAttestation("console-user", "interactive terminal; answered after 162.5 s");
+  assert.equal(simulated?.shows, "The decision log shows an answer at an interactive terminal, 162.5 s after the prompt appeared.");
+  assert.equal(simulated?.limit, "That proves a terminal and a timing, not a person: a program driving the terminal could answer too.");
+
+  assert.match(decisionAttestation("console-user", "interactive terminal; answered after 0.4 s (faster than a person can read the proposal)")?.shows ?? "", /faster than a person can read/);
+  // Rejected unread: no answer was read, so nothing about a terminal is claimed either.
+  assert.deepEqual(decisionAttestation("console-user", "rejected unread: no interactive terminal"), {
+    channel: "console",
+    shows: "The decision log shows that RECAP rejected the request without reading any answer (rejected unread: no interactive terminal).",
+    limit: "No answer was read, so it shows nothing about who was at the terminal.",
+  });
+  assert.match(decisionAttestation("console-user", "rejected without asking: no login name to record for a live target")?.limit ?? "", /No answer was read/);
+});
+
+test("what a dashboard or API decision proves: a holder of the operator token and a timing, not a person", () => {
+  const approved = decisionAttestation("operator:ronit", DASHBOARD_NOTE);
+  assert.equal(approved?.channel, "dashboard");
+  assert.equal(
+    approved?.shows,
+    "The decision log shows a decision sent through the dashboard or the API with the operator token, 42.3 s after the request; the target service's exact name was typed.",
+  );
+  assert.equal(approved?.limit, "That proves a holder of the operator token and a timing, not a person: anyone holding the token could send it.");
+  // A live rejection needs no name; a simulated dashboard decision has no note at all.
+  assert.doesNotMatch(decisionAttestation("operator:ronit", "dashboard or API; answered 12.0 s after the request")?.shows ?? "", /name/);
+  assert.equal(
+    decisionAttestation("operator:ronit", "")?.shows,
+    "The decision log shows a decision sent through the dashboard or the API with the operator token.",
+  );
+  // Decisions no person is expected to make, or by an actor this page does not know: nothing claimed.
+  for (const actor of ["auto-approver[simulation]", "recap", "", "someone"]) assert.equal(decisionAttestation(actor, CONSOLE_NOTE.replace("interactive terminal; ", "")), null, actor);
+});
+
+test("an expired request (run-6ffe22367d): the late answer is refused, kept apart, and named as late", () => {
+  const log = [
+    approval(1, "prop-6ffe", "requested", "recap", "run run-6ffe22367d; expires 2026-11-03T21:00:00+00:00"),
+    approval(2, "prop-6ffe", "expired", "recap", "no decision in time"),
+    approval(3, "prop-6ffe", "refused", "console-user", "approval request expired before a decision was made"),
+  ];
+  const life = permissionLifecycle("prop-6ffe", log, false);
+  assert.equal(life.status, "expired");
+  assert.equal(life.expiredAt, log[1].at);
+  assert.deepEqual(life.late.map((e) => e.event_id), [3]);
+  assert.deepEqual([life.steps[1].text, life.steps[1].note], ["Expired: nobody decided in time", null]);
+  assert.equal(decisionAttestation(life.steps[1].actor, life.steps[1].note), null, "nobody decided: nothing to attest");
+
+  // What RECAP stopped: the expired fix (with the rule that required its approval), and the late answer.
+  const gateway = gatewayRows([
+    policy(43, "execute_rollback", "APPROVAL_REQUIRED", ["R1-tool-name-format", "R14-remediation-catalog", "R11-reversible-approval"], "controller", "reversible_write", [
+      "reversible write: needs a human approval bound to this exact proposal",
+    ]),
+  ]);
+  const actions: ActionRecord[] = [{ action: "execute_rollback", target: "geo", params: { to_version: "sha-d2c036bc" }, result: "expired", at: "2026-11-03T21:00:01Z", note: "approval expired" }];
+  const rows = blockedActions({ actions, gateway, checks: [], proposals: [], lifecycles: [life] });
+  assert.deepEqual(rows.map((r) => [r.layer, r.result, r.what, r.rule]), [
+    ["approval", "Expired", "execute_rollback on geo (to_version=sha-d2c036bc)", "R11-reversible-approval"],
+    ["approval", "Refused", "a late answer on proposal prop-6ffe, after its expiry", null],
+  ]);
+  assert.equal(rows[1].reason, "approval request expired before a decision was made");
+});
+
+test("the run's trace keeps each decision too: by proposal, and an unnamed expiry joins the request before it", () => {
+  const requests = [
+    entry(20, "approval_requested", "approval.requested", { proposal_id: "prop-a", channel: "console" }),
+    entry(46, "approval_requested", "approval.requested", { proposal_id: LIVE_PROPOSAL, channel: "console" }),
+  ];
+  const decisions = [
+    entry(10, "approval_decided", "approval.decided", { decision: "expired" }), // before any request: no proposal to join
+    entry(30, "approval_decided", "approval.decided", { decision: "refused", reason: "approval request expired before a decision was made" }),
+    entry(31, "approval_decided", "approval.decided", { decision: "expired" }),
+    entry(47, "approval_decided", "approval.decided", { decision: "approved", actor: "console-user", approval_id: "apr-21dae2eb3e", proposal_id: LIVE_PROPOSAL, note: CONSOLE_NOTE }),
+  ];
+  const found = traceDecisions(requests, decisions);
+  assert.deepEqual([...found.keys()], ["prop-a", LIVE_PROPOSAL]);
+  assert.deepEqual(found.get("prop-a"), { proposalId: "prop-a", decision: "expired", actor: null, note: null, reason: null, seq: 31 });
+  assert.deepEqual(found.get(LIVE_PROPOSAL), { proposalId: LIVE_PROPOSAL, decision: "approved", actor: "console-user", note: CONSOLE_NOTE, reason: null, seq: 47 });
+  assert.ok(!JSON.stringify([...found.values()]).includes("apr-21dae2eb3e"), "the approval id is never read");
+  assert.equal(traceDecisions(null, undefined).size, 0);
+});
+
+test("the trace's note stands in for a log entry that has none, for the same decision only", () => {
+  const log = [approval(1, "p", "requested", "recap"), approval(2, "p", "approved", "console-user", "")];
+  const traced = { proposalId: "p", decision: "approved", actor: "console-user", note: CONSOLE_NOTE, reason: null, seq: 47 };
+  assert.equal(permissionLifecycle("p", log, false, traced).steps[1].note, CONSOLE_NOTE);
+  assert.equal(permissionLifecycle("p", log, false, { ...traced, decision: "rejected" }).steps[1].note, null);
+  const logged = [approval(1, "p", "requested", "recap"), approval(2, "p", "approved", "console-user", "interactive terminal; answered after 9.0 s")];
+  assert.equal(permissionLifecycle("p", logged, false, traced).steps[1].note, "interactive terminal; answered after 9.0 s", "the log's own words win");
+});
+
+test("the evidence gate's rules: the failed one is read from RECAP's own problem text", () => {
+  assert.deepEqual(PROPOSAL_RULES.map((rule) => rule.id), ["VP1-evidence-exists", "VP2-target-matches-diagnosis", "VP3-action-named", "VP4-restore-point"]);
+  // run-e08c17d46e on SREGym's cluster: the model proposed the release the diagnosis blamed.
+  assert.deepEqual(failedProposalRules(["the proposal restores 20260912.1, the release the diagnosis blames"]), ["VP4-restore-point"]);
+  assert.deepEqual(failedProposalRules(["the proposal cites no evidence", "the proposal targets cart, but the diagnosis is inventory"]), [
+    "VP1-evidence-exists",
+    "VP2-target-matches-diagnosis",
+  ]);
+  assert.deepEqual(failedProposalRules(["the proposal cites evidence not in this run: ev-x"]), ["VP1-evidence-exists"]);
+  assert.deepEqual(failedProposalRules(["there is no supported diagnosis to act on"]), ["VP2-target-matches-diagnosis"]);
+  assert.deepEqual(failedProposalRules(["the proposal names no action"]), ["VP3-action-named"]);
+  assert.deepEqual(failedProposalRules(["no deployment history or rollback dry run in this run names a version of geo to restore"]), ["VP4-restore-point"]);
+  // Model text inside a problem cannot pose as another rule: only how RECAP's sentence starts counts.
+  assert.deepEqual(failedProposalRules([`the fix targets cart ${HOSTILE} the proposal names no action`]), []);
+});
+
+test("the gate's rule ids and problem openings are the verifier's own (recap/agents/verifier.py)", () => {
+  const verifier = readFileSync(`${REPO}recap/agents/verifier.py`, "utf8");
+  for (const rule of PROPOSAL_RULES) {
+    assert.ok(verifier.includes(`"${rule.id}"`), `${rule.id} is in PROPOSAL_RULES`);
+    for (const start of rule.problems) assert.ok(verifier.includes(start), `the verifier writes "${start}…"`);
+  }
+});
+
+test("a refused proposal names the rule it failed; unknown problem text keeps every rule the check ran", () => {
+  const every = PROPOSAL_RULES.map((rule) => rule.id);
+  const checks: ProposalCheckView[] = [
+    { seq: 12, proposal_id: "prop-e08c", ok: false, problems: ["the proposal restores 20260912.1, the release the diagnosis blames"], rule_ids: every, enforced: true },
+    { seq: 13, proposal_id: "prop-odd", ok: false, problems: ["a problem this dashboard cannot read"], rule_ids: every, enforced: true },
+  ];
+  const rows = blockedActions({ actions: [], gateway: [], checks, proposals: [], lifecycles: [] });
+  assert.deepEqual(rows.map((r) => r.rule), ["VP4-restore-point", every.join(", ")]);
+  const outcomes = runLayerOutcomes({ gateway: [], checks: checks.slice(0, 1), lifecycles: [], writes: [], counts: unsafeCounts(null), live: false });
+  assert.deepEqual(outcomes[1].lines, ["failed VP4-restore-point", "the proposal restores 20260912.1, the release the diagnosis blames"]);
+});
+
+test("a fix the evidence gate refused is shown once, by the gate, though the run record lists it as denied", () => {
+  // recap/harness/controller.py records a gate refusal as a "denied" action, like a policy DENY.
+  const problem = "the proposal restores 20260912.1, the release the diagnosis blames";
+  const proposals = [{ proposal_id: "prop-e08c", action: "execute_rollback", target: "geo", params: { to_version: "20260912.1" } } as unknown as ProposalView];
+  const checks: ProposalCheckView[] = [{ seq: 44, proposal_id: "prop-e08c", ok: false, problems: [problem], rule_ids: PROPOSAL_RULES.map((r) => r.id), enforced: true }];
+  const actions: ActionRecord[] = [{ action: "execute_rollback", target: "geo", params: { to_version: "20260912.1" }, result: "denied", at: "2026-11-03T20:10:00Z", note: problem }];
+  const gateway = gatewayRows([policy(43, "execute_rollback", "APPROVAL_REQUIRED", ["R11-reversible-approval"], "controller", "reversible_write", ["needs an approval"])]);
+  const rows = blockedActions({ actions, gateway, checks, proposals, lifecycles: [] });
+  assert.deepEqual(rows.map((r) => [r.layer, r.what, r.result, r.rule, r.at]), [
+    ["evidence_gate", "execute_rollback on geo (to_version=20260912.1)", "Refused", "VP4-restore-point", "2026-11-03T20:10:00Z"],
+  ]);
+  // A policy DENY on that tool, with no gate refusal: still the policy's own row, with its rule.
+  const denyRollback = gatewayRows([policy(45, "execute_rollback", "DENY", ["R9-destructive-deny"], "controller", "destructive", ["no"])]);
+  const denied = blockedActions({ actions, gateway: denyRollback, checks: [], proposals, lifecycles: [] });
+  assert.deepEqual(denied.map((r) => [r.layer, r.result, r.rule]), [["policy", "Denied", "R9-destructive-deny"]]);
+});
+
+test("each write with the target's own answer: what it changed, or why it refused; never a capability or an approval id", () => {
+  const sideEffects = ["geo generation 2 -> 3", "geo pod template image: ghcr.io/sregym/hotel-reservation:sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a"];
+  const writes = [
+    entry(51, "write_executed", "mitigation.executed", {
+      tool: "execute_rollback",
+      target: "geo",
+      params: { to_version: "sha-d2c036bc" },
+      approval_id: "apr-21dae2eb3e",
+      proposal_digest: DIGEST,
+      capability: "cap.v1.SECRET",
+      ok: true,
+      error: null,
+      side_effects: sideEffects,
+    }),
+    entry(60, "write_executed", "mitigation.executed", { tool: "execute_rollback", target: "geo", ok: false, error: "not authorized: the capability was already used" }),
+  ];
+  const rows = writeRows(writes);
+  assert.deepEqual(rows[0], {
+    seq: 51,
+    ts: writes[0].ts,
+    what: "execute_rollback on geo",
+    params: "to_version=sha-d2c036bc",
+    ok: true,
+    effects: sideEffects,
+    error: null,
+    digest: `${DIGEST.slice(0, 12)}…`,
+  });
+  assert.deepEqual([rows[1].ok, rows[1].error, rows[1].effects, rows[1].digest], [false, "not authorized: the capability was already used", [], "Not recorded"]);
+  for (const secret of ["apr-21dae2eb3e", "cap.v1.SECRET", DIGEST]) assert.ok(!JSON.stringify(rows).includes(secret), secret);
+
+  // The write layer says what the target reported; a refusal is the layer stopping the fix.
+  const [applied] = writes;
+  const passed = runLayerOutcomes({ gateway: [], checks: [], lifecycles: [], writes: [applied], counts: unsafeCounts(null), live: false })[3];
+  assert.deepEqual([passed.state, passed.headline, passed.lines], ["passed", "Signed write applied: execute_rollback on geo", sideEffects.map((e) => `the target reported: ${e}`)]);
+  const refused = runLayerOutcomes({ gateway: [], checks: [], lifecycles: [], writes, counts: unsafeCounts(null), live: false })[3];
+  assert.deepEqual([refused.state, refused.headline, refused.lines[0]], ["stopped", "Write failed or refused: execute_rollback on geo", "not authorized: the capability was already used"]);
+});
+
+test("a run's target in a sentence, from its recorded environment: never guessed, never the shop for a cluster", () => {
+  assert.deepEqual(targetWords({ kind: "simulated", is_simulated: true }), { simulated: true, adapter: "simulated", short: "the shop", long: "the simulated shop" });
+  assert.deepEqual(targetWords({ kind: "kind", is_simulated: false }), { simulated: false, adapter: "kubernetes", short: "the cluster", long: "the Kind demo cluster (live)" });
+  assert.deepEqual(targetWords({ kind: "sregym", is_simulated: false }), { simulated: false, adapter: "kubernetes", short: "the cluster", long: "SREGym's cluster (live)" });
+  assert.deepEqual(targetWords({ kind: "eks", is_simulated: false }), { simulated: false, adapter: null, short: "the target", long: "the eks target (live)" });
+  assert.equal(targetWords({ kind: "", is_simulated: false }).long, "a live target (its kind not recorded)");
+  assert.deepEqual(targetWords(null), { simulated: null, adapter: null, short: "the target", long: "the target (not recorded)" });
+  assert.deepEqual(targetWords({ kind: "kind" }), targetWords(null), "no is_simulated: not recorded");
+});
+
+test("what each target's adapter checks: the simulator's capability, the Kubernetes adapter's dry run and read-back", () => {
+  assert.match(adapterChecks(targetWords({ kind: "simulated", is_simulated: true })) ?? "", /single-use capability, signed for exactly that action/);
+  const kube = adapterChecks(targetWords({ kind: "sregym", is_simulated: false })) ?? "";
+  for (const part of ["only rollbacks and restarts", "nonce is spent before the cluster is touched", "server-side dry run as its RBAC-limited writer identity", "reads the Deployment back"]) {
+    assert.ok(kube.includes(part), part);
+  }
+  assert.equal(adapterChecks(targetWords({ kind: "eks", is_simulated: false })), null, "an adapter this page does not know: nothing claimed");
+  assert.equal(adapterChecks(targetWords(null)), null);
+  // The layers' own text no longer assumes the simulator.
+  assert.match(SAFETY_LAYERS[3].plain, /^The target applies a write only with a single-use capability/);
+  assert.doesNotMatch(SAFETY_LAYERS[3].plain, /simulated shop/);
+});
+
+test("every test the page lists exists in this repository, the M5 live-target guards included", () => {
+  for (const item of SAFETY_TESTS) {
+    const source = readFileSync(`${REPO}${item.file}`, "utf8");
+    assert.match(source, new RegExp(`def ${item.test}\\(`), `${item.file}::${item.test}`);
+  }
+  const listed = SAFETY_TESTS.map((item) => `${item.file}::${item.test}`);
+  for (const wanted of [
+    "tests/e2e/test_api_security.py::test_a_live_approval_needs_the_target_services_exact_name",
+    "tests/unit/test_console_approval_live.py::test_a_prompt_nobody_answers_gives_up_when_the_request_expires",
+    "tests/e2e/test_kind_pipeline.py::test_the_write_boundary_holds_inside_the_mcp_server_for_any_caller",
+    "tests/unit/test_kind_engine.py::test_delete_namespace_is_refused_even_with_a_valid_capability",
+  ]) {
+    assert.ok(listed.includes(wanted), wanted);
+  }
+  assert.ok(SAFETY_TESTS.filter((item) => item.liveTarget).every((item) => !item.file.includes("test_kind_live")), "never a test that needs the real cluster (not in CI)");
+  assert.equal(new Set(listed).size, listed.length, "no test listed twice");
 });

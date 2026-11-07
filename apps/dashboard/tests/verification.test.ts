@@ -27,11 +27,14 @@ import {
   proposersOf,
   reportLeads,
   roundsAsked,
+  anyRuleNote,
+  provenanceOf,
   ruleIdsOf,
   ruleNote,
   textAuthor,
   verifiedBeforeM3,
 } from "../src/view/verification.ts";
+import { targetFacts } from "../src/view/lab.ts";
 import type { Evidence, Hypothesis, HypothesisCheck, TraceEvent, VerificationReport } from "../src/types.ts";
 
 function hypothesis(over: Partial<Hypothesis> = {}): Hypothesis {
@@ -518,4 +521,39 @@ test("a merge without a traced report keeps the short disagreement form and no v
   assert.deepEqual(rows[0].leads, []);
   // The merge payload's own leads count too.
   assert.deepEqual(mergeHistory([event(47, "verification.merge", { leads: ["look at payment"] })])[0].leads, ["look at payment"]);
+});
+
+// --- M5: the rule notes every verifier rule has, and where an observation was read ------------------------------
+
+test("V1-consistency has its note like every other verifier rule (Trace Explorer and Evidence tooltips)", () => {
+  assert.match(ruleNote("V1-consistency") ?? "", /details that belong to another mechanism are reported, never used/);
+  assert.equal(anyRuleNote("V1-consistency"), ruleNote("V1-consistency"));
+  assert.match(anyRuleNote("VP1-evidence-exists") ?? "", /./, "the proposal rules keep their notes");
+  assert.equal(anyRuleNote("V9-unknown"), undefined);
+});
+
+test("an observation's provenance: read live from the named cluster, from the simulated shop, or not said", () => {
+  const kind = targetFacts({ kind: "kind", name: "Kind cluster recap-m5", namespace: "recap-demo", is_simulated: false });
+  const shop = targetFacts({ kind: "simulated", name: "RECAP simulated shop", namespace: "shop", is_simulated: true });
+  const unknown = targetFacts(null);
+  const events = { source_type: "tool" as const, tool: "get_k8s_like_events" };
+  assert.equal(
+    provenanceOf(events, kind),
+    "Read live from Kind cluster recap-m5, namespace recap-demo (a real cluster, not a simulation) by a read-only tool call through RECAP's MCP server",
+  );
+  assert.equal(provenanceOf(events, shop), "Read from the simulated shop (RECAP simulated shop, namespace shop) by a read-only tool call through RECAP's MCP server");
+  assert.equal(provenanceOf(events, unknown), null, "a tool's answer from a target nobody recorded: nothing is guessed");
+  assert.equal(
+    provenanceOf({ source_type: "tool", tool: "execute_rollback" }, kind),
+    "The approved write's result on Kind cluster recap-m5, namespace recap-demo (a real cluster), as the target answered it",
+  );
+  assert.equal(provenanceOf({ source_type: "tool", tool: "restart_service" }, shop), "The approved write's result on the simulated shop");
+  assert.match(provenanceOf({ source_type: "tool", tool: "some_new_tool" }, kind) ?? "", /by a tool call through/, "only known read tools are called read-only");
+  // RECAP's own sources never claim to be the target.
+  assert.match(provenanceOf({ source_type: "doc", tool: "search_runbooks" }, kind) ?? "", /^RECAP's runbook index/);
+  assert.match(provenanceOf({ source_type: "memory", tool: null }, kind) ?? "", /^RECAP's experience memory/);
+  assert.equal(provenanceOf({ source_type: "alert", tool: null }, kind), "The incident's alert");
+  assert.match(provenanceOf({ source_type: "oracle", tool: null }, unknown) ?? "", /^RECAP's recovery oracle/);
+  // A live target that reported no name or namespace is still called live, never named.
+  assert.match(provenanceOf(events, targetFacts({ kind: "sregym", is_simulated: false })) ?? "", /^Read live from the live sregym \(a real system, not a simulation\)/);
 });

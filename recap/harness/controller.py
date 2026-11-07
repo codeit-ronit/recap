@@ -194,6 +194,7 @@ class IncidentController:
         self.tracer: Tracer
         self.evidence: EvidenceRegistry
         self.oracle: RecoveryOracle
+        self.transport: ToolTransport
         self.gateway: ToolGateway
         self.capabilities: CapabilityIssuer
         self.harness: AgentHarness
@@ -392,6 +393,8 @@ class IncidentController:
         while True:
             self._transition(S.INVESTIGATING, "investigate with read-only tools")
             report = await self._investigate(focus, len(failed_actions))
+            if self._tool_server_lost():
+                return  # never ask a person to approve a fix that can no longer be sent
             handover = _handover(report) if report is not None and report.best is None else ""
             if handover:
                 self._finish(S.FAILED, handover)
@@ -468,6 +471,8 @@ class IncidentController:
             if attempts >= retries.max_mitigation_attempts:
                 self._finish(S.FAILED, "mitigation did not recover the system; attempts used up")
                 return
+            if self._tool_server_lost():
+                return  # the oracle judged the fix in flight; nothing more can be read or sent
             # Start a new epoch: the system changed, so agents may observe it again. The
             # oracle's verdict is used only as a yes/no; where to look next comes from
             # RECAP's own reasoning, never from the oracle's list of unhealthy services.
@@ -568,6 +573,8 @@ class IncidentController:
             # Later rounds must see the evidence that contradicts a hypothesis.
             self.harness.priority_ids = _contradicting_ids(report)
             self._checkpoint()
+            if self._tool_server_lost():
+                return report  # the run has ended: a later round could read nothing
             if report.status == "supported" and report.best is not None:
                 return report
             escalate = True
@@ -858,6 +865,23 @@ class IncidentController:
             return [proposal.target]
         return list(self.settings.policies.allowed_services)
 
+    def _tool_server_lost(self) -> bool:
+        """True once the MCP tool server is gone (its process exited); the first call ends
+        the run FAILED with that reason. No read can reach the target any more and no fix can
+        be sent, so neither another investigation round nor an approval request makes sense.
+        A fix that was being sent when it died has already been judged by the oracle, which
+        reads the target on its own."""
+        lost = getattr(self.transport, "lost", None)
+        if not lost:
+            return False
+        if not self.lifecycle.is_terminal:  # an earlier stop keeps its own reason
+            self._fail_with_error(
+                f"the MCP tool server stopped during the run: {lost}",
+                "the tool server was lost: nothing more can be read or sent; "
+                "a human should take over",
+            )
+        return True
+
     def _namespace_refused(self, alert_namespace: str) -> bool:
         """Refuse up front to work in a namespace the safety policy does not allow."""
         allowed = self.settings.policies.allowed_namespaces
@@ -873,6 +897,7 @@ class IncidentController:
 
     def _build_run_components(self, transport: ToolTransport) -> None:
         """Create the per-run gateway, harness and orchestrator around one MCP connection."""
+        self.transport = transport
         self.gateway = ToolGateway(
             transport=transport,
             registry=self.deps.registry,

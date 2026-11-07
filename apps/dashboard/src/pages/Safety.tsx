@@ -23,15 +23,18 @@ import type { ApprovalEvent, ApprovalRequest } from "../types";
 import {
   BLOCK_LAYER_LABELS,
   CALL_SCOPES,
+  PROPOSAL_RULES,
   SAFETY_LAYERS,
   SAFETY_STOP_OUTCOMES,
   SAFETY_TESTS,
   actionText,
   actorLabel,
+  adapterChecks,
   approvalKind,
   authorWords,
   blockedActions,
   callScope,
+  decisionAttestation,
   gatewayRows,
   injectionRows,
   lastFixDecision,
@@ -42,21 +45,40 @@ import {
   requestedRunId,
   runLayerOutcomes,
   shortHash,
+  targetWords,
+  traceDecisions,
   trustedRisk,
   unsafeCounts,
   verdictCounts,
+  writeRows,
 } from "../view/safety";
-import type { BlockedRow, GatewayRow, InjectionRow, LayerOutcome, Lifecycle, OutcomeState, RequestFacts, StepState, UnsafeCounts } from "../view/safety";
+import type {
+  BlockedRow,
+  GatewayRow,
+  InjectionRow,
+  LayerOutcome,
+  Lifecycle,
+  OutcomeState,
+  RequestFacts,
+  StepState,
+  TargetWords,
+  TestedGuarantee,
+  TraceDecision,
+  UnsafeCounts,
+  WriteRow,
+} from "../view/safety";
 import "../styles/safety.css";
 
 /**
- * Safety & Approvals: the four layers between a model's suggestion and a change to the simulated
- * shop, the approvals waiting for a person, and for one run what each layer did (policy
- * decisions with rule ids, the evidence gate, the permission lifecycle from the approval log,
- * the signed write), what was stopped, and its prompt-injection flags. Then the approval audit
- * log across runs, runs that ended in a safety stop, and the rule reference.
+ * Safety & Approvals: the four layers between a model's suggestion and a change to the target
+ * (the simulated shop, or a real Kubernetes cluster), the approvals waiting for a person, and
+ * for one run what each layer did (policy decisions with rule ids, the evidence gate, the
+ * permission lifecycle from the approval log with how each decision came, the signed write and
+ * the target's own answer), what was stopped, and its prompt-injection flags. Then the approval
+ * audit log across runs, runs that ended in a safety stop, and the rule reference.
  *
- * Digests are shown as a short prefix only; no token, signed capability or key reaches the page.
+ * Digests are shown as a short prefix only; no token, approval id, signed capability or key
+ * reaches the page.
  */
 
 export const NOT_RECORDED = "Not recorded";
@@ -184,6 +206,8 @@ export interface RunSafetyData {
   summary: dto.TimelineEntry[];
   flags: dto.TimelineEntry[];
   requests: dto.TimelineEntry[];
+  /** approval.decided entries: the run's own record of each decision (a fallback for the log's note). */
+  decisions: dto.TimelineEntry[];
   writes: dto.TimelineEntry[];
   /** The approval log of every proposal the run made. */
   approvals: ApprovalEvent[];
@@ -196,13 +220,14 @@ export function proposalIds(detail: dto.RunDetail, evidence: dto.EvidenceView): 
 }
 
 async function loadRunSafety(runId: string): Promise<RunSafetyData> {
-  const [detail, evidence, policy, summary, flags, requests, writes] = await Promise.all([
+  const [detail, evidence, policy, summary, flags, requests, decisions, writes] = await Promise.all([
     api.runView(runId),
     api.evidenceView(runId),
     api.timeline(runId, { kind: "policy", limit: 2000 }),
     api.timeline(runId, { kind: "summary", limit: 20 }),
     api.timeline(runId, { kind: "injection_flag", limit: 500 }),
     api.timeline(runId, { kind: "approval_requested", limit: 200 }),
+    api.timeline(runId, { kind: "approval_decided", limit: 200 }),
     api.timeline(runId, { kind: "write_executed", limit: 200 }),
   ]);
   const approvals = (await Promise.all(proposalIds(detail, evidence).map((id) => api.approvalEvents(id)))).flat();
@@ -215,9 +240,19 @@ async function loadRunSafety(runId: string): Promise<RunSafetyData> {
     summary: summary.entries,
     flags: flags.entries,
     requests: requests.entries,
+    decisions: decisions.entries,
     writes: writes.entries,
     approvals,
   };
+}
+
+/** The run's target from its summary (or its record): how the page names it in sentences. */
+export function runTargetWords(detail: dto.RunDetail): TargetWords {
+  const summary = detail.summary;
+  if (summary && typeof summary.environment_simulated === "boolean") {
+    return targetWords({ kind: summary.environment_kind, is_simulated: summary.environment_simulated });
+  }
+  return targetWords(detail.record?.environment ?? null);
 }
 
 // --- one run: unsafe actions, layer by layer ------------------------------------------------------------
@@ -226,7 +261,7 @@ function count(value: number | null): string {
   return value === null ? NOT_RECORDED : fmtInt(value);
 }
 
-export function UnsafeSplit({ counts, live }: { counts: UnsafeCounts; live: boolean }) {
+export function UnsafeSplit({ counts, live, where = targetWords(null) }: { counts: UnsafeCounts; live: boolean; where?: TargetWords }) {
   if (!counts.summarized) {
     return (
       <Notice tone="neutral" icon="clock" title={live ? "Counted when the run ends" : "Unsafe-action counts: not recorded"}>
@@ -256,12 +291,12 @@ export function UnsafeSplit({ counts, live }: { counts: UnsafeCounts; live: bool
             <StatusToken
               tone={executedTone}
               size="sm"
-              label={counts.executed === 0 ? "none reached the shop" : "reached the shop"}
+              label={counts.executed === 0 ? `none reached ${where.short}` : `reached ${where.short}`}
               icon={counts.executed === 0 ? "check" : "x"}
             />
           ) : null}
         </div>
-        <div className="sf-unsafe-note">Sent to the simulated shop and applied. Should always be 0.</div>
+        <div className="sf-unsafe-note">Sent to {where.long} and applied. Should always be 0.</div>
       </div>
       <div className="sf-unsafe-tile tone-neutral">
         <div className="sf-unsafe-label">Fixes sent</div>
@@ -323,6 +358,7 @@ export function LifecycleView({
   request,
   risk,
   decision = null,
+  traced = null,
 }: {
   lifecycle: Lifecycle;
   proposal: dto.ProposalView | undefined;
@@ -330,8 +366,13 @@ export function LifecycleView({
   risk: string | null;
   /** The policy's last decision on this proposal's tool (explains a fix that never reached approval). */
   decision?: GatewayRow | null;
+  /** The run's own record of the decision (its trace), for a proposal the approval log does not hold. */
+  traced?: TraceDecision | null;
 }) {
   const title = proposal ? actionText(proposal.action, proposal.target, proposal.params) : `proposal ${lifecycle.proposalId}`;
+  const decided = lifecycle.steps.find((step) => step.key === "decided");
+  const attestation = decided && lifecycle.status !== "expired" ? decisionAttestation(decided.actor, decided.note) : null;
+  const late = lifecycle.late.length;
   return (
     <section className={`sf-lifecycle tone-${lifecycle.tone}`} aria-label={`${title}: ${lifecycle.label}`}>
       <div className="sf-lifecycle-head">
@@ -375,6 +416,17 @@ export function LifecycleView({
           </span>
         </div>
       ) : null}
+      {lifecycle.status === "not_requested" && traced ? (
+        <div className="sf-lifecycle-why sf-traced">
+          <Icon name="info" size={14} />
+          <span>
+            This server's approval log holds no entry for this proposal, but the run's trace records a decision:{" "}
+            <strong>{traced.decision || NOT_RECORDED}</strong>
+            {traced.actor ? <> by {actorLabel(traced.actor).label}</> : null}
+            {traced.note || traced.reason ? <span className="reason"> ({traced.note || traced.reason})</span> : null}.
+          </span>
+        </div>
+      ) : null}
       <ol className="sf-steps">
         {lifecycle.steps.map((step) => {
           const view = STEP_VIEW[step.state];
@@ -393,18 +445,44 @@ export function LifecycleView({
                 {step.key === "requested" && request?.expiresAt ? (
                   <div className="sf-step-at">expires {fmtDateTime(request.expiresAt)}</div>
                 ) : null}
+                {step.note ? (
+                  <div className="sf-step-note">
+                    <span className="sf-step-note-label">decision log:</span> {step.note}
+                  </div>
+                ) : null}
               </div>
             </li>
           );
         })}
       </ol>
+      {attestation ? (
+        <div className="sf-attest" role="note" aria-label="What the decision log proves">
+          <Icon name={attestation.channel === "console" ? "key" : "users"} size={14} />
+          <span>
+            {attestation.shows} <strong>{attestation.limit}</strong>
+          </span>
+        </div>
+      ) : null}
+      {lifecycle.status === "expired" ? (
+        <div className="sf-expired">
+          <StatusToken tone="warn" icon="clock" size="sm" label="Expired: the fix was not applied" />
+          <span>
+            Nobody decided before the request expired{request?.expiresAt ? ` (${fmtDateTime(request.expiresAt)})` : ""}, so the gateway never received an
+            approval and this fix was never sent.
+            {late
+              ? ` ${late === 1 ? "An answer" : `${late} answers`} reached the decision log after the expiry and ${late === 1 ? "was" : "were"} refused: a late answer changes nothing.`
+              : ""}
+          </span>
+        </div>
+      ) : null}
       {lifecycle.refused.length ? (
         <div className="sf-refused">
           <StatusToken tone="warn" icon="alert" size="sm" label={`${lifecycle.refused.length} refused ${lifecycle.refused.length === 1 ? "attempt" : "attempts"}`} />
           <ul className="sf-refused-list">
             {lifecycle.refused.map((event) => (
               <li key={event.event_id}>
-                <span className="muted small">{fmtDateTime(event.at)}</span> {actorLabel(event.actor).label}:{" "}
+                <span className="muted small">{fmtDateTime(event.at)}</span> {actorLabel(event.actor).label}
+                {lifecycle.late.includes(event) ? <span className="sf-late"> (a late answer, after the expiry)</span> : null}:{" "}
                 <span className="reason">{event.detail || NOT_RECORDED}</span>
               </li>
             ))}
@@ -432,11 +510,14 @@ export function Lifecycles({
   proposals,
   requests,
   gateway,
+  decisions = new Map(),
 }: {
   lifecycles: readonly Lifecycle[];
   proposals: readonly dto.ProposalView[];
   requests: ReadonlyMap<string, RequestFacts>;
   gateway: readonly GatewayRow[];
+  /** The trace's approval.decided events, by proposal id. */
+  decisions?: ReadonlyMap<string, TraceDecision>;
 }) {
   if (!lifecycles.length) return <Quiet icon="key">This run proposed no fix, so nothing needed a decision.</Quiet>;
   return (
@@ -451,9 +532,74 @@ export function Lifecycles({
             request={requests.get(lifecycle.proposalId)}
             risk={proposal ? trustedRisk(gateway, proposal.action) : null}
             decision={proposal ? lastFixDecision(gateway, proposal.action) : null}
+            traced={decisions.get(lifecycle.proposalId) ?? null}
           />
         );
       })}
+    </div>
+  );
+}
+
+// --- one run: the target's own answer to each write ----------------------------------------------------
+
+export function TargetChecks({ writes, where, refused }: { writes: readonly WriteRow[]; where: TargetWords; refused: number | null }) {
+  const checks = adapterChecks(where);
+  return (
+    <div className="stack">
+      {writes.length ? (
+        <ul className="sf-writes">
+          {writes.map((row) => (
+            <li key={row.seq} className="sf-write">
+              <div className="sf-write-head">
+                <StatusToken
+                  tone={row.ok ? "ok" : "bad"}
+                  icon={row.ok ? "check" : "x"}
+                  size="sm"
+                  label={row.ok ? `Applied by ${where.short}` : `Refused or failed at ${where.short}`}
+                />
+                <Mono>{row.what}</Mono>
+                {row.params ? <span className="muted small mono">({row.params})</span> : null}
+              </div>
+              <div className="sf-write-meta muted small">
+                {fmtDateTime(row.ts)} ·{" "}
+                {row.digest === NOT_RECORDED ? (
+                  "its digest was not recorded"
+                ) : (
+                  <>
+                    bound to digest <Mono>{row.digest}</Mono>
+                  </>
+                )}
+              </div>
+              {row.ok ? (
+                row.effects.length ? (
+                  <ul className="sf-write-report" aria-label="What the target reported">
+                    {row.effects.map((effect, i) => (
+                      <li key={i}>{effect}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <span className="muted small">The target reported no change details.</span>
+                )
+              ) : (
+                <span className="reason">{row.error || NOT_RECORDED}</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <Quiet icon="shield">No write was sent to {where.short} in this run, so it had nothing to check.</Quiet>
+      )}
+      {refused !== null && refused > 0 ? (
+        <div className="muted small">
+          {refused} unsafe {refused === 1 ? "write was" : "writes were"} refused by {where.short} itself (the run summary's count).
+        </div>
+      ) : null}
+      {checks ? (
+        <p className="sf-adapter-checks">
+          <span className="sf-adapter-label">What {where.long} checks before it applies a write (from its adapter's code, not recorded per run):</span>{" "}
+          {checks}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -817,16 +963,33 @@ export function SafetyStopList({ page }: { page: Page<dto.RunSummary> }) {
   );
 }
 
-export function TestedGuarantees() {
+function TestList({ items }: { items: readonly TestedGuarantee[] }) {
   return (
     <ul className="sf-tests">
-      {SAFETY_TESTS.map((item) => (
-        <li key={item.test}>
+      {items.map((item) => (
+        <li key={`${item.file}::${item.test}`}>
           <span>{item.shows}</span>
           <Mono>{`${item.file}::${item.test}`}</Mono>
         </li>
       ))}
     </ul>
+  );
+}
+
+export function TestedGuarantees() {
+  const every = SAFETY_TESTS.filter((item) => !item.liveTarget);
+  const live = SAFETY_TESTS.filter((item) => item.liveTarget);
+  return (
+    <div className="sf-test-groups">
+      <section>
+        <h3 className="mini-title">Every target</h3>
+        <TestList items={every} />
+      </section>
+      <section>
+        <h3 className="mini-title">Live targets (M5) · checked offline, on a fake cluster or a target marked live</h3>
+        <TestList items={live} />
+      </section>
+    </div>
   );
 }
 
@@ -851,28 +1014,53 @@ const POLICY_RULES: [string, string][] = [
 
 export function PolicyRuleReference() {
   return (
-    <details className="sf-reference">
-      <summary>Policy rule reference ({POLICY_RULES.length} rule ids)</summary>
-      <p className="muted small">
-        Documentation, not metrics. Rules run in this order (R14 runs after the risk tiers, before R11) and the first DENY wins, so the
-        last id a decision lists is the rule that produced its verdict. Verdicts depend only on trusted inputs: the registry's risk
-        tier, validated arguments, the caller, the environment and the stored approval.
-      </p>
-      <div className="table-wrap">
-        <table className="table compact rules">
-          <tbody>
-            {POLICY_RULES.map(([id, meaning]) => (
-              <tr key={id}>
-                <td>
-                  <Mono>{id}</Mono>
-                </td>
-                <td>{meaning}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </details>
+    <div className="stack">
+      <details className="sf-reference">
+        <summary>Policy rule reference ({POLICY_RULES.length} rule ids)</summary>
+        <p className="muted small">
+          Documentation, not metrics. Rules run in this order (R14 runs after the risk tiers, before R11) and the first DENY wins, so the
+          last id a decision lists is the rule that produced its verdict. Verdicts depend only on trusted inputs: the registry's risk
+          tier, validated arguments, the caller, the environment and the stored approval.
+        </p>
+        <div className="table-wrap">
+          <table className="table compact rules">
+            <caption className="sr-only">Policy rule ids and what each means</caption>
+            <tbody>
+              {POLICY_RULES.map(([id, meaning]) => (
+                <tr key={id}>
+                  <td>
+                    <Mono>{id}</Mono>
+                  </td>
+                  <td>{meaning}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
+      <details className="sf-reference">
+        <summary>Evidence gate rule reference ({PROPOSAL_RULES.length} rule ids)</summary>
+        <p className="muted small">
+          Documentation, not metrics. After the policy's verdict and before any approval is requested, the verifier checks every proposed fix
+          against all four. A check lists all four ids; a refusal's problems say which failed, and that rule is shown with the refused fix.
+        </p>
+        <div className="table-wrap">
+          <table className="table compact rules">
+            <caption className="sr-only">Evidence gate rule ids and what each means</caption>
+            <tbody>
+              {PROPOSAL_RULES.map((rule) => (
+                <tr key={rule.id}>
+                  <td>
+                    <Mono>{rule.id}</Mono>
+                  </td>
+                  <td>{rule.meaning}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </div>
   );
 }
 
@@ -899,11 +1087,14 @@ export function RunSafetyView({ data, runId, live }: { data: RunSafetyData; runI
   const gateway = gatewayRows(data.policy);
   const counts = unsafeCounts(latestSummary(data.summary));
   const proposals = data.evidence.proposals;
-  const lifecycles = proposalIds(data.detail, data.evidence).map((id) => permissionLifecycle(id, data.approvals, live));
+  const decisions = traceDecisions(data.requests, data.decisions ?? []);
+  const lifecycles = proposalIds(data.detail, data.evidence).map((id) => permissionLifecycle(id, data.approvals, live, decisions.get(id) ?? null));
   const outcomes = runLayerOutcomes({ gateway, checks: data.evidence.proposal_checks, lifecycles, writes: data.writes, counts, live });
   const blocked = blockedActions({ actions: record?.actions ?? [], gateway, checks: data.evidence.proposal_checks, proposals, lifecycles });
   const injections = injectionRows(data.evidence.injection_flags, data.flags);
   const requests = requestFacts(data.requests);
+  const writes = writeRows(data.writes);
+  const where = runTargetWords(data.detail);
   const safetyOff = record?.config.safety_enabled === false;
 
   return (
@@ -924,7 +1115,7 @@ export function RunSafetyView({ data, runId, live }: { data: RunSafetyData; runI
           {safetyOff ? (
             <Notice tone="bad" icon="alert" title="Safety was switched off for this run (simulation-only ablation)">
               The policy allowed every call with rule R0 and recorded the verdict that would have applied. This is allowed only
-              against the simulated shop, to show what an unsafe action would do.
+              against the simulated shop (a real cluster refuses such a run before it is touched), to show what an unsafe action would do.
             </Notice>
           ) : null}
           {data.traceAvailable ? null : (
@@ -934,14 +1125,20 @@ export function RunSafetyView({ data, runId, live }: { data: RunSafetyData; runI
             </Notice>
           )}
           <Card title="This run, layer by layer" subtitle="What each layer did with this run's fix, from its trace and the approval log. Attempted is not executed.">
-            <UnsafeSplit counts={counts} live={live} />
+            <UnsafeSplit counts={counts} live={live} where={where} />
             <LayerOutcomes outcomes={outcomes} />
           </Card>
           <Card
             title={`Permission lifecycle${lifecycles.length ? ` (${lifecycles.length})` : ""}`}
-            subtitle="From the append-only approval log: requested, then decided, then used once, unless an expiry, a rejection or a revocation stopped it."
+            subtitle="From the append-only approval log: requested, then decided, then used once, unless an expiry, a rejection or a revocation stopped it. How each decision came is in the log's own words."
           >
-            <Lifecycles lifecycles={lifecycles} proposals={proposals} requests={requests} gateway={gateway} />
+            <Lifecycles lifecycles={lifecycles} proposals={proposals} requests={requests} gateway={gateway} decisions={decisions} />
+          </Card>
+          <Card
+            title={`The target's own checks${writes.length ? ` (${writes.length})` : ""}`}
+            subtitle="The gateway's approval is not the last lock: the target checks the signed capability itself. Each write RECAP sent, and what the target answered."
+          >
+            <TargetChecks writes={writes} where={where} refused={counts.refusedByEnvironment} />
           </Card>
           <Card
             title={`What RECAP stopped${blocked.length ? ` (${blocked.length})` : ""}`}
@@ -1005,7 +1202,7 @@ export function SafetyPage({ route }: PageProps) {
     <>
       <PageHeader
         title="Safety & Approvals"
-        description="Four independent checks stand between a model's suggestion and a change to the simulated shop. None of them depends on the model behaving well, and an unsafe action that is attempted is never the same as one that is executed."
+        description="Four independent checks stand between a model's suggestion and a change to the target: the simulated shop, or a real Kind cluster the owner runs (never production). None of them depends on the model behaving well, and an unsafe action that is attempted is never the same as one that is executed."
       />
       <PendingApprovals pending={pending} />
       <SafetyLayersCard system={system} />
@@ -1029,12 +1226,12 @@ export function SafetyPage({ route }: PageProps) {
         </Card>
         <Card
           title="What the test suite checks"
-          subtitle="Documentation, not a live result: adversarial tests that run in CI with every change (python -m pytest)."
+          subtitle="Documentation, not a live result: tests that run in CI with every change (python -m pytest), never against a real cluster."
         >
           <TestedGuarantees />
         </Card>
       </div>
-      <Card title="Reference" subtitle="What each rule id in a decision means.">
+      <Card title="Reference" subtitle="What each rule id in a policy decision or an evidence check means.">
         <PolicyRuleReference />
       </Card>
     </>

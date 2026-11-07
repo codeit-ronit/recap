@@ -1,15 +1,14 @@
 # `infra/kind/`: RECAP's local Kubernetes demo (M5, target 1)
 
-> **Files only. Nothing in this folder has been run.** No cluster was created, no image was
-> built, no manifest was applied and no script was run against Docker, `kind` or `kubectl`:
-> they are not installed or started on the build machine, and every install waits for the
-> owner's approval ([docs/m5-integration-plan.md](../../docs/m5-integration-plan.md), sections
-> 7 and 12). What *was* checked, offline: the demo program's behaviour (each version, the
-> metrics, readiness under the leak, the exact log lines read by RECAP's own parsers) in
-> `tests/unit/test_kind_demo_app.py`, and every manifest's invariants, `bash -n` on every
-> script and the scripts' pure-bash helpers (with a stub in place of `kubectl`) in
-> `tests/unit/test_kind_manifests.py`. Every timing and memory figure below is an estimate
-> until it is measured on the cluster.
+> **Run on a real cluster in M5.** It ran first on the owner's Mac, in a dedicated colima
+> profile (W2, W3), then on the owner's AWS VM ([infra/aws/ec2.sh](../aws/ec2.sh)), where the
+> model runs too (W4 onward). All six live acceptance tests passed
+> (`tests/e2e/test_kind_live.py`, `RECAP_LIVE_KIND=1`), and the owner approved two real-model
+> recoveries ([evals/live/](../../evals/live/README.md)). What happened is in
+> [docs/m5-progress.md](../../docs/m5-progress.md), measured figures included (the node
+> container used 742 MiB). Timings and memory figures below were written before the first
+> run. Offline checks: the demo program's behaviour in `tests/unit/test_kind_demo_app.py`,
+> and the manifests' invariants and the scripts' helpers in `tests/unit/test_kind_manifests.py`.
 
 This folder is the cluster side of [M5's plan](../../docs/m5-integration-plan.md) (sections 3
 and 4): a one-node Kind cluster that RECAP's owner controls completely, two small services with
@@ -200,13 +199,18 @@ dropped, the runtime's default seccomp profile and a read-only root filesystem.
    at once. Re-apply `manifests/10-recap-rbac.yaml` and run `mint-tokens.sh` to restore.
 4. Remove everything: `infra/kind/scripts/cleanup.sh`.
 
-## To be checked on the cluster
+## Checked on the cluster (M5), and still to check
 
-- That the CEL expressions of the admission policy compile and deny exactly what they should
-  (acceptance test 3's variant: a patch of another shape sent as the writer).
-- That colima forwards Kind's 127.0.0.1 port mappings to the Mac.
-- How long `dependency-crash` takes to show: the kubelet's crash-loop back-off on v1.37 and
-  the 60 s progress deadline.
-- `kubectl create token`'s accepted durations, and `--dry-run=server` on `kubectl patch` with
-  the pinned `kubectl`.
+Checked (W2 and W3, [docs/m5-progress.md](../../docs/m5-progress.md)):
+- The admission policy's CEL expressions compile, and the policy denies a patch of another
+  shape sent as the writer (live acceptance test 3).
+- colima forwarded Kind's 127.0.0.1 port mappings to the Mac. On the VM, the SSH tunnel
+  forwards them.
+- Tokens from `kubectl create token` work, and a server-side dry run of the patch works. The
+  pinned `kubectl` (1.37) has no `--dry-run` on `rollout restart`, so a restart is the patch
+  that command makes.
+
+Still to check:
+- How long `dependency-crash` takes to show on the cluster: the kubelet's crash-loop back-off
+  and the 60 s progress deadline.
 - Every figure marked as an estimate above.

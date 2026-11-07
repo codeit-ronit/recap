@@ -5,7 +5,7 @@ import type { ApiError } from "../api";
 import { Chip, Mono, StateChip } from "../components/Badge";
 import { Card, KeyValues, Notice, PageHeader, StatTile } from "../components/Card";
 import { DataSourceBadge } from "../components/DataSourceBadge";
-import type { SourceFields, TargetFields } from "../components/DataSourceBadge";
+import type { SourceFields } from "../components/DataSourceBadge";
 import { applyFilters, FilterBar, filterOptions } from "../components/FilterBar";
 import type { FilterSpec, FilterValues } from "../components/FilterBar";
 import { Icon } from "../components/Icon";
@@ -28,7 +28,9 @@ import {
   MODE_ORDER,
   NO_LABEL,
   NOT_RECORDED,
+  batchTargets,
   batchesOf,
+  benchmarkVerdictCounts,
   configurationMatrix,
   expectedEntries,
   failureGroups,
@@ -50,26 +52,31 @@ import {
   plural,
   providerClasses,
   recordOutcome,
+  recordTarget,
+  recordVerdict,
   retrievalLabel,
   sampleNote,
   scenarioGroups,
   stageNote,
   stateCounts,
+  targetFields,
   timeView,
   tokenView,
   toolCallRows,
 } from "../view/evals";
-import type { ConfigMatrix, ScenarioGroup } from "../view/evals";
+import type { ConfigMatrix, EvalTarget, ScenarioGroup, VerdictView } from "../view/evals";
 import "../styles/evaluations.css";
 
 /**
  * Evaluations (GET /evals, GET /evals/{batch_id}; docs/evaluation.md). One tab per mode,
  * because the modes are different kinds of evidence and never share a number: a scripted
  * regression of RECAP's own code, offline replays of recorded real-model runs, real models
- * on simulated incidents, and a real cluster (M5, not implemented). Every count is over one
- * batch, written "k of N". A record opens read-only, with a link to its trace when this server
+ * on simulated incidents, and real models on a real Kubernetes cluster (M5: the Kind demo
+ * cluster or SREGym's own, told apart by each batch's target). Every count is over one batch,
+ * written "k of N"; a benchmark grader's verdicts (SREGym's) are counted apart from RECAP's
+ * verified recoveries. A record opens read-only, with a link to its trace when this server
  * stores the run. Only the scripted regression starts from the browser (operator, after a
- * confirmation); real-model batches are started from a terminal.
+ * confirmation); real-model batches are built from a terminal.
  */
 
 // --- small pieces -------------------------------------------------------------------------------
@@ -78,12 +85,33 @@ export function NotRecorded({ children = NOT_RECORDED }: { children?: ReactNode 
   return <span className="not-recorded">{children}</span>;
 }
 
-/** Evaluation records exist only for runs on the simulated shop (evals/categorize.py refuses others). */
-const SIMULATED_TARGET: TargetFields = {
-  kind: "simulated",
-  is_simulated: true,
-  description: "Evaluation records exist only for runs on the simulated shop: the record builder refuses a run whose target was not simulated.",
-};
+/** What the runs worked on, in words: the simulated shop, or a real cluster (said in the text, not only the color). */
+export function TargetChips({ targets }: { targets: readonly EvalTarget[] }) {
+  return (
+    <span className="chip-row evl-targets">
+      {targets.map((target) => (
+        <Chip key={target.key || "unnamed"} tone={target.simulated ? "warn" : "bad"} title={target.about}>
+          <Icon name={target.simulated ? "flask" : "alert"} size={12} />
+          {target.simulated ? target.label : `${target.label} · live`}
+        </Chip>
+      ))}
+    </span>
+  );
+}
+
+/** A benchmark grader's verdict: its own token, never drawn like RECAP's outcome. */
+function VerdictToken({ view, prefix = "" }: { view: VerdictView; prefix?: string }) {
+  return (
+    <StatusToken
+      size="sm"
+      variant="plain"
+      tone={view.tone}
+      icon={view.icon}
+      label={`${prefix}${prefix ? view.label.toLowerCase() : view.label}`}
+      title="The benchmark grader's own verdict, recorded by hand: kept apart from RECAP's outcome"
+    />
+  );
+}
 
 function sourceOf(origin: string, model: string | null): SourceFields {
   return { origin: (origin || undefined) as SourceFields["origin"], model };
@@ -324,6 +352,7 @@ export function BatchPicker({
                     </span>
                   ) : null}
                 </span>
+                <TargetChips targets={batchTargets(batch)} />
                 <span className="evl-batch-meta">
                   {fmtUtc(batch.created_at) ?? NOT_RECORDED} · {batch.source === "published" ? "published in git" : "local to this machine"}
                 </span>
@@ -396,6 +425,9 @@ export function BatchHeader({ batch, records }: { batch: dto.BatchSummary; recor
   const sources = providerClasses(records);
   const scripted = batch.mode === "scripted_regression";
   const none = scripted ? <span className="muted">None: the scripted policy is not an LLM</span> : <NotRecorded />;
+  const targets = batchTargets(batch);
+  // One target: the badge names it. Several (none so far): the badge shows the decisions only, the row lists them.
+  const environment = targets.length === 1 ? targetFields(targets[0]) : undefined;
   return (
     <Card
       title={batch.title}
@@ -421,16 +453,28 @@ export function BatchHeader({ batch, records }: { batch: dto.BatchSummary; recor
       <div className="evl-sources" role="group" aria-label="Where this batch's decisions came from">
         {sources.length ? (
           sources.map((source) => (
-            <DataSourceBadge key={source.origin || "none"} provider={sourceOf(source.origin, source.model)} environment={SIMULATED_TARGET} size="sm" />
+            <DataSourceBadge key={source.origin || "none"} provider={sourceOf(source.origin, source.model)} environment={environment} size="sm" />
           ))
         ) : (
-          <DataSourceBadge provider={null} environment={SIMULATED_TARGET} size="sm" />
+          <DataSourceBadge provider={null} environment={environment} size="sm" />
         )}
       </div>
       <KeyValues
         className="kv-wide evl-facts"
         rows={[
           ["Mode", <Mono>{batch.mode}</Mono>],
+          ["Target", <TargetChips targets={targets} />],
+          ...(batch.benchmark
+            ? [
+                [
+                  "Benchmark grader",
+                  <span className="cell-stack">
+                    <span>{batch.benchmark}</span>
+                    <span className="muted small">Its verdicts are counted apart (below) and never merged into RECAP's verified recoveries.</span>
+                  </span>,
+                ] as [ReactNode, ReactNode],
+              ]
+            : []),
           ["Created", fmtUtc(batch.created_at) ?? <NotRecorded />],
           [
             "Plan",
@@ -467,6 +511,27 @@ function StatesTile({ outcomes }: { outcomes: dto.BatchOutcomes }) {
       ) : (
         <NotRecorded />
       )}
+    </div>
+  );
+}
+
+/** A benchmark grader's verdicts over the batch: its own tile, beside (never inside) RECAP's count. */
+export function BenchmarkTile({ benchmark, counts, n }: { benchmark: string; counts: readonly [VerdictView, number][]; n: number }) {
+  return (
+    <div className="stat-tile evl-verdicts" role="group" aria-label="Benchmark verdicts, kept apart from RECAP's outcome">
+      <div className="stat-label">Benchmark verdicts</div>
+      <ul className="evl-state-list">
+        {counts.map(([view, k]) => (
+          <li key={view.key}>
+            <VerdictToken view={view} />
+            <span>{kOfN(k, n)}</span>
+          </li>
+        ))}
+      </ul>
+      <div className="stat-note">
+        From the grader this batch names: {benchmark}. Each verdict was copied by hand from its output, and none is merged into RECAP's verified
+        recoveries.
+      </div>
     </div>
   );
 }
@@ -588,20 +653,34 @@ export function OutcomesCard({
   const matrix = configurationMatrix(records);
   const note = sampleNote(n, matrix?.rows.length ?? 0);
   const missed = n - outcomes.successes;
+  const verdicts = benchmarkVerdictCounts(batch); // empty unless the batch names a grader
+  const graded = verdicts.length ? batch.benchmark : null;
   return (
-    <Card title="Outcomes" subtitle="Counts over this batch only, as runs out of N. A success needs RESOLVED and the independent oracle's verified recovery.">
+    <Card
+      title="Outcomes"
+      subtitle={`Counts over this batch only, as runs out of N. A success needs RESOLVED and the independent oracle's verified recovery.${
+        graded ? " A benchmark grader's verdicts are counted apart." : ""
+      }`}
+    >
       <Notice tone="warn" icon="alert" title={note.label}>
         {note.text}
       </Notice>
-      <div className="stat-grid evl-tiles">
+      <div className={graded ? "stat-grid evl-tiles evl-tiles-4" : "stat-grid evl-tiles"}>
         <StatTile
           label="Verified recoveries"
           value={kOfN(outcomes.successes, n)}
           tone={outcomes.successes ? "ok" : "neutral"}
-          note={matrix ? "all configurations together: compare the rows below instead" : "resolved and confirmed by the oracle"}
+          note={
+            matrix
+              ? "all configurations together: compare the rows below instead"
+              : graded
+                ? "resolved and confirmed by RECAP's own oracle"
+                : "resolved and confirmed by the oracle"
+          }
         />
         <StatTile label="Did not recover" value={kOfN(missed, n)} tone={missed ? "bad" : "neutral"} note="each with one failure category (below)" />
         <StatesTile outcomes={outcomes} />
+        {graded ? <BenchmarkTile benchmark={graded} counts={verdicts} n={n} /> : null}
       </div>
       {matrix ? (
         <ConfigMatrixView matrix={matrix} onOpen={onOpen} />
@@ -687,10 +766,13 @@ export function RecordsCard({
   records,
   onOpen,
   initialLimit = 20,
+  benchmark = null,
 }: {
   records: readonly dto.EvalRecord[];
   onOpen: (runId: string) => void;
   initialLimit?: number;
+  /** The grader the batch names: each run's verdict is then shown, apart from RECAP's. */
+  benchmark?: string | null;
 }) {
   const [values, setValues] = useState<FilterValues>({});
   const [offset, setOffset] = useState(0);
@@ -805,22 +887,26 @@ export function RecordsCard({
             header: (
               <span className="cell-stack">
                 <span>Result</span>
-                <span className="evl-th-note">state · category · oracle</span>
+                <span className="evl-th-note">state · category · oracle{benchmark ? " · benchmark (apart)" : ""}</span>
               </span>
             ),
-            render: (r) => (
-              <span className="cell-stack evl-result">
-                {r.final_state ? <StateChip state={r.final_state} /> : <NotRecorded />}
-                <OutcomeToken record={r} />
-                <StatusToken
-                  size="sm"
-                  variant="plain"
-                  tone={r.oracle_verified ? "ok" : "neutral"}
-                  icon={r.oracle_verified ? "check" : "minus"}
-                  label={r.oracle_verified ? "oracle verified" : "oracle: not verified"}
-                />
-              </span>
-            ),
+            render: (r) => {
+              const verdict = recordVerdict(r, benchmark);
+              return (
+                <span className="cell-stack evl-result">
+                  {r.final_state ? <StateChip state={r.final_state} /> : <NotRecorded />}
+                  <OutcomeToken record={r} />
+                  <StatusToken
+                    size="sm"
+                    variant="plain"
+                    tone={r.oracle_verified ? "ok" : "neutral"}
+                    icon={r.oracle_verified ? "check" : "minus"}
+                    label={r.oracle_verified ? "oracle verified" : "oracle: not verified"}
+                  />
+                  {verdict ? <VerdictToken view={verdict} prefix="benchmark: " /> : null}
+                </span>
+              );
+            },
           },
           { key: "requests", header: "Model requests", numeric: true, render: (r) => fmtCount(r.model_requests) },
           {
@@ -996,7 +1082,7 @@ function orNone(value: string | null | undefined, none: ReactNode = <NotRecorded
   return value ? <Mono>{value}</Mono> : none;
 }
 
-export function RecordDetails({ record }: { record: dto.EvalRecord }) {
+export function RecordDetails({ record, benchmark = null }: { record: dto.EvalRecord; benchmark?: string | null }) {
   const scripted = isScripted(record);
   const noModel = scripted ? <span className="muted">None: the scripted policy is not an LLM</span> : <NotRecorded />;
   const asked = record.model_requests > 0;
@@ -1005,6 +1091,7 @@ export function RecordDetails({ record }: { record: dto.EvalRecord }) {
   const tokens = tokenView(record);
   const expected = expectedEntries(record.expected);
   const byAgent = toolCallRows(record.tool_calls_by_agent);
+  const verdict = recordVerdict(record, benchmark);
   return (
     <div className="evl-drawer-grid">
       <Section title="Run" icon="live">
@@ -1017,6 +1104,7 @@ export function RecordDetails({ record }: { record: dto.EvalRecord }) {
             ["Family · split", `${record.incident_family || NOT_RECORDED} · ${record.split || NOT_RECORDED}`],
             ["Label", record.label ? <Mono>{record.label}</Mono> : <NotRecorded />],
             ["Mode", <Mono>{record.mode}</Mono>],
+            ["Target", <TargetChips targets={[recordTarget(record)]} />],
             ["Started", fmtUtc(record.started_at) ?? <NotRecorded />],
             ["Ended", fmtUtc(record.ended_at) ?? <NotRecorded />],
             ["Recording", orNone(record.recording, scripted ? <span className="muted">None: a scripted run has no model answers to record</span> : <NotRecorded />)],
@@ -1125,6 +1213,20 @@ export function RecordDetails({ record }: { record: dto.EvalRecord }) {
             ["Outcome", <OutcomeToken record={record} />],
             ["Failure category", record.failure ? <Mono>{record.failure}</Mono> : <span className="muted">None</span>],
             ["Failure detail", record.failure_detail || <NotRecorded />],
+            ...(verdict
+              ? [
+                  [
+                    "Benchmark verdict",
+                    <span className="cell-stack">
+                      <VerdictToken view={verdict} />
+                      <span className="muted small">
+                        Grader: {benchmark || "not named by this batch"}. The grader's own verdict, copied by hand from its output: kept apart from
+                        RECAP's outcome above and never merged into it.
+                      </span>
+                    </span>,
+                  ] as [ReactNode, ReactNode],
+                ]
+              : []),
           ]}
         />
       </Section>
@@ -1224,11 +1326,14 @@ export function RecordDrawer({
   record,
   onClose,
   trace,
+  benchmark = null,
 }: {
   record: dto.EvalRecord | null;
   onClose: () => void;
   /** Replaces the GET /runs/{id} check (tests). */
   trace?: ReactNode;
+  /** The grader the record's batch names (its verdict is shown apart from RECAP's outcome). */
+  benchmark?: string | null;
 }) {
   // A long record: focus starts at its top (not on the last control), so the dialog opens at its head.
   const top = useRef<HTMLDivElement>(null);
@@ -1248,12 +1353,12 @@ export function RecordDrawer({
       closeLabel="Close the record"
     >
       <div className="evl-drawer-badges" ref={top} tabIndex={-1}>
-        <DataSourceBadge provider={sourceOf(record.provider_class, record.model)} environment={SIMULATED_TARGET} size="sm" />
+        <DataSourceBadge provider={sourceOf(record.provider_class, record.model)} environment={targetFields(recordTarget(record))} size="sm" />
         {record.final_state ? <StateChip state={record.final_state} /> : null}
         <OutcomeToken record={record} />
       </div>
       {trace ?? <TraceAvailability runId={record.run_id} scenarioId={record.scenario_id} />}
-      <RecordDetails record={record} />
+      <RecordDetails record={record} benchmark={benchmark} />
       <details className="evl-raw">
         <summary>The whole record as JSON</summary>
         <JsonView value={record} maxHeight={360} />
@@ -1285,9 +1390,9 @@ export function BatchDetail({
       ) : null}
       <OutcomesCard batch={batch} records={records} onOpen={onOpenRecord} />
       <FailuresCard batch={batch} records={records} onOpen={onOpenRecord} />
-      <RecordsCard key={batch.batch_id} records={records} onOpen={onOpenRecord} />
+      <RecordsCard key={batch.batch_id} records={records} onOpen={onOpenRecord} benchmark={batch.benchmark} />
       <MethodsCards batch={batch} />
-      <RecordDrawer record={record} onClose={onCloseRecord} />
+      <RecordDrawer record={record} onClose={onCloseRecord} benchmark={batch.benchmark} />
     </>
   );
 }
@@ -1630,9 +1735,9 @@ export function CommandsCard({ mode }: { mode: dto.EvalMode }) {
         "The browser never starts a real-model batch. It takes minutes to hours of local compute or free-plan quota, so a person starts each batch at a terminal, with explicit consent for a hosted free plan.",
     },
     real_kubernetes: {
-      title: "Run on the real cluster: from a terminal, with your approval",
+      title: "Run on a real cluster: from a terminal, with your approval",
       subtitle:
-        "A person starts each run at a terminal and approves its fix there; the batch is then built from the stored runs. The browser never starts a run against the cluster.",
+        "The Kind demo cluster or SREGym's own: a person starts each run and approves its fix by typing the target service's name, then the batch is built at a terminal from the stored runs. This page never starts a run or builds a batch.",
     },
   };
   return (
@@ -1675,8 +1780,9 @@ export function CommandsCard({ mode }: { mode: dto.EvalMode }) {
           <li>
             <Icon name="key" size={15} />
             <span>
-              <strong>A person approves every write.</strong> The fix waits at the terminal until its operator types the target service's exact name; a
-              plain <Mono>y</Mono> rejects, and the approval is bound to that one proposal, single use.
+              <strong>A person approves every write.</strong> The fix waits until its operator types the target service's exact name: at the terminal a
+              plain <Mono>y</Mono> rejects, and through the dashboard or the API an approval without that name decides nothing. The approval is bound
+              to that one proposal, single use.
             </span>
           </li>
           <li>
@@ -1689,7 +1795,16 @@ export function CommandsCard({ mode }: { mode: dto.EvalMode }) {
           <li>
             <Icon name="check" size={15} />
             <span>
-              <strong>The cluster judges the recovery.</strong> The oracle reads the cluster itself (rollout, readiness, an HTTP probe), never the model.
+              <strong>The cluster judges the recovery.</strong> RECAP's oracle reads the cluster itself, never the model: rollout and readiness, plus
+              an HTTP probe on the Kind demo, or containers that stay up on SREGym's cluster.
+            </span>
+          </li>
+          <li>
+            <Icon name="flag" size={15} />
+            <span>
+              <strong>SREGym's grader stays apart.</strong> Its verdicts (<Mono>run-oracle.py</Mono>) are copied into the batch by hand and counted next
+              to RECAP's verified recoveries, never merged into them. A person approved every fix, so these runs are not comparable with SREGym's
+              leaderboard.
             </span>
           </li>
         </ul>
@@ -1766,7 +1881,11 @@ export function AdapterTable({ adapters }: { adapters: readonly dto.AdapterStatu
 
 export function AdaptersView({ system }: { system: Pick<Polled<dto.SystemView>, "data" | "error" | "loading" | "refresh"> }) {
   return (
-    <Card title="Environment adapters on this server" subtitle="What GET /system reports for each target environment. Only an implemented adapter can be operational." flush>
+    <Card
+      title="Environment adapters on this server"
+      subtitle="What GET /system reports for each target environment. Only the adapter this server is configured with runs incidents here (operational); GET /system never contacts a cluster."
+      flush
+    >
       <PolledView polled={system} loadingLabel="Loading the environment adapters…" errorTitle="Could not load GET /system">
         {(view) => <AdapterTable adapters={view.environment_adapters} />}
       </PolledView>
@@ -1925,7 +2044,10 @@ export function EvalsPage({ route: given }: { route?: Route } = {}) {
       />
       <div className="honesty-banner evl-honesty" role="note">
         <Icon name="flask" size={16} />
-        <span>Simulated shop only · four modes, never combined · counts “k of N”, never rates · small samples, no statistical claims</span>
+        <span>
+          Simulated shop, or a real Kind cluster the owner runs (never production) · four modes, never combined · counts “k of N”, never rates · small
+          samples, no statistical claims
+        </span>
       </div>
       <PolledView
         polled={evals}

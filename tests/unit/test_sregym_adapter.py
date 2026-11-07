@@ -21,7 +21,7 @@ from recap.core.errors import ConfigError
 from recap.core.interfaces import TargetEnvironment
 from recap.environments.kubernetes import KubernetesEnvironment
 from recap.environments.registry import create_environment
-from recap.runtime import ENVIRONMENT_ADAPTERS, LIVE_ADAPTERS
+from recap.runtime import ENVIRONMENT_ADAPTERS, LIVE_ADAPTERS, Runtime
 from tests.unit.test_kind_external import options as fake_options
 
 SCENARIO = "sregym-misconfig-app-hotel-res"
@@ -108,3 +108,18 @@ def test_get_system_reports_the_adapter_as_implemented_and_live() -> None:
     assert (adapter, implemented) == ("SREGymEnvironment", True)
     assert "sregym" in LIVE_ADAPTERS and "RECAP_TARGET=sregym-hotel" in detail
     assert (REPO_ROOT / "configs" / "targets" / "sregym-hotel" / "environment.yaml").is_file()
+
+
+def test_configured_sregym_is_the_active_adapter_with_its_own_oracle(profile: Any) -> None:
+    """GET /system on a SREGym server (offline: nothing contacts the cluster): SREGym is the
+    one operational adapter, with its own oracle and policy; every run uses it."""
+    runtime = Runtime(profile)
+    summary = runtime.system_summary()
+    found = {a["kind"]: a for a in summary["environment_adapters"]}
+
+    assert (found["sregym"]["status"], found["sregym"]["operational"]) == ("active", True)
+    for other in ("kind", "simulated"):
+        assert (found[other]["status"], found[other]["operational"]) == ("available", False)
+    assert summary["oracle"] == "sregym-health-oracle"
+    assert summary["environment"]["is_simulated"] is False
+    assert summary["versions"]["policy_version"] == "policy-sregym-hotel-v2"

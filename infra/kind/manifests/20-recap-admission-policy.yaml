@@ -1,7 +1,7 @@
 # The admission policy that checks every change RECAP's two writing identities make
-# (docs/m5-integration-plan.md, section 3.4). Not applied yet, so not yet tested against an API
-# server: the acceptance tests of section 11 exercise it (a patch of the wrong shape, sent as
-# the writer, must be denied and leave the Deployment's generation unchanged).
+# (docs/m5-integration-plan.md, section 3.4). setup.sh applies it. Live acceptance test 3
+# (tests/e2e/test_kind_live.py) sends patches of the wrong shape as the writer and checks that
+# they are denied; it passed on the real cluster in M5 W3 (docs/m5-progress.md).
 #
 # patch on a Deployment can do more than a rollback or a restart: it can change the image,
 # the command, the mounts or the identity a pod runs with. RBAC cannot see inside a patch, so
