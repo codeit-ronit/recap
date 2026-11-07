@@ -628,11 +628,13 @@ class ConsoleApprovalChannel:
         nobody can be reading the proposal, so the request is rejected without reading it.
         Anything typed before the prompt appeared is discarded, so the answer is typed after
         the proposal was shown; on a live target the terminal's bell rings when it appears.
-        The decision log records how the answer came: "interactive terminal; answered after
-        N s", flagged when it came faster than a person reads, and on a live target why an
-        answer did not approve (never the typed text: a password typed into the wrong window
-        must not reach a log). This proves a terminal and a timing, not a person: a program
-        driving a terminal can still answer.
+        The prompt waits no longer than the request: at its expiry it gives up and records
+        nothing, and the store expires the request (an M5 run once waited at the prompt four
+        hours past it, until someone came back). The decision log records how the answer
+        came: "interactive terminal; answered after N s", flagged when it came faster than a
+        person reads, and on a live target why an answer did not approve (never the typed
+        text: a password typed into the wrong window must not reach a log). This proves a
+        terminal and a timing, not a person: a program driving a terminal can still answer.
         """
         for line in _describe(request, self.environment if self.live else None):
             self._output(line)
@@ -657,7 +659,14 @@ class ConsoleApprovalChannel:
                 if self.live:
                     _ring_bell()
             started = time.monotonic()
-            answer, empty_lines = await self._ask(request)
+            answer, empty_lines, expired = await self._ask(request)
+            if expired:
+                until = request.expires_at.strftime("%H:%M:%S")
+                self._output(
+                    f"\nNo answer before the request expired ({until} UTC): nothing is changed, "
+                    "and a line typed now is ignored."
+                )
+                return
             approved = answer is not None and self._approves(answer, request)
             waited = time.monotonic() - started
             where = "interactive terminal; " if real_prompt else ""
@@ -685,8 +694,9 @@ class ConsoleApprovalChannel:
             local_login=login,
         )
 
-    async def _ask(self, request: ApprovalRequest) -> tuple[str | None, int]:
-        """The typed answer (None: input ended) and how many empty lines came before it.
+    async def _ask(self, request: ApprovalRequest) -> tuple[str | None, int, bool]:
+        """The typed answer (None: input ended or the request expired), how many empty lines
+        came before it, and whether the request expired first.
 
         On a live target an empty line is not an answer: at the end of a long investigation
         an Enter pressed alone is no decision to act on (two real M5 runs ended rejected that
@@ -697,20 +707,49 @@ class ConsoleApprovalChannel:
         empty = 0
         while True:
             try:
-                # input() blocks, so it runs in a thread and the event loop keeps running.
-                answer = str(await asyncio.to_thread(self._input, prompt))
+                answer = await self._read_line(prompt, request.expires_at)
             except EOFError:  # input ended: treat as "no"
-                return None, empty
+                return None, empty, False
+            if answer is None:  # the request expired while the prompt waited
+                return None, empty, True
             if (
                 answer.strip()
                 or not self.live
                 or empty >= EMPTY_LINES_ASKED_AGAIN
                 or utcnow() >= request.expires_at
             ):
-                return answer, empty
+                return answer, empty, False
             empty += 1
             target = _printable(request.proposal.target, 64)
             self._output(f"Nothing was typed: type {target} to approve, or no to reject.")
+
+    async def _read_line(self, prompt: str, deadline: datetime) -> str | None:
+        """One line typed at the prompt, or None if `deadline` comes first.
+
+        input() blocks and cannot be interrupted, so it runs in a daemon thread: the event loop
+        keeps running, and a run whose request expired goes on (and can exit) while the prompt
+        still waits for a line nobody will read.
+        """
+        remaining = (deadline - utcnow()).total_seconds()
+        if remaining <= 0:
+            return None
+        loop = asyncio.get_running_loop()
+        line: asyncio.Future[str] = loop.create_future()
+
+        def read() -> None:
+            try:
+                result: tuple[str | None, BaseException | None] = (str(self._input(prompt)), None)
+            except BaseException as exc:  # EOFError and the like: raised where it is awaited
+                result = (None, exc)
+            with contextlib.suppress(RuntimeError):  # the loop is closed: the run is over
+                loop.call_soon_threadsafe(_settle, line, *result)
+
+        threading.Thread(target=read, name="recap-console-prompt", daemon=True).start()
+        try:
+            return await asyncio.wait_for(asyncio.shield(line), timeout=remaining)
+        except TimeoutError:
+            line.add_done_callback(_retrieve)  # a late line or error is dropped quietly
+            return None
 
     def _prompt(self, request: ApprovalRequest) -> str:
         if not self.live:
@@ -738,6 +777,20 @@ def _os_login() -> str:
     except (OSError, KeyError, ImportError):  # no login variable and no password entry
         return ""
     return _printable(str(login), limit=64).strip()
+
+
+def _settle(future: asyncio.Future[str], value: str | None, error: BaseException | None) -> None:
+    if future.done():
+        return
+    if error is not None:
+        future.set_exception(error)
+    else:
+        future.set_result(value or "")
+
+
+def _retrieve(future: asyncio.Future[str]) -> None:
+    if not future.cancelled():
+        future.exception()  # marks it retrieved: no "exception was never retrieved" warning
 
 
 def _why_not(answer: str | None) -> str:

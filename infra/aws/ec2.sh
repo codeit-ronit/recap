@@ -17,7 +17,7 @@
 #                              copy RECAP's identity kubeconfigs and ca.sha256 for that cluster
 #                              from the VM to this Mac's private ~/.config/recap/<cluster>/
 #   infra/aws/ec2.sh hold CMD  run CMD on this Mac (a RECAP run), kept awake, with the VM marked
-#                              in use until CMD ends (an approval wait uses nothing on the VM)
+#                              in use until CMD ends, 2 h at most (an approval wait uses nothing there)
 #   infra/aws/ec2.sh stop      stop the VM: compute billing ends, the disk stays (~$0.45/day)
 #   infra/aws/ec2.sh down      terminate the VM and delete its security group and key pair
 #
@@ -239,7 +239,8 @@ cmd_creds() {
   say "copied RECAP's $cluster identities to ~/.config/recap/$cluster"
 }
 
-HOLD_SECONDS=600  # well inside the idle guard's 45 minutes
+HOLD_SECONDS=600       # well inside the idle guard's 45 minutes
+HOLD_MAX_SECONDS=7200  # a run takes at most about 80 minutes: a stuck one must not keep the VM
 
 cmd_hold() {
   # A run's approval wait and recovery window use neither the model nor a command on the VM:
@@ -247,7 +248,13 @@ cmd_hold() {
   [[ $# -gt 0 ]] || die "usage: ec2.sh hold COMMAND [ARGS...]"
   load
   ssh_ true </dev/null || die "the VM is not reachable (ec2.sh up)"
-  (while sleep "$HOLD_SECONDS"; do ssh_ true </dev/null >/dev/null 2>&1 || true; done) 2>/dev/null &
+  (
+    for ((touched = 0; touched < HOLD_MAX_SECONDS / HOLD_SECONDS; touched++)); do
+      sleep "$HOLD_SECONDS"
+      ssh_ true </dev/null >/dev/null 2>&1 || true
+    done
+    say "hold: $((HOLD_MAX_SECONDS / 3600)) h are up, the VM is no longer kept in use (its idle guard may stop it)"
+  ) 2>/dev/null &
   TOUCHER=$!  # global: the EXIT trap runs after this function has returned
   trap 'pkill -P "$TOUCHER" 2>/dev/null; kill "$TOUCHER" 2>/dev/null || true' EXIT
   command -v caffeinate >/dev/null && set -- caffeinate -i "$@"  # macOS: no sleep mid-run

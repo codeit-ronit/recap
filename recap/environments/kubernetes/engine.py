@@ -276,7 +276,7 @@ class KubernetesEnvironment(TargetEnvironment):
         deployment = await _get_or_none(reader, service)
         pods = await reader.list_pods(translate.selector_of(deployment)) if deployment else []
         stuck = rollout.progress_deadline_exceeded(deployment) if deployment else False
-        status = translate.agent_status(deployment, pods, stuck)
+        status = translate.agent_status(deployment, pods, stuck, utcnow())
         ready = translate.ready_replicas(deployment) if deployment else 0
         replicas = translate.desired_replicas(deployment) if deployment else 0
         now = utcnow()
@@ -732,8 +732,9 @@ class KubernetesEnvironment(TargetEnvironment):
         while True:
             view = await self._view(self._reset_identity())
             probes = await self._probe_round()
+            now = utcnow()
             conditions = {
-                service: _condition(deployment, pods)
+                service: _condition(deployment, pods, now)
                 for service, (deployment, pods) in view.items()
             }
             fired = probe.alert_symptoms(rule, probes, conditions)
@@ -1250,13 +1251,17 @@ def _settled_but_unready(deployment: Mapping[str, Any]) -> bool:
     return settled and translate.ready_replicas(deployment) < desired
 
 
-def _condition(deployment: Mapping[str, Any] | None, pods: list[dict[str, Any]]) -> Condition:
+def _condition(
+    deployment: Mapping[str, Any] | None, pods: list[dict[str, Any]], now: datetime
+) -> Condition:
+    """One service for the alert rule. A crash loop counts between two crashes too: an alert
+    measured while the container is briefly up must not read as "readiness failing" only."""
     if deployment is None:
         return Condition(ready=0, replicas=1, crash_looping=False, rollout_stuck=False)
     return Condition(
         ready=translate.ready_replicas(deployment),
         replicas=translate.desired_replicas(deployment),
-        crash_looping=translate.crash_looping(pods),
+        crash_looping=translate.crash_looping(pods) or translate.recently_crashed(pods, now),
         rollout_stuck=rollout.progress_deadline_exceeded(deployment),
     )
 
