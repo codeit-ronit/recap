@@ -126,6 +126,13 @@
   flex-direction: column;
   gap: var(--space-6);
 }
+/* How many episodes memory files under each kind of target (a run finds only its own kind's). */
+.mem-targets {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
 .mem-group {
   display: flex;
   flex-direction: column;

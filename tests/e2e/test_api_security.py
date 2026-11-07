@@ -1,8 +1,9 @@
 """The API's security controls, signed in and not (audit finding 2.4; see apps/api/auth.py).
 
 The audit reproductions in test_audit_api_security.py show that anonymous callers are now
-refused. These tests cover the rest: a wrong token, the identity a decision records, the
-origin and host checks, the decision log endpoint, cancellation, and the token file.
+refused. These tests cover the rest: a wrong token, the identity a decision records, a live
+approval's typed name (whichever server on the run's data folder is asked), the origin and
+host checks, the decision log endpoint, cancellation, and the token file.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from recap.core.models import ApprovalRequest, ApprovalStatus, MitigationProposa
 from recap.environments.kubernetes import KubernetesEnvironment
 from recap.environments.kubernetes.preflight import PreflightError
 from recap.runtime import Runtime
+from tests.e2e.test_kind_pipeline import adapter, kind_runtime
 from tests.helpers import OPERATOR_HEADERS
 from tests.unit.test_kind_engine import WRITE_OPS, kind_options
 
@@ -176,6 +178,56 @@ def test_a_live_rejection_needs_no_name(
     assert rejected.status_code == 200 and rejected.json()["decision"] == "rejected"
     note = runtime.approvals.events(request.proposal_id)[-1].detail
     assert note.startswith("dashboard or API; answered") and "typed" not in note
+
+
+@pytest.mark.e2e
+def test_a_live_runs_approval_needs_the_name_on_a_server_configured_for_the_simulator(
+    settings: Settings, tmp_path: Path
+) -> None:
+    """Two API servers on one data folder: one whose target is the Kind demo (the offline
+    fake cluster), one configured for the simulator. The approval store is the folder's, so
+    both list the live run's request. The simulator's server decides it by the run's own
+    target: one click, or a wrong name, decides nothing (400); the exact name approves, the
+    decision log says it was typed, and the rollback then reaches the cluster under that
+    approval."""
+    kind, _ = kind_runtime(settings, tmp_path)
+    simulated = Runtime(settings)  # the same data folder, configured for the simulator
+    assert kind.settings.paths.recap_db == simulated.settings.paths.recap_db
+    assert simulated.environment_info().is_simulated and not kind.environment_info().is_simulated
+    with (
+        TestClient(create_app(kind), headers=OPERATOR_HEADERS) as live_server,
+        TestClient(create_app(simulated), headers=OPERATOR_HEADERS) as other_server,
+    ):
+        run_id = live_server.post(
+            "/incidents/run",
+            json={"scenario_id": "kind-bad-release", "config": {"memory_write": False}},
+        ).json()["run_id"]
+        [request] = wait_for(lambda: other_server.get("/approvals/pending").json())
+        url = f"/approvals/{request['proposal_id']}"
+        approve = {"decision": "approved", "proposal_digest": request["proposal_digest"]}
+        bare = other_server.post(url, json=approve)
+        wrong = other_server.post(url, json={**approve, "confirm_target": "Backend"})
+        status = simulated.approvals.get_request(request["proposal_id"]).status
+        named = other_server.post(url, json={**approve, "confirm_target": "backend"})
+
+        def finished() -> dict | None:
+            body = live_server.get(f"/runs/{run_id}").json()
+            return body if body["status"] == "finished" else None
+
+        record = wait_for(finished)["record"]
+
+    assert request["run_id"] == run_id and request["proposal"]["target"] == "backend"
+    assert bare.status_code == wrong.status_code == 400
+    assert "type the target service's exact name" in bare.json()["detail"]
+    assert status == ApprovalStatus.PENDING  # neither decided anything
+    assert named.status_code == 200 and named.json()["decision"] == "approved"
+    log = simulated.approvals.events(request["proposal_id"])
+    assert [e.kind for e in log] == ["requested", "approved", "consumed"]
+    assert log[1].detail.startswith("dashboard or API; typed the target service's name;")
+    assert record["state"] == "RESOLVED", record["outcome_note"]
+    [approval] = record["approvals"]
+    [write] = adapter(kind, run_id).state.writes()
+    assert (write["outcome"], write["approval_id"]) == ("executed", approval["approval_id"])
 
 
 def test_the_environment_check_reaches_the_target_and_changes_nothing(

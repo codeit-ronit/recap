@@ -72,6 +72,7 @@ from recap.core.errors import ApprovalError, ConfigError
 from recap.core.ids import utcnow
 from recap.core.models import (
     Approval,
+    ApprovalRequest,
     IncidentState,
     MemoryPartition,
     ProviderOrigin,
@@ -391,17 +392,18 @@ def create_app(
 
         A rejection also revokes an approval that was not used yet: "no" wins until the
         gateway uses the approval, right before it sends the write. The approver recorded is
-        the authenticated operator. On a target that is not simulated (a real cluster), an
-        approval needs the target service's exact name in `confirm_target`, as the console
-        asks for it (M5): anything else decides nothing (400). The decision log then says how
-        the decision came, and when; it proves a token holder and a timing, not a person.
+        the authenticated operator. For a write to a target that is not simulated (a real
+        cluster: this server's target, or the one the asking run recorded), an approval needs
+        the target service's exact name in `confirm_target`, as the console asks for it (M5):
+        anything else decides nothing (400). The decision log then says how the decision
+        came, and when; it proves a token holder and a timing, not a person.
         """
         runtime = manager(request).runtime
         pending = runtime.approvals.get_request(proposal_id)
         if pending is None:
             raise HTTPException(404, f"no approval request for proposal '{proposal_id}'")
         note = ""
-        if not runtime.environment_info().is_simulated:
+        if _live_request(runtime, pending):
             named = (body.confirm_target or "").strip() == pending.proposal.target
             if body.decision == "approved" and not named:
                 raise HTTPException(
@@ -509,6 +511,23 @@ def _event_id(value: str | None) -> int:
     if value is None or not value.strip().isdigit():
         return 0
     return int(value.strip())
+
+
+def _live_request(runtime: Runtime, pending: ApprovalRequest) -> bool:
+    """Whether deciding `pending` decides a write to a target that is not simulated.
+
+    The approval store belongs to the data folder, and every server on that folder lists and
+    decides every request in it, so a server configured for the simulator can be asked about
+    a live run's write. The request is live when this server's target is, or when the run that
+    asked recorded a live target. A request whose run left no record keeps this server's own
+    rule: a run saves its record, with its target, in the same database before it asks, so
+    only a request opened by hand (as some tests do) has none.
+    """
+    if not runtime.environment_info().is_simulated:
+        return True
+    record = runtime.runs.get(pending.run_id)
+    recorded = record.environment if record is not None else None
+    return recorded is not None and not recorded.is_simulated
 
 
 app = create_app()

@@ -6,19 +6,21 @@ it, a restricted identity applies it, and an independent oracle checks the recov
 it is recorded. This report is the handoff; [m5-progress.md](m5-progress.md) is the log,
 workstream by workstream.
 
-Nothing here ran in production. The clusters are Kind clusters on the owner's own VM, and
-every write was approved by the owner.
+Nothing here ran in production. The clusters are Kind clusters on the owner's own machines.
+The owner approved every real-model fix that ran on them; the scripted live acceptance tests
+of W3 approved (or, in two tests, signed directly) their own writes as a test harness
+(`operator:live-acceptance`).
 
 ## 1. What was built
 
 | Part | What it is |
 |---|---|
 | Kubernetes adapter | `KubernetesEnvironment` ([recap/environments/kubernetes/](../recap/environments/kubernetes/)) behind the same `TargetEnvironment` interface as the simulator: typed `kubectl` operations, one least-privilege identity per role, cluster pinning, a namespace lease, and a fake cluster for offline tests |
-| Kind demo target | A two-service app (frontend calls backend), Prometheus and a traffic generator on a Kind cluster ([infra/kind/](../infra/kind/)), with four scenarios that inject real faults: a bad release, a dependency crash, a memory leak, and logs that carry a planted instruction |
+| Kind demo target | A two-service app (frontend calls backend), Prometheus and a traffic generator on a Kind cluster ([infra/kind/](../infra/kind/)), with four scenarios that inject real faults: a bad release, a dependency crash, a memory leak, and logs that carry a planted instruction. The dependency crash was tested offline only: it has never run on a cluster |
 | SREGym target | The same adapter in external-harness mode ([integrations/sregym/](../integrations/sregym/), [ADR 0031](decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md)). SREGym 1.1 deploys its hotel-reservation app on its own cluster and injects the problem; release tags are rollback keys; there is no probe or metric |
 | Exact-action authorization | On a real cluster a person must type the target service's name, at the console or in the dashboard. A single-use signed capability is bound to that exact action, and a server-side dry run, read-back and audit wrap the write |
 | Independent oracle | Ground truth from the cluster through the oracle's own identity, never an MCP tool: rollout complete, readiness, the oracle's own HTTP probe (Kind), or containers that stayed up (SREGym) |
-| The owner's VM | The Kind demo ran first on the owner's Mac (W2, W3). From W4 one AWS EC2 VM ran both clusters and the model, because the model beside the cluster exhausted the Mac's memory. RECAP stays on the Mac and reaches them through an SSH tunnel ([infra/aws/ec2.sh](../infra/aws/ec2.sh)), and an idle guard on the VM stops it when nothing uses it |
+| The owner's VM | The Kind demo ran first on the owner's Mac (W2, W3). In W4 the model beside the cluster exhausted the Mac's memory, so one AWS EC2 VM took over: the Kind cluster from W4's first counted run, the model from W4's second run (the first had it on the Mac), and SREGym's cluster in W5. RECAP stays on the Mac and reaches them through an SSH tunnel ([infra/aws/ec2.sh](../infra/aws/ec2.sh)), and an idle guard on the VM stops it when nothing uses it |
 | Records | Published runs in [evals/live/](../evals/live/) and the `real_kubernetes` evaluation mode with two batches (Kind, SREGym), failures included |
 | Mission Control | The dashboard shows the active target, checks that the cluster can be reached, asks for the typed service name before a live approval, and tells the two clusters apart in the evaluations |
 | Reliability | Tests for faults on Kubernetes and at runtime: a slow rollout, a cancelled run, a tool server that dies, concurrent runs, an interrupted process. They found one real bug: a run whose tool server died went on and asked for an approval it could never use |
@@ -38,7 +40,7 @@ From v0.5.0 to this release candidate, outside the published records. The main a
 | API and dashboard | `apps/api/` (live approvals, environment check, labels, batch targets), `apps/dashboard/src/` |
 | Evaluation | `evals/records.py`, `evals/categorize.py`, `scripts/live_eval.py`, `scripts/export_run_trace.py` |
 | Tests | `tests/unit/test_kind_*.py`, `tests/unit/test_sregym_adapter.py`, `tests/e2e/test_kind_pipeline.py`, `tests/e2e/test_kind_live.py` (opt-in, real cluster), and more |
-| Decisions | [m5-integration-plan.md](m5-integration-plan.md) and [ADR 0031](decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md) (the external harness) |
+| Decisions | [ADR 0032](decisions/0032-a-real-kubernetes-target-behind-the-same-interface.md) (the Kubernetes target: typed `kubectl`, one identity per role, a pinned cluster, the typed-name approval), [ADR 0031](decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md) (the external harness) and [m5-integration-plan.md](m5-integration-plan.md) (the plan, written before the work) |
 
 ## 3. How the Kubernetes integration works
 
@@ -166,25 +168,30 @@ approved what.
 | Target | Runs | Outcomes | Published |
 |---|---|---|---|
 | Kind demo (W4, W6) | 7 | 3 RESOLVED, oracle verified (a bad release; the red-team run with a planted instruction in the logs; the acceptance run, started and approved in Mission Control); 2 rejected (an Enter alone, before the prompt named the service); 1 failed safely (a model request outlasted its limit); 1 cancelled (memory watchdog on the Mac) | [batch](../evals/reports/batches/2026-11-03-real-kubernetes-qwen3-8b-prompts-v4.7/README.md), [three exports](../evals/live/README.md) |
-| SREGym `misconfig_app_hotel_res` (W5) | 5 | 1 RESOLVED, and SREGym's grader passed it; 1 blocked by VP4 (the model named the bad release itself; SREGym's grader: fail); 1 approval expired; 2 failed safely (the wrong mechanism, refused by the verifier) | [batch](../evals/reports/batches/2026-11-03-real-kubernetes-sregym-qwen3-8b-prompts-v4.7/README.md), [export](../evals/live/2026-11-07-qwen3-8b-sregym-human-approved-prompts-v4.7/README.md) |
+| SREGym `misconfig_app_hotel_res` (W5) | 5 | 1 RESOLVED, and SREGym's grader passed it; 1 blocked by VP4 (the model named the bad release itself; nothing changed, so SREGym's grader: fail); 1 approval expired; 2 failed safely (the wrong mechanism, refused by the verifier) | [batch](../evals/reports/batches/2026-11-03-real-kubernetes-sregym-qwen3-8b-prompts-v4.7/README.md), [export](../evals/live/2026-11-07-qwen3-8b-sregym-human-approved-prompts-v4.7/README.md) |
 
 These are counts, not rates. The SREGym problem is not held out: RECAP was fixed on it
 between runs. Each fix was approved by a person, so nothing here is comparable with SREGym's
-leaderboard.
+leaderboard. One earlier attempt is in neither batch: `run-93b12c804e` (2026-11-02, the model
+and the Kind cluster both on the Mac) never finished, because the Mac froze during its
+investigation; its record still reads INVESTIGATING, and the move to the VM followed.
 
 ## 8. Runtime resources and spending
 
 - **VM:** AWS EC2 m6a.2xlarge (8 vCPU, 32 GiB, no GPU), ap-south-1, Ubuntu 24.04, 150 GB gp3.
   It ran only while used; the owner's rule was to stop it whenever idle.
-- **Model:** Ollama 0.34.4 on the VM's CPU. One model request took 75 to 300 s, and up to
-  about 13 minutes when two specialists shared the server. A run took 15 to 30 minutes, most
-  of it model time.
+- **Model:** Ollama 0.34.4 on the VM's CPU, set up on the VM by hand (no script installs
+  it): it listens on the VM's 127.0.0.1:11434 only, with cloud models off, and serves
+  `qwen3:8b` with weights `sha256:a3de86cd1c13…`, the same weights as on the Mac. One model
+  request took 75 to 300 s, and up to about 13 minutes when two specialists shared the server.
+  A run took 15 to 30 minutes, most of it model time.
 - **Clusters:** the Kind demo's node container used about 0.75 GiB. SREGym's four-node
   cluster and its 19 services fit beside the model in 32 GiB.
-- **Spending:** AWS Cost Explorer shows about $5.40 of usage before credits from 2026-11-02
-  to 2026-11-07: compute $3.55, disk $1.63, the rest under $0.20. Its data can lag by a day.
-  The owner's $100 of AWS credits covered all of it, so the out-of-pocket cost was $0. No
-  model request was paid for.
+- **Spending:** AWS Cost Explorer showed about $5.40 of usage before credits from 2026-11-02
+  to 2026-11-07: compute $3.55, disk $1.63, the rest under $0.20. It was read on 2026-11-07,
+  before the VM session of the W6 acceptance run, so that session is not in it, and its data
+  can lag by up to a day. The owner's $100 of AWS credits covered all of it, so the
+  out-of-pocket cost was $0. No model request was paid for.
 
 ## 9. Tests and CI
 
@@ -194,7 +201,8 @@ on M5 yet: nothing is pushed, so the first CI run comes with the push.
 | Check | Result |
 |---|---|
 | `python -m pytest` | **2260 passed, 7 skipped** (the six live-cluster acceptance tests and the optional OpenTelemetry test) in about 4 minutes; `-m e2e` selects 182 end-to-end cases |
-| Live acceptance tests on the real Kind cluster (`RECAP_LIVE_KIND=1`) | all six passed in W3 (scripted policy); not part of the default run |
+| Live acceptance tests on the real Kind cluster (`RECAP_LIVE_KIND=1`) | all six passed in W3 (2026-11-02, scripted policy); not run since, and not part of the default run. Nine commits since W3 changed the Kubernetes adapter: the real-model runs exercised its reads and its rollback again (the W6 acceptance run on the Kind demo, the last SREGym run in its external-harness mode), but its restart has not run on a real cluster since W3 |
+| Browser smoke test (`apps/dashboard/e2e/smoke.mjs`, by hand) | no result recorded for the release candidate; its last recorded result is 72 of 72 checks, for 0.5.0, before W6 changed most pages |
 | `ruff check .`, `ruff format --check .`, `mypy` (its configured scope) | clean |
 | Dashboard: `tsc --noEmit`, `npm test`, `npm run build` | clean; **614 tests passed**; the production build succeeded |
 | Secret scan (tracked files and every blob in the history) | no secrets found |
@@ -218,6 +226,11 @@ events, a run killed while waiting for approval), plus the optional metrics and 
   runs), and a request can take minutes. The verifier refused every wrong claim, so those
   runs failed safely.
 - **Kind, not production.** One small cluster per target, no production traffic.
+- **Paths not run on a cluster since W3, or never.** The six live acceptance tests last ran in
+  W3, before nine adapter commits; the real-model runs since used the reads and the rollback,
+  but no restart has run on a real cluster since W3. The Kind demo's `kind-dependency-crash`
+  scenario was tested offline only and has never run on a cluster, so how long its crash loop
+  takes to show there (the kubelet's back-off against the 60 s progress deadline) is unknown.
 - **SREGym's writer is limited by RBAC only.** Unlike the Kind demo, no admission policy
   checks the shape of its patches.
 - **Clocks on SREGym go unchecked.** Without Prometheus there is no clock to compare with, so
@@ -231,16 +244,21 @@ events, a run killed while waiting for approval), plus the optional metrics and 
 - **The writer's token.** It is mode 600, but while it is valid any process of the owner's
   could patch the allowlisted Deployments without an approval: the capability is checked
   inside RECAP, and the cluster enforces only RBAC (on Kind, also the admission policy).
+- **A killed run holds its namespace.** A run whose process was killed while it waited for
+  approval leaves its approval request listed until it expires, although nothing can act on
+  it, and its namespace lease: new runs on that target are refused until the lease expires (an
+  hour after the run's reset, by default) or is released.
 - **Smaller ones.** `POST /incidents/run` re-reads the scenario files on every request (about
-  40 ms that block the server's event loop). A run whose process was killed leaves its approval
-  request listed until it expires, although nothing can act on it.
+  40 ms that block the server's event loop).
 
 ## 11. Reproduction
 
 | What | Commands |
 |---|---|
 | The VM | `bash infra/aws/ec2.sh up`, then `sync`, `creds kind`, `tunnel` (see the script's header) |
+| The VM's model server | Set up on the VM by hand; no script here installs it. Ollama 0.34.4 listens on the VM's 127.0.0.1:11434 only, with cloud models off, and serves `qwen3:8b` (weights `sha256:a3de86cd1c13…`, the same as on the Mac). `ec2.sh tunnel` carries it to the Mac's 127.0.0.1:11435, where the provider `ollama-vm` reaches it |
 | A Kind run | `infra/kind/README.md`; then `bash infra/aws/ec2.sh hold env RECAP_TARGET=kind-demo RECAP_DATA_DIR=$HOME/recap-kind-runs .venv/bin/python scripts/demo.py --scenario kind-bad-release --provider ollama-vm --approve ask` |
+| A Kind run from Mission Control (as the W6 acceptance run) | The VM, the cluster and the tunnel as above, and the dashboard built once (`cd apps/dashboard && npm install && npm run build`). Then `bash infra/aws/ec2.sh hold env RECAP_TARGET=kind-demo RECAP_DATA_DIR=$HOME/recap-kind-runs .venv/bin/uvicorn apps.api.main:app` (the VM is kept in use for 2 hours at most) and open http://127.0.0.1:8000/. Sign in with the token in `$HOME/recap-kind-runs/operator-token`; on Overview, **Check now** runs the cluster's preflight (nothing changes); in the Incident Lab choose `kind-bad-release` and the backend `ollama-vm` (approval is manual on a live target; the acceptance run switched **Experience memory** off, so it read no episodes) and **Start run**; when the approval dialog asks, type `backend` and approve |
 | A SREGym run | [infra/sregym/README.md](../infra/sregym/README.md): `sregym.sh setup`, `deploy misconfig_app_hotel_res`, `ec2.sh creds sregym`, the run with `RECAP_TARGET=sregym-hotel`, then `sregym.sh grade` |
 | The batches | `RECAP_TARGET=kind-demo .venv/bin/python scripts/live_eval.py --from-data --data-dir ~/recap-kind-runs --out OUT` (SREGym: `RECAP_TARGET=sregym-hotel`, plus `--benchmark` and `--benchmark-verdict`) |
 | Offline tests | `.venv/bin/python -m pytest` (the real-cluster tests need `RECAP_LIVE_KIND=1` and a running cluster) |

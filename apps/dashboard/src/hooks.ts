@@ -435,35 +435,41 @@ export function useOperatorToken(): string | null {
   return token;
 }
 
-/** The environment GET /system last reported in this tab (shared by every useServerEnvironment). */
-let lastServerEnvironment: EnvironmentInfo | null = null;
-
 export interface ServerEnvironment {
-  /** null until GET /system answers (or when it reports none). */
+  /**
+   * What this component's own GET /system reported. null until it answers, while its latest ask
+   * has failed, or when it reports none: an earlier answer never stands in for it.
+   */
   environment: EnvironmentInfo | null;
   error: ApiError | null;
-  /** True until the first answer (or error). */
+  /** True until this component's first answer (or error). */
   loading: boolean;
+}
+
+/**
+ * A GET /system poll as the environment it reports. Only the poll's own latest answer counts: the
+ * API may have restarted on another target since an earlier answer, so after a failed ask the
+ * environment is unknown (null), never the last one seen. An approval decided on a stale
+ * "simulated" would skip the typed name that a live target needs.
+ */
+export function serverEnvironmentOf(polled: Pick<Polled<EnvironmentInfo | null>, "data" | "error" | "loading"> | null): ServerEnvironment {
+  if (!polled) return { environment: null, error: null, loading: false };
+  return { environment: polled.error ? null : (polled.data ?? null), error: polled.error, loading: polled.loading };
 }
 
 /**
  * The environment this server is configured for (GET /system `environment`): what a run started
  * now acts on, and what the server checks an approval against. For components the page does not
  * hand it to (the approval card on Safety & Approvals). Asked when the component mounts and every
- * 30 s, like the shell; until the first answer, the last one this tab saw (null at first).
- * `enabled` false: nothing is fetched (the caller already knows the environment).
+ * 30 s, like the shell. Nothing another component or an earlier page heard is used before this
+ * component's own answer (serverEnvironmentOf). `enabled` false: nothing is fetched (the caller
+ * already knows the environment).
  */
 export function useServerEnvironment(enabled = true): ServerEnvironment {
   const polled = usePolling(
-    enabled
-      ? () =>
-          api.system().then((system) => {
-            lastServerEnvironment = system.environment ?? null;
-            return lastServerEnvironment;
-          })
-      : null,
+    enabled ? () => api.system().then((system) => system.environment ?? null) : null,
     enabled ? 30_000 : null,
     [enabled],
   );
-  return { environment: enabled ? (polled.data ?? lastServerEnvironment) : null, error: polled.error, loading: polled.loading };
+  return serverEnvironmentOf(enabled ? polled : null);
 }

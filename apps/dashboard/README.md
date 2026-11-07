@@ -7,13 +7,16 @@ knowledge base, experience memory, safety and approvals, evaluations and the arc
 ![RECAP Mission Control, the Overview page](../../docs/screenshots/overview.png)
 
 **Everything on screen comes from the RECAP API** (`apps/api/main.py`). The dashboard has no
-hardcoded metrics, sample data or fake runs. If there are no runs yet, the pages say so. RECAP
-runs against a **simulated** environment (a simulated shop); nothing on screen suggests a
-production system. A strip across the top of every page says which environment is plugged in,
-from the server only: **SIMULATED ENVIRONMENT** (amber) when `GET /system` reports
-`environment.is_simulated`, a red **LIVE ENVIRONMENT · &lt;kind&gt;** if a live adapter were ever
-configured, the label `GET /health` sends until `/system` answers, and **ENVIRONMENT NOT
-CONFIRMED** before either does (never a guess).
+hardcoded metrics, sample data or fake runs. If there are no runs yet, the pages say so. By
+default RECAP runs against a **simulated** environment (a simulated shop). Since M5 a server
+started with a target profile (`RECAP_TARGET=kind-demo` or `sregym-hotel`) runs against a real
+Kubernetes cluster instead: a Kind cluster the owner runs, not production. Nothing on screen
+suggests a production system. A strip across the top of every page says which environment is
+plugged in, from the server only: **SIMULATED ENVIRONMENT** (amber) when `GET /system` reports
+`environment.is_simulated`, a red **LIVE ENVIRONMENT · &lt;kind&gt;** when it reports a target
+that is not simulated (`kind` for the Kind demo, `sregym` for SREGym's cluster), the label
+`GET /health` sends until `/system` answers, and **ENVIRONMENT NOT CONFIRMED** before either
+does (never a guess).
 
 ## Run it
 
@@ -56,6 +59,23 @@ RECAP_DATA_DIR=~/recap-demo uvicorn apps.api.main:app   # http://127.0.0.1:8000/
 `scripts/seed_demo.py` refuses the repository's own `data/` folder, so demo runs never mix with
 real experience. Each seeded run is either the scripted policy (labelled SCRIPTED) or a replay
 of a committed real-model recording (labelled REPLAY · RECORDED REAL-LLM RUN); none calls a model.
+
+### On a real cluster (M5, the owner's setup)
+
+```bash
+cd apps/dashboard && npm install && npm run build && cd ../..
+bash infra/aws/ec2.sh hold env RECAP_TARGET=kind-demo RECAP_DATA_DIR=$HOME/recap-kind-runs \
+  .venv/bin/uvicorn apps.api.main:app            # http://127.0.0.1:8000/
+```
+
+This needs the owner's VM, the cluster, RECAP's identities and the SSH tunnel first
+([docs/m5-report.md](../../docs/m5-report.md#11-reproduction), section 11). The strip then
+reads LIVE ENVIRONMENT · kind. On Overview, **Check now** runs the cluster adapter's own
+preflight (`POST /environment/check`: operator only, nothing changes, no run starts); the
+Incident Lab offers manual approval only (the server refuses the auto-approver on a live
+target); and the approval dialog asks for the target service's exact name before Approve.
+M5's acceptance run, `run-34a3580d2f`, was started and approved this way
+([its export](../../evals/live/2026-11-07-qwen3-8b-kind-dashboard-approved-prompts-v4.7/README.md)).
 
 `VITE_API_URL` (build- or dev-time environment variable) overrides the API origin, e.g.
 `VITE_API_URL=http://127.0.0.1:8000 npm run dev`. The API's CORS settings allow
@@ -135,15 +155,15 @@ bar names each investigation round's routing (`R1 parallel`, `R2 parallel`).
 
 | Page | What it shows | API |
 |---|---|---|
-| **Overview** | *Start the demo* (the golden recording, one click to its replay panel); system readiness (environment adapters: the simulated shop active, SREGym and Kind planned for M5; components and their status); the 10 newest runs with their data source; outcomes counted separately per data source (scripted, replay, local LLM, free hosted LLM: never one success rate); what is running now; access (reading is open, acting needs the operator token); what M5 still has to build; the decision providers (class, readiness, per-run selection; an API key only as set or missing). | `/system`, `/providers`, `/replays`, `/runs`, `/auth/session` |
-| **Incident Lab** (`#/live`) | *Replay a recorded incident*: the committed real-model recordings (integrity-checked against the manifest) at a watchable or instant pace; the replay asks a person to approve again. *Run a scenario*: a scenario, a backend this server lets a run pick, the settings, and what keeps every run safe. A started run streams: the data-source banner, the stage stepper, the live event feed (key or all events; click a line for the raw event), *So far* counters, the **approval modal** (action, target, params, trusted vs declared risk, digest, expiry, the policy and evidence-gate checks, the model's rationale and cited evidence as untrusted text; Approve, Reject, Decide later, *Test binding*), *Stop run*; then the outcome (the oracle's verdict, the approval, wall time) and the run details. | `/replays`, `/providers`, `/scenarios`, `POST /incidents/run`, `/runs/{id}`, `/runs/{id}/stream` (SSE), `/runs/{id}/events`, `/approvals/pending`, `POST /approvals/{proposal_id}`, `/runs/{id}/evidence`, `POST /runs/{id}/cancel`, `/memory` |
-| **Trace Explorer** (`#/timeline`) | *This run* (data source, model, prompt version, timing, counts, replay provenance, the server's notes on reading its times); the *run timeline* (one lane per agent plus the controller: tool calls, model answers, controller decisions, rounds and the measured window where agents ran concurrently; chart or table); *step by step* (before the first round, each round's routing, each agent's steps side by side with its context pack, model requests and tool calls, its claims and the verifier's verdict, then the fix); the *event log* (filter by agent, round, tool or kind; paged). | `/runs/{id}/timeline`, `/runs/{id}` |
+| **Overview** | *Start the demo* (the golden recording, one click to its replay panel), or on a live server a real-cluster call to action instead (an approved action changes the cluster; approving takes the target service's typed name); system readiness (environment adapters: the simulated shop, Kind and SREGym implemented since M5, only the configured one operational; components and their status); the 10 newest runs with their data source; outcomes counted separately per data source and target (scripted, replay, local LLM, free hosted LLM; the simulator apart from a real cluster: never one success rate); what is running now; the *Active environment* (adapter, namespace, the actions it supports, its scenarios, the policy and the oracle; on a live target the time a fix may take to settle) with **Check now**, which asks the server to reach the target as a run would (`POST /environment/check`: operator only, nothing changes, no run starts); access (reading is open, acting needs the operator token); anything the server still lists as planned (a server of this repository lists none since M5); the decision providers (class, readiness, per-run selection; an API key only as set or missing). | `/system`, `/providers`, `/replays`, `/runs`, `/scenarios`, `/auth/session`, `POST /environment/check` |
+| **Incident Lab** (`#/live`) | *Replay a recorded incident*: the committed real-model recordings (integrity-checked against the manifest) at a watchable or instant pace; the replay asks a person to approve again. *Run a scenario*: a scenario, a backend this server lets a run pick, the settings (on a live target, approval is manual only), and what keeps every run safe. A started run streams: the data-source banner, the stage stepper, the live event feed (key or all events; click a line for the raw event), *So far* counters, the **approval modal** (action, target, params, trusted vs declared risk, digest, expiry, the policy and evidence-gate checks, the model's rationale and cited evidence as untrusted text; Approve, Reject, Decide later, and *Test binding* on the simulated shop only; on a live target a red LIVE block naming the cluster and namespace, and a field where the target service's exact name must be typed before Approve), *Stop run*; then the outcome (the oracle's verdict, the approval, wall time) and the run details. | `/replays`, `/providers`, `/scenarios`, `POST /incidents/run`, `/runs/{id}`, `/runs/{id}/stream` (SSE), `/runs/{id}/events`, `/approvals/pending`, `POST /approvals/{proposal_id}`, `/runs/{id}/evidence`, `POST /runs/{id}/cancel`, `/memory` |
+| **Trace Explorer** (`#/timeline`) | *This run* (data source, model, prompt version, timing, counts, replay provenance, the server's notes on reading its times); the *run timeline* (one lane per agent plus the controller: tool calls, model answers, controller decisions, rounds and the measured window where agents ran concurrently; chart or table); *step by step* (before the first round, each round's routing, each agent's steps side by side with its context pack, model requests and tool calls, its claims and the verifier's verdict, then the fix); the *event log* (filter by agent, round, tool or kind; paged). On a real-cluster run (M5) it also says where the alert was measured, what the write changed on the cluster as RECAP read it back, and how long the oracle probed. | `/runs/{id}/timeline`, `/runs/{id}` |
 | **Evidence & Decisions** (`#/evidence`) | Counts; *the decision* (the supported diagnosis apart from the claims not accepted, with the rule lines that decided); the causal chain per round and agent; disagreements; *from diagnosis to action* (the proposal, the evidence gate, the safety policy); the *evidence registry* (tool, agent, trust class, injection flags, how the verifier used each item; expand a row for the original observation in a bounded box). | `/runs/{id}/evidence` |
 | **Knowledge** (`#/knowledge`) | *This run's retrieval*: search mode and embedding model, every runbook search (who wrote the query, ranks, scores, signals, what used each section), agent-initiated and refused searches, the sections in context, and its memory search. *The knowledge base*: the retrieval configuration, a search box (`?q=`, `?k=`) and the runbook index. A field a run did not record reads *Not recorded*. | `/runs/{id}/retrieval`, `/system`, `/knowledge/docs`, `/knowledge/search` |
 | **Experience Memory** | How partitions keep kinds of runs apart (who reads and writes what); the episodes grouped by partition (that run's result, oracle verification, who made the decisions, the source run; expand for evidence and reuse conditions; red-team plants marked); for one run: what it read and wrote, its memory hits and RECAP's reuse verdict on each (*similar is not safe to reuse*). | `/memory`, `/system`, `/runs/{id}/retrieval`, `/runs/{id}` |
-| **Safety & Approvals** | Approvals waiting (decide here, signed in); the four layers (policy, evidence gate, exact approval, signed capability) with their status; for one run: unsafe actions *attempted* apart from *executed*, each layer's verdict, the permission lifecycle from the approval log, what RECAP stopped, the policy decisions (filterable), prompt-injection flags and the run's approval log; across runs: the approval audit log, runs that ended in a safety stop, what the adversarial tests check, and the rule reference. | `/approvals/pending`, `/approvals/events`, `/approvals/{id}/events`, `/runs/{id}`, `/runs/{id}/evidence`, `/runs/{id}/timeline`, `/runs?state=BLOCKED`, `/system` |
-| **Evaluations** | One tab per mode, never combined: scripted regression, offline replay, real LLM (exploratory) and Kubernetes (planned, M5). Per batch: plan, providers, models, prompt versions and N; outcomes as *k of N* with a small-sample warning; the configuration × scenario matrix; why runs did not recover (one failure category each); every run (filterable, paged; tokens reported vs estimated); methods and limitations; how to run a batch (real models from a terminal only). The scripted regression can be started here (operator only). | `/evals`, `/evals/{id}`, `/runs`, `/system`, `POST /evals/run`, `/evals/results` |
-| **Architecture & Learning** (`#/architecture`) | The flow of one incident (alert → controller → retrieval & memory → router → agents → MCP gateway → verifier → approval → authorized write → oracle → episode), each step with its status from `/system`, what it does, its code, its ADRs and the trace events it writes; planned (M5) parts are marked planned, never active; the live wiring and versions; links to the docs. | `/system` |
+| **Safety & Approvals** | Approvals waiting (decide here, signed in; on a live target Approve takes the target service's typed name, as in the Incident Lab); the four layers (policy, evidence gate, exact approval, signed capability) with their status; for one run: unsafe actions *attempted* apart from *executed*, each layer's verdict, the permission lifecycle from the approval log, what RECAP stopped, the policy decisions (filterable), prompt-injection flags and the run's approval log; across runs: the approval audit log, runs that ended in a safety stop, what the adversarial tests check, and the rule reference. | `/approvals/pending`, `/approvals/events`, `/approvals/{id}/events`, `/runs/{id}`, `/runs/{id}/evidence`, `/runs/{id}/timeline`, `/runs?state=BLOCKED`, `/system` |
+| **Evaluations** | One tab per mode, never combined: scripted regression, offline replay, real LLM (exploratory) and real Kubernetes (since M5: the Kind demo batch and the SREGym batch). Per batch: plan, providers, models, prompt versions, N and what the runs worked on (the simulated shop, or a named cluster marked live, for the batch and for each record); outcomes as *k of N* with a small-sample warning; on SREGym's batch, SREGym's grader verdicts in a tile of their own, never merged with RECAP's outcome; the configuration × scenario matrix; why runs did not recover (one failure category each); every run (filterable, paged; tokens reported vs estimated); methods and limitations; how to make a batch (the commands, run from a terminal). The scripted regression can be started here (operator only). | `/evals`, `/evals/{id}`, `/runs`, `/system`, `POST /evals/run`, `/evals/results` |
+| **Architecture & Learning** (`#/architecture`) | The flow of one incident (alert → controller → retrieval & memory → router → agents → MCP gateway → verifier → approval → authorized write → oracle → episode), each step with its status from `/system`, what it does, its code, its ADRs and the trace events it writes (a part the server lists as planned is marked so, never active); since M5 also *How a real Kubernetes action is authorized*, the chain an approved fix passes through on the Kind demo and on SREGym's cluster; the live wiring and versions; links to the docs. | `/system` |
 
 ## How live updates work
 
@@ -176,7 +196,12 @@ bar names each investigation round's routing (`R1 parallel`, `R2 parallel`).
   **409**, and the card shows that response. A rejection also revokes an approval that was not
   used yet. Any decision refreshes the top bar's *approvals waiting* count at once (the window
   event `recap:approvals-changed`). *Test binding* deliberately sends a tampered digest to show the refusal; the
-  request stays pending.
+  request stays pending. It is offered on the simulated shop only.
+- **On a live target** (M5) Approve also needs the target service's exact name, typed in the
+  dialog: it is sent with the approval as `confirm_target`, and without it, or with another
+  name, the server answers **400** and decides nothing. Reject needs no name. The decision log
+  records that the name was typed and how long the answer took; it proves a holder of the
+  operator token and a timing, not which person decided.
 - A live run has a **Cancel run** button (`POST /runs/{id}/cancel`); its pending approval
   request expires with it. The Safety page shows the append-only approval decision log
   (`/approvals/events`, and per proposal of the selected run).
@@ -288,7 +313,9 @@ below. `node e2e/smoke.mjs --help` lists them.
 The real dashboard on the seeded demo folder, taken by `node e2e/smoke.mjs --screenshots
 ../../docs/screenshots` (1440 × 900 unless noted). The run-scoped ones show the smoke test's own
 replay of the golden recording, approved in the browser; `evidence.png` and `safety.png` show
-the seeded `malicious-log` run (BLOCKED).
+the seeded `malicious-log` run (BLOCKED). **They are from 0.5.0, before M5:** they show the
+simulated shop only, with Kind and SREGym still listed as planned and the Kubernetes
+evaluations as a planned tab, and no live target, readiness check or typed-name approval.
 
 | File | What it shows |
 |---|---|

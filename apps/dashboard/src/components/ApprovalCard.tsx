@@ -3,10 +3,20 @@ import type { ReactNode } from "react";
 import { api, toApiError } from "../api";
 import { fmtArgs, fmtCountdown, fmtDateTime, humanize, riskTone, shortDigest, tsMs } from "../format";
 import { SIGN_IN_HINT } from "../auth";
-import type { EvidenceItem, PolicyVerdictView, ProposalCheckView } from "../dto";
+import type { EvidenceItem, PolicyVerdictView, ProposalCheckView, RunDetail } from "../dto";
 import { announceApprovalsChanged, hrefFor, useNow, useOperatorToken, useServerEnvironment } from "../hooks";
+import type { Polled, ServerEnvironment } from "../hooks";
 import type { Approval, ApprovalRequest } from "../types";
-import { approveGate, attemptLabel, decisionBody, liveTargetWords, namesTarget, targetFacts } from "../view/lab";
+import {
+  approvalTarget,
+  approveGate,
+  attemptLabel,
+  decisionBody,
+  liveTargetWords,
+  namesTarget,
+  summaryTarget,
+  targetFacts,
+} from "../view/lab";
 import type { DecisionChoice, TargetFacts, TargetFields } from "../view/lab";
 import "../styles/incident-lab.css";
 import { Chip, Mono } from "./Badge";
@@ -162,33 +172,84 @@ function RiskTokens({ trusted, declared }: { trusted: string | null | undefined;
 
 export interface ApprovalTarget {
   target: TargetFacts;
-  /** GET /system has not answered yet (the card asked it itself). */
+  /** Approve waits: a source the card asked itself (GET /system, the request's run) has not answered yet. */
   checking: boolean;
-  /** Why the target is unknown, when GET /system failed. */
+  /** What is still being asked, in words ("GET /system and GET /runs/run-…"), while checking. */
+  asking?: string | null;
+  /** Why the target is not known, when a source the card asked failed or reported none. */
+  error: string | null;
+}
+
+/** The request's own run, as the page read it (GET /runs/{run_id}): the target the run recorded. */
+export interface RunTarget {
+  /** The run's recorded target; null until read, or when its record names none. */
+  environment: TargetFields | null;
+  /** True until GET /runs/{run_id} first answers (or fails). */
+  loading: boolean;
+  /** The server's message when the run could not be read. */
   error: string | null;
 }
 
 /**
- * The target a decision acts on. `environment` from the page (the Incident Lab knows the run's own
- * and the server's), or, when the page passes none (Safety & Approvals), the server's environment
- * from GET /system: what the server checks an approval against.
+ * GET /runs/{run_id} as the run's target: its record's environment (with its name and namespace),
+ * else its typed summary's two fields; a live one wins if they ever differ (approvalTarget).
  */
-export function useApprovalTarget(environment: TargetFields | null | undefined): ApprovalTarget {
-  const ask = environment === undefined;
-  const server = useServerEnvironment(ask);
-  const target = targetFacts(ask ? server.environment : environment);
+export function runTargetOf(polled: Pick<Polled<RunDetail>, "data" | "error" | "loading">): RunTarget {
+  const detail = polled.data;
   return {
-    target,
-    checking: ask && target.state === "unknown" && server.loading,
-    error: ask && target.state === "unknown" && server.error ? server.error.message : null,
+    environment: detail ? approvalTarget(detail.record?.environment ?? null, summaryTarget(detail.summary)) : null,
+    loading: polled.loading,
+    error: polled.error ? polled.error.message : null,
   };
 }
 
+function reported(environment: TargetFields | null | undefined): environment is TargetFields {
+  return !!environment && typeof environment.is_simulated === "boolean";
+}
+
 /**
- * Approve is one click only on a target the server reported as simulated. On a live target, or
- * one not reported, approving takes the target service's exact name, typed (the server refuses
- * an approval without it on a live target: 400, nothing decided). While GET /system is still
- * being asked, Approve waits.
+ * The target of a request the page names no target for (Safety & Approvals): the request's own run
+ * (GET /runs/{run_id}, read by the page) and this server (GET /system, asked by the card). Every
+ * server on a data folder lists every request in it, so a live run's request can reach a server
+ * configured for the simulator; the server asks for the name when either is live (apps/api/main.py).
+ * Either one live makes the target live at once, whatever the other says or whether it has
+ * answered. Otherwise Approve waits while either is still asked (no target is shown yet), is one
+ * click once both answered "simulated", and else (a source failed or reported none) the target is
+ * unknown, which asks for the name as live does.
+ */
+export function askedTarget(runId: string, run: RunTarget | undefined, server: ServerEnvironment): ApprovalTarget {
+  const runEnvironment = run && reported(run.environment) ? run.environment : null;
+  const serverEnvironment = reported(server.environment) ? server.environment : null;
+  const live = [runEnvironment, serverEnvironment].find((environment) => environment?.is_simulated === false);
+  if (live) return { target: targetFacts(live), checking: false, asking: null, error: null };
+  const asking = [server.loading ? "GET /system" : "", run?.loading ? `GET /runs/${runId}` : ""].filter(Boolean);
+  if (asking.length) return { target: targetFacts(null), checking: true, asking: asking.join(" and "), error: null };
+  if (runEnvironment && serverEnvironment) return { target: targetFacts(runEnvironment), checking: false, asking: null, error: null };
+  const why: string[] = [];
+  if (!serverEnvironment) why.push(server.error ? `GET /system failed (${server.error.message})` : "GET /system reported no environment");
+  if (!runEnvironment) {
+    why.push(!run ? "the request's run was not read" : run.error ? `GET /runs/${runId} failed (${run.error})` : `run ${runId} records no target`);
+  }
+  return { target: targetFacts(null), checking: false, asking: null, error: why.join("; ") };
+}
+
+/**
+ * The target a decision acts on. `environment` from the page when it knows it (the Incident Lab
+ * combines the run's own and the server's: src/view/lab.ts approvalTarget). Left out (Safety &
+ * Approvals), the request's run (`run`, which the page reads) and this server's environment, which
+ * the card asks itself (askedTarget). Without `run` as well, the run's target is unknown.
+ */
+export function useApprovalTarget(environment: TargetFields | null | undefined, runId: string, run?: RunTarget): ApprovalTarget {
+  const ask = environment === undefined;
+  const server = useServerEnvironment(ask);
+  return ask ? askedTarget(runId, run, server) : { target: targetFacts(environment), checking: false, asking: null, error: null };
+}
+
+/**
+ * Approve is one click only on a target reported as simulated (on Safety & Approvals, by both the
+ * request's run and the server). On a live target, or one not reported, approving takes the target
+ * service's exact name, typed (the server refuses an approval without it on a live target: 400,
+ * nothing decided). While a source is still being asked, Approve waits.
  */
 export function approveNeedsName(state: ApprovalTarget, outcome: DecisionOutcome | null = null): boolean {
   // The server refused an approval for want of the name (its only 400 here): its target is live,
@@ -224,17 +285,26 @@ export function LiveTargetNotice({ target, action, service }: { target: TargetFa
   );
 }
 
-/** GET /system did not say which target this is: approving takes the name, as on a live target. */
-function UnknownTargetNotice({ error }: { error: string | null }) {
+/** Nothing said which target this is: approving takes the name, as on a live target. `error`: why (askedTarget). */
+export function UnknownTargetNotice({ error }: { error: string | null }) {
+  const why = error
+    ? error.charAt(0).toUpperCase() + error.slice(1)
+    : "GET /system has not said whether this approval acts on a simulated or a live target";
   return (
     <div className="approval-response tone-neutral" role="note">
       <Icon name="info" size={15} />
       <div>
-        <strong>Target not reported.</strong> GET /system has not said whether this approval acts on a simulated or a live target
-        {error ? ` (${error})` : ""}, so approving takes the target service's name, as a live target requires. Reject needs no name.
+        <strong>Target not reported.</strong> {why}, so approving takes the target service's name, as a live target requires. Reject
+        needs no name.
       </div>
     </div>
   );
+}
+
+/** Approve's title: while the card asks its sources, which ones (approveGate names GET /system only). */
+function approveTitle(gate: { why: string | null }, state: ApprovalTarget): string | undefined {
+  if (state.checking && state.asking && gate.why) return `Checking which environment this approval acts on (${state.asking})…`;
+  return gate.why ?? undefined;
 }
 
 /**
@@ -300,7 +370,9 @@ export function ConfirmTargetField({
  * On a live target the card says so (which cluster and namespace an approved action changes) and
  * Approve waits for the target service's exact name, typed; the name is sent with the approval
  * (confirm_target), and the server's refusal is shown if it differs. Reject needs no name. The
- * target comes from `environment` when the page passes one, else from GET /system.
+ * target comes from `environment` when the page passes one. Else the card asks GET /system itself
+ * and combines it with the request's own run (`run`, read by the page): Approve is one click only
+ * when both say simulated, and waits while either is still being asked (askedTarget).
  *
  * Deciding needs the operator token (sign in, top right). A rejection also revokes an approval
  * that was not used yet: "no" wins until the gateway uses the approval, right before it sends
@@ -311,18 +383,21 @@ export function ApprovalCard({
   trustedRisk,
   onDecided,
   environment,
+  run,
 }: {
   request: ApprovalRequest;
   /** Risk tier from the trusted registry (mitigation.proposed event), if known. */
   trustedRisk?: string;
   onDecided?: (approval: Approval) => void;
-  /** The target the decision acts on; left out, the server's (GET /system). */
+  /** The target the decision acts on; left out, the request's run and the server's (askedTarget). */
   environment?: TargetFields | null;
+  /** The request's own run as the page read it (GET /runs/{run_id}); used when `environment` is left out. */
+  run?: RunTarget;
 }) {
   const { busy, outcome, send } = useApprovalDecision(request, onDecided);
   const now = useNow(1000);
   const signedIn = useOperatorToken() !== null;
-  const targetState = useApprovalTarget(environment);
+  const targetState = useApprovalTarget(environment, request.run_id, run);
   const { target, checking } = targetState;
   const [typed, setTyped] = useState("");
   const p = request.proposal;
@@ -407,7 +482,7 @@ export function ApprovalCard({
           type="button"
           className="btn btn-approve"
           disabled={gate.blocked}
-          title={gate.why ?? undefined}
+          title={approveTitle(gate, targetState)}
           onClick={() => void send({ decision: "approved", confirmTarget: needsName ? typed : null })}
         >
           <Icon name="check" size={15} /> {busy === "approve" ? "Approving…" : "Approve this exact action"}
@@ -415,7 +490,7 @@ export function ApprovalCard({
         <button type="button" className="btn btn-reject" disabled={disabled} onClick={() => void send({ decision: "rejected" })}>
           <Icon name="x" size={15} /> {busy === "reject" ? "Rejecting…" : "Reject"}
         </button>
-        {target.state === "simulated" && !needsName ? (
+        {target.state === "simulated" && !needsName && !checking ? (
           <button
             type="button"
             className="btn btn-ghost btn-small"
@@ -566,7 +641,7 @@ export function ApprovalModal({
   const { busy, outcome, send } = useApprovalDecision(request, onDecided);
   const now = useNow(1000);
   const signedIn = useOperatorToken() !== null;
-  const targetState = useApprovalTarget(environment);
+  const targetState = useApprovalTarget(environment, request.run_id);
   const { target, checking } = targetState;
   const [typed, setTyped] = useState("");
   const focusRef = useRef<HTMLDivElement>(null);
@@ -607,7 +682,7 @@ export function ApprovalModal({
           <ConfirmTargetField service={p.target} typed={typed} onType={setTyped} disabled={disabled} />
         </div>
       ) : null}
-      {target.state === "simulated" && !needsName ? (
+      {target.state === "simulated" && !needsName && !checking ? (
         <button
           type="button"
           className="btn btn-ghost btn-small lab-foot-btn lab-tamper"
@@ -628,7 +703,7 @@ export function ApprovalModal({
         type="button"
         className="btn btn-approve lab-foot-btn"
         disabled={gate.blocked}
-        title={gate.why ?? undefined}
+        title={approveTitle(gate, targetState)}
         onClick={() => void send({ decision: "approved", confirmTarget: needsName ? typed : null })}
       >
         <Icon name="check" size={15} /> {busy === "approve" ? "Approving…" : "Approve this exact action"}

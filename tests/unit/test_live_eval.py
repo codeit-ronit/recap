@@ -454,7 +454,8 @@ def test_a_batch_says_whether_a_person_reviewed_its_fixes() -> None:
 
 def test_a_benchmarks_own_verdicts_are_recorded_apart_from_recaps() -> None:
     """M5: SREGym's grader gives the benchmark's verdict, recorded by hand per run; it never
-    becomes RECAP's success, and a verdict for a run the batch does not hold is refused."""
+    becomes RECAP's success. A verdict for a run the batch does not hold is refused, and so
+    is a run given twice: the last one never silently wins."""
     records = [
         EvalRecord(run_id="run-a", mode="real_kubernetes", scenario_id="s", success=False),
         EvalRecord(run_id="run-b", mode="real_kubernetes", scenario_id="s", success=True),
@@ -465,6 +466,27 @@ def test_a_benchmarks_own_verdicts_are_recorded_apart_from_recaps() -> None:
         (["run-a=pass"], None, "needs --benchmark"),
         (["run-a=maybe"], "g", "RUN=pass or RUN=fail"),
         (["run-z=pass"], "g", "no such run in this batch: run-z"),
+        (["run-a=pass", "run-b=pass", "run-a=fail"], "g", "run-a: one verdict per run"),
+        (["run-b=pass", "run-b=pass"], "g", "run-b: one verdict per run"),
     ]:
         with pytest.raises(ValueError, match=why):
             with_benchmark_verdicts(records, verdicts, benchmark)
+
+
+async def test_a_run_given_two_verdicts_refuses_the_whole_batch(
+    settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The command line refuses it before anything is written: no batch with either verdict."""
+    fake = FakeOllama(responder=ScriptedModel())
+    _, run = await live_run(settings, RunConfig(provider="ollama", use_memory=False), fake)
+    out = tmp_path / "out"
+    data = str(settings.paths.data_dir)
+    argv = ["--from-data", "--data-dir", data, "--out", str(out), "--benchmark", "the grader"]
+    for verdict in ("pass", "fail"):
+        argv += ["--benchmark-verdict", f"{run.run_id}={verdict}"]
+
+    assert await main(argv) == EXIT_REFUSED
+    assert f"refused: {run.run_id}: one verdict per run (given pass, then fail)" in (
+        capsys.readouterr().err
+    )
+    assert not (out / "batch.json").exists()

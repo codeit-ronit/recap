@@ -1,7 +1,8 @@
 /**
  * Pure helpers for the Experience Memory page (src/pages/Memory.tsx): partitions in plain
- * words, the red-team plant marker, an episode's consolidator-v2 run summary, and how a
- * run's memory hits were found and judged (signals, conditions, restore points).
+ * words, the red-team plant marker, an episode's consolidator-v2 run summary, the target an
+ * episode's run acted on (M5), and how a run's memory hits were found and judged (signals,
+ * conditions, restore points).
  *
  * Runs and episodes recorded before M3 lack the new fields. Read back through the API they
  * arrive as empty defaults ([], {}, null, and summary_method "deterministic-extraction"),
@@ -77,7 +78,14 @@ const PARTITIONS = new Map<string, { words: string; tone: Tone; title: string }>
       title: "Scripted runs write here by default. Before M3, real-model runs did too.",
     },
   ],
-  ["live", { words: "real-model runs", tone: "accent", title: "Runs whose decisions came from a real language model write here (since M3)." }],
+  [
+    "live",
+    {
+      words: "real-model runs",
+      tone: "accent",
+      title: "Runs whose decisions came from a real language model write here (since M3), whichever target they acted on: the name is about the model, not a live cluster.",
+    },
+  ],
   ["train", { words: "evaluation training", tone: "info", title: "The evaluation's training runs write here; its scored test runs read only this partition." }],
   ["test", { words: "held-out test", tone: "warn", title: "Held-out test runs never write memory: an episode here is unexpected." }],
 ]);
@@ -585,6 +593,95 @@ export function accessRules(access: Record<string, MemoryAccessView> | null | un
   for (const [key, who, note] of ACCESS_WHO) add(key, who, note);
   for (const key of Object.keys(access ?? {}).sort()) if (!known.has(key)) add(key, `${key} run`, null);
   return [...rows, ...EVALUATION_ACCESS];
+}
+
+// --- the target an episode's run acted on (M5) --------------------------------------------------------
+
+/** The live targets RECAP's Kubernetes adapter serves, named as Safety & Approvals names them. */
+const LIVE_TARGETS = new Map<string, string>([
+  ["kind", "the Kind demo cluster"],
+  ["sregym", "SREGym's cluster"],
+]);
+
+/** A kind of target in a sentence: "the simulated shop", "the Kind demo cluster (live)"... */
+export function targetKindWords(kind: string, simulated: boolean): string {
+  if (simulated) return kind && kind !== "simulated" ? `a simulated target (${kind})` : "the simulated shop";
+  const named = LIVE_TARGETS.get(kind);
+  if (named) return `${named} (live)`;
+  return kind ? `the ${kind} target (live)` : "a live target (its kind not recorded)";
+}
+
+export interface EpisodeTarget {
+  /**
+   * The kind of target memory files the episode under (recap/memory/store.py
+   * episode_environment): its provenance's "environment"; without one "simulated", or "" when it
+   * says its run was not simulated (no run finds such an episode). A run finds only episodes of
+   * its own kind, however alike they read.
+   */
+  kind: string;
+  simulated: boolean;
+  /** False when the provenance says neither where its run acted nor whether it was simulated (a red-team plant). */
+  recorded: boolean;
+  words: string;
+}
+
+/**
+ * Where an episode's run acted, from the episode's own provenance (never from the server's
+ * target: GET /memory lists every episode in the data folder, whichever target wrote it).
+ * Consolidation records "simulated" and "environment" (the adapter's kind) in every episode, and
+ * memory files episodes by that kind since M5; one that names neither (a red-team plant) counts as
+ * simulated, as the store counts it.
+ */
+export function episodeTarget(episode: Pick<ExperienceEpisode, "provenance">): EpisodeTarget {
+  const provenance = isRecord(episode.provenance) ? episode.provenance : {};
+  const named = typeof provenance.environment === "string" && provenance.environment !== "" ? provenance.environment : null;
+  const flag = typeof provenance.simulated === "boolean" ? provenance.simulated : null;
+  const kind = named ?? (flag === false ? "" : "simulated");
+  const simulated = flag ?? kind === "simulated";
+  return { kind, simulated, recorded: named !== null || flag !== null, words: targetKindWords(kind, simulated) };
+}
+
+/** An episode's target under its token, in words: never only a color or a tooltip. */
+export function episodeTargetNote(target: EpisodeTarget): string {
+  if (!target.recorded) return `Not recorded: memory files it under ${target.words}, as it does every episode that names no target.`;
+  const words = target.words.charAt(0).toUpperCase() + target.words.slice(1);
+  if (!target.kind) return `${words}: no run finds it, since memory matches an episode by its target's kind.`;
+  return `${words}: only a run on the same kind of target finds it.`;
+}
+
+export interface TargetCount {
+  kind: string;
+  words: string;
+  count: number;
+}
+
+/** How many episodes memory files under each kind of target: the simulated shop first, then the most. */
+export function episodesByTarget(episodes: readonly ExperienceEpisode[]): TargetCount[] {
+  const counts = new Map<string, TargetCount>();
+  for (const episode of episodes) {
+    const target = episodeTarget(episode);
+    const known = counts.get(target.kind);
+    if (known) known.count += 1;
+    else counts.set(target.kind, { kind: target.kind, words: target.words, count: 1 });
+  }
+  return [...counts.values()].sort(
+    (a, b) => Number(b.kind === "simulated") - Number(a.kind === "simulated") || b.count - a.count || a.kind.localeCompare(b.kind),
+  );
+}
+
+/**
+ * The page's opening, from GET /system's environment: where this server's runs act, and that a
+ * run finds only episodes from its own kind of target. It never says where the listed episodes
+ * came from: each one names its own target.
+ */
+export function memoryIntro(environment: { is_simulated?: boolean | null; kind?: string | null } | null | undefined): string {
+  const lead = "What RECAP remembers from finished runs, and how a run used it.";
+  const rule = "An episode is the record of one past run, never an instruction: its fix is reused only when the new run's own evidence passes every reuse condition.";
+  if (!environment || typeof environment.is_simulated !== "boolean") {
+    return `${lead} Each episode names the target its run acted on, and a run finds only episodes from runs on its own kind of target. ${rule}`;
+  }
+  const where = targetKindWords(text(environment.kind).trim(), environment.is_simulated);
+  return `${lead} This server's runs act on ${where} and find only episodes from runs on that kind of target; each episode names the target its run acted on. ${rule}`;
 }
 
 // --- an episode's source run, outcome and past action ------------------------------------------------

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { api } from "../api";
 import type { Page } from "../api";
-import { ApprovalCard } from "../components/ApprovalCard";
+import { ApprovalCard, runTargetOf } from "../components/ApprovalCard";
 import { Chip, Mono } from "../components/Badge";
 import { Card, Notice, PageHeader } from "../components/Card";
 import { DataSourceBadge, summarySource } from "../components/DataSourceBadge";
@@ -90,6 +90,9 @@ export const LOG_PER_PAGE = 20;
 /** How many recent approval-log entries the page asks for (the server allows up to 500). */
 const LOG_LIMIT = 200;
 
+/** How often a pending request's run is asked again while GET /runs/{run_id} fails (ms). */
+const RUN_RETRY_MS = 5000;
+
 /** A short "nothing here, and why" line for a card inside the run audit. */
 function Quiet({ icon = "info", children }: { icon?: IconName; children: ReactNode }) {
   return (
@@ -143,6 +146,18 @@ function SafetyLayersCard({ system }: { system: Polled<dto.SystemView> }) {
 
 // --- approvals waiting for a person ------------------------------------------------------------------
 
+/**
+ * One request's card, given the target of the request's own run (GET /runs/{run_id}). The card
+ * combines it with this server's (GET /system), as the server checks the decision: every server
+ * on a data folder lists every request in it, so a run on a live cluster can ask a server
+ * configured for the simulator, and Approve is one click only when both are simulated.
+ */
+function PendingCard({ request, onDecided }: { request: ApprovalRequest; onDecided: () => void }) {
+  // A run's target never changes: asked until GET /runs/{run_id} answers, then kept.
+  const run = usePolling(() => api.runView(request.run_id), (detail) => (detail ? null : RUN_RETRY_MS), [request.run_id]);
+  return <ApprovalCard request={request} onDecided={onDecided} run={runTargetOf(run)} />;
+}
+
 export function PendingList({ requests, onDecided }: { requests: ApprovalRequest[]; onDecided: () => void }) {
   if (!requests.length) {
     return (
@@ -172,7 +187,7 @@ export function PendingList({ requests, onDecided }: { requests: ApprovalRequest
             <span className="muted">requested {fmtDateTime(request.requested_at)}</span>
             <a href={hrefFor("safety", { run: request.run_id })}>Audit this run</a>
           </div>
-          <ApprovalCard request={request} onDecided={onDecided} />
+          <PendingCard request={request} onDecided={onDecided} />
         </div>
       ))}
     </div>
@@ -184,7 +199,7 @@ function PendingApprovals({ pending }: { pending: Polled<ApprovalRequest[]> }) {
   return (
     <Card
       title={`Waiting for a person${pending.data ? ` (${count})` : ""}`}
-      subtitle="GET /approvals/pending: each request names one exact proposal, and approving it is never general consent. Sign in (top right) to decide."
+      subtitle="GET /approvals/pending: each request names one exact proposal, and approving it is never general consent. When the request's run or this server acts on a live cluster, approving takes the target service's name, typed. Sign in (top right) to decide."
       tone={count ? "warn" : undefined}
     >
       <PolledView polled={pending} loadingLabel="Loading pending approvals…" errorTitle="Could not load GET /approvals/pending">

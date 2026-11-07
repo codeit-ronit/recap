@@ -9,13 +9,14 @@ anyone can check what happened:
   replays offline; a run on a real cluster's is evidence only, since a replay is refused there);
 - `README.md`: a readable account built only from those files and the approval log.
 
-The runs before M5 used the **simulated** environment. The two 2026-11-03 runs worked on a
-**real Kubernetes cluster**: RECAP's two-service Kind demo cluster on the owner's VM, with
-real faults and real writes, not production. Of the two 2026-11-07 runs, one worked on
-**SREGym's own cluster**, on a problem SREGym's harness injected, and the other on the Kind
-demo again, **started and approved in Mission Control**, the dashboard. No model request was paid for. Each is one
-run of one scenario, so together they show that the real-model path works, not how often a
-model is right.
+Four of the eight runs here worked on a real cluster (M5); the four runs before M5 used the
+**simulated** environment. The two 2026-11-03 runs worked on a **real Kubernetes cluster**:
+RECAP's two-service Kind demo cluster on the owner's VM, with real faults and real writes, not
+production. Of the two 2026-11-07 runs, the first worked on **SREGym's own cluster**, on a
+problem SREGym's harness injected, and the second on the Kind demo again, **started and
+approved in Mission Control**, the dashboard. No model request was paid for. Each is one run
+of one scenario, so together they show that the real-model path works, not how often a model
+is right.
 
 | Folder | Model | Prompts | Approved by | Outcome |
 |---|---|---|---|---|
@@ -32,14 +33,15 @@ model is right.
 
 - **The second 2026-11-07 run is M5's acceptance run for Mission Control (W6).** The owner
   started `kind-bad-release` in the dashboard's Incident Lab, with the self-hosted model
-  (`ollama-vm`) and experience memory off, and watched it live. Two specialists investigated
+  (`ollama-vm`) and experience memory not read (the verified run was still saved to it, as
+  episode `ep-9f3b0112ae`: see its README), and watched it live. Two specialists investigated
   (8 model requests, 22,892 input / 1,189 output tokens); the verifier supported backend's bad
   release v1.1.0; the model proposed rolling backend back to v1.0.0. On a live target the
   dashboard's approval dialog asks for the target service's name, as the console does: the
   owner typed `backend` 152.0 s after the request, and the decision log records how. The
   writer identity rolled backend back, and the oracle verified the recovery (backend's error
   rate 0.3 to 0.0). Its trace is in Trace Explorer on the server that ran it.
-- **The 2026-11-07 run is M5's SREGym run (W5).** SREGym's harness deployed its
+- **The first 2026-11-07 run is M5's SREGym run (W5).** SREGym's harness deployed its
   hotel-reservation app (19 Deployments) and moved geo to a release, `20260912.1`, that dials
   its database on the wrong port, so geo crash-loops. RECAP worked through its own three
   least-privilege identities, never SREGym's administrator credential or agent tools. One
@@ -164,10 +166,11 @@ python scripts/demo.py --scenario bad-deployment --no-memory --approve auto
 
 The replay answers every model request from the recording: no model is called, and the
 run is labeled REPLAY. With different prompts it stops with `ReplayMismatch` instead of
-guessing. The two `qwen3:8b` exports replay this way (checked with their own commits); a
-run with a parallel round, like the Groq one, may not, because its specialists' prompts
-depend on the order they ran in. A hosted recording would replay without a key, because
-nothing is sent.
+guessing. The two M2 `qwen3:8b` exports (prompts-v4.1 and v4.2) replay this way (checked
+with their own commits), and the M3 v4.7 run's recording replays in CI as a fixture, its
+parallel rounds included (above). The Groq run does not (above), and the four M5 runs never
+do: a replay is refused against a live target. A hosted recording would replay without a
+key, because nothing is sent.
 
 ## Adding a run
 

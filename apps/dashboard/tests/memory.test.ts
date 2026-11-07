@@ -5,7 +5,8 @@
  * were judged against live evidence (sample A), a real-model run's episode (sample C), and an
  * adversarial run that found a planted false memory and rejected it (sample D). The older
  * shapes are what the API serves for records made before M3: pydantic fills the missing
- * fields with empty defaults, including summary_method.
+ * fields with empty defaults, including summary_method. M5: the provenance of the episode the
+ * Kind acceptance run wrote (ep-9f3b0112ae), for the target an episode names.
  */
 
 import assert from "node:assert/strict";
@@ -18,11 +19,15 @@ import {
   episodeOrigin,
   episodePartitionBadge,
   episodeSummary,
+  episodeTarget,
+  episodeTargetNote,
+  episodesByTarget,
   fmtSignal,
   hitConditions,
   hitOrder,
   hitSignals,
   isPlanted,
+  memoryIntro,
   memoryTrace,
   partitionBadge,
   plantedNote,
@@ -315,6 +320,77 @@ test("a red-team plant is recognized by its provenance, whatever else it claims"
   assert.equal(plantedNote({ provenance: { planted: "" } }), "(no note)");
   assert.equal(isPlanted({ provenance: {} }), false);
   assert.equal(isPlanted(null), false);
+});
+
+// --- the target an episode's run acted on (M5) ----------------------------------------------------
+
+// ep-9f3b0112ae's provenance, trimmed: the Kind acceptance run run-34a3580d2f wrote it to LIVE
+// (evals/live/2026-11-07-qwen3-8b-kind-dashboard-approved-prompts-v4.7).
+const KIND_PROVENANCE = {
+  simulated: false,
+  environment: "kind",
+  provider: "ollama-vm:qwen3:8b",
+  origin: "local_llm",
+  model: "qwen3:8b",
+  prompt_version: "prompts-v4.7",
+  origin_run_id: "run-34a3580d2f",
+  created_by: "consolidator-v2",
+};
+
+test("an episode names the target its own run acted on, as memory files it", () => {
+  assert.deepEqual(episodeTarget({ provenance: KIND_PROVENANCE }), { kind: "kind", simulated: false, recorded: true, words: "the Kind demo cluster (live)" });
+  assert.deepEqual(episodeTarget(V2_EPISODE), { kind: "simulated", simulated: true, recorded: true, words: "the simulated shop" });
+  assert.equal(episodeTarget({ provenance: { simulated: false, environment: "sregym" } }).words, "SREGym's cluster (live)");
+  // Only the flag: filed by the kind the store gives it.
+  assert.deepEqual(episodeTarget({ provenance: { simulated: true } }), { kind: "simulated", simulated: true, recorded: true, words: "the simulated shop" });
+  assert.deepEqual(episodeTarget({ provenance: { simulated: false } }), { kind: "", simulated: false, recorded: true, words: "a live target (its kind not recorded)" });
+  // A plant names neither: memory files it as simulated, and that is not a recorded fact.
+  assert.deepEqual(episodeTarget(PLANTED), { kind: "simulated", simulated: true, recorded: false, words: "the simulated shop" });
+  // An adapter this page does not know is named by its kind, never guessed.
+  assert.equal(episodeTarget({ provenance: { simulated: false, environment: "custom.module:Adapter" } }).words, "the custom.module:Adapter target (live)");
+  assert.equal(episodeTarget({ provenance: { simulated: true, environment: "sandbox" } }).words, "a simulated target (sandbox)");
+  // Malformed provenance degrades instead of throwing.
+  assert.equal(episodeTarget({ provenance: null as unknown as Record<string, unknown> }).recorded, false);
+  assert.deepEqual(episodeTarget({ provenance: { environment: 7 } }), { kind: "simulated", simulated: true, recorded: false, words: "the simulated shop" });
+});
+
+test("an episode's target in words, and the episodes counted by the target memory files them under", () => {
+  assert.equal(episodeTargetNote(episodeTarget({ provenance: KIND_PROVENANCE })), "The Kind demo cluster (live): only a run on the same kind of target finds it.");
+  assert.equal(episodeTargetNote(episodeTarget(V2_EPISODE)), "The simulated shop: only a run on the same kind of target finds it.");
+  assert.equal(
+    episodeTargetNote(episodeTarget(PLANTED)),
+    "Not recorded: memory files it under the simulated shop, as it does every episode that names no target.",
+  );
+  assert.equal(
+    episodeTargetNote(episodeTarget({ provenance: { simulated: false } })),
+    "A live target (its kind not recorded): no run finds it, since memory matches an episode by its target's kind.",
+  );
+  const kind = { ...LOCAL_EPISODE, provenance: KIND_PROVENANCE };
+  const sregym = { ...LOCAL_EPISODE, provenance: { simulated: false, environment: "sregym" } };
+  const counts = episodesByTarget([kind, V2_EPISODE, sregym, PLANTED, kind, V1_SERVED]);
+  // The simulated shop first, then the most; the plant counted where memory files it.
+  assert.deepEqual(
+    counts.map((c) => [c.kind, c.words, c.count]),
+    [
+      ["simulated", "the simulated shop", 3],
+      ["kind", "the Kind demo cluster (live)", 2],
+      ["sregym", "SREGym's cluster (live)", 1],
+    ],
+  );
+  assert.deepEqual(episodesByTarget([]), []);
+});
+
+test("the page's opening names where this server's runs act, never where the listed episodes came from", () => {
+  const kind = memoryIntro({ is_simulated: false, kind: "kind" });
+  assert.match(kind, /This server's runs act on the Kind demo cluster \(live\) and find only episodes from runs on that kind of target; each episode names the target its run acted on\./);
+  assert.doesNotMatch(kind, /simulated shop/);
+  assert.match(memoryIntro({ is_simulated: true, kind: "simulated" }), /This server's runs act on the simulated shop and find only episodes/);
+  assert.match(memoryIntro({ is_simulated: false, kind: "sregym" }), /act on SREGym's cluster \(live\)/);
+  const unknown = memoryIntro(undefined);
+  assert.match(unknown, /^What RECAP remembers from finished runs, and how a run used it\. Each episode names the target its run acted on, and a run finds only episodes from runs on its own kind of target\./);
+  assert.doesNotMatch(unknown, /simulated shop|This server/);
+  assert.equal(memoryIntro({ kind: "kind" }), unknown, "a target that does not say whether it is simulated is not named");
+  for (const text of [kind, unknown]) assert.match(text, /never an instruction: its fix is reused only when the new run's own evidence passes every reuse condition\.$/);
 });
 
 // --- consolidator-v2 run summary ----------------------------------------------------------------

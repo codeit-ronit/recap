@@ -468,11 +468,13 @@ class IncidentController:
                 return
 
             failed_actions.append(action)
+            # Before the attempts check: a fix lost with the server, even the last allowed one,
+            # ends the run as an error, so it is never remembered as a fix that did not work.
+            if self._tool_server_lost():
+                return  # the oracle judged the fix in flight; nothing more can be read or sent
             if attempts >= retries.max_mitigation_attempts:
                 self._finish(S.FAILED, "mitigation did not recover the system; attempts used up")
                 return
-            if self._tool_server_lost():
-                return  # the oracle judged the fix in flight; nothing more can be read or sent
             # Start a new epoch: the system changed, so agents may observe it again. The
             # oracle's verdict is used only as a yes/no; where to look next comes from
             # RECAP's own reasoning, never from the oracle's list of unhealthy services.
@@ -714,6 +716,8 @@ class IncidentController:
         if decision.verdict == Verdict.ALLOW:
             # Only possible when safety is disabled in a simulation-only ablation.
             return None
+        if await self._tool_server_gone():
+            return None  # never ask a person to approve a fix that can no longer be sent
         self._transition(S.AWAITING_APPROVAL, f"approval required for {proposal.action}")
         ttl = self.settings.budget.approvals.ttl_seconds
         request = self.deps.approvals.create_request(proposal, self.run_id, ttl_seconds=ttl)
@@ -866,11 +870,11 @@ class IncidentController:
         return list(self.settings.policies.allowed_services)
 
     def _tool_server_lost(self) -> bool:
-        """True once the MCP tool server is gone (its process exited); the first call ends
-        the run FAILED with that reason. No read can reach the target any more and no fix can
-        be sent, so neither another investigation round nor an approval request makes sense.
-        A fix that was being sent when it died has already been judged by the oracle, which
-        reads the target on its own."""
+        """True once the MCP tool server is gone (its process exited, or it no longer answers
+        a ping); the first call ends the run FAILED with that reason. No read can reach the
+        target any more and no fix can be sent, so neither another investigation round nor an
+        approval request makes sense. A fix that was being sent when it died has already been
+        judged by the oracle, which reads the target on its own."""
         lost = getattr(self.transport, "lost", None)
         if not lost:
             return False
@@ -881,6 +885,16 @@ class IncidentController:
                 "a human should take over",
             )
         return True
+
+    async def _tool_server_gone(self) -> bool:
+        """_tool_server_lost(), after asking the server whether it still answers (an MCP ping,
+        bounded by the tool timeout). No call touches the connection while a model drafts the
+        fix, which can take minutes, so a server that died then is found only by asking. A
+        transport that cannot be asked counts as answering."""
+        alive = getattr(self.transport, "alive", None)
+        if callable(alive):
+            await alive(self.settings.policies.limits.tool_timeout_seconds)
+        return self._tool_server_lost()
 
     def _namespace_refused(self, alert_namespace: str) -> bool:
         """Refuse up front to work in a namespace the safety policy does not allow."""
