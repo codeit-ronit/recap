@@ -23,7 +23,9 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const testsDir = join(root, "tests");
-const outDir = join(root, "node_modules", ".cache", "recap-dashboard-tests");
+// RECAP_DASHBOARD_TEST_OUT: another folder, so two test runs at once do not share bundles.
+const outDir =
+  process.env.RECAP_DASHBOARD_TEST_OUT ?? join(root, "node_modules", ".cache", "recap-dashboard-tests");
 const setup = join(testsDir, "support", "setup.ts");
 
 const requested = process.argv.slice(2).map((file) => resolve(root, file));

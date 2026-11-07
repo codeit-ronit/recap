@@ -647,6 +647,8 @@ export interface RunStartResponse {
 export interface ApprovalDecisionBody {
   decision: "approved" | "rejected";
   proposal_digest: string;
+  /** On a real cluster, approving needs the target service's exact name, typed (M5). */
+  confirm_target?: string;
 }
 
 export type ApprovalEventKind = "requested" | "approved" | "rejected" | "revoked" | "expired" | "consumed" | "refused";

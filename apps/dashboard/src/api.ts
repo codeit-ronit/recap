@@ -222,8 +222,11 @@ export const api = {
   knowledgeDocs: () => request<KnowledgeDocRef[]>("/knowledge/docs"),
 
   // --- M4 typed API (apps/api/dto.py; generated types in ./dto) -----------------------------
-  /** Components, environment adapters (simulated active; Kind/SREGym planned), flags. */
+  /** Components, environment adapters (the configured one is operational), flags. */
   systemView: () => request<dto.SystemView>("/system"),
+  /** Can the configured target be reached now? A real cluster runs its preflight (operator). */
+  checkEnvironment: () =>
+    request<dto.EnvironmentCheck>("/environment/check", { method: "POST" }),
   /** Every provider with its class, limits and whether this server lets a run pick it. */
   providerViews: () => request<dto.ProviderView[]>("/providers"),
   /** The committed real-model recordings (fixtures/recordings/MANIFEST.json), checked. */
