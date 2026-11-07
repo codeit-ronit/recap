@@ -161,7 +161,8 @@ def test_a_live_approval_needs_the_target_services_exact_name(
     assert "type the target service's exact name" in bare.json()["detail"]
     assert pending == ApprovalStatus.PENDING  # nothing was decided by either
     assert named.status_code == 200 and named.json()["decision"] == "approved"
-    assert [e["kind"] for e in log] == ["requested", "approved"]
+    assert [e["kind"] for e in log] == ["requested", "refused", "refused", "approved"]
+    assert "without the target service's exact name" in log[1]["detail"]  # each attempt kept
     assert log[-1]["detail"].startswith("dashboard or API; typed the target service's name;")
 
 
@@ -222,8 +223,8 @@ def test_a_live_runs_approval_needs_the_name_on_a_server_configured_for_the_simu
     assert status == ApprovalStatus.PENDING  # neither decided anything
     assert named.status_code == 200 and named.json()["decision"] == "approved"
     log = simulated.approvals.events(request["proposal_id"])
-    assert [e.kind for e in log] == ["requested", "approved", "consumed"]
-    assert log[1].detail.startswith("dashboard or API; typed the target service's name;")
+    assert [e.kind for e in log] == ["requested", "refused", "refused", "approved", "consumed"]
+    assert log[3].detail.startswith("dashboard or API; typed the target service's name;")
     assert record["state"] == "RESOLVED", record["outcome_note"]
     [approval] = record["approvals"]
     [write] = adapter(kind, run_id).state.writes()

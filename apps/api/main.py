@@ -406,6 +406,12 @@ def create_app(
         if _live_request(runtime, pending):
             named = (body.confirm_target or "").strip() == pending.proposal.target
             if body.decision == "approved" and not named:
+                runtime.approvals.refuse_attempt(
+                    proposal_id,
+                    actor=who.actor,
+                    proposal_digest=body.proposal_digest,
+                    reason="approval without the target service's exact name, on a live target",
+                )
                 raise HTTPException(
                     400,
                     "on a live target, type the target service's exact name to approve "

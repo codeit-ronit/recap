@@ -365,6 +365,15 @@ class ApprovalStore:
         finally:
             self._waiters.pop(proposal_id, None)
 
+    def refuse_attempt(
+        self, proposal_id: str, *, actor: str, proposal_digest: str, reason: str
+    ) -> None:
+        """Log an attempt its caller refused before any decision (the API's typed-name rule on
+        a live target): nothing is decided, and the decision log still keeps the attempt."""
+        with self._transaction() as conn:
+            source = {"proposal_digest": proposal_digest}
+            _refuse(conn, proposal_id, actor, utcnow(), source, reason)
+
     def expire(self, proposal_id: str) -> None:
         """Mark a still-pending request EXPIRED and wake its waiter; a no-op otherwise.
 

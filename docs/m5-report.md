@@ -200,11 +200,11 @@ on M5 yet: nothing is pushed, so the first CI run comes with the push.
 
 | Check | Result |
 |---|---|
-| `python -m pytest` | **2260 passed, 7 skipped** (the six live-cluster acceptance tests and the optional OpenTelemetry test) in about 4 minutes; `-m e2e` selects 182 end-to-end cases |
+| `python -m pytest` | **2264 passed, 7 skipped** (the six live-cluster acceptance tests and the optional OpenTelemetry test) in about 4 minutes; `-m e2e` selects 185 end-to-end cases |
 | Live acceptance tests on the real Kind cluster (`RECAP_LIVE_KIND=1`) | all six passed in W3 (2026-11-02, scripted policy); not run since, and not part of the default run. Nine commits since W3 changed the Kubernetes adapter: the real-model runs exercised its reads and its rollback again (the W6 acceptance run on the Kind demo, the last SREGym run in its external-harness mode), but its restart has not run on a real cluster since W3 |
 | Browser smoke test (`apps/dashboard/e2e/smoke.mjs`, by hand) | no result recorded for the release candidate; its last recorded result is 72 of 72 checks, for 0.5.0, before W6 changed most pages |
 | `ruff check .`, `ruff format --check .`, `mypy` (its configured scope) | clean |
-| Dashboard: `tsc --noEmit`, `npm test`, `npm run build` | clean; **614 tests passed**; the production build succeeded |
+| Dashboard: `tsc --noEmit`, `npm test`, `npm run build` | clean; **627 tests passed**; the production build succeeded |
 | Secret scan (tracked files and every blob in the history) | no secrets found |
 | Recordings manifest | both committed recordings match their pins; the golden two-agent replay passes |
 
