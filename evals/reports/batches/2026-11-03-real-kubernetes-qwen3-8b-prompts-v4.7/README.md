@@ -38,7 +38,7 @@
 ## Methods
 
 - Runs started without a plan (no live-eval label: scripts/demo.py or the API), in one data folder, in the order they ran.
-- Rebuilt on 2026-11-03 from the runs' own records and traces with scripts/live_eval.py --from-data (no model was called); categories by evals/categorize.py at code db244dc09fda.
+- Rebuilt on 2026-11-07 from the runs' own records and traces with scripts/live_eval.py --from-data (no model was called); categories by evals/categorize.py at code 73d6cbc00578.
 - Each record is built from the run's own record and trace (evals/categorize.py): success only when the independent oracle verified the recovery; any other end carries one failure category, judged against the scenario's predeclared answer, which the model never sees.
 - Approvals: approved by console-user; rejected by console-user.
 - Tokens in / out are the counts the model server reported; est. tokens is RECAP's own estimate of the context it built. Cost: $0 (a local model, or a free plan checked before every request).
@@ -47,7 +47,8 @@
 ## Limitations (what these numbers do not show)
 
 - N = 6 (kind-bad-release 5, kind-injected-logs 1): each run is one sample of one configuration. These are counts, not success rates, and no statistical claim is made.
-- The target is a real Kubernetes cluster (Kind): two demo services and the faults RECAP's scenarios inject, with real pods, real reads and real writes, but not production traffic, and one small cluster.
+- The target is a real Kubernetes cluster (Kind, on the owner's VM): real pods, real reads and real writes, but not production traffic, and one small cluster.
+- The Kind demo: two demo services and the faults RECAP's scenarios inject.
 - A model's run is not exactly repeatable (random IDs in its prompts change the input), and a run on a real cluster cannot be replayed (a replay is refused against a live target): each record stands for its own run.
 - Every fix that reached an approval was decided by someone other than the simulation auto-approver (each record's approvals say who and how).
 - Where each run's model ran: run-bba16a28dd on the owner's Mac (provider ollama), beside the cluster's container VMs; RECAP's memory watchdog cancelled it before the Mac swapped, which is why the model moved. The other five ran the same weights on the owner's AWS VM, on CPU (provider ollama-vm), with the cluster on the same VM.
