@@ -3,9 +3,10 @@ import type { ReactNode } from "react";
 import { api, toApiError } from "../api";
 import type { ApiError, Page } from "../api";
 import { Mono } from "../components/Badge";
-import { Card, Notice, PageHeader } from "../components/Card";
+import { Card, Notice, PageHeader, StatTile } from "../components/Card";
 import { DataSourceBadge, describeTarget, summarySource } from "../components/DataSourceBadge";
 import { Icon } from "../components/Icon";
+import type { IconName } from "../components/Icon";
 import { PolledView } from "../components/StateViews";
 import { StateToken, StatusToken } from "../components/StatusToken";
 import type * as dto from "../dto";
@@ -16,6 +17,7 @@ import "../styles/overview-architecture.css";
 import type { ScenarioInfo } from "../types";
 import {
   DOCS,
+  GLANCE_GROUPS,
   OPERATOR_ACTIONS,
   SOURCE_LABELS,
   SOURCE_NOTES,
@@ -26,6 +28,7 @@ import {
   checkLook,
   componentLook,
   configuredAdapter,
+  glanceCounts,
   keyStatus,
   livenessLook,
   operationalLook,
@@ -45,6 +48,7 @@ import {
   targetNote,
 } from "../view/system";
 import type { Gap, SessionState, SourceBreakdown } from "../view/system";
+import { demoPageHref, goldenFixture } from "../view/demo";
 
 /**
  * Overview: the first screen. What this RECAP server has plugged in (GET /system) and which
@@ -57,8 +61,8 @@ import type { Gap, SessionState, SourceBreakdown } from "../view/system";
 
 /** How many of the newest runs the outcome breakdown and active incidents read (GET /runs). */
 export const RUN_SCAN = 500;
-/** Rows in the recent-runs list. */
-export const RECENT_RUNS = 10;
+/** Rows in the recent-runs list: a short list; every run is in the Trace Explorer. */
+export const RECENT_RUNS = 5;
 
 type Loaded<T> = Pick<Polled<T>, "data" | "error" | "loading" | "refresh">;
 
@@ -133,6 +137,129 @@ export function ActivePill({ runs }: { runs: Loaded<Page<dto.RunSummary>> }) {
 }
 
 // ======================================================================================
+// What RECAP is, where to start, and the server at a glance
+// ======================================================================================
+
+const PILLARS: readonly { icon: IconName; title: string; text: string }[] = [
+  {
+    icon: "search",
+    title: "Investigates",
+    text: "Specialist AI agents read logs, metrics and cluster events through read-only tools. An independent verifier checks every diagnosis against the evidence.",
+  },
+  {
+    icon: "shield",
+    title: "Proposes safe fixes",
+    text: "Every fix passes an evidence gate and a safety policy, and runs only after a person approves that exact action.",
+  },
+  {
+    icon: "heart",
+    title: "Verifies recovery",
+    text: "An independent oracle, not the agents, decides whether the system recovered.",
+  },
+];
+
+/** What RECAP is in one sentence, and the way in: the guided demo, or on a real cluster its incidents. */
+export function OverviewHero({ liveAction: live }: { liveAction: string | null }) {
+  return (
+    <section className="ov-hero" aria-labelledby="ov-hero-title">
+      <h2 id="ov-hero-title" className="ov-hero-title">
+        RECAP is an AI reliability engineer that investigates incidents, proposes safe fixes and verifies recovery.
+      </h2>
+      <ul className="ov-pillars">
+        {PILLARS.map((pillar) => (
+          <li key={pillar.title}>
+            <Icon name={pillar.icon} size={18} />
+            <div>
+              <div className="ov-pillar-title">{pillar.title}</div>
+              <div className="small muted">{pillar.text}</div>
+            </div>
+          </li>
+        ))}
+      </ul>
+      <div className="ov-hero-actions">
+        {live ? (
+          <a className="btn btn-primary btn-large" href={hrefFor("live")}>
+            <Icon name="live" size={15} />
+            {live}
+          </a>
+        ) : (
+          <>
+            <a className="btn btn-primary btn-large" href={demoPageHref()}>
+              <Icon name="play" size={15} />
+              Try the guided demo
+            </a>
+            <a className="btn" href={demoPageHref({ interview: true })}>
+              <Icon name="users" size={14} />
+              Interview mode
+            </a>
+          </>
+        )}
+        <a className="btn btn-ghost" href={hrefFor("architecture")}>
+          <Icon name="architecture" size={14} />
+          Explore the technology
+        </a>
+      </div>
+      <p className="small muted ov-hero-note">
+        {live
+          ? "This server's incidents run against a real cluster, where replays are refused: the guided demo runs on a server without RECAP_TARGET."
+          : "The guided demo replays a recorded real-model run on RECAP's simulated shop: no cluster and no paid model, three to five minutes, and you approve the fix yourself."}
+      </p>
+    </section>
+  );
+}
+
+/** Where this server's incidents run, whether that target is in use, and how its runs ended. */
+export function AtAGlance({ system, runs }: { system: Loaded<dto.SystemView>; runs: Loaded<Page<dto.RunSummary>> }) {
+  const view = system.data;
+  const adapter = view ? configuredAdapter(view) : null;
+  return (
+    <Card title="At a glance" subtitle="Where this server's incidents run, and how its newest runs ended">
+      <div className="ov-glance-env">
+        <span className="muted small">Environment</span>
+        {view ? (
+          <StatusToken
+            tone={view.environment.is_simulated ? "warn" : "bad"}
+            icon={view.environment.is_simulated ? "flask" : "alert"}
+            label={view.environment.is_simulated ? "Simulation" : `Real cluster · ${adapterName(view.environment_kind)}`}
+            detail={`${view.environment.name} · namespace ${view.environment.namespace}`}
+            size="sm"
+          />
+        ) : system.error ? (
+          <span className="small">Not reachable: {system.error.message}</span>
+        ) : (
+          <span className="muted small">Loading GET /system…</span>
+        )}
+        {adapter ? <StatusToken {...operationalLook(adapter)} size="sm" variant="outline" /> : null}
+      </div>
+      <PolledView
+        polled={runs}
+        loadingLabel="Loading runs…"
+        errorTitle="Could not load the runs (GET /runs)"
+        emptyTitle="No incident has run on this server yet"
+        empty={(page) => (page.items.length ? null : "Try the guided demo to see RECAP handle one, step by step.")}
+      >
+        {(page) => {
+          const counts = glanceCounts(page.items);
+          return (
+            <>
+              <div className="stat-grid ov-glance-tiles">
+                {GLANCE_GROUPS.filter((group) => group.key !== "other" || counts.other).map((group) => (
+                  <StatTile key={group.key} label={group.label} value={fmtInt(counts[group.key])} note={group.hint} tone={group.tone} />
+                ))}
+              </div>
+              <p className="small muted ov-glance-note">
+                {scanNote(page.items.length, page.total) ?? `All ${count(page.items.length, "run")} on this server.`} Scripted, replayed and live-model runs
+                are counted together here; Technical details below splits them by data source.
+              </p>
+            </>
+          );
+        }}
+      </PolledView>
+    </Card>
+  );
+}
+
+// ======================================================================================
 // Active incidents
 // ======================================================================================
 
@@ -187,8 +314,7 @@ export function ActiveIncidents({ runs, now }: { runs: dto.RunSummary[]; now: nu
 
 /** The recording the demo starts from: the launchable "golden" one, else the first launchable. */
 export function demoFixture(view: dto.ReplaysView): dto.FixtureView | null {
-  const launchable = view.fixtures.filter((f) => f.launchable);
-  return launchable.find((f) => f.tags.includes("golden")) ?? launchable[0] ?? null;
+  return goldenFixture(view.fixtures);
 }
 
 function DemoFixture({ view, system }: { view: dto.ReplaysView; system: dto.SystemView | undefined }) {
@@ -1128,50 +1254,59 @@ export interface OverviewViewProps {
  */
 export function OverviewView({ system, providers, runs, replays, scenarios, session, check, onCheck, now }: OverviewViewProps) {
   const active = runs.data ? activeRuns(runs.data.items) : [];
-  const fixture = replays.data ? demoFixture(replays.data) : null;
   const live = system.data ? !system.data.environment.is_simulated : false;
+  const environment = <ActiveEnvironmentCard system={system} scenarios={scenarios} check={check} onCheck={onCheck} session={session} now={now} />;
   return (
     <div className="ov">
       <PageHeader
         title="Overview"
-        description="RECAP's readiness, the environment its incidents run against, the providers that can drive its agents, and what its recent runs did. Every value on this page comes from the RECAP API."
+        description="Start here: what RECAP is, where its incidents run, and what they did. Every value on this page comes from the RECAP API."
         actions={
           <div className="ov-header-actions">
             <ActivePill runs={runs} />
-            {live && system.data ? (
-              <a className="btn btn-primary" href={hrefFor("live")}>
-                <Icon name="live" size={14} />
-                {liveAction(system.data.environment_kind)}
-              </a>
-            ) : (
-              <a className="btn btn-primary" href={demoHref(fixture?.id)}>
-                <Icon name="play" size={14} />
-                Start the demo
-              </a>
-            )}
           </div>
         }
       />
 
       <SimulationNotice system={system.data} />
 
+      <OverviewHero liveAction={live && system.data ? liveAction(system.data.environment_kind) : null} />
+
+      <AtAGlance system={system} runs={runs} />
+
       {active.length ? <ActiveIncidents runs={active} now={now} /> : null}
 
-      <div className="ov-grid">
-        {live && system.data ? <RealClusterCard system={system.data} /> : <DemoCard replays={replays} system={system.data} />}
-        <ReadinessCard system={system} />
-      </div>
+      {/* On a real cluster, what an incident there changes and whether the cluster answers matter first. */}
+      {live && system.data ? (
+        <div className="ov-grid">
+          <RealClusterCard system={system.data} />
+          {environment}
+        </div>
+      ) : null}
 
       <RecentRunsCard runs={runs} now={now} live={live} />
 
-      <OutcomesCard runs={runs} />
-
-      <div className="ov-grid">
-        <ActiveEnvironmentCard system={system} scenarios={scenarios} check={check} onCheck={onCheck} session={session} now={now} />
-        <AccessCard system={system} session={session} />
-      </div>
-
-      <ProvidersCard providers={providers} />
+      <details className="ov-more">
+        <summary>
+          <Icon name="chevronRight" size={15} />
+          <span className="ov-more-title">Technical details</span>
+          <span className="muted small">
+            System readiness, {live ? "" : "the demo recording, the environment check, "}outcomes by data source, access and model providers
+          </span>
+        </summary>
+        <div className="ov-more-body">
+          <div className="ov-grid">
+            {live ? null : <DemoCard replays={replays} system={system.data} />}
+            <ReadinessCard system={system} />
+          </div>
+          <OutcomesCard runs={runs} />
+          <div className="ov-grid">
+            {live ? null : environment}
+            <AccessCard system={system} session={session} />
+          </div>
+          <ProvidersCard providers={providers} />
+        </div>
+      </details>
     </div>
   );
 }

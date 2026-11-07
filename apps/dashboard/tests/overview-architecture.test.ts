@@ -29,6 +29,7 @@ import {
   SOURCE_ORDER,
   TARGET_KINDS,
   accessFacts,
+  GLANCE_GROUPS,
   activeRuns,
   adapterLook,
   adapterName,
@@ -38,6 +39,7 @@ import {
   componentById,
   componentLook,
   configuredAdapter,
+  glanceCounts,
   keyStatus,
   livenessLook,
   nextNodeId,
@@ -612,6 +614,24 @@ test("active incidents are the unfinished runs, and liveness says whether this s
   assert.equal(livenessLook("external").label, "Not running in this server");
   assert.equal(livenessLook("error").tone, "bad");
   assert.equal(livenessLook("unknown").label, "Status unknown");
+});
+
+test("at a glance: resolved, blocked, failed, active, and anything else apart; never a rate", () => {
+  const outcomes = ["resolved", "resolved", "safety_blocked", "approval_rejected", "approval_expired", "failed", "error", "budget_exhausted", "cancelled", "quota_deferred", "something_new"];
+  const list = [...outcomes.map((outcome) => run({ outcome: outcome as never })), run({ terminal: false, outcome: "in_progress" }), run({ terminal: false, outcome: "resolved" })];
+  assert.deepEqual(glanceCounts(list), { resolved: 2, blocked: 3, failed: 3, active: 2, other: 3 });
+  assert.deepEqual(glanceCounts([]), { resolved: 0, blocked: 0, failed: 0, active: 0, other: 0 });
+  assert.deepEqual(
+    GLANCE_GROUPS.map((g) => [g.key, g.label, g.tone]),
+    [
+      ["resolved", "Resolved", "ok"],
+      ["blocked", "Blocked", "warn"],
+      ["failed", "Failed", "bad"],
+      ["active", "Active", "accent"],
+      ["other", "Cancelled or deferred", "neutral"],
+    ],
+  );
+  for (const group of GLANCE_GROUPS) assert.doesNotMatch(group.hint, /%|rate/);
 });
 
 test("the breakdown says when it counted only the newest runs", () => {

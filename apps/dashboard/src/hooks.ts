@@ -16,12 +16,13 @@ import type { EnvironmentInfo, RunSummary, SystemSummary, TraceEvent } from "./t
 /** Every route, in navigation order. The route ids are stable: they are in shared deep links. */
 export const PAGES = [
   "overview",
+  "demo",
   "live",
   "timeline",
   "evidence",
+  "safety",
   "knowledge",
   "memory",
-  "safety",
   "evals",
   "architecture",
 ] as const;
@@ -31,6 +32,7 @@ export type PageId = (typeof PAGES)[number];
 /** The name each route has in the navigation and the browser tab (RECAP Mission Control). */
 export const PAGE_LABELS: Readonly<Record<PageId, string>> = {
   overview: "Overview",
+  demo: "Guided Demo",
   live: "Incident Lab",
   timeline: "Trace Explorer",
   evidence: "Evidence & Decisions",
@@ -40,6 +42,16 @@ export const PAGE_LABELS: Readonly<Record<PageId, string>> = {
   evals: "Evaluations",
   architecture: "Architecture & Learning",
 };
+
+/**
+ * The navigation's groups, in PAGES order: where a first-time visitor starts, the views of one
+ * incident, and what RECAP knows, remembers and measures.
+ */
+export const NAV_GROUPS: readonly { label: string; pages: readonly PageId[] }[] = [
+  { label: "Start here", pages: ["overview", "demo"] },
+  { label: "Investigate", pages: ["live", "timeline", "evidence", "safety"] },
+  { label: "Learn & measure", pages: ["knowledge", "memory", "evals", "architecture"] },
+];
 
 /**
  * Pages that show ONE run, chosen with `?run=`: the selected run follows the user between
