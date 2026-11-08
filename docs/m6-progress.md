@@ -294,7 +294,7 @@ Every interrupted run's trace stays gapless and ends with a `run.summary` that c
   - One queue-metrics test in `tests/unit/test_api_metrics.py`.
 - **Python, full suite, run once:** **2361 passed, 2 failed, 9 skipped** (2372 tests). The 9 skips: the 6 live-cluster tests, the optional OpenTelemetry test, and the 2 real-Redis tests. The 2 failures:
   - `tests/unit/test_contract_examples.py[run_record]`, caused by W3: the committed example run record predates the new `interruption` field. Fixed by adding `"interruption": null` to `tests/fixtures/contracts/run_record.json` only (the export script regenerates all twelve examples with new ids and timestamps, which would have hidden a one-field change); the contract tests pass (14).
-  - `tests/integration/test_m4_robustness.py::test_parallel_trace_events_in_any_order_give_the_same_record`, **not caused by W3**: it fails 4 times in 5 on the committed W2 code too (checked on a clean export of HEAD). The run's first history entry (CREATED) is about 0.5 ms older than its trace event (the other states: 7-60 µs), so durations rounded to the millisecond from the two sources disagree about half the time; it passed in W2's full run by chance. Left unchanged (outside W3); a fix is proposed in the report.
+  - `tests/integration/test_m4_robustness.py::test_parallel_trace_events_in_any_order_give_the_same_record`, **not caused by W3**: it fails 4 times in 5 on the committed W2 code too (checked on a clean export of HEAD). The run's first history entry (CREATED) is about 0.5 ms older than its trace event (the other states: 7-60 µs), so durations rounded to the millisecond from the two sources disagree about half the time; it passed in W2's full run by chance. Left unchanged then; fixed at its root in the final verification below.
   - After the full run I added one test (a run that ended before its worker died) and the fix above; every W3 test file and the contract tests then passed in one focused rerun (81 passed).
 - **Ruff, format, mypy:** clean; mypy's scope now includes `recap/workers` and `apps/worker` (52 files).
 - **Dashboard:** `npm test`: **694 passed** (689 before, plus 5 new in `tests/workers.test.ts`; two existing assertions now read "Running" instead of "Running in this server", which is no longer true with workers); `tsc` and `vite build` pass.
@@ -307,7 +307,7 @@ Every interrupted run's trace stays gapless and ends with a `run.summary` that c
   - a new worker ran the retry, which asked for a fresh approval (a different proposal); approving the old request answered 409; the fresh one resolved the incident (attempt 2).
   - Screenshots of Mission Control for the queued run and the interrupted one: `~/Desktop/RECAP_M6_W3_screenshots.zip`. The first capture showed a "SOURCE NOT RECORDED · TARGET NOT RECORDED" banner and a "Starting" chip on a run that had not started; the live run page now shows "Queued" and no banner until the run has events or a record.
 
-**Docker: blocked, not claimed.** The Docker CLI and colima 0.10.3 are installed; the Compose plugin and Redis are not, and colima is not running. With the owner's approval, the setup is:
+**Docker: blocked, not claimed** (at the time; built and verified later the same day: see "W3 final verification" below). The Docker CLI and colima 0.10.3 are installed; the Compose plugin and Redis are not, and colima is not running. With the owner's approval, the setup is:
 1. `brew install docker-compose`, then add `"cliPluginsExtraDirs": ["/opt/homebrew/lib/docker/cli-plugins"]` to `~/.docker/config.json` (what the formula's caveats ask);
 2. `colima start --cpu 4 --memory 6` (a local VM: no cloud, no cost);
 3. `docker compose -f infra/compose/compose.yaml up --build -d`, then the checks in [infra/compose/README.md](../infra/compose/README.md).
@@ -318,8 +318,90 @@ For the real-Redis test without Docker: `brew install redis`, `redis-server --po
 - Not exactly once: a job can be attempted more than once; only a run that provably sent nothing runs again, so some crashes end in `needs_reconciliation`.
 - Fencing relies on timing; the protections against a duplicate write do not (single-use approvals, capability nonces, the namespace lease on a live target).
 - A worker's run-event metrics (tool calls, tokens) are not exported: workers have no metrics endpoint yet; `/metrics` reports the queue from Redis.
-- The Compose setup has never been built or run; its README lists what is unverified. Containers record `code_version: "unknown"` (no git checkout in the image).
+- The Compose setup had not been built or run (it was, in the final verification below); its README lists what is unverified. Containers record `code_version: "unknown"` (no git checkout in the image).
 - A trace event written by a worker presumed dead (frozen past its TTL, then woken) could share a sequence number with the closing events; the closed record itself cannot be overwritten.
+
+## W3 final verification: the timing test, real containers, real Redis (2026-11-08)
+
+The owner provisionally accepted W3 and authorized the local Docker setup (the Compose plugin
+through Homebrew, the existing colima). No AWS, Kubernetes, Ollama or paid model was used.
+
+**1. The timing test: root cause and fix.**
+- `test_m4_robustness.py::test_parallel_trace_events_in_any_order_give_the_same_record` compares the run's evaluation record built from its stored history with one built from its trace alone. Both describe the same state changes, but each state change was timestamped twice: once by the lifecycle (`StateChange.at`) and again when its trace event was written (`TraceEvent.ts`).
+- For the first state, CREATED, the controller built the run record, the tracer, the evidence registry and the oracle, and serialized three models, between the two clock reads: the trace event was about 0.5 ms later. For every other state the gap was 7-60 µs. Rounded to the millisecond, the two durations disagreed in most runs.
+- They are one logical event, so the time is now captured once: `Tracer.emit(..., ts=)` accepts a time that was already recorded, and the controller passes the state change's own time, for CREATED and for every transition (W3's reconciliation does the same for the move to FAILED it writes). Every other event is still stamped when it is written. A state change's event is emitted right after its `StateChange` with no event in between, so times still never decrease along the sequence.
+- Regression coverage: `test_a_state_change_has_one_time_in_the_record_and_in_the_trace` (every state's trace time equals its history time exactly, and the durations derived from each agree), a tracer unit test for `ts`, and crash window 3 now checks the closing move's time against the record.
+
+**2. Repeated runs** (a bounded runner: each run a fresh process with a 120 s timeout):
+- before the fix: **2 passed, 18 failed** of 20;
+- after the fix: **30 passed, 0 failed** of 30.
+
+**3. Docker Compose: build and runtime.**
+- Setup: `brew install docker-compose` (5.7.0); `"cliPluginsExtraDirs"` added to `~/.docker/config.json` (backed up first to `config.json.bak-2026-11-08-before-compose`; JSON validated; every earlier setting checked unchanged); a new colima profile, `colima start recap --cpu 4 --memory 4 --disk 20` (the existing `default` profile has a 40 GB disk colima cannot shrink, and `w5b` runs k3s; neither was touched). Docker Engine 29.5.2, linux/arm64. 4 GB was enough: the four containers used about 140 MB, with 3.3 GB still available in the VM.
+- Built: `recap:local` (154 MB) and `recap-dashboard:local` (78 MB). Every base image is now pinned by version and by its multi-arch index digest (each lists linux/amd64 and linux/arm64, checked with `docker manifest inspect`).
+- Found and fixed while running the real stack (each reproduced first):
+  - **The API crashed on start**: the model-usage ledger defaults to `~/.local/state`, and the containers' user has no home on a read-only root filesystem. Compose now sets `RECAP_USAGE_LEDGER=/data/llm-usage.db` (shared by the API and the workers), checked by a test.
+  - **An intermittent HTTP 500** on a run's evidence view: `sqlite3.InterfaceError: bad parameter or other API misuse`. `RunStore` shared one SQLite connection across the API's thread pool (and, in W3, a worker's settling thread) without a lock; the trace store and the approval store already lock theirs. It now takes a lock around every call. The same race reproduced on the committed code (errors in 2 of 3 runs of an 8-thread script; the new test's workload hit it in 5 of 5 attempts against the old store, and never with the lock). This predates W3; the containers' timing exposed it.
+  - **A false "This run is not a replay"** in the Guided Demo while a replay waited in the queue (no event or record yet, so the page could not tell). The job's typed view now says what the run will replay (`provider`, `replay_fixture`), and the demo shows the replay's provenance from it; tests on both sides.
+  - **A build race**: the api and worker services both built `recap:local`, and the two builds collided when tagging (`AlreadyExists`). Only the api builds it now; the worker reuses it (`pull_policy: never`). Proven on a clean slate: containers removed, the image untagged, `up --build` from scratch succeeded.
+- Two things on this machine that are not RECAP's: `~/.docker/config.json` still names Docker Desktop's credential helper (`"credsStore": "desktop"`) although Docker Desktop is not installed, which breaks every pull; it was left unchanged (the owner's setting), and the commands here used a private Docker config without a helper. Port 8000 is held by the owner's own uvicorn, so the stack's API was published on 127.0.0.1:8001 (`RECAP_API_PORT`); with colima, a taken port is not forwarded and no error is shown.
+
+**4. Real Redis integration tests** (`tests/integration/test_workers_redis.py`, against a throwaway `redis:7.4.2-alpine` container on 127.0.0.1:6390, database 15, never the stack's own Redis, which is not published): **7 passed**: the queue's semantics, a transaction error raised, a blocking claim woken by another client, a heartbeat expiring on the server and refused afterwards, every connection dropped by the server (`CLIENT KILL`, as a restart would) reading as an outage and the client reconnecting, a worker running an incident, and a worker surviving its connections being dropped mid-run. Every key was removed afterwards (`dbsize` 0).
+
+**5. End to end in the containers.** A checklist script drove the stack over HTTP and `docker compose`: **34 of 34 checks passed** on the final images:
+- every service healthy; published ports on 127.0.0.1 only; Redis not published;
+- FastAPI answers (execution backend `redis`, Redis reachable); Mission Control loads through nginx, which proxies `/api`; a worker alive;
+- Published Runs load without AWS (4 runs); cancelling one is refused (409);
+- a queued incident: the same Idempotency-Key returns the same run; another request with that key is refused (422); a worker claims it; it waits for a person; approving without the token is refused (401), with another digest refused (409), and nothing acts until the exact approval; then RESOLVED, the oracle verified, the job completed; its SSE stream through nginx gapless to `run.summary`;
+- a queued run cancelled before it starts; a running one cancelled at the worker's next heartbeat, its request no longer approvable;
+- `docker compose restart worker` while a run waits for a person: the run is handed back (interrupted, `worker_stopped`), the retry asks a person again (the old request refused, 409) and resolves (attempt 2);
+- `docker compose kill -s SIGKILL worker` in the same state: after its heartbeat expired, the next worker settled the job (`worker_lost`), and the retry resolved with a fresh approval;
+- `docker compose restart redis`: the queue kept its jobs and counters (append-only file) and the worker reconnected; `down` then `up`: runs and jobs persisted (the `recap-data` and `redis-data` volumes);
+- no credential: the operator token in none of 117 HTTP responses, nor in the Compose configuration or any container's environment (it lives only in the data volume, mode 600; the API prints a generated token once in its log on first start, by design).
+- The browser smoke test against the containers (`e2e/smoke.mjs --base http://127.0.0.1:8080`): **119 passed, 0 failed**: every page at 1440 px and 390 px, the Incident Lab replay with the operator's approval, Published Runs read-only, and the Guided Demo (approve, restart, reject) executed by the container worker.
+- Screenshots from the containers (the browser smoke test's, through nginx, and the interrupted run's page): `~/Desktop/RECAP_M6_W3_final_screenshots.zip` (23 files).
+- The `metrics` profile: Prometheus scraped the API (target up); `recap_queue_up` 1, `recap_workers{alive="true"}` 1, `recap_jobs_total{event="completed"}` 12.
+- An interrupted run in the Incident Lab now reads "Interrupted" (the token, the stepper: "Interrupted while awaiting approval", and the caption, which keeps "Stored state: Failed"); the stored outcome is unchanged. A focused dashboard test covers it.
+
+**6. Full regression.** 
+- **Python, full suite, run once** (the real-Redis tests included, against the throwaway container): **2376 passed, 7 skipped, 0 failed** in 329 s. The skips: the 6 live-cluster tests and the optional OpenTelemetry test.
+- **Ruff, format, mypy:** clean (404 files formatted; mypy's 52 files).
+- **Dashboard:** `npm test` **698 passed** (694 before, plus 4: the interrupted wording, the stepper's exit, the queued replay); `tsc` and `vite build` pass.
+- **Browser smoke tests:** **119 passed, 0 failed** against the containers (above); **77 passed, 0 failed** against the default in-process backend, served by uvicorn on an empty data folder (the same count as W2's).
+- **Recordings manifest:** 2 recordings, each matching its pin. **Published runs:** 4 load. **Generated dashboard types:** up to date. **Secret scan:** no secrets in 2015 blobs from 122 commits (the tracked tree rescanned after the commit).
+
+**7. Unresolved.**
+- Only linux/arm64 was built and run; linux/amd64 is not verified. The images were built by Docker's classic builder (no buildx plugin here); BuildKit was not tried.
+- The stale `credsStore` in `~/.docker/config.json` is the owner's to remove (or keep, with a private `DOCKER_CONFIG` for these commands).
+- `UsageLedger` also shares one SQLite connection without a lock; today it is only used from one thread (the event loop) in the API and in workers, so the race above cannot reach it; not changed.
+- A container's runs record `code_version: "unknown"` (no git checkout in the image).
+- The CI replay-metrics wait (W0) is still pending remote CI verification: nothing is pushed.
+
+**8. Git.** Committed locally in two commits after `1a9d1fd` (the work, then this checkpoint), as codeit-ronit, with no attribution: `main` is 9 commits ahead of origin, nothing pushed, the working tree clean after the commit. Docker and colima were left stopped (see cleanup below).
+
+**Cleanup.** The Compose containers and the throwaway Redis were removed; the stack's named volumes (`recap_recap-data`, `recap_redis-data`, `recap_prometheus-data`, about 8 MB, holding only these verification runs) were kept, so the evidence can be opened again (`docker compose ... down -v` removes them). The colima `recap` VM is stopped (about 2.5 GB on disk: `colima delete recap` reclaims it); the Docker CLI's context is back to `default`, and `~/.docker/config.json` differs from its backup only by `cliPluginsExtraDirs`. The owner's own uvicorn on port 8000 was left running. AWS was not touched.
+
+**9. Reproducing the working Docker setup (macOS, Apple silicon):**
+```bash
+brew install docker-compose                    # colima and the docker CLI were already installed
+# add to ~/.docker/config.json, keeping every other key:
+#   "cliPluginsExtraDirs": ["/opt/homebrew/lib/docker/cli-plugins"]
+colima start recap --cpu 4 --memory 4 --disk 20
+# only if `docker pull` fails with "docker-credential-desktop ... not found" (and you keep that setting):
+mkdir -p ~/.docker-recap && echo '{"cliPluginsExtraDirs": ["/opt/homebrew/lib/docker/cli-plugins"]}' > ~/.docker-recap/config.json
+export DOCKER_CONFIG=~/.docker-recap DOCKER_HOST=unix://$HOME/.colima/recap/docker.sock
+# from the repository root (RECAP_API_PORT only if 127.0.0.1:8000 is taken):
+RECAP_API_PORT=8001 docker compose -f infra/compose/compose.yaml up --build -d --wait
+docker compose -f infra/compose/compose.yaml exec api cat /data/operator-token    # sign in with it
+open http://127.0.0.1:8080
+# real-Redis tests:
+docker run --rm -d --name recap-test-redis -p 127.0.0.1:6390:6379 redis:7.4.2-alpine
+RECAP_TEST_REDIS_URL=redis://127.0.0.1:6390/15 .venv/bin/pytest tests/integration/test_workers_redis.py
+# stop:
+docker stop recap-test-redis
+RECAP_API_PORT=8001 docker compose -f infra/compose/compose.yaml --profile metrics down   # volumes kept
+colima stop recap && docker context use default
+```
 
 ## Workstream status
 
@@ -328,5 +410,5 @@ For the real-Redis test without Docker: `brew install redis`, `redis-server --po
 | W0 baseline, evidence, cost | done |
 | W1 Mission Control UX and guided demo | done: implemented and checked; the manual review is the owner's |
 | W2 published-run import | done: implemented and checked locally; the owner's review is pending |
-| W3 durable workers and Docker Compose | done: implemented and tested locally; Compose written, not started (needs the setup above); the owner's review is pending |
+| W3 durable workers and Docker Compose | done: implemented, then verified with real containers and a real Redis (linux/arm64); the owner's review is pending |
 | W4–W7 | not started: not authorized yet |
