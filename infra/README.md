@@ -13,8 +13,11 @@
 V1 makes **no cloud calls, no paid API calls, and needs no Kubernetes or GPU**. The optional
 Anthropic provider only runs if you explicitly select it and supply your own API key.
 
-A Docker/Compose setup for RECAP itself is **not included**: it could not be tested on the build
-machine, and an untested container recipe would be a false claim. It is listed in the V2 backlog.
+A Docker Compose setup for RECAP itself now exists, in [`compose/`](compose/README.md) (M6 W3):
+the API, Mission Control, Redis, workers and an optional Prometheus. It is **written and checked
+offline only**: the build machine has no container engine and no Compose plugin, so it has never
+been built or started, and its README says so first. Docker stays optional: everything above
+runs without it.
 
 ## M5: a local Kind cluster as a real target (files only, nothing run yet)
 

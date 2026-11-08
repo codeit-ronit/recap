@@ -72,12 +72,15 @@ class Tracer:
         run_id: str,
         sinks: Sequence[TraceSink] = (),
         redact: Callable[[Any], Any] | None = None,
+        *,
+        start_seq: int = 0,
     ) -> None:
         self.run_id = run_id
         self.sinks: list[TraceSink] = list(sinks)
         self.stage = "CREATED"  # the controller updates this on every state transition
         self._redact = redact or (lambda value: value)
-        self._seq = 0
+        # A process closing another's interrupted run continues its numbering (reconcile.py).
+        self._seq = start_seq
 
     def emit(
         self,

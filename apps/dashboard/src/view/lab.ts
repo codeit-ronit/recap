@@ -14,12 +14,13 @@
 
 import type { IconName } from "../components/Icon";
 import type { SourceFields } from "../components/DataSourceBadge";
-import type { FixtureView, OracleVerdict, ProviderView, TextAuthor } from "../dto";
+import type { FixtureView, JobView, OracleVerdict, ProviderView, RunStatus, TextAuthor } from "../dto";
 import type { Tone } from "../format";
 import type {
   ApprovalDecisionBody,
   EnvironmentInfo,
   ExperienceEpisode,
+  Interruption,
   ProviderInfo,
   RunConfigInput,
   ScenarioInfo,
@@ -773,6 +774,20 @@ export function outcomeView(outcome: string | null | undefined, environment?: Ta
       return { label: "Budget exhausted", tone: "warn", icon: "stop", sentence: "A run limit was reached, so the run stopped safely." };
     case "quota_deferred":
       return { label: "Deferred: quota", tone: "warn", icon: "clock", sentence: "A free model's quota ran out: the run was deferred and nothing was decided." };
+    case "interrupted":
+      return {
+        label: "Interrupted",
+        tone: "warn",
+        icon: "alert",
+        sentence: "Its worker stopped before any fix could reach the target; it was closed from its persisted evidence.",
+      };
+    case "needs_reconciliation":
+      return {
+        label: "Needs reconciliation",
+        tone: "bad",
+        icon: "shield",
+        sentence: "Its worker stopped after a fix may have reached the target: it was not retried, and a person must check the target.",
+      };
     case "in_progress":
       return { label: "In progress", tone: "accent", icon: "clock", sentence: "The run has not reached a final state yet." };
     default:
@@ -986,4 +1001,88 @@ export function feedStart(total: number, limit: number, frozenStart: number | nu
   const count = Math.max(0, Math.floor(total));
   if (frozenStart !== null && Number.isFinite(frozenStart)) return Math.min(Math.max(0, Math.floor(frozenStart)), count);
   return Math.max(0, count - Math.max(1, Math.floor(limit)));
+}
+
+// ======================================================================================
+// The Redis execution backend (M6): where a queued run waits, and how an interrupted one ended
+// ======================================================================================
+
+/** What the live run page says about a run's job and its interruption; null: nothing to say. */
+export interface QueueNotice {
+  tone: Tone;
+  icon: IconName;
+  title: string;
+  body: string;
+  /** The run the incident continued as, when it ran again. */
+  next: string | null;
+}
+
+const PHASE_WORDS: Readonly<Record<Interruption["phase"], string>> = {
+  before_start: "before it started",
+  before_write: "before any fix was sent",
+  awaiting_approval: "while it waited for a person's approval",
+  write_in_flight: "while a fix was being sent",
+  after_write: "after a fix was sent",
+  verifying: "while the recovery was being verified",
+};
+
+/** The notice for a run's job (GET /runs/{id} `job`) and its record's interruption, if any. */
+export function queueNotice(
+  status: RunStatus | string | null | undefined,
+  job: JobView | null | undefined,
+  interruption: Interruption | null | undefined,
+  hasEvents: boolean,
+): QueueNotice | null {
+  if (interruption) {
+    const when = PHASE_WORDS[interruption.phase] ?? interruption.phase;
+    const how = interruption.cause === "worker_stopped" ? "was stopped" : "stopped";
+    if (interruption.needs_reconciliation) {
+      return {
+        tone: "bad",
+        icon: "shield",
+        title: "Needs reconciliation: a person must check the target",
+        body:
+          `The worker running this incident ${how} ${when}. The fix may have reached the target ` +
+          `(write: ${interruption.write.replace("_", " ")}), so it was not retried. ${interruption.detail}`,
+        next: null,
+      };
+    }
+    return {
+      tone: "warn",
+      icon: "alert",
+      title: interruption.retried_as ? "Interrupted: the incident ran again" : "Interrupted",
+      body:
+        `The worker running this incident ${how} ${when}; no fix reached the target. ` +
+        (interruption.retried_as
+          ? "It ran again as a new run, which investigates afresh and asks for its own approval."
+          : "It was not run again."),
+      next: interruption.retried_as,
+    };
+  }
+  if (status === "queued" && !hasEvents) {
+    const where = job?.position ? `Position ${job.position} in the queue` : "In the queue";
+    const attempt = job && job.attempt > 0 ? `, attempt ${job.attempt + 1} of ${job.max_attempts}` : "";
+    return {
+      tone: "accent",
+      icon: "clock",
+      title: "Queued for a worker",
+      body: `${where}${attempt}. Its events appear here as soon as a worker starts it.`,
+      next: null,
+    };
+  }
+  if (status === "interrupted") {
+    return {
+      tone: "warn",
+      icon: "alert",
+      title: "Its worker stopped",
+      body:
+        "The worker running this incident stopped mid-run. Another worker will settle it from the run's " +
+        "persisted evidence: a fix that may have reached the target is never sent again.",
+      next: null,
+    };
+  }
+  if (status === "cancelled") {
+    return { tone: "neutral", icon: "stop", title: "Cancelled before it started", body: "It was taken off the queue: nothing ran.", next: null };
+  }
+  return null;
 }

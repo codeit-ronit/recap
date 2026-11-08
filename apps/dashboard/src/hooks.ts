@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, openRunStream, toApiError } from "./api";
 import { getToken, onTokenChange } from "./auth";
+import { stillGoing } from "./format";
 import type { ApiError } from "./api";
 import type * as dto from "./dto";
 import type { EnvironmentInfo, RunSummary, SystemSummary, TraceEvent } from "./types";
@@ -294,7 +295,7 @@ export function useRunEvents(runId: string | null): RunEventsState {
         // may never emit run.summary).
         if (!finished && round % 3 === 2) {
           const detail = await api.run(runId);
-          if (detail.status !== "running") {
+          if (!stillGoing(detail.status)) {
             add(await api.events(runId, lastSeq));
             stop();
           }

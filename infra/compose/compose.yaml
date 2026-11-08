@@ -1,0 +1,160 @@
+# RECAP with durable workers (M6 W3): the API, Mission Control, Redis and workers.
+#
+#   cp infra/compose/.env.example infra/compose/.env       # optional: every value has a default
+#   docker compose -f infra/compose/compose.yaml up --build -d
+#   open http://127.0.0.1:8080                                # Mission Control
+#   docker compose -f infra/compose/compose.yaml down         # stop (data volumes kept)
+#   docker compose -f infra/compose/compose.yaml down -v      # stop and delete every volume
+#
+# Offline by default: the simulated environment and the scripted policy (or a committed
+# recording's replay). No cloud, no Kubernetes, no Ollama, no key. Every published port is
+# bound to 127.0.0.1 only; Redis is not published at all (only the API and the workers reach
+# it, on this project's own network). Each container runs as a non-root user with every Linux
+# capability dropped, no privilege escalation and a read-only root filesystem.
+#
+# Docker is never required: without it, RECAP runs exactly as before (README.md), with the
+# in-process backend. infra/compose/README.md has the details, the metrics profile and cleanup.
+
+name: recap
+
+x-hardened: &hardened
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs: ["/tmp:size=64m"]
+
+x-recap-env: &recap-env
+  RECAP_DATA_DIR: /data
+  RECAP_EXECUTION_BACKEND: redis
+  RECAP_REDIS_URL: redis://redis:6379/0
+  RECAP_QUEUE_CAPACITY: ${RECAP_QUEUE_CAPACITY:-20}
+  RECAP_JOB_MAX_ATTEMPTS: ${RECAP_JOB_MAX_ATTEMPTS:-3}
+  RECAP_WORKER_HEARTBEAT_SECONDS: ${RECAP_WORKER_HEARTBEAT_SECONDS:-5}
+  RECAP_WORKER_HEARTBEAT_TTL_SECONDS: ${RECAP_WORKER_HEARTBEAT_TTL_SECONDS:-20}
+  RECAP_PROVIDER: ${RECAP_PROVIDER:-deterministic}
+  RECAP_TOOL_LATENCY_MS: ${RECAP_TOOL_LATENCY_MS:-}
+
+services:
+  redis:
+    image: redis:7.4.2-alpine
+    # Append-only file, fsync every second: a restarted Redis keeps its queue (a second at most
+    # is lost; every run's outcome lives in SQLite either way). No RDB snapshots.
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--save", ""]
+    user: "999:1000" # the image's redis user, so its entrypoint needs no capability to switch
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    <<: *hardened
+
+  api:
+    build:
+      context: ../..
+      dockerfile: infra/compose/Dockerfile
+      target: recap
+    image: recap:local
+    environment:
+      <<: *recap-env
+      # The operator token: empty means generated on first start into /data/operator-token
+      # (read it with `docker compose ... exec api cat /data/operator-token`).
+      RECAP_OPERATOR_TOKEN: ${RECAP_OPERATOR_TOKEN:-}
+      RECAP_OPERATOR_NAME: ${RECAP_OPERATOR_NAME:-local-operator}
+      # "api" is this service's name on the project network (nginx and Prometheus use it).
+      RECAP_ALLOWED_HOSTS: localhost,127.0.0.1,[::1],api
+      RECAP_METRICS: ${RECAP_METRICS:-0}
+    volumes:
+      - recap-data:/data
+    ports:
+      - "127.0.0.1:${RECAP_API_PORT:-8000}:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import sys, urllib.request; sys.exit(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status != 200)"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    stop_grace_period: 20s
+    restart: unless-stopped
+    <<: *hardened
+
+  worker:
+    build: # the api's image (one build: the second is a cache hit)
+      context: ../..
+      dockerfile: infra/compose/Dockerfile
+      target: recap
+    image: recap:local
+    command: ["python", "-m", "apps.worker"]
+    environment:
+      <<: *recap-env
+      RECAP_WORKER_CONCURRENCY: ${RECAP_WORKER_CONCURRENCY:-2}
+      RECAP_WORKER_GRACE_SECONDS: ${RECAP_WORKER_GRACE_SECONDS:-25}
+      RECAP_WORKER_HEALTH_FILE: /tmp/recap-worker-health
+    volumes:
+      - recap-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "apps.worker", "--check"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    # SIGTERM stops claiming; running incidents get RECAP_WORKER_GRACE_SECONDS to finish, then
+    # are cancelled and settled from their evidence. Docker waits this long before SIGKILL.
+    stop_signal: SIGTERM
+    stop_grace_period: 45s
+    restart: unless-stopped
+    <<: *hardened
+
+  dashboard:
+    build:
+      context: ../..
+      dockerfile: infra/compose/Dockerfile
+      target: dashboard
+    image: recap-dashboard:local
+    ports:
+      - "127.0.0.1:${RECAP_DASHBOARD_PORT:-8080}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    restart: unless-stopped
+    <<: *hardened
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    profiles: [metrics] # only with --profile metrics (and RECAP_METRICS=1 for the API)
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=2d
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${RECAP_PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    <<: *hardened
+
+volumes:
+  redis-data:
+  recap-data:
+  prometheus-data:

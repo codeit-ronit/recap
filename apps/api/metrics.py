@@ -19,6 +19,12 @@ dependency. Without it, GET /metrics answers 404 and nothing is counted or timed
     recap_actions_total                  fixes the controller decided on, by outcome
     recap_recovery_verifications_total   the recovery oracle's verdicts, by verified
     recap_environment_info               the target every run acts on: kind, simulated
+    recap_queue_up                       with RECAP_EXECUTION_BACKEND=redis (M6): 1 when the
+                                         Redis job queue answered this scrape, else 0
+    recap_queue_depth, _capacity         jobs waiting, and how many may wait
+    recap_workers                        registered workers, by whether their heartbeat is current
+    recap_jobs_total                     what happened to jobs, as the queue counts them across
+                                         every API and worker process (submitted, completed, ...)
 
 Where the numbers come from: an ASGI middleware (RequestMetrics) counts and times every
 request, and ApiMetrics is one of the runtime's trace sinks while the app runs
@@ -34,7 +40,10 @@ run, incident or proposal id, a prompt, model text, a credential, a path or othe
 
 What the counts cover: this server process, from its start. Runs started by the CLI, the
 evaluation runner or another process are not in them, nor is a request for a host name the
-API does not serve (refused with 400 before anything else). The scripted baseline is not a
+API does not serve (refused with 400 before anything else). With the Redis backend, runs
+execute in workers, so the run-event counts above stay at 0 here; the recap_queue_* /
+recap_workers / recap_jobs_total families are read from Redis at each scrape and cover every
+process. (Workers expose no metrics endpoint of their own yet.) The scripted baseline is not a
 model and sends no model requests; a replay's model requests and tokens are those of the
 recorded run, answered offline from its recording (provider_class="replay"): no model is
 called.
@@ -51,7 +60,7 @@ from collections.abc import Callable, Collection, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import get_args
+from typing import Any, get_args
 
 from starlette.routing import Match, Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -66,6 +75,8 @@ from recap.core.models import (
 )
 from recap.runtime import ENVIRONMENT_ADAPTERS, Runtime
 from recap.telemetry.tracer import TraceCategory
+from recap.workers.queue import JobQueue
+from recap.workers.resp import RedisError
 
 log = logging.getLogger(__name__)
 
@@ -78,6 +89,15 @@ FINAL_STATES = tuple(state.value for state in IncidentState if state in TERMINAL
 PROVIDER_CLASSES: tuple[str, ...] = get_args(ProviderOrigin)
 TOOL_OUTCOMES = ("ok", "error", "denied")
 ACTION_OUTCOMES = ("executed", "refused", "blocked", "rejected", "expired")
+# What the job queue counts (recap/workers/queue.py: its stats hash), a closed set.
+JOB_EVENTS = (
+    "submitted",
+    "completed",
+    "failed",
+    "cancelled",
+    "needs_reconciliation",
+    "requeued",
+)
 # Fixed buckets, in seconds: requests and tool calls, then whole incidents (a run on a real
 # cluster, with a person approving its fix, takes minutes).
 LATENCY_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0)
@@ -135,6 +155,10 @@ class Counter(_Values):
     def inc(self, amount: float = 1.0, **labels: str) -> None:
         key = self.key(labels)
         self.values[key] = self.values.get(key, 0.0) + amount
+
+    def set_total(self, value: float, **labels: str) -> None:
+        """A total counted elsewhere (the Redis queue's counters), copied as it is."""
+        self.values[self.key(labels)] = value
 
     def touch(self, **labels: str) -> None:
         """Show a series at 0 before anything happened (one value of a small closed set)."""
@@ -359,6 +383,30 @@ class ApiMetrics:
             "and whether it is simulated.",
             ("kind", "simulated"),
         )
+        self.queue_up = Gauge(
+            "recap_queue_up",
+            "With the Redis execution backend: 1 when the job queue answered this scrape, 0 "
+            "when it did not (the other queue metrics are then left out).",
+        )
+        self.queue_depth = Gauge("recap_queue_depth", "Jobs waiting in the Redis job queue.")
+        self.queue_capacity = Gauge(
+            "recap_queue_capacity",
+            "How many jobs may wait; a submission beyond it is refused with 429.",
+        )
+        self.workers = Gauge(
+            "recap_workers",
+            "Registered workers, by whether their heartbeat is current (a dead worker's jobs "
+            "are settled by another worker from the runs' persisted evidence).",
+            ("alive",),
+        )
+        self.jobs = Counter(
+            "recap_jobs_total",
+            "What happened to jobs, as the Redis queue counts them across every API and worker "
+            "process: submitted, completed (the harness ran the incident to its end; the run "
+            "record says how it went), failed, cancelled, needs_reconciliation (a fix may have "
+            "reached the target; a person checks), requeued (interrupted before any write).",
+            ("event",),
+        )
         # The few outcomes that matter most are shown at 0 from the start.
         for state in FINAL_STATES:
             self.finished.touch(state=state)
@@ -417,26 +465,49 @@ class ApiMetrics:
             with self._lock:
                 handler(event)
 
-    def render(self) -> str:
-        """Every metric, in the Prometheus text format."""
+    def render(self, queue: JobQueue | None = None) -> str:
+        """Every metric, in the Prometheus text format; with `queue` (the Redis backend), the
+        queue's, read from Redis now."""
+        snapshot = None
+        if queue is not None:
+            try:
+                snapshot = queue.snapshot(recent=0)
+            except RedisError:
+                snapshot = None
         with self._lock:
             self.active.set(len(self._created))
-            return render_text(
-                [
-                    self.requests,
-                    self.request_seconds,
-                    self.active,
-                    self.finished,
-                    self.incident_seconds,
-                    self.tool_calls,
-                    self.tool_seconds,
-                    self.model_requests,
-                    self.model_tokens,
-                    self.actions,
-                    self.recoveries,
-                    self.environment,
-                ]
-            )
+            families: list[Family] = [
+                self.requests,
+                self.request_seconds,
+                self.active,
+                self.finished,
+                self.incident_seconds,
+                self.tool_calls,
+                self.tool_seconds,
+                self.model_requests,
+                self.model_tokens,
+                self.actions,
+                self.recoveries,
+                self.environment,
+            ]
+            if queue is not None:
+                families += self._queue(snapshot)
+            return render_text(families)
+
+    def _queue(self, snapshot: dict[str, Any] | None) -> list[Family]:
+        self.queue_up.set(1 if snapshot is not None else 0)
+        if snapshot is None:
+            return [self.queue_up]
+        self.queue_depth.set(snapshot["depth"])
+        self.queue_capacity.set(snapshot["capacity"])
+        workers = snapshot["workers"]
+        alive = sum(1 for worker in workers if worker["alive"])
+        self.workers.set(alive, alive="true")
+        self.workers.set(len(workers) - alive, alive="false")
+        counters = snapshot["counters"]
+        for event in JOB_EVENTS:  # a total read from Redis: set, not added to
+            self.jobs.set_total(float(counters.get(event, 0)), event=event)
+        return [self.queue_up, self.queue_depth, self.queue_capacity, self.workers, self.jobs]
 
     # --- what run events say ----------------------------------------------------------------
 

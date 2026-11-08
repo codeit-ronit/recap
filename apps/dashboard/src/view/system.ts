@@ -362,6 +362,8 @@ export const OUTCOME_ORDER: readonly RunOutcome[] = [
   "approval_expired",
   "budget_exhausted",
   "quota_deferred",
+  "needs_reconciliation",
+  "interrupted",
   "cancelled",
   "in_progress",
 ];
@@ -376,6 +378,18 @@ const OUTCOME_LOOKS: Record<RunOutcome, StatusLook> = {
   budget_exhausted: { label: "Budget exhausted", tone: "warn", icon: "stop", title: "A run limit stopped the run safely." },
   quota_deferred: { label: "Quota deferred", tone: "warn", icon: "clock", title: "A free model's quota ran out: the run was deferred, nothing decided." },
   cancelled: { label: "Cancelled", tone: "neutral", icon: "stop", title: "Someone cancelled the run." },
+  interrupted: {
+    label: "Interrupted",
+    tone: "warn",
+    icon: "alert",
+    title: "Its worker stopped before any fix could reach the target; the incident ran again as a new run, or was closed.",
+  },
+  needs_reconciliation: {
+    label: "Needs reconciliation",
+    tone: "bad",
+    icon: "shield",
+    title: "Its worker stopped after a fix may have reached the target: never retried, a person must check the target.",
+  },
   in_progress: { label: "In progress", tone: "accent", icon: "live", title: "The run has not reached a final state." },
 };
 
@@ -522,7 +536,12 @@ export const GLANCE_GROUPS: readonly { key: GlanceKey; label: string; tone: Tone
   { key: "blocked", label: "Blocked", tone: "warn", hint: "The safety policy, the evidence gate or a person stopped the fix, or its approval expired." },
   { key: "failed", label: "Failed", tone: "bad", hint: "No verified recovery: the evidence stayed insufficient, an error, or a run limit." },
   { key: "active", label: "Active", tone: "accent", hint: "Not finished yet." },
-  { key: "other", label: "Cancelled or deferred", tone: "neutral", hint: "Someone cancelled the run, or a free model's quota deferred it." },
+  {
+    key: "other",
+    label: "Cancelled or deferred",
+    tone: "neutral",
+    hint: "Someone cancelled the run, a free model's quota deferred it, or its worker stopped and it ran again.",
+  },
 ];
 
 const GLANCE_OF: Readonly<Record<string, GlanceKey>> = {
@@ -533,6 +552,8 @@ const GLANCE_OF: Readonly<Record<string, GlanceKey>> = {
   failed: "failed",
   error: "failed",
   budget_exhausted: "failed",
+  needs_reconciliation: "failed",
+  interrupted: "other",
   in_progress: "active",
 };
 
@@ -547,7 +568,23 @@ export function glanceCounts(runs: readonly Pick<RunSummary, "outcome" | "termin
 export function livenessLook(status: RunStatus | string): StatusLook {
   switch (status) {
     case "running":
-      return { label: "Running in this server", tone: "accent", icon: "live", title: "This API server runs it: its events stream live." };
+      return {
+        label: "Running",
+        tone: "accent",
+        icon: "live",
+        title: "Its events stream live: this API server runs it, or (with the Redis backend) a worker does.",
+      };
+    case "queued":
+      return { label: "Queued for a worker", tone: "accent", icon: "clock", title: "Waiting in the Redis job queue; its events stream once a worker starts it." };
+    case "interrupted":
+      return {
+        label: "Interrupted",
+        tone: "warn",
+        icon: "alert",
+        title: "Its worker stopped mid-run; another worker will settle it from its persisted evidence, never by replaying a fix.",
+      };
+    case "cancelled":
+      return { label: "Cancelled before it started", tone: "neutral", icon: "stop", title: "Taken off the queue before any worker started it: nothing ran." };
     case "external":
       return {
         label: "Not running in this server",

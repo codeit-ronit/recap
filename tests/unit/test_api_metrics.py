@@ -281,6 +281,37 @@ def test_recap_metrics_1_turns_them_on_outside_the_typed_api_contract(
     assert "/metrics" not in paths  # not part of the typed JSON contract (recap-api-v1)
 
 
+def test_with_the_redis_backend_the_queue_is_scraped_from_redis(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """M6: depth, capacity, workers and the queue's own job counts, read at each scrape; with
+    Redis away, only recap_queue_up 0 (the other metrics are still served)."""
+    from recap.workers.queue import JobQueue, QueueConfig
+    from tests.fake_redis import FakeRedisServer
+
+    monkeypatch.setenv("RECAP_METRICS", "1")
+    with FakeRedisServer.running() as server:
+        queue = JobQueue(QueueConfig(url=server.url, capacity=7))
+        queue.submit(run_id="run-1", scenario_id="bad-deployment", config={})
+        queue.register("worker-a", {"pid": 1})
+        with TestClient(
+            create_app(Runtime(settings), queue=queue), headers=OPERATOR_HEADERS
+        ) as client:
+            samples = parse(client.get("/metrics").text)
+            assert value(samples, "recap_queue_up") == 1
+            assert value(samples, "recap_queue_depth") == 1
+            assert value(samples, "recap_queue_capacity") == 7
+            assert value(samples, "recap_workers", alive="true") == 1
+            assert value(samples, "recap_jobs_total", event="submitted") == 1
+            assert value(samples, "recap_jobs_total", event="needs_reconciliation") == 0
+            server.stop()
+            down = client.get("/metrics")
+            assert down.status_code == 200
+            samples = parse(down.text)
+            assert value(samples, "recap_queue_up") == 0
+            assert value(samples, "recap_active_incidents") == 0
+
+
 # --- the format -------------------------------------------------------------------------------
 
 

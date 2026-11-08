@@ -1,0 +1,32 @@
+# What the Compose images (infra/compose/Dockerfile) never receive: local data, secrets,
+# version control, caches, build output and the test suite.
+.git
+.github
+.env
+**/.env
+!**/.env.example
+.venv
+venv
+data
+**/*.db
+**/*.db-*
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.mypy_cache
+*.egg-info
+build
+dist
+**/node_modules
+apps/dashboard/dist
+evals/reports/runs
+tests
+docs
+infra/aws
+infra/sregym
+infra/kind
+RECAP_*.md
+.DS_Store
+.idea
+.vscode

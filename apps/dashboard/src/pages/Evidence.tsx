@@ -24,7 +24,7 @@ import type {
   TextAuthor as AuthorKind,
   VerificationView,
 } from "../dto";
-import { findingOutcomeLabel, findingOutcomeTone, fmtDateTime, fmtInt, fmtTime, isTerminal, riskTone, stateLabel } from "../format";
+import { findingOutcomeLabel, findingOutcomeTone, fmtDateTime, fmtInt, fmtTime, isTerminal, riskTone, stateLabel, stillGoing } from "../format";
 import { PAGE_LABELS, hrefFor, navigate, usePolling, useRunSelection } from "../hooks";
 import type { PageProps } from "../hooks";
 import type { RunSummary } from "../types";
@@ -88,7 +88,7 @@ const FOCUS_EVENT = "recap:evidence-focus";
 /** Poll while the run is live; retry slowly while nothing loaded (the API may be restarting). */
 export function evidenceInterval(view: EvidenceView | undefined): number | null {
   if (!view) return 10_000;
-  if (view.status === "running") return 2500;
+  if (stillGoing(view.status)) return 2500;
   return view.status === "external" && !isTerminal(view.state) ? 5000 : null;
 }
 
@@ -1748,7 +1748,7 @@ export function EvidenceBody({
 
 /** Ask for the run's record again while a just-started run has none yet (its environment is in it). */
 function recordInterval(detail: { status: string; record: unknown } | undefined): number | null {
-  return detail && !detail.record && detail.status === "running" ? 3000 : null;
+  return detail && !detail.record && stillGoing(detail.status) ? 3000 : null;
 }
 
 function EvidenceRun({ runId, summary, focusId }: { runId: string; summary: RunSummary | undefined; focusId: string | null }) {

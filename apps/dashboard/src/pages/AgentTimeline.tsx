@@ -37,6 +37,7 @@ import {
   splitSummary,
   stateLabel,
   stateTone,
+  stillGoing,
   str,
   verdictLabel,
   verdictTone,
@@ -394,6 +395,7 @@ function runOutcomeTone(outcome: dto.RunOutcome): Tone {
     case "budget_exhausted":
     case "quota_deferred":
     case "approval_expired":
+    case "interrupted":
       return "warn";
     default:
       return "bad";
@@ -2817,7 +2819,7 @@ export function TraceExplorerView({ runId, trace, detail, log, filters, onFilter
 function TraceExplorer({ runId, route }: { runId: string; route: Route }) {
   const trace = useFullTrace(runId);
   const live = !!trace.state.view?.live;
-  const detail = usePolling(() => api.runView(runId), (d) => (d?.status === "running" || live ? 3000 : null), [runId]);
+  const detail = usePolling(() => api.runView(runId), (d) => (stillGoing(d?.status) || live ? 3000 : null), [runId]);
   const params = route.params.toString();
   const filters = useMemo(() => readLogFilters((key) => new URLSearchParams(params).get(key)), [params]);
   const log = useEventLog(runId, filters);

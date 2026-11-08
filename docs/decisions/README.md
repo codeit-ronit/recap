@@ -40,6 +40,7 @@ these notes explain why RECAP looks the way it does.
 | [0031](0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md) | RECAP on an external benchmark's cluster: the harness owns the fault, a release is an image tag, and pod failures can date an onset | accepted | SREGym's external-harness mode (reset changes nothing, first revisions as baseline); image tags as rollback keys into the Deployment's own history; "not measured" instead of a guessed metric; V2's onset from the first pod-failure warning when no metric or tagged log exists (M5). |
 | [0032](0032-a-real-kubernetes-target-behind-the-same-interface.md) | A real Kubernetes target behind the same interface: typed kubectl, one identity per role, a pinned cluster, and a person who types the service's name | accepted | `KubernetesEnvironment` chosen by a target profile (`RECAP_TARGET`); typed operations, never a command string; reader, writer, oracle and scenario identities with short-lived tokens; cluster pinning and a namespace lease; dry run, write, read-back and audit; a typed service name for every live write, at the console or in the dashboard; an oracle with its own identity (M5). |
 | [0033](0033-published-real-cluster-runs-read-only-behind-the-same-views.md) | Published real-cluster runs: an allowlisted, pinned, read-only source behind the same views | accepted | `evals/live/MANIFEST.json` pins each published run's files; checked before shown (schemas, cross-file agreement, no credentials), refused whole otherwise; status `published` in the same run views; never written, followed, replayed or approved again; SREGym's grader kept apart (M6). |
+| [0034](0034-durable-workers-redis-coordinates-the-run-records-decide.md) | Durable workers: Redis coordinates, the run records decide, and an uncertain write is never retried | accepted | Optional `RECAP_EXECUTION_BACKEND=redis`: idempotent, bounded submission and atomic claims; a dead worker's job is settled from the run's persisted evidence (write-ahead record, approvals, the target's audit log); a retry is a new run with a fresh approval, and a write that may have landed ends as `needs_reconciliation`; Docker Compose packaging written, not started (M6). |
 
 ## How the decisions fit together
 
@@ -90,6 +91,9 @@ these notes explain why RECAP looks the way it does.
   pod-failure warning can date a bad release's onset where no metric or tagged log exists.
 - **0033** makes those real-cluster runs readable on a fresh checkout (M6): an allowlist that
   pins every file, checks before anything is shown, and a `published` status no write path accepts.
+- **0034** lets workers run incidents from a Redis queue (M6): Redis only coordinates, a dead
+  worker's job is settled from the run's persisted evidence, and a write that may have reached
+  the target is never retried.
 
 The [threat model](../threat-model.md) builds on 0004, 0005, 0007, 0014, 0015 and 0032. It lists
 every threat RECAP defends against, where the defense lives in the code, and the test that

@@ -40,6 +40,7 @@ from recap.core.models import (
     Evidence,
     FailureMechanism,
     IncidentState,
+    Interruption,
     ProviderOrigin,
     RunRecord,
     SourceType,
@@ -58,7 +59,28 @@ ProviderClass = ProviderOrigin
 # Where a run stands as far as THIS server process can tell (RunManager.status).
 # 'published' (M6): a real-cluster run published with the repository (evals/live/MANIFEST.json),
 # read from its checked files: historical evidence, never running, never acted on.
-RunStatus = Literal["running", "finished", "error", "external", "unknown", "published"]
+# With the Redis execution backend (M6, RECAP_EXECUTION_BACKEND=redis), a run's job adds:
+# 'queued' (waiting for a worker; no record yet), 'interrupted' (its worker stopped mid-run and
+# no worker has settled it yet) and 'cancelled' (taken off the queue before it started: nothing
+# ran). A worker's run that is running is 'running', as one this server runs.
+RunStatus = Literal[
+    "running",
+    "finished",
+    "error",
+    "external",
+    "unknown",
+    "published",
+    "queued",
+    "interrupted",
+    "cancelled",
+]
+
+# What happened to a job in the Redis queue (recap/workers/queue.py). It never says how the
+# incident went: the run's record does.
+JobStatus = Literal["queued", "running", "completed", "failed", "cancelled", "needs_reconciliation"]
+
+# How an incident is executed: in the API process (the default) or by workers (M6).
+ExecutionBackend = Literal["inprocess", "redis"]
 
 # How a run ended, in one word, from its recorded state, actions and note (views.run_outcome).
 RunOutcome = Literal[
@@ -72,6 +94,9 @@ RunOutcome = Literal[
     "safety_blocked",  # BLOCKED: the policy or the evidence gate refused the fix
     "budget_exhausted",  # a run limit stopped it safely
     "quota_deferred",  # a free model's quota ran out: deferred, nothing decided
+    "interrupted",  # FAILED: its worker stopped before any fix could reach the target (M6)
+    "needs_reconciliation",  # FAILED: its worker stopped after a fix may have reached the target;
+    # never retried: a person must check the target (record.interruption, M6)
 ]
 
 # The status of one implementation behind an interface (GET /system).
@@ -257,13 +282,42 @@ class RunSummary(ApiModel):
     labels: list[str]  # e.g. "SIMULATED ENVIRONMENT", "REPLAY", "SCRIPTED BASELINE (NOT AN LLM)"
     not_recorded: list[str] = Field(default_factory=list)
     published: PublishedProvenance | None = None  # only for a published run (status "published")
+    # M6: closed after its worker stopped mid-run, from its persisted evidence (else null).
+    interruption: Interruption | None = None
+
+
+class JobView(ApiModel):
+    """One incident in the Redis job queue (M6): its attempts, who runs it, and why it ended.
+
+    The queue coordinates and never decides: whether the incident was resolved is the run
+    record's to say. A job that runs again after an interruption runs as a new run (`runs`),
+    so each attempt keeps its own trace; `job_id` is the incident's id across attempts.
+    """
+
+    job_id: str
+    status: JobStatus
+    run_id: str  # the current (or last) attempt's run
+    runs: list[str]  # every attempt's run, oldest first
+    scenario_id: str
+    attempt: int  # how many times a worker claimed it
+    max_attempts: int
+    position: int | None  # 1 = claimed next; null unless it is waiting
+    worker: str | None  # the worker running it (null unless running)
+    worker_alive: bool | None  # that worker's heartbeat is current (null unless running)
+    submitted_at: datetime | None
+    claimed_at: datetime | None
+    finished_at: datetime | None
+    category: str | None  # why it ended or ran again (recap/workers/queue.py)
+    detail: str | None
+    cancel_requested: bool
 
 
 class RunDetail(Versioned):
     """GET /runs/{id}: the summary, plus the stored record and evidence as before.
 
     `status`, `record`, `evidence` and `error` keep the shape the dashboard has always read.
-    `record` is null while a run this server just started has not saved its first checkpoint.
+    `record` is null while a run this server just started has not saved its first checkpoint,
+    and while a queued run waits for a worker (`job` then says where it is in the queue).
     """
 
     status: RunStatus
@@ -271,18 +325,62 @@ class RunDetail(Versioned):
     record: RunRecord | None
     evidence: list[Evidence]
     error: str | None
+    job: JobView | None = None  # M6: the run's job, with the Redis execution backend
 
 
 class RunStarted(Versioned):
-    """POST /incidents/run (202): the new run's id and what it will run with."""
+    """POST /incidents/run (202): the new run's id and what it will run with.
+
+    With the Redis execution backend (M6) the run is `queued` for a worker, and `job_id` is the
+    incident's stable id. `duplicate` is true when the request's Idempotency-Key named an
+    earlier submission: this is that submission's run, and nothing new was started.
+    """
 
     run_id: str
-    status: Literal["started"] = "started"
+    status: Literal["started", "queued"] = "started"
     scenario_id: str
     provider: str  # the configured provider name the run uses
     provider_class: ProviderClass
     replay_fixture: str | None
     labels: list[str]
+    job_id: str | None = None
+    queue_position: int | None = None  # 1 = claimed next
+    duplicate: bool = False
+
+
+class WorkerView(ApiModel):
+    """One registered worker, from its heartbeat (M6)."""
+
+    worker_id: str
+    alive: bool  # its heartbeat is current; a dead worker's jobs are settled by another
+    host: str | None
+    pid: int | None
+    started_at: datetime | None
+    concurrency: int | None
+    target: str | None  # the environment kind it runs incidents on
+    jobs: list[str]  # the job ids it holds
+
+
+class QueueView(Versioned):
+    """GET /queue: how incidents are executed, and with Redis, the queue and its workers.
+
+    Read-only and from Redis alone: nothing here changes a job. `reachable` is false (and the
+    rest empty) when Redis does not answer; runs, traces and approvals stay readable then.
+    """
+
+    backend: ExecutionBackend
+    reachable: bool
+    address: str | None  # redis://host:port/db, never a password
+    error: str | None
+    depth: int | None  # jobs waiting
+    capacity: int | None  # a submission beyond it is refused (429)
+    max_attempts: int | None
+    heartbeat_seconds: float | None
+    heartbeat_ttl_seconds: float | None
+    running: int  # incidents being run now (this server's tasks, or the workers' jobs)
+    workers: list[WorkerView]
+    jobs: list[JobView]  # the newest jobs, newest first
+    counters: dict[str, int]  # submitted, completed, failed, cancelled, requeued, ...
 
 
 # ======================================================================================

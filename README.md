@@ -154,6 +154,24 @@ Or build once (`cd apps/dashboard && npm install && npm run build`), restart uvi
   - `python scripts/providers.py` shows which providers are ready (no inference).
 - The paid Claude adapter is disabled for this $0 project (it needs `RECAP_ALLOW_PAID_LLM=1` on top of an API key).
 
+### Durable workers and Docker Compose (optional, M6)
+
+By default the API runs each incident itself, and nothing below is needed. To run incidents in
+separate worker processes, queued in Redis (6.2 or newer):
+
+```bash
+export RECAP_EXECUTION_BACKEND=redis RECAP_REDIS_URL=redis://127.0.0.1:6379/0
+uvicorn apps.api.main:app        # POST /incidents/run now answers "queued"; GET /queue shows the queue
+python -m apps.worker            # one or more workers, in other terminals or on other machines
+```
+
+Redis only coordinates: the run records stay the source of truth, a worker that dies has its
+jobs settled from each run's persisted evidence, and a fix that may have reached the target is
+never sent again ([ADR 0034](docs/decisions/0034-durable-workers-redis-coordinates-the-run-records-decide.md)).
+[infra/compose/](infra/compose/README.md) packages the API, Mission Control, Redis and workers
+for Docker Compose; it was written and checked offline but **not yet started** (no container
+engine on the build machine).
+
 ### Run an incident on a real cluster (M5)
 
 This is the owner's setup, not a quickstart. It needs an AWS account (the VM is billed while it runs), Ollama serving `qwen3:8b` on the VM (set up by hand, as the [M5 report](docs/m5-report.md#11-reproduction) describes; no script here installs it: the VM's first-boot script installs only Docker, kind and kubectl), `kubectl` on the Mac where [configs/targets/kind-demo/environment.yaml](configs/targets/kind-demo/environment.yaml) says, and a person at the terminal to approve the fix. The header of [infra/aws/ec2.sh](infra/aws/ec2.sh) lists every command; the cluster side is in [infra/kind/README.md](infra/kind/README.md).
@@ -347,13 +365,14 @@ Status words: **implemented** (works and is tested, against the simulator; rows 
 | Hybrid retrieval (BM25 + embeddings) | implemented, opt-in | [recap/knowledge/ollama_embedder.py](recap/knowledge/ollama_embedder.py), [vectors.py](recap/knowledge/vectors.py) | `nomic-embed-text` on the local Ollama, stored runbook vectors, rank fusion; BM25 stays the default because hybrid found the right runbook less often on alert queries (7 vs 9 of 15) ([ADR 0022](docs/decisions/0022-hybrid-retrieval-with-a-local-embedder-and-agent-search.md)) |
 | OpenTelemetry console bridge | adapter only | [recap/telemetry/otel.py](recap/telemetry/otel.py) | Optional `otel` extra; console spans, no collector |
 | `LearnedRouter` | adapter only | [recap/routing/router.py](recap/routing/router.py) | Interface stub; raises `NotImplementedError` |
-| Type checking and secret scan | implemented | `[tool.mypy]` in [pyproject.toml](pyproject.toml), [scripts/secret_scan.py](scripts/secret_scan.py) | mypy on its configured scope: the core interfaces, the M4 modules and M5's Kubernetes adapter (44 files); every tracked file and every blob in the git history scanned for keys; both in CI |
+| Type checking and secret scan | implemented | `[tool.mypy]` in [pyproject.toml](pyproject.toml), [scripts/secret_scan.py](scripts/secret_scan.py) | mypy on its configured scope: the core interfaces, the M4 modules, M5's Kubernetes adapter and M6's workers (52 files); every tracked file and every blob in the git history scanned for keys; both in CI |
 | Model training or fine-tuning | not yet built | `TrainingPipeline` in [recap/core/interfaces.py](recap/core/interfaces.py) | Explicit not-implemented placeholder |
 | Learned routing policy | not yet built | — | Planned contextual bandit |
 | Neural reranker | not yet built | `Reranker` interface in [recap/core/interfaces.py](recap/core/interfaces.py) | V1 uses a lexical reranker |
 | Per-person approvals | not yet built | — | Since M1 approvals come from one authenticated operator token, not individual people; on a real cluster (M5) an approval proves a terminal or a token holder and a timing, not which person decided |
-| Docker / Compose packaging | not yet built | [infra/README.md](infra/README.md) | Not included: it could not be tested |
-| Crash-resume of in-flight runs | not yet built | [recap/harness/store.py](recap/harness/store.py) | Checkpoints are saved and inspectable, but an interrupted run is not resumed |
+| Durable workers (Redis job queue) | implemented, opt-in (M6) | [recap/workers/](recap/workers/), [apps/worker/](apps/worker/__main__.py) | `RECAP_EXECUTION_BACKEND=redis`: idempotent, bounded submission, atomic claims, heartbeats, cancellation, graceful shutdown; a dead worker's job is settled from the run's persisted evidence, and only a run that provably sent no write runs again (as a new run, with a fresh approval); tested with real worker processes killed at seven points, against an in-repo fake Redis ([ADR 0034](docs/decisions/0034-durable-workers-redis-coordinates-the-run-records-decide.md)) |
+| Docker / Compose packaging | written, not started (M6) | [infra/compose/](infra/compose/README.md) | API, Mission Control, Redis, workers, optional Prometheus; localhost-only, non-root, read-only containers; checked offline, never built or started (no container engine on the build machine) |
+| Crash-resume of in-flight runs | not yet built | [recap/harness/store.py](recap/harness/store.py) | An interrupted run is not resumed; with the Redis backend (M6) it is closed from its persisted evidence and, when no write can have landed, run again as a new run |
 
 Other known limits: pattern-based injection detection is not production-grade (the protection is the gateway); one MCP subprocess per run adds about 0.4–0.5 s; SQLite files are trusted local state. On SREGym's cluster RBAC alone limits RECAP's writer (no admission policy there) and clocks go unchecked; published runs are files to read, not runs Mission Control can open ([docs/m5-report.md](docs/m5-report.md#10-known-failures-and-limitations)).
 
@@ -467,6 +486,7 @@ Full details: [docs/threat-model.md](docs/threat-model.md) and [recap/safety/REA
 .
 ├── apps/
 │   ├── api/               FastAPI backend: runs, approvals, SSE stream, memory, knowledge, evals
+│   ├── worker/            python -m apps.worker: runs queued incidents (Redis backend, M6)
 │   └── dashboard/         React + TypeScript dashboard (Vite)
 ├── configs/               environment adapter, agents, budgets, safety policy, providers (YAML);
 │                          targets/: the Kind demo and SREGym target profiles (M5, RECAP_TARGET)
@@ -482,7 +502,7 @@ Full details: [docs/threat-model.md](docs/threat-model.md) and [recap/safety/REA
 │   ├── kind-scenarios/    4 Kind demo faults (M5)
 │   └── sregym-scenarios/  1 SREGym problem (M5)
 ├── infra/                 how RECAP runs; kind/: the Kind demo cluster; aws/: the owner's VM;
-│                          sregym/: SREGym on that VM (M5)
+│                          sregym/: SREGym on that VM (M5); compose/: Docker Compose (M6, not started)
 ├── integrations/sregym/   SREGym adapter (the Kubernetes adapter in external-harness mode);
 │                          the pre-M5 tool mapping
 ├── recap/                 the Python package
@@ -499,6 +519,7 @@ Full details: [docs/threat-model.md](docs/threat-model.md) and [recap/safety/REA
 │   ├── verification/      recovery oracle
 │   ├── providers/         scripted policy (default), Ollama and Groq Free providers, replay, paid Claude adapter (off)
 │   ├── telemetry/         tracer, sinks, redaction, usage labels, optional OpenTelemetry
+│   ├── workers/           Redis job queue, workers, crash reconciliation (optional, M6)
 │   └── runtime.py         composition root: builds every part from configs
 ├── scripts/               demo.py, evaluate.py, smoke_test.py, live_eval.py, export_run_trace.py,
 │                          export_contract_examples.py, bootstrap.sh
@@ -543,7 +564,7 @@ CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on every push and
 | Learned router (contextual bandit) | Spend parallel compute only where it pays off | Many logged runs with verified outcomes; the existing `RoutingSignals` and `LearnedRouter` interface | Medium |
 | Hybrid retrieval + neural reranker | BM25 misses synonyms ("OOM" vs "out of memory") | A larger, realistic runbook corpus; the `Reranker` interface | Medium |
 | Crash-resume from checkpoints | An interrupted run is recorded but not resumed | Safe replay of each stage from `RunStore` checkpoints | Medium |
-| Docker packaging | One-command setup; Docker Compose, Redis-backed incident workers and larger load tests are tracked for after M5 | A machine where the image can be built and tested | Medium |
+| Docker packaging | Redis-backed workers exist and Compose files are written (M6); building and starting them, and larger load tests, remain | A machine where the images can be built and started | Medium |
 | Static demo site (GitHub Pages) | A shareable link that replays real recorded runs in the dashboard, clearly labeled as a recording | The dashboard's replay (M4) without a running API: an export of the replayed run | Medium |
 | OpenTelemetry collector | Nested spans in a real trace viewer | The `TraceSink` interface; a local collector | Low |
 | Trajectory distillation | Learn a policy from verified runs, the long-term goal | Only with enough valid, verified trajectory data and a free GPU | Low, conditional |

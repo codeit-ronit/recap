@@ -24,8 +24,9 @@ import re
 from collections import Counter
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 from pydantic import ValidationError
 
@@ -48,12 +49,15 @@ from apps.api.dto import (
     EvalsView,
     EvidenceItem,
     EvidenceView,
+    ExecutionBackend,
     ExportProvenance,
     FeatureFlags,
     FindingView,
     FixtureIntegrity,
     FixtureView,
     InjectionFlagView,
+    JobStatus,
+    JobView,
     MemoryAccessView,
     MemoryAssessmentView,
     MemoryHitView,
@@ -70,6 +74,7 @@ from apps.api.dto import (
     ProviderView,
     PublishedProvenance,
     PublishedView,
+    QueueView,
     RecordWithoutTraceView,
     RefusedSearchView,
     RejectedArtifactView,
@@ -95,6 +100,7 @@ from apps.api.dto import (
     UsageView,
     VerificationView,
     VersionsView,
+    WorkerView,
 )
 from evals.published import PublishedIndex, PublishedRun
 from evals.records import EvalBatch
@@ -114,6 +120,8 @@ from recap.core.models import (
 )
 from recap.providers.recordings import FixtureInfo
 from recap.telemetry.tracer import TraceCategory as C
+from recap.workers.queue import Job, QueueConfig
+from recap.workers.resp import RedisAddress
 
 # The controller's note for a cancelled run (IncidentController.run): the record keeps no
 # other sign of a cancellation, so the outcome reads it from there.
@@ -358,6 +366,8 @@ def run_outcome(record: RunRecord) -> RunOutcome:
         if last == "expired":
             return "approval_expired"
         return "safety_blocked"  # the policy, the evidence gate or the namespace allowlist
+    if record.interruption is not None:  # closed after its worker stopped (M6)
+        return "needs_reconciliation" if record.interruption.needs_reconciliation else "interrupted"
     if record.outcome_note == CANCELLED_NOTE:
         return "cancelled"
     return "error" if record.error else "failed"
@@ -540,7 +550,117 @@ def run_summary(
         labels=([PUBLISHED_LABEL] if published else []) + run_labels(record, replay),
         not_recorded=missing,
         published=published,
+        interruption=record.interruption,
     )
+
+
+# --- the Redis job queue (M6) ---------------------------------------------------------------
+
+JOB_STATUSES: frozenset[str] = frozenset(get_args(JobStatus))
+
+
+def job_view(job: Job, *, position: int | None, worker_alive: bool | None) -> JobView:
+    """One job, as the queue holds it; its run's record says how the incident went."""
+    running = job.status == "running"
+    return JobView(
+        job_id=job.job_id,
+        status=job.status if job.status in JOB_STATUSES else "failed",
+        run_id=job.run_id,
+        runs=list(job.runs),
+        scenario_id=job.scenario_id,
+        attempt=job.attempt,
+        max_attempts=job.max_attempts,
+        position=position,
+        worker=(job.worker or None) if running else None,
+        worker_alive=worker_alive if running else None,
+        submitted_at=_when(job.submitted_at),
+        claimed_at=_when(job.claimed_at),
+        finished_at=_when(job.finished_at),
+        category=job.category or None,
+        detail=job.detail or None,
+        cancel_requested=job.cancel_requested,
+    )
+
+
+def worker_view(worker_id: str, heartbeat: Mapping[str, Any] | None, jobs: list[str]) -> WorkerView:
+    """One worker, from its heartbeat (only what it wrote about itself; nothing secret)."""
+    beat = heartbeat or {}
+    return WorkerView(
+        worker_id=worker_id,
+        alive=heartbeat is not None,
+        host=_str(beat.get("host")),
+        pid=_int(beat.get("pid")),
+        started_at=_when(beat.get("started_at")),
+        concurrency=_int(beat.get("concurrency")),
+        target=_str(beat.get("target")),
+        jobs=jobs,
+    )
+
+
+def queue_view(
+    backend: ExecutionBackend,
+    *,
+    running: int,
+    config: QueueConfig | None = None,
+    snapshot: Mapping[str, Any] | None = None,
+    error: str | None = None,
+) -> QueueView:
+    """GET /queue: the in-process backend, or the Redis queue as one snapshot read it."""
+    if backend == "inprocess" or config is None:
+        return QueueView(
+            backend="inprocess",
+            reachable=True,
+            address=None,
+            error=None,
+            depth=None,
+            capacity=None,
+            max_attempts=None,
+            heartbeat_seconds=None,
+            heartbeat_ttl_seconds=None,
+            running=running,
+            workers=[],
+            jobs=[],
+            counters={},
+        )
+    snap = snapshot or {}
+    waiting: list[str] = list(snap.get("waiting", []))
+    workers = [
+        worker_view(w["worker_id"], w["heartbeat"], w["jobs"]) for w in snap.get("workers", [])
+    ]
+    alive = {w.worker_id for w in workers if w.alive}
+    jobs = [
+        job_view(
+            job,
+            position=len(waiting) - waiting.index(job.job_id) if job.job_id in waiting else None,
+            worker_alive=job.worker in alive,
+        )
+        for job in snap.get("jobs", [])
+    ]
+    return QueueView(
+        backend="redis",
+        reachable=snapshot is not None,
+        address=RedisAddress.parse(config.url).shown(),
+        error=error,
+        depth=snap.get("depth"),
+        capacity=config.capacity,
+        max_attempts=config.max_attempts,
+        heartbeat_seconds=config.heartbeat_seconds,
+        heartbeat_ttl_seconds=config.heartbeat_ttl_seconds,
+        running=sum(len(w.jobs) for w in workers),
+        workers=workers,
+        jobs=jobs,
+        counters=dict(snap.get("counters", {})),
+    )
+
+
+def _when(value: object) -> datetime | None:
+    """An ISO timestamp the queue stored; None when absent or unreadable."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 @dataclass(frozen=True)

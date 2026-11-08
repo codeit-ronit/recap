@@ -659,5 +659,6 @@
     "transport": "mcp-stdio"
   },
   "created_at": "2026-10-26T04:57:43.504849Z",
-  "updated_at": "2026-10-26T04:57:44.104940Z"
+  "updated_at": "2026-10-26T04:57:44.104940Z",
+  "interruption": null
 }

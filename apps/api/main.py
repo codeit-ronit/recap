@@ -16,6 +16,12 @@ the simulation auto-approver, a provider the owner allows per run, or a replay o
 committed recording) and evaluations, and approve or reject one exact proposal; the
 controller executes approved actions through the safety gateway.
 
+Execution (M6): runs execute in this process by default. With RECAP_EXECUTION_BACKEND=redis
+they are queued in Redis and executed by workers (python -m apps.worker, recap/workers/);
+POST /incidents/run then answers "queued", honours an Idempotency-Key header, and refuses a
+submission with 429 when the queue is full; GET /queue shows the queue and its workers. The
+persisted run records stay the source of truth: Redis only coordinates.
+
 Security (audit finding 2.4, see apps/api/auth.py): every state-changing endpoint needs the
 operator's bearer token, and the approver recorded is the authenticated operator, never a
 client-supplied name. Only requests for this machine's loopback host names are served, and
@@ -25,6 +31,7 @@ token, a key, a signed capability or a local file path.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -52,8 +59,10 @@ from apps.api.dto import (
     EnvironmentCheck,
     EvalsView,
     EvidenceView,
+    JobView,
     ProviderView,
     PublishedView,
+    QueueView,
     ReplaysView,
     RetrievalView,
     RunDetail,
@@ -84,8 +93,12 @@ from recap.providers.catalog import provider_status
 from recap.providers.local_memory import check_run_memory
 from recap.runtime import Runtime
 from recap.safety.injection import injection_flags
+from recap.workers.queue import IdempotencyConflict, JobQueue, QueueFull
+from recap.workers.resp import RedisError
 
 DASHBOARD_DIST = Path(__file__).resolve().parents[1] / "dashboard" / "dist"
+QUEUE_DOWN = "the incident queue (Redis) did not answer; nothing was queued or changed"
+RETRY_AFTER_SECONDS = 5  # what a 429 for a full queue asks the client to wait
 
 
 class RunRequest(BaseModel):
@@ -124,18 +137,21 @@ def create_app(
     *,
     auth: OperatorAuth | None = None,
     allowed_hosts: list[str] | None = None,
+    queue: JobQueue | None = None,
 ) -> FastAPI:
     """Build the API. Tests pass their own Runtime (temporary data directory).
 
     `auth` defaults to the operator token from the environment or the data directory (see
-    apps/api/auth.py); `allowed_hosts` defaults to RECAP_ALLOWED_HOSTS or the loopback names.
+    apps/api/auth.py); `allowed_hosts` defaults to RECAP_ALLOWED_HOSTS or the loopback names;
+    `queue` defaults to the Redis job queue RECAP_EXECUTION_BACKEND=redis configures (none:
+    runs execute in this process).
     """
     hosts = allowed_hosts or allowed_hosts_from_environment()
     metrics = ApiMetrics.from_environment()  # off unless RECAP_METRICS=1 (GET /metrics)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        app.state.manager = RunManager(runtime)
+        app.state.manager = RunManager(runtime, queue=queue)
         app.state.reader = RunReader(app.state.manager)
         app.state.auth = auth or OperatorAuth.from_environment(
             app.state.manager.runtime.settings.paths.data_dir
@@ -205,13 +221,16 @@ def create_app(
 
     @app.get("/health")
     def health(request: Request) -> dict[str, Any]:
-        rt = manager(request).runtime
+        mgr = manager(request)
+        rt = mgr.runtime
         return {
             "status": "ok",
             "version": __version__,
             "environment": rt.settings.environment.kind,
             "provider": rt.settings.providers.default,
             "label": environment_label(rt.environment_info()),
+            "execution_backend": mgr.backend,
+            "queue_reachable": mgr.queue_reachable(),  # null: in-process, no queue
         }
 
     @app.get("/system", response_model=SystemView)
@@ -246,7 +265,19 @@ def create_app(
     # --- incident runs ----------------------------------------------------------------------
 
     @app.post("/incidents/run", status_code=202, response_model=RunStarted)
-    async def run_incident(body: RunRequest, request: Request, who: OperatorRequired) -> Any:
+    async def run_incident(
+        body: RunRequest,
+        request: Request,
+        who: OperatorRequired,
+        idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
+    ) -> Any:
+        """Start an incident run (in-process), or queue it for a worker (Redis backend).
+
+        An Idempotency-Key header (1-128 of A-Z a-z 0-9 . _ : -) names one submission: sent
+        again with the same request, it returns that submission (`duplicate`: true) and starts
+        nothing; with a different request it is refused (422). With Redis: 429 when the
+        queue is full (Retry-After), 503 when Redis does not answer.
+        """
         # async: starting a background task needs the server's event loop (sync endpoints
         # run in a worker thread that has none).
         mgr = manager(request)
@@ -259,8 +290,23 @@ def create_app(
         refusal = check_run_memory(mgr.runtime.settings, config.provider)
         if refusal:  # a local model that would push this machine into swap
             raise HTTPException(503, refusal)
-        run_id = mgr.start_run(body.scenario_id, config)
-        return reader(request).run_started(run_id, body.scenario_id, config)
+        key = (idempotency_key or "").strip()
+        try:
+            submission = await _off_loop(
+                mgr, mgr.submit, body.scenario_id, config, idempotency_key=key
+            )
+        except ValueError as exc:  # a malformed Idempotency-Key
+            raise HTTPException(400, str(exc)) from None
+        except IdempotencyConflict as exc:
+            raise HTTPException(422, str(exc)) from None
+        except QueueFull as exc:
+            headers = {"Retry-After": str(RETRY_AFTER_SECONDS)}
+            raise HTTPException(429, str(exc), headers=headers) from None
+        except RedisError:
+            raise HTTPException(503, QUEUE_DOWN) from None
+        return reader(request).run_started(
+            submission.run_id, body.scenario_id, config, submission=submission
+        )
 
     @app.get(
         "/runs",
@@ -330,17 +376,29 @@ def create_app(
 
     @app.post("/runs/{run_id}/cancel", status_code=202)
     async def cancel_run(run_id: str, request: Request, who: OperatorRequired) -> dict[str, str]:
-        """Stop a run this server is running. A pending approval request expires with it."""
+        """Stop a run. A pending approval request expires with it. With the Redis backend, a
+        queued run is taken off the queue ("cancelled": nothing ran) and a worker's run stops
+        at the worker's next heartbeat ("cancelling")."""
         if reader(request).published_run(run_id) is not None:
             raise HTTPException(
                 409, f"run '{run_id}' is a published historical run: read-only, nothing runs"
             )
         mgr = manager(request)
-        if mgr.status(run_id) == "unknown":
+        if await _off_loop(mgr, mgr.status, run_id) == "unknown":
+            if mgr.backend == "redis" and not await _off_loop(mgr, mgr.queue_reachable):
+                raise HTTPException(503, QUEUE_DOWN)  # a queued run is known only to Redis
             raise HTTPException(404, f"unknown run '{run_id}'")
-        if not mgr.cancel(run_id):
-            raise HTTPException(409, f"run '{run_id}' is not running in this server")
-        return {"run_id": run_id, "status": "cancelling"}
+        try:
+            outcome = await _off_loop(mgr, mgr.cancel, run_id)
+        except RunRefused as refused:
+            raise HTTPException(refused.status, refused.detail) from None
+        except RedisError:
+            raise HTTPException(503, QUEUE_DOWN) from None
+        if outcome is None:
+            if mgr.backend == "inprocess":
+                raise HTTPException(409, f"run '{run_id}' is not running in this server")
+            raise HTTPException(409, f"run '{run_id}' is neither queued nor running")
+        return {"run_id": run_id, "status": outcome}
 
     @app.get("/runs/{run_id}/events")
     def run_events(run_id: str, request: Request, after_seq: int = 0) -> list[dict[str, Any]]:
@@ -372,6 +430,23 @@ def create_app(
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    # --- the job queue (M6) ---------------------------------------------------------------
+
+    @app.get("/queue", response_model=QueueView)
+    def queue_state(request: Request) -> Any:
+        """How runs execute; with Redis, the queue's depth, its workers (alive or not, from
+        their heartbeats) and the newest jobs. Read-only: nothing here changes a job."""
+        return clean(request, manager(request).queue_view().model_dump(mode="json"))
+
+    @app.get("/jobs/{job_id}", response_model=JobView)
+    def get_job(job_id: str, request: Request) -> Any:
+        """One job of the Redis queue: its attempts (each a run), who runs it, why it ended."""
+        try:
+            job = manager(request).job(job_id)
+        except RedisError:
+            raise HTTPException(503, QUEUE_DOWN) from None
+        return clean(request, found(job, f"job '{job_id}'").model_dump(mode="json"))
 
     @app.get("/published", response_model=PublishedView)
     def published_runs(request: Request) -> Any:
@@ -517,17 +592,26 @@ def create_app(
     # --- operational metrics ------------------------------------------------------------------
 
     @app.get("/metrics", include_in_schema=False)
-    def prometheus_metrics() -> Response:
+    def prometheus_metrics(request: Request) -> Response:
         """Prometheus text metrics, only with RECAP_METRICS=1 (else 404): counts and timings
         with bounded labels, never an id, a prompt or model text (apps/api/metrics.py)."""
         if not metrics.enabled:
             raise HTTPException(404, "metrics are off: RECAP_METRICS=1 turns them on")
-        return Response(metrics.render(), media_type=PROMETHEUS_TEXT)
+        queue = manager(request).queue
+        return Response(metrics.render(queue=queue), media_type=PROMETHEUS_TEXT)
 
     # The built dashboard (npm run build) is served at / when present.
     if DASHBOARD_DIST.exists():
         app.mount("/", StaticFiles(directory=DASHBOARD_DIST, html=True), name="dashboard")
     return app
+
+
+async def _off_loop(mgr: RunManager, function: Any, *args: Any, **kwargs: Any) -> Any:
+    """Call a RunManager method; off the event loop when it talks to Redis (blocking), on it
+    for the in-process backend, whose runs are tasks of this loop."""
+    if mgr.queue is None:
+        return function(*args, **kwargs)
+    return await asyncio.to_thread(function, *args, **kwargs)
 
 
 def _event_id(value: str | None) -> int:
