@@ -73,6 +73,18 @@ def test_health_gates_the_startup_order(compose: dict[str, Any]) -> None:
     assert services(compose)["worker"]["healthcheck"]["test"][-1] == "--check"
 
 
+def test_one_service_builds_each_local_image(compose: dict[str, Any]) -> None:
+    """Two services building one tag race when they tag it (seen in W3's first real build):
+    the api builds recap:local, and the worker reuses it without ever pulling it."""
+    builders: dict[str, list[str]] = {}
+    for name, service in services(compose).items():
+        if service.get("build"):
+            builders.setdefault(service["image"], []).append(name)
+    assert builders == {"recap:local": ["api"], "recap-dashboard:local": ["dashboard"]}
+    worker = services(compose)["worker"]
+    assert worker["image"] == "recap:local" and worker["pull_policy"] == "never"
+
+
 def test_redis_keeps_the_queue_across_a_restart(compose: dict[str, Any]) -> None:
     command = services(compose)["redis"]["command"]
     assert command[command.index("--appendonly") + 1] == "yes"
@@ -87,6 +99,8 @@ def test_the_api_and_the_workers_share_the_data_and_the_queue(compose: dict[str,
         assert env["RECAP_EXECUTION_BACKEND"] == "redis", name
         assert env["RECAP_REDIS_URL"] == "redis://redis:6379/0", name
         assert env["RECAP_DATA_DIR"] == "/data", name
+        # Nothing may write outside /data and /tmp (a read-only root, a user without a home).
+        assert env["RECAP_USAGE_LEDGER"] == "/data/llm-usage.db", name
         assert "recap-data:/data" in service["volumes"], name
     assert set(compose["volumes"]) == {"redis-data", "recap-data", "prometheus-data"}
 
@@ -126,12 +140,14 @@ def test_the_build_context_leaves_out_data_secrets_and_history() -> None:
 
 
 def test_every_base_image_is_pinned_to_a_version(compose: dict[str, Any]) -> None:
-    images = [s["image"] for s in services(compose).values() if not s.get("build")]
+    # The stack's own images (recap:local, recap-dashboard:local) are built here, not pulled.
+    images = [s["image"] for s in services(compose).values() if not s["image"].endswith(":local")]
     images += re.findall(r"^ARG \w+_IMAGE=(\S+)", (COMPOSE / "Dockerfile").read_text(), re.M)
     assert len(images) == 5
     for image in images:
         name, _, tag = image.partition("@")[0].rpartition(":")
         assert name and re.match(r"v?\d+\.\d+\.\d+", tag), image  # never "latest" or a major only
+        assert re.search(r"@sha256:[0-9a-f]{64}$", image), image  # and the exact bytes
 
 
 def test_nginx_proxies_the_api_on_one_origin_and_streams_events() -> None:

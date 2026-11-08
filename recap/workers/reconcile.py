@@ -266,9 +266,12 @@ def finish_trace(runtime: Runtime, record: RunRecord, events: Sequence[TraceEven
     if not moved:
         tracer.stage = record.state.value
         origin = _stopped_in(None, events) or None  # the last state the trace holds
+        last = record.history[-1] if record.history else None
         tracer.emit(
             TraceCategory.STATE,
             {"from": origin, "to": record.state.value, "reason": record.outcome_note},
+            # the time close_run recorded for the move, as the controller's moves do
+            ts=last.at if last is not None and last.state == record.state else None,
         )
     tracer.emit(
         TraceCategory.RUN_SUMMARY,

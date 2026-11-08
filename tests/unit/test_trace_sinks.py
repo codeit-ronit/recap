@@ -40,6 +40,22 @@ def emit_run(tracer: Tracer) -> list[TraceEvent]:
 # --- JSONL ----------------------------------------------------------------------------------
 
 
+def test_an_event_keeps_a_time_given_to_it_and_is_stamped_now_otherwise() -> None:
+    """A state change's trace event carries the time its StateChange recorded (M6)."""
+    from datetime import UTC, datetime
+
+    from recap.telemetry.tracer import MemorySink, Tracer
+
+    sink = MemorySink()
+    tracer = Tracer("run-ts", [sink])
+    recorded = datetime(2026, 11, 8, 12, 0, 0, 123456, tzinfo=UTC)
+    before = datetime.now(UTC)
+    tracer.emit("state.transition", {"to": "CREATED"}, ts=recorded)
+    tracer.emit("agent.start", {})
+    assert sink.events[0].ts == recorded
+    assert sink.events[1].ts >= before and [e.seq for e in sink.events] == [1, 2]
+
+
 def test_jsonl_sink_round_trips_events(tmp_path: Path) -> None:
     sink = JsonlTraceSink(tmp_path / "traces")
     events = emit_run(Tracer("run-abc123", sinks=[sink]))

@@ -292,6 +292,9 @@ class IncidentController:
                 "environment": self.info.model_dump(mode="json"),
                 "provider": self.provider.info.model_dump(mode="json"),
             },
+            # The one CREATED event: the trace holds the time the lifecycle recorded for it,
+            # not the time this event was written after the run's setup.
+            ts=self.lifecycle.history[0].at,
         )
         self._checkpoint()
 
@@ -1181,7 +1184,9 @@ class IncidentController:
         self.record.history.append(change)
         self.tracer.stage = state.value
         self.tracer.emit(
-            TraceCategory.STATE, {"from": previous.value, "to": state.value, "reason": reason}
+            TraceCategory.STATE,
+            {"from": previous.value, "to": state.value, "reason": reason},
+            ts=change.at,  # one state change, one time: in the record and in the trace
         )
         self._checkpoint()
 

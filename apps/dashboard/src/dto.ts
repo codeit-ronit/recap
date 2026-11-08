@@ -140,6 +140,8 @@ export interface JobView extends ApiModel {
   category: string | null;
   detail: string | null;
   cancel_requested: boolean;
+  provider: string | null;
+  replay_fixture: string | null;
 }
 
 /** GET /runs/{id}: the summary, plus the stored record and evidence as before. */

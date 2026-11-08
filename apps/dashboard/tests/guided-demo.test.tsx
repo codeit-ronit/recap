@@ -110,7 +110,7 @@ function request(events: TraceEvent[]): ApprovalRequest {
 function run(events: TraceEvent[], over: Partial<DemoRunViewProps> = {}): string {
   const finished = events.some((e) => e.category === "run.summary");
   const props: DemoRunViewProps = {
-    runId: events[0].run_id,
+    runId: events[0]?.run_id ?? "run-queued",
     events,
     finished,
     live: !finished,
@@ -304,6 +304,36 @@ test("interview mode adds a presenter note; technical details add the codes, the
   assert.match(text, /Technical details Where this run's decisions come from/);
   assert.match(text, /RECORDED REAL-LLM RUN · SIMULATED/);
   assert.match(text, new RegExp(`Run ${APPROVED[0].run_id} ?: 128 trace events`));
+});
+
+test("a queued replay (Redis backend) carries the replay label before its first event", () => {
+  const job = {
+    job_id: "job-1",
+    status: "queued",
+    run_id: "run-queued",
+    runs: ["run-queued"],
+    scenario_id: "m3-inventory-leak-behind-frontend",
+    attempt: 0,
+    max_attempts: 3,
+    position: 1,
+    worker: null,
+    worker_alive: null,
+    submitted_at: null,
+    claimed_at: null,
+    finished_at: null,
+    category: null,
+    detail: null,
+    cancel_requested: false,
+    provider: "replay",
+    replay_fixture: "qwen3-8b-unfamiliar-parallel",
+  } as const;
+  const text = textOf(run([], { provider: null, environment: null, live: true, transport: "sse", job }));
+  assert.match(text, /Recorded real-model execution — replayed locally/);
+  assert.match(text, /Queued for a worker: it will replay the committed recording qwen3-8b-unfamiliar-parallel offline/);
+  assert.doesNotMatch(text, /This run is not a replay/);
+  // A queued run that replays nothing is not called a replay.
+  const scripted = textOf(run([], { provider: null, environment: null, live: true, transport: "sse", job: { ...job, provider: null, replay_fixture: null } }));
+  assert.match(scripted, /This run is not a replay/);
 });
 
 test("a run that is not a replay never carries the replay label", () => {

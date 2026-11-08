@@ -199,6 +199,24 @@ def test_a_full_queue_answers_429_and_a_queued_run_is_cancelled_before_it_starts
         assert client.post("/runs/run-unknown/cancel").status_code == 404
 
 
+def test_a_queued_run_says_what_it_will_run_before_it_starts(
+    settings: Settings, server: FakeRedisServer
+) -> None:
+    """No worker yet: the run has no event and no record, and its job says what it will run
+    (the Guided Demo shows a queued replay's provenance from it)."""
+    replay = {
+        "scenario_id": "bad-deployment",
+        "config": {"provider": "replay", "replay_fixture": "qwen3-8b-bad-deployment"},
+    }
+    with api(Runtime(settings), make_queue(server)) as client:
+        replayed = client.post("/incidents/run", json=replay).json()["run_id"]
+        scripted = client.post("/incidents/run", json=BODY).json()["run_id"]
+        job = client.get(f"/runs/{replayed}").json()["job"]
+        assert (job["provider"], job["replay_fixture"]) == ("replay", "qwen3-8b-bad-deployment")
+        plain = client.get(f"/runs/{scripted}").json()["job"]
+        assert (plain["provider"], plain["replay_fixture"]) == (None, None)  # server default
+
+
 def test_a_run_waiting_for_a_person_survives_an_api_restart(
     settings: Settings, server: FakeRedisServer
 ) -> None:
