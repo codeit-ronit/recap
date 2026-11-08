@@ -15,6 +15,7 @@ import { KnowledgePage } from "./pages/Knowledge";
 import { LiveRunPage } from "./pages/LiveRun";
 import { MemoryPage } from "./pages/Memory";
 import { OverviewPage } from "./pages/Overview";
+import { PublishedPage } from "./pages/Published";
 import { SafetyPage } from "./pages/Safety";
 import type { RunDetail } from "./types";
 
@@ -24,6 +25,8 @@ function renderPage(page: PageId, props: PageProps): ReactNode {
       return <OverviewPage {...props} />;
     case "demo":
       return <GuidedDemoPage {...props} />;
+    case "published":
+      return <PublishedPage {...props} />;
     case "live":
       return <LiveRunPage {...props} />;
     case "timeline":

@@ -12,27 +12,56 @@ function optionLabel(run: RunSummary): string {
   return `${run.scenario_id}${label} · ${stateLabel(run.state)} · ${fmtDateTime(run.created_at)} · ${run.run_id}`;
 }
 
+/** A published run in the picker: its target, how it ended and when (historical, read-only). */
+function publishedLabel(run: PublishedRun): string {
+  return `${run.scenario_id} · ${stateLabel(run.state)} · ${fmtDateTime(run.created_at)} · ${run.run_id} (published)`;
+}
+
+type PublishedRun = Pick<RunSummary, "run_id" | "scenario_id" | "state" | "created_at">;
+
 export function RunPicker({
   runs,
   value,
   onChange,
+  published = [],
 }: {
   runs: RunSummary[];
   value: string | null;
   onChange: (runId: string) => void;
+  /** The real-cluster runs published with the repository (GET /published): a group of their own. */
+  published?: readonly PublishedRun[];
 }) {
-  const known = runs.some((r) => r.run_id === value);
+  const known = runs.some((r) => r.run_id === value) || published.some((r) => r.run_id === value);
   return (
     <label className="run-picker">
       <span className="field-label">Run</span>
       <select value={value ?? ""} onChange={(e) => onChange(e.target.value)}>
         {/* A deep-linked run older than the list is still selectable. */}
         {value && !known ? <option value={value}>{value}</option> : null}
-        {runs.map((r) => (
-          <option key={r.run_id} value={r.run_id}>
-            {optionLabel(r)}
-          </option>
-        ))}
+        {published.length ? (
+          <>
+            <optgroup label="This server's runs">
+              {runs.map((r) => (
+                <option key={r.run_id} value={r.run_id}>
+                  {optionLabel(r)}
+                </option>
+              ))}
+            </optgroup>
+            <optgroup label="Published real-cluster runs (historical, read-only)">
+              {published.map((r) => (
+                <option key={r.run_id} value={r.run_id}>
+                  {publishedLabel(r)}
+                </option>
+              ))}
+            </optgroup>
+          </>
+        ) : (
+          runs.map((r) => (
+            <option key={r.run_id} value={r.run_id}>
+              {optionLabel(r)}
+            </option>
+          ))
+        )}
       </select>
     </label>
   );
@@ -76,7 +105,7 @@ export function RunScope({
   return (
     <>
       <div className="run-scope">
-        <RunPicker runs={list} value={runId} onChange={select} />
+        <RunPicker runs={list} value={runId} onChange={select} published={selection.published?.data?.runs ?? []} />
         <div className="run-scope-meta">
           {summary ? <StateChip state={summary.state} /> : null}
           {/* Each investigation round's routing, numbered like the Evaluations tables ("R1 single"). */}

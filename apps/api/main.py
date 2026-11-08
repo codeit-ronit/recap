@@ -53,6 +53,7 @@ from apps.api.dto import (
     EvalsView,
     EvidenceView,
     ProviderView,
+    PublishedView,
     ReplaysView,
     RetrievalView,
     RunDetail,
@@ -330,6 +331,10 @@ def create_app(
     @app.post("/runs/{run_id}/cancel", status_code=202)
     async def cancel_run(run_id: str, request: Request, who: OperatorRequired) -> dict[str, str]:
         """Stop a run this server is running. A pending approval request expires with it."""
+        if reader(request).published_run(run_id) is not None:
+            raise HTTPException(
+                409, f"run '{run_id}' is a published historical run: read-only, nothing runs"
+            )
         mgr = manager(request)
         if mgr.status(run_id) == "unknown":
             raise HTTPException(404, f"unknown run '{run_id}'")
@@ -339,7 +344,7 @@ def create_app(
 
     @app.get("/runs/{run_id}/events")
     def run_events(run_id: str, request: Request, after_seq: int = 0) -> list[dict[str, Any]]:
-        events = manager(request).runtime.events.list_events(run_id, after_seq)
+        events = reader(request).events_after(run_id, after_seq)
         return clean(request, [e.model_dump(mode="json") for e in events])
 
     @app.get("/runs/{run_id}/stream")
@@ -356,11 +361,24 @@ def create_app(
         stream resumes right after it, so no event is sent twice.
         """
         resume = max(after_seq, _event_id(last_event_id))
+        published = reader(request).published_run(run_id)
+        frames = (
+            reader(request).published_stream(published, resume)
+            if published is not None  # historical: its trace, then the end, never live
+            else manager(request).stream(run_id, resume)
+        )
         return StreamingResponse(
-            manager(request).stream(run_id, resume),
+            frames,
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    @app.get("/published", response_model=PublishedView)
+    def published_runs(request: Request) -> Any:
+        """The real-cluster runs published with the repository (evals/live/MANIFEST.json), each
+        checked before it is shown; the real-cluster evaluation records without a published
+        trace; and any entry refused, with the reason. Read-only, offline: no cluster, no model."""
+        return reader(request).published()
 
     # --- approvals --------------------------------------------------------------------------
 

@@ -1086,6 +1086,48 @@ select:focus {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+
+/* A published run's label on every page that shows it (components/Historical.tsx). */
+.historical-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--info-line);
+  border-left-width: 4px;
+  border-radius: 10px;
+  background: var(--info-soft);
+}
+.historical-banner > .icon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--info-text);
+}
+.historical-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.historical-label {
+  color: var(--info-text);
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  line-height: 1.3;
+}
+.historical-text {
+  margin: 4px 0 0;
+  color: var(--text-2);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+.historical-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
 .notice-title {
   font-weight: 600;
 }
@@ -1203,6 +1245,7 @@ select:focus {
 /* ---------------------------------------------------------------------------------- */
 
 .table-wrap {
+  position: relative; /* contains absolutely positioned text (.sr-only), which would widen the page */
   width: 100%;
   overflow-x: auto;
 }

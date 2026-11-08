@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { api } from "../api";
 import { Chip, FlagChip, HypothesisChip, Mono, VerdictChip } from "../components/Badge";
@@ -107,6 +107,12 @@ function scrollToElement(id: string): void {
 }
 
 /** An evidence id that jumps to its registry row (the ?ev= deep link); an id this run never recorded stays text. */
+/**
+ * False for a published run (GET /runs/{id} status "published"): its evidence registry's
+ * contents were not exported, so a cited id missing from it is not a finding here.
+ */
+const RegistryRecorded = createContext(true);
+
 function EvidenceLink({
   id,
   runId,
@@ -120,6 +126,15 @@ function EvidenceLink({
   inline?: boolean;
   tone?: "neutral" | "ok" | "bad";
 }) {
+  const registryRecorded = useContext(RegistryRecorded);
+  if (!known.has(id) && !registryRecorded) {
+    // A published run: its registry's contents were not exported, so the id is not checkable here.
+    return (
+      <Chip tone="neutral" mono title="This run's evidence registry was not published: the id and the tool that recorded it are in Trace Explorer">
+        {id}
+      </Chip>
+    );
+  }
   if (!known.has(id)) {
     return (
       <Chip tone="bad" mono title="Cited, but this run recorded no observation with this id">
@@ -409,7 +424,7 @@ function RunBar({
         <div>
           <dt>Observations</dt>
           <dd>
-            {fmtInt(view.registry.length)}
+            {view.status === "published" ? <span className="not-recorded">Not published</span> : fmtInt(view.registry.length)}
             {flagged ? <span className="ed-fact-note"> · {fmtInt(flagged)} flagged</span> : null}
           </dd>
         </div>
@@ -1488,6 +1503,15 @@ function Registry({
     { key: "use", label: "Use", options: filterOptions(rows, READERS.use, (v) => USE_LABELS[v] ?? v) },
   ].filter((spec) => spec.options.length > 1 || !!filters[spec.key]);
 
+  if (!rows.length && view.status === "published") {
+    return (
+      <EmptyView
+        title="The registry's contents were not published"
+        icon="evidence"
+        reason="This published run's tool outputs were not exported with it. Each evidence ID, the tool and agent that recorded it, and every verdict on it are in Trace Explorer; what the model was shown is in the run's recording.jsonl."
+      />
+    );
+  }
   if (!rows.length) {
     const running = view.status === "running";
     return (
@@ -1710,7 +1734,7 @@ export function EvidenceBody({
   // GET /runs sends the typed M4 summary: its environment kind and whether it is simulated.
   const target = targetFacts(environment ?? summaryTarget(summary as unknown as SummarySourceFields | undefined));
   return (
-    <>
+    <RegistryRecorded.Provider value={view.status !== "published"}>
       <RunBar view={view} summary={summary} kind={kind} target={target} />
       <RunNotices view={view} runId={runId} known={known} />
       <DecisionCard view={view} runId={runId} known={known} kind={kind} />
@@ -1718,7 +1742,7 @@ export function EvidenceBody({
       <DisagreementsCard view={view} runId={runId} known={known} />
       <ActionCard view={view} runId={runId} known={known} />
       <RegistryCard view={view} runId={runId} focusId={focusId} target={target} />
-    </>
+    </RegistryRecorded.Provider>
   );
 }
 

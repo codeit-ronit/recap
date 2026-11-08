@@ -7,6 +7,7 @@ import type { HealthResponse, RunDetail, SystemSummary } from "../types";
 import { DataSourceBadge } from "./DataSourceBadge";
 import { BackendHint } from "./EmptyState";
 import { EnvironmentBanner } from "./EnvironmentBanner";
+import { HistoricalBanner } from "./Historical";
 import { Icon } from "./Icon";
 import type { IconName } from "./Icon";
 import { LoadingView } from "./StateViews";
@@ -26,6 +27,7 @@ export const PRODUCT_NAME = "RECAP Mission Control";
 const NAV_ICONS: Readonly<Record<PageId, IconName>> = {
   overview: "overview",
   demo: "play",
+  published: "package",
   live: "live",
   timeline: "timeline",
   evidence: "evidence",
@@ -132,6 +134,15 @@ export function RunSource({ run }: { run: SelectedRun }) {
       <code className="mono run-context-id" title={runId}>
         {runId}
       </code>
+      {detail.data?.status === "published" ? (
+        <StatusToken
+          tone="info"
+          icon="package"
+          size="sm"
+          label="PUBLISHED · READ-ONLY"
+          title="A real run published with the repository: historical evidence, nothing runs now"
+        />
+      ) : null}
       {source}
     </div>
   );
@@ -301,6 +312,8 @@ export function AppShell({
         </header>
         <main id="main" className="content" tabIndex={-1}>
           {health.error?.offline ? <OfflineBanner error={health.error} /> : null}
+          {/* The Guided Demo shows a published run's banner in place of its replay label. */}
+          {selectedRun?.detail.data?.status === "published" && page !== "demo" ? <HistoricalBanner summary={selectedRun.detail.data.summary} /> : null}
           {children}
         </main>
       </div>

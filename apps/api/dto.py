@@ -56,7 +56,9 @@ TOTAL_HEADER = "X-Total-Count"  # GET /runs: how many runs match the filters
 ProviderClass = ProviderOrigin
 
 # Where a run stands as far as THIS server process can tell (RunManager.status).
-RunStatus = Literal["running", "finished", "error", "external", "unknown"]
+# 'published' (M6): a real-cluster run published with the repository (evals/live/MANIFEST.json),
+# read from its checked files: historical evidence, never running, never acted on.
+RunStatus = Literal["running", "finished", "error", "external", "unknown", "published"]
 
 # How a run ended, in one word, from its recorded state, actions and note (views.run_outcome).
 RunOutcome = Literal[
@@ -188,6 +190,24 @@ class ExportProvenance(ApiModel):
     files: list[str]
 
 
+class PublishedProvenance(ApiModel):
+    """Where a published run comes from (evals/published.py): an allowlisted folder of the
+    repository whose files matched their pinned SHA-256 and size when this server read them,
+    and the run's evaluation record. Historical evidence: nothing of it can be acted on."""
+
+    folder: str  # repo-relative, e.g. "evals/live/2026-11-07-..."
+    files: list[str]
+    integrity: Literal["verified"]  # every pinned file matched; a run that does not is never shown
+    target: str  # the real cluster it worked on: "kind" or "sregym"
+    title: str  # a person's, from the manifest (checked in review)
+    notes: list[str]  # a person's, from the manifest
+    recording_id: str  # the run's own model recording (recording.jsonl in the folder)
+    batch_id: str  # the evaluation batch holding its record
+    benchmark: str | None  # the grader behind benchmark_verdict (the batch's), if any
+    benchmark_verdict: Literal["pass", "fail"] | None  # the benchmark's own grader; never RECAP's
+    approvals: list[str]  # the evaluation record's account of each decision (a past decision)
+
+
 class RunSummary(ApiModel):
     """One run in a few dozen fields: identity, provenance, outcome and oracle verdict.
 
@@ -236,6 +256,7 @@ class RunSummary(ApiModel):
     error: str | None
     labels: list[str]  # e.g. "SIMULATED ENVIRONMENT", "REPLAY", "SCRIPTED BASELINE (NOT AN LLM)"
     not_recorded: list[str] = Field(default_factory=list)
+    published: PublishedProvenance | None = None  # only for a published run (status "published")
 
 
 class RunDetail(Versioned):
@@ -1083,3 +1104,49 @@ class EvalsView(Versioned):
 class BatchView(Versioned):
     batch: BatchSummary
     records: list[EvalRecord]
+
+
+# ======================================================================================
+# GET /published: the real-cluster runs published with the repository (M6)
+# ======================================================================================
+
+
+class RecordWithoutTraceView(ApiModel):
+    """A real-cluster run known only from its evaluation record: its full trace was not
+    published, so it has no Trace Explorer view. Every field is the record's own."""
+
+    run_id: str
+    batch_id: str
+    target: str
+    scenario_id: str
+    started_at: datetime | None
+    final_state: str
+    oracle_verified: bool
+    failure: str  # the evaluation's failure category ("" for a verified success)
+    failure_detail: str
+    approvals: list[str]
+    benchmark_verdict: Literal["pass", "fail"] | None
+    model: str | None
+    provider: str
+
+
+class RejectedArtifactView(ApiModel):
+    """A manifest entry that failed a check: nothing of it is shown, only why."""
+
+    folder: str | None
+    run_id: str | None
+    reason: str
+
+
+class PublishedView(Versioned):
+    """GET /published: every published real-cluster run that passed its checks (as run
+    summaries with their provenance), the real-cluster evaluation records without a published
+    trace (failures included), and any entry that was refused, with the reason."""
+
+    manifest_schema: str
+    runs: list[RunSummary]
+    records_without_trace: list[RecordWithoutTraceView]
+    rejected: list[RejectedArtifactView]
+    manifest_error: str | None
+    benchmarks: dict[str, str]  # batch id -> the grader behind its records' benchmark_verdict
+    limitations: list[str]  # what the published files do not hold, in plain words

@@ -2664,7 +2664,8 @@ export function TraceExplorerView({ runId, trace, detail, log, filters, onFilter
   const entries = trace.state.entries;
   const record = detail.data?.record ?? null;
   const summary = detail.data?.summary ?? null;
-  const evidence = detail.data ? detail.data.evidence : null;
+  // A published run's registry contents were not exported: unknown (no tag), never "not in this run".
+  const evidence = detail.data && detail.data.status !== "published" ? detail.data.evidence : null;
   const running = !!view?.live;
 
   const events = useMemo(() => entries.map((e) => toTraceEvent(e, runId)), [entries, runId]);

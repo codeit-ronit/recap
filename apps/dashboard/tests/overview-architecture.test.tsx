@@ -629,8 +629,8 @@ test("the demo starts from the golden recording, labelled as a replay of a real 
   // The way in is the guided demo, from the hero: plain, interview mode, and the technology.
   const hero = between(html, '<section class="ov-hero"', "</section>");
   assert.match(textOf(hero), /RECAP is an AI reliability engineer that investigates incidents, proposes safe fixes and verifies recovery\./);
-  assert.match(textOf(hero), /Try the guided demo Interview mode Explore the technology/);
-  assert.deepEqual(hrefs(hero), ["#/demo", "#/demo?mode=interview", "#/architecture"]);
+  assert.match(textOf(hero), /Try the guided demo Interview mode Real Kubernetes runs Explore the technology/);
+  assert.deepEqual(hrefs(hero), ["#/demo", "#/demo?mode=interview", "#/published", "#/architecture"]);
   const card = between(html, "Start the demo</h2>", "System readiness");
   const cardText = textOf(card);
   assert.match(cardText, /REPLAY · RECORDED REAL-LLM RUN qwen3:8b \/ SIMULATED TARGET/);

@@ -9,7 +9,7 @@ export type EvalMode = "scripted_regression" | "offline_replay" | "real_llm" | "
 export type ProviderOrigin = "scripted" | "local_llm" | "free_hosted_llm" | "paid_llm" | "replay";
 export type ApiSchema = "recap-api-v1";
 export type ProviderClass = "scripted" | "local_llm" | "free_hosted_llm" | "paid_llm" | "replay";
-export type RunStatus = "running" | "finished" | "error" | "external" | "unknown";
+export type RunStatus = "running" | "finished" | "error" | "external" | "unknown" | "published";
 export type RunOutcome = "in_progress" | "resolved" | "failed" | "error" | "cancelled" | "approval_rejected" | "approval_expired" | "safety_blocked" | "budget_exhausted" | "quota_deferred";
 export type ComponentState = "active" | "available" | "unavailable" | "disabled" | "planned" | "error";
 export type TrustClass = "untrusted_tool_output" | "untrusted_runbook_text" | "untrusted_memory_text" | "untrusted_alert_text" | "recap_trusted_text";
@@ -61,6 +61,21 @@ export interface ExportProvenance extends ApiModel {
   files: string[];
 }
 
+/** Where a published run comes from (evals/published.py): an allowlisted folder of the repository whose files matched their pinned SHA-256 and size when this server read them, and the run's evaluation record. Historical evidence: nothing of it can be acted on. */
+export interface PublishedProvenance extends ApiModel {
+  folder: string;
+  files: string[];
+  integrity: "verified";
+  target: string;
+  title: string;
+  notes: string[];
+  recording_id: string;
+  batch_id: string;
+  benchmark: string | null;
+  benchmark_verdict: "pass" | "fail" | null;
+  approvals: string[];
+}
+
 /** One run in a few dozen fields: identity, provenance, outcome and oracle verdict. */
 export interface RunSummary extends ApiModel {
   run_id: string;
@@ -101,6 +116,7 @@ export interface RunSummary extends ApiModel {
   error: string | null;
   labels: string[];
   not_recorded: string[];
+  published: PublishedProvenance | null;
 }
 
 /** GET /runs/{id}: the summary, plus the stored record and evidence as before. */
@@ -880,4 +896,39 @@ export interface EvalRecord {
 export interface StageTiming {
   stage: string;
   seconds: number;
+}
+
+/** A real-cluster run known only from its evaluation record: its full trace was not published, so it has no Trace Explorer view. Every field is the record's own. */
+export interface RecordWithoutTraceView extends ApiModel {
+  run_id: string;
+  batch_id: string;
+  target: string;
+  scenario_id: string;
+  started_at: string | null;
+  final_state: string;
+  oracle_verified: boolean;
+  failure: string;
+  failure_detail: string;
+  approvals: string[];
+  benchmark_verdict: "pass" | "fail" | null;
+  model: string | null;
+  provider: string;
+}
+
+/** A manifest entry that failed a check: nothing of it is shown, only why. */
+export interface RejectedArtifactView extends ApiModel {
+  folder: string | null;
+  run_id: string | null;
+  reason: string;
+}
+
+/** GET /published: every published real-cluster run that passed its checks (as run summaries with their provenance), the real-cluster evaluation records without a published trace (failures included), and any entry that was refused, with the reason. */
+export interface PublishedView extends Versioned {
+  manifest_schema: string;
+  runs: RunSummary[];
+  records_without_trace: RecordWithoutTraceView[];
+  rejected: RejectedArtifactView[];
+  manifest_error: string | null;
+  benchmarks: Record<string, string>;
+  limitations: string[];
 }

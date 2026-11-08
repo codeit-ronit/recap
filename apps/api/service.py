@@ -36,6 +36,7 @@ from apps.api.dto import (
     RunDetail,
     RunStarted,
     RunStatus,
+    RunSummary,
     TimelineFilters,
 )
 from apps.api.views import (
@@ -48,6 +49,8 @@ from apps.api.views import (
     evidence_view,
     origin_labels,
     provider_view,
+    published_provenance,
+    published_view,
     replays_view,
     retrieval_view,
     run_summary,
@@ -55,6 +58,8 @@ from apps.api.views import (
     timeline_view,
     usage_view,
 )
+from evals.published import MANIFEST as PUBLISHED_MANIFEST
+from evals.published import PublishedIndex, PublishedRun, load_published
 from evals.records import EvalBatch, find_batches
 from evals.runner import (
     LATEST_DIR,
@@ -466,11 +471,23 @@ class _ExportCache:
     index: dict[str, ExportProvenance] | None = None
 
 
+@dataclass
+class _PublishedCache:
+    stamp: tuple[tuple[str, int, int], ...] = ()
+    index: PublishedIndex | None = None
+
+
 class RunReader:
     """Reads persisted runs, traces, evidence, recordings and evaluation batches, and turns
     them into the API's typed views. Read-only: it never changes a record."""
 
-    def __init__(self, manager: RunManager, *, manifest: Path = MANIFEST) -> None:
+    def __init__(
+        self,
+        manager: RunManager,
+        *,
+        manifest: Path = MANIFEST,
+        published_manifest: Path = PUBLISHED_MANIFEST,
+    ) -> None:
         self.manager = manager
         self.runtime = manager.runtime
         settings = self.runtime.settings
@@ -489,6 +506,10 @@ class RunReader:
             ],
         }
         self._exports = _ExportCache()
+        # Real-cluster runs published with the repository (evals/live/MANIFEST.json): read
+        # only, checked byte for byte, never written anywhere (evals/published.py).
+        self.published_manifest = published_manifest
+        self._published = _PublishedCache()
 
     def json(self, model: BaseModel) -> Any:
         """A response body: the model as JSON data, with every local folder removed."""
@@ -511,7 +532,7 @@ class RunReader:
             )
             for record in matching[offset : offset + limit]
         ]
-        return page, len(matching)
+        return page, len(matching)  # this server's own runs only: published ones are listed apart
 
     def run_detail(self, run_id: str) -> Any | None:
         """GET /runs/{id}; None for an unknown run."""
@@ -522,8 +543,9 @@ class RunReader:
         summary = None
         evidence: list[Evidence] = []
         if record is not None:
-            summary = run_summary(record, status, fixtures=self.fixtures(), exports=self.exports())
-            evidence = self.runtime.runs.evidence(run_id)
+            summary = self._summary(record, status)
+            # A published run's registry contents were not exported (PUBLISHED_LIMITATIONS).
+            evidence = [] if status == "published" else self.runtime.runs.evidence(run_id)
         detail = RunDetail(
             status=status,
             summary=summary,
@@ -557,6 +579,11 @@ class RunReader:
         if found is None:
             return None
         record, status = found
+        if status == "published":
+            view = evidence_view(
+                run_id, record, [], self.events(run_id), status, registry_recorded=False
+            )
+            return self.json(view)
         stored = self.runtime.runs.evidence(run_id)
         return self.json(evidence_view(run_id, record, stored, self.events(run_id), status))
 
@@ -601,7 +628,11 @@ class RunReader:
         return self.json(started)
 
     def events(self, run_id: str) -> list[TraceEvent]:
-        """Every stored event of a run, oldest first, read a page at a time."""
+        """Every stored event of a run, oldest first, read a page at a time (a published run's
+        from its checked trace.jsonl)."""
+        published = self.published_run(run_id)
+        if published is not None:
+            return list(published.events)
         found: list[TraceEvent] = []
         after = 0
         while True:
@@ -611,14 +642,84 @@ class RunReader:
                 return found
             after = page[-1].seq
 
+    def events_after(self, run_id: str, after_seq: int) -> list[TraceEvent]:
+        """GET /runs/{id}/events: the events after `after_seq`, stored or published."""
+        published = self.published_run(run_id)
+        if published is not None:
+            return [event for event in published.events if event.seq > after_seq]
+        return self.runtime.events.list_events(run_id, after_seq)
+
     def _load(self, run_id: str) -> tuple[RunRecord | None, RunStatus] | None:
-        """A run's checkpoint and status; None when neither this server nor the store knows
-        it. A run this server has just started may not have a checkpoint yet."""
+        """A run's checkpoint and status; None when neither this server, its store nor the
+        published runs know it. A run this server has just started may not have a checkpoint
+        yet. This server's own copy of a run wins over a published one."""
         record = self.runtime.runs.get(run_id)
         status = self.manager.status_for(run_id, record)
         if record is None and status == "unknown":
-            return None
+            published = self.published_index().get(run_id)
+            return (published.record, "published") if published is not None else None
         return record, status
+
+    def _summary(self, record: RunRecord, status: RunStatus) -> RunSummary:
+        """A run's summary; a published run's carries where its checked files are."""
+        published = None
+        if status == "published":
+            run = self.published_index().get(record.run_id)
+            if run is not None:
+                folder = self.published_manifest.parent / run.entry.folder
+                shown = shown_folder(folder, self.runtime.settings.paths.root) or run.entry.folder
+                published = published_provenance(run, shown)
+        return run_summary(
+            record, status, fixtures=self.fixtures(), exports=self.exports(), published=published
+        )
+
+    # --- published real-cluster runs (evals/published.py) ------------------------------
+
+    def published_index(self) -> PublishedIndex:
+        """The published runs as checked: loaded when first asked, and again whenever the
+        manifest, an export file or a published batch changed."""
+        stamp = self._published_stamp()
+        if self._published.index is None or stamp != self._published.stamp:
+            published_batches = [b for b, source in self.batches() if source == "published"]
+            index = load_published(self.published_manifest, batches=published_batches)
+            self._published = _PublishedCache(stamp, index)
+        assert self._published.index is not None
+        return self._published.index
+
+    def published_run(self, run_id: str) -> PublishedRun | None:
+        """A published run this server does not hold itself (its own copy wins), else None."""
+        if run_id in self.manager.tasks or self.runtime.runs.get(run_id) is not None:
+            return None
+        return self.published_index().get(run_id)
+
+    def published(self) -> Any:
+        """GET /published."""
+        index = self.published_index()
+        summaries = [self._summary(run.record, "published") for run in index.runs]
+        return self.json(published_view(index, summaries))
+
+    async def published_stream(self, run: PublishedRun, after_seq: int) -> AsyncIterator[str]:
+        """A published run's events as server-sent events, then the end: nothing is live."""
+        for event in run.events:
+            if event.seq > after_seq:
+                yield sse_frame(event, self.paths)
+
+    def _published_stamp(self) -> tuple[tuple[str, int, int], ...]:
+        live = self.published_manifest.parent
+        root = self.runtime.settings.paths.root
+        paths = [
+            self.published_manifest,
+            *sorted(live.glob("*/*")),
+            *sorted((root / "evals" / "reports" / "batches").glob("*/batch.json")),
+        ]
+        stamp = []
+        for path in paths:
+            try:
+                info = path.stat()
+            except OSError:
+                continue
+            stamp.append((str(path), info.st_mtime_ns, info.st_size))
+        return tuple(stamp)
 
     # --- providers, system, replays -----------------------------------------------------
 

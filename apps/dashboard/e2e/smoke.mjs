@@ -21,7 +21,12 @@
  *      feed advance, approve the exact action in the modal, and see RESOLVED with the oracle's
  *      verdict; the API must agree (RESOLVED, oracle verified, approved by the operator). Then
  *      the run's Trace Explorer, Evidence, Knowledge, Memory and Safety pages are checked too.
- *   3. The guided demo (needs the token): the start screen with its provenance label, a replay
+ *   3. Published runs (no token needed, so it also proves a fresh checkout): GET /published lists the
+ *      real Kind and SREGym runs; Published Runs shows them with the historical label; each opened
+ *      run's pages (Trace Explorer, Evidence, Safety, Knowledge, Memory, the lab, step by step)
+ *      pass the page checks with the PUBLISHED · READ-ONLY marker and the historical banner, and
+ *      offer no control that acts (no stop, approve or restart); cancelling one is refused.
+ *   4. The guided demo (needs the token): the start screen with its provenance label, a replay
  *      started from it, the stepper advancing with replayed model activity, the decision card,
  *      approval in the same dialog and RESOLVED with the API agreeing; the steps from the keyboard;
  *      then Restart (a new run) and Reject (BLOCKED, the fix and recovery steps skipped, the API
@@ -53,6 +58,7 @@ const PRODUCT = "RECAP Mission Control";
 const LABELS = {
   overview: "Overview",
   demo: "Guided Demo",
+  published: "Published Runs",
   live: "Incident Lab",
   timeline: "Trace Explorer",
   evidence: "Evidence & Decisions",
@@ -62,7 +68,9 @@ const LABELS = {
   evals: "Evaluations",
   architecture: "Architecture & Learning",
 };
-const GLOBAL_PAGES = ["overview", "demo", "evals", "architecture"];
+const GLOBAL_PAGES = ["overview", "demo", "published", "evals", "architecture"];
+// The label every published run carries (src/view/published.ts HISTORICAL_LABEL).
+const HISTORICAL = "Recorded real Kubernetes execution — historical, read-only";
 const RUN_PAGES = ["live", "demo", "timeline", "evidence", "knowledge", "memory", "safety"];
 // The Guided Demo's label for a replay (src/view/demo.ts DEMO_PROVENANCE).
 const PROVENANCE = "Recorded real-model execution — replayed locally";
@@ -568,6 +576,68 @@ async function checkPages(runs) {
   }
 }
 
+/**
+ * The published real-cluster runs, read-only: the list, then each run's pages with the
+ * historical marker and banner and no control that acts. Needs no token and no local run.
+ */
+async function publishedFlow() {
+  let published;
+  try {
+    published = await apiGet("/published");
+  } catch (err) {
+    record(false, "GET /published answers", err.message);
+    return;
+  }
+  const runs = published.runs ?? [];
+  const verified = runs.every((run) => run.status === "published" && run.published?.integrity === "verified");
+  record(runs.length > 0 && verified && !published.manifest_error && !(published.rejected ?? []).length, "GET /published: every listed run was checked and loads", `${runs.length} runs, ${(published.records_without_trace ?? []).length} records without a trace, ${(published.rejected ?? []).length} refused`);
+
+  await browser.viewport(DESKTOP);
+  await checkPage("published", { viewport: DESKTOP, name: "Published Runs lists the real-cluster runs" });
+  const listed = await browser.run(
+    (label) => ({
+      banner: document.querySelector("main .historical-label")?.textContent?.trim() === label,
+      cards: document.querySelectorAll("article.pub-run").length,
+      tables: document.querySelectorAll("table.pub-table").length,
+    }),
+    HISTORICAL,
+  );
+  record(listed.banner && listed.cards === runs.length && listed.tables >= 1, "Published Runs: the historical label, one card per run, every real-cluster run in a table", JSON.stringify(listed));
+  await shoot("published-runs.png", null);
+
+  // One run per target: each run page, read-only.
+  const picks = ["sregym", "kind"].map((target) => runs.find((run) => run.published?.target === target)).filter(Boolean);
+  for (const run of picks) {
+    for (const page of ["timeline", "evidence", "safety", "knowledge", "memory", "live", "demo"]) {
+      await checkPage(page, { run: run.run_id, source: ["PUBLISHED · READ-ONLY", "LOCAL LLM"], viewport: DESKTOP, name: `${LABELS[page]} · published ${run.published.target} run ${run.run_id}` });
+      const facts = await browser.run(
+        (label) => ({
+          banner: [...document.querySelectorAll("main .historical-label")].some((el) => el.textContent.trim() === label),
+          // The controls that act (stop, restart, approve, reject, start), by their exact labels:
+          // filter chips such as "Approved 11" in the audit log are not actions.
+          acting: [...document.querySelectorAll("main button")]
+            .map((b) => b.textContent.trim())
+            .filter((t) => /^(Stop run|Restart|Approve|Approve this exact action|Reject|Start the guided demo|Replay this incident|Start run)$/.test(t)),
+        }),
+        HISTORICAL,
+      );
+      record(facts.banner && !facts.acting.length, `${LABELS[page]} · published ${run.run_id}: historical banner, no control that acts`, facts.acting.length ? `controls: ${facts.acting.join(", ")}` : "");
+      if (run.published.target === "sregym" && ["timeline", "safety", "demo"].includes(page)) await shoot(`published-sregym-${page}.png`, null);
+    }
+  }
+  if (picks.length) {
+    await browser.viewport(PHONE);
+    await checkPage("published", { viewport: PHONE, name: "Published Runs @ 390x844" });
+    await shoot("phone-published-runs.png", null);
+    await checkPage("timeline", { run: picks[0].run_id, source: ["PUBLISHED · READ-ONLY"], viewport: PHONE, name: `Trace Explorer · published ${picks[0].run_id} @ 390x844` });
+    await browser.viewport(DESKTOP);
+  }
+  if (TOKEN && picks.length) {
+    const response = await fetch(`${API}/runs/${encodeURIComponent(picks[0].run_id)}/cancel`, { method: "POST", headers: { Authorization: `Bearer ${TOKEN}` } });
+    record(response.status === 409, "Cancelling a published run is refused (409), even signed in", `HTTP ${response.status}`);
+  }
+}
+
 /** Sign in through the top bar, once per tab (the token stays in this tab's session storage). */
 async function signIn() {
   const already = await browser.run(() => !!document.querySelector(".operator.signed-in"));
@@ -886,6 +956,7 @@ async function main() {
 
   try {
     if (!args["skip-pages"]) await checkPages(found);
+    if (!args["skip-pages"]) await publishedFlow();
 
     let demoRun = null;
     if (args["skip-flow"]) {

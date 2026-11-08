@@ -239,6 +239,9 @@ export const api = {
   evidenceView: (runId: string) => request<dto.EvidenceView>(`/runs/${enc(runId)}/evidence`),
   retrievalView: (runId: string) => request<dto.RetrievalView>(`/runs/${enc(runId)}/retrieval`),
   usageView: (runId: string) => request<dto.UsageView>(`/runs/${enc(runId)}/usage`),
+  /** The real-cluster runs published with the repository (evals/live/MANIFEST.json), each
+   * checked before it is shown; historical and read-only (M6). */
+  published: () => request<dto.PublishedView>("/published"),
   evals: () => request<dto.EvalsView>("/evals"),
   evalBatch: (batchId: string) => request<dto.BatchView>(`/evals/${enc(batchId)}`),
   /** Replay a committed recording: the server takes its scenario and routing from the

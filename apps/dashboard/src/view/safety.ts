@@ -360,7 +360,8 @@ export function permissionLifecycle(
     return {
       proposalId,
       status: "not_requested",
-      label: "No approval requested",
+      // A run decided elsewhere (a published run, another server's) has its decision in its trace only.
+      label: trace ? "Not in this server's approval log" : "No approval requested",
       tone: "neutral",
       steps: [
         step("requested", "skipped", "No request in the approval log"),
@@ -837,9 +838,18 @@ function gateOutcome(checks: readonly ProposalCheckView[], policy: LayerOutcome)
   return outcome("evidence_gate", "passed", checks.length === 1 ? "Passed" : `Passed (${checks.length} proposals)`, rules.length ? [rules.join(" · ")] : []);
 }
 
-function approvalOutcome(lifecycles: readonly Lifecycle[]): LayerOutcome {
+function approvalOutcome(lifecycles: readonly Lifecycle[], decisions: ReadonlyMap<string, TraceDecision>): LayerOutcome {
   const asked = lifecycles.filter((l) => l.status !== "not_requested");
-  if (!asked.length) return outcome("approval", "not_reached", "No approval requested");
+  if (!asked.length) {
+    // No entry in this server's approval log; the run's trace may still record the decision.
+    const traced = [...decisions.values()].sort((a, b) => a.seq - b.seq).pop();
+    if (!traced) return outcome("approval", "not_reached", "No approval requested");
+    const by = `${traced.decision}${traced.actor ? ` by ${traced.actor}` : ""}`;
+    const lines = [by, ...(traced.note ? [traced.note] : []), "recorded in the run's trace; this server's approval log has no entry"];
+    if (traced.decision === "approved") return outcome("approval", "passed", "Approved (in the run's trace)", lines);
+    if (traced.decision === "rejected") return outcome("approval", "stopped", "Rejected (in the run's trace)", lines);
+    return outcome("approval", "warning", `${traced.decision || "Decided"} (in the run's trace)`, lines);
+  }
   const last = asked[asked.length - 1];
   // Who decided (approved or rejected by ...); an expiry is already the headline.
   const decided = last.steps.find((step) => step.key === "decided");
@@ -979,9 +989,16 @@ export function runLayerOutcomes(input: {
   writes: readonly TimelineEntry[];
   counts: UnsafeCounts;
   live: boolean;
+  /** The trace's decisions (traceDecisions): the approval layer for a run decided elsewhere. */
+  decisions?: ReadonlyMap<string, TraceDecision>;
 }): LayerOutcome[] {
   const policy = policyOutcome(input.gateway, input.live);
-  return [policy, gateOutcome(input.checks, policy), approvalOutcome(input.lifecycles), writeOutcome(input.writes, input.counts)];
+  return [
+    policy,
+    gateOutcome(input.checks, policy),
+    approvalOutcome(input.lifecycles, input.decisions ?? new Map()),
+    writeOutcome(input.writes, input.counts),
+  ];
 }
 
 // --- the approval request (timeline approval_requested) -----------------------------------------------
