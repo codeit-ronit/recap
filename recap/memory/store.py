@@ -162,10 +162,14 @@ class MemoryAccess(Contract):
 
     @classmethod
     def from_run_config(cls, config: RunConfig) -> MemoryAccess:
-        """Translate a run's memory switches into an access rule (unset: the DEMO default)."""
+        """Translate a run's memory switches into an access rule (unset: the DEMO default).
+
+        An explicit empty list reads nothing: only an unset value (None) takes the default, so
+        a run asked to read no partition can never read DEMO episodes by accident (M6 W4)."""
         default = cls.default()
+        read = config.memory_read_partitions
         return cls(
-            readable_partitions=list(config.memory_read_partitions or default.readable_partitions),
+            readable_partitions=list(default.readable_partitions if read is None else read),
             write_enabled=config.memory_write,
             write_partition=config.memory_write_partition or default.write_partition,
         )

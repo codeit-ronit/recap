@@ -23,6 +23,7 @@ After a fix (the recovery lifecycle, audit finding 2.6):
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 import time
 from collections.abc import Awaitable, Callable
@@ -606,12 +607,12 @@ class IncidentController:
         # Providers get label-free views: no scenario ID, no evaluation labels.
         incident = self.incident.agent_view()
         memories = [hit.agent_view() for hit in self.record.memory_hits]
-        pack = self.deps.packer.build(
+        pack = self._packer.build(
             incident=incident,
             evidence=self.evidence.all(),
             docs=self.record.retrieved_docs,
             memories=memories,
-            max_tokens=self.settings.budget.context.pack_tokens,
+            max_tokens=self._pack_tokens,
             focus_services=[target] if target else [],
             priority_ids=priority,
             pinned_ids=pinned,
@@ -627,6 +628,7 @@ class IncidentController:
                 "budget_tokens": pack.budget_tokens,
                 "items": pack.ids(),
                 "dropped": pack.dropped_ids,
+                "compacted": pack.compacted_ids(),
                 "priority": priority,
                 "pinned": pinned,
                 "estimate": True,
@@ -938,11 +940,11 @@ class IncidentController:
             incident=self.incident,
             provider=self.provider,
             gateway=self.gateway,
-            packer=self.deps.packer,
+            packer=self._packer,
             evidence=self.evidence,
             tracer=self.tracer,
             budget=self.budget,
-            pack_tokens=self.settings.budget.context.pack_tokens,
+            pack_tokens=self._pack_tokens,
         )
         self.harness.on_usage = self._add_usage
         self.orchestrator = Orchestrator(
@@ -1440,6 +1442,18 @@ class IncidentController:
             provider_budget = spec.budget if spec is not None else {}
         return RunBudget(**{**defaults, **provider_budget, **self.scenario.budget})
 
+    @property
+    def _pack_tokens(self) -> int:
+        """The estimated tokens one context pack may hold in this run."""
+        return self.config.pack_tokens or self.settings.budget.context.pack_tokens
+
+    @functools.cached_property
+    def _packer(self) -> ContextPacker:
+        """The shared packer, or one with this run's own item limit (RunConfig)."""
+        if self.config.max_item_tokens:
+            return ContextPacker(self.config.max_item_tokens)
+        return self.deps.packer
+
     def _versions(self, seed: int) -> dict[str, Any]:
         return {
             "recap": __version__,
@@ -1458,6 +1472,11 @@ class IncidentController:
             "recording": self.provider.info.recording,
             "environment": self.info.kind,
             "seed": seed,
+            # The context budget this run packed with (RunConfig, else configs/budget.yaml).
+            "context": {
+                "pack_tokens": self._pack_tokens,
+                "max_item_tokens": self._packer.max_item_tokens,
+            },
             # Extra knowledge folders (RECAP_KNOWLEDGE_OVERLAYS): a red-team run says so.
             "knowledge_overlays": [
                 _shown_path(folder, self.settings.paths.root)

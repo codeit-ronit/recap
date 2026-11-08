@@ -20,6 +20,8 @@
     "replay_pace": 0.0,
     "seed": null,
     "budget": null,
+    "pack_tokens": null,
+    "max_item_tokens": null,
     "tool_latency_ms": null,
     "label": ""
   },

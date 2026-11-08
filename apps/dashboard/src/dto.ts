@@ -894,6 +894,9 @@ export interface EvalsView extends Versioned {
 export interface BatchView extends Versioned {
   batch: BatchSummary;
   records: EvalRecord[];
+  configurations: EvalConfiguration[];
+  comparisons: ComparisonResult[];
+  scenario_sets: Record<string, string[]>;
 }
 
 /** One run, as an evaluation sees it. */
@@ -948,12 +951,256 @@ export interface EvalRecord {
   recording: string | null;
   target: string;
   benchmark_verdict: "pass" | "fail" | null;
+  seed: number | null;
+  fixture_hash: string | null;
+  router: string | null;
+  verifier: string | null;
+  policy_version: string | null;
+  safety_enabled: boolean | null;
+  planner: string | null;
+  memory_read: string[] | null;
+  memory_write: string | null;
+  budget_limits: Record<string, unknown>;
+  context_limits: Record<string, unknown>;
+  budget_stop: string | null;
+  routing_rules: string[];
+  specialists: number | null;
+  steps: number | null;
+  evidence_by_agent: Record<string, number>;
+  supported_basis_by_agent: Record<string, number>;
+  disagreements: number | null;
+  claims_supported: number | null;
+  claims_contradicted: number | null;
+  claims_insufficient: number | null;
+  mechanism_correct: boolean | null;
+  unsafe_attempts: number | null;
+  unsafe_blocked: number | null;
+  unsafe_executed: number | null;
+  unsafe_refused: number | null;
+  injection_flags: number | null;
+  action_sources: string[];
+  executed_actions: string[];
+  wrong_target_writes: number | null;
+  context_packs: number | null;
+  context_dropped: number | null;
+  context_compacted: number | null;
 }
 
 /** How long one stage of a run took, from its state transitions. */
 export interface StageTiming {
   stage: string;
   seconds: number;
+}
+
+/** One configuration a batch's runs were made with (M6 W4): the RunConfig switches its file sets, verbatim. The runner adds what every scored run shares (read-only TRAIN memory, the auto-approver), which the batch's methods state. */
+export interface EvalConfiguration {
+  name: string;
+  suite: string;
+  description: string;
+  switches: Record<string, unknown>;
+}
+
+/** A comparison, measured on one batch's runs (evals/compare.py). */
+export interface ComparisonResult {
+  comparison: Comparison;
+  n: number;
+  unpaired: string[];
+  baseline_successes: number;
+  variant_successes: number;
+  both_succeeded: number;
+  neither: number;
+  only_baseline: string[];
+  only_variant: string[];
+  baseline_correct: number;
+  variant_correct: number;
+  by_set: Record<string, SetCount>;
+  pairs: PairedOutcome[];
+  differences: MetricDifference[];
+  unexpected: string[];
+}
+
+/** Two configurations of one batch that differ in ONE switch (M6 W4): their runs are compared scenario by scenario (evals/compare.py), never as two unrelated rates. */
+export interface Comparison {
+  name: string;
+  baseline: string;
+  variant: string;
+  switch: string;
+  question: string;
+  decision: string;
+}
+
+export interface SetCount {
+  n: number;
+  baseline_successes: number;
+  variant_successes: number;
+}
+
+/** One scenario (and seed) run by both configurations of a comparison. */
+export interface PairedOutcome {
+  scenario_id: string;
+  scenario_set: string;
+  seed: number | null;
+  baseline: string;
+  variant: string;
+  baseline_diagnosis_correct: boolean | null;
+  variant_diagnosis_correct: boolean | null;
+  baseline_run: string;
+  variant_run: string;
+}
+
+/** One measure over the pairs where both runs recorded it. */
+export interface MetricDifference {
+  metric: string;
+  n: number;
+  baseline_mean: number | null;
+  variant_mean: number | null;
+  mean_difference: number | null;
+  changed: number;
+}
+
+/** The published component evaluations (evals/components.py), newest first: each part of RECAP measured on its own dataset, never merged into an end-to-end success rate. */
+export interface ComponentsView extends Versioned {
+  reports: ComponentReport[];
+}
+
+export interface ComponentReport {
+  schema_version: "recap-component-report-v1";
+  report_id: string;
+  created_at: string;
+  code_version: string;
+  batch_id: string | null;
+  retrieval: RetrievalComponent | null;
+  memory: MemoryComponent | null;
+  routing: RoutingComponent | null;
+  budget: BudgetRow[];
+  verifier: VerifierRow[];
+  safety: SafetyRow[];
+  methods: string[];
+  limitations: string[];
+}
+
+export interface RetrievalComponent {
+  dataset: string;
+  corpus_chunks: number;
+  vectors: string | null;
+  embedder: string | null;
+  weights: string | null;
+  rankers: string[];
+  scores: RetrievalScore[];
+  exposure: Exposure[];
+  ranks: Record<string, Record<string, number | null>>;
+  not_measured: string[];
+}
+
+export interface RetrievalScore {
+  ranker: string;
+  kind: string;
+  partition: string;
+  n: number;
+  hit_at_1: number;
+  hit_at_2: number;
+  hit_at_4: number;
+  mrr: number;
+  remediation_at_2: number | null;
+  remediation_at_4: number | null;
+  remediation_n: number;
+  wrong_mechanism_at_1: number;
+  misses: string[];
+}
+
+export interface Exposure {
+  ranker: string;
+  kind: string;
+  k: number;
+  n: number;
+  exposed: string[];
+  displaced: string[];
+}
+
+export interface MemoryComponent {
+  runs: number;
+  runs_with_hits: number;
+  hits: number;
+  not_assessed: number;
+  by_label: Record<string, number>;
+  correct: number;
+  false_safe: number;
+  false_unsafe: number;
+  unlabelled_safe: number;
+  twins: number;
+  twins_accepted: number;
+  fix_from_memory: string[];
+  leakage: string[];
+  judged: JudgedHit[];
+}
+
+export interface JudgedHit {
+  config: string;
+  scenario_id: string;
+  remembered: string;
+  label: string;
+  partition: string;
+  similarity: number | null;
+  safe_to_reuse: boolean;
+  assessed: boolean;
+  correct: boolean | null;
+}
+
+export interface RoutingComponent {
+  config: string;
+  cases: RoutingCase[];
+  rules_fired: Record<string, number>;
+  parallel_cross_service: number[];
+  parallel_single_service: number[];
+  second_specialist_contributed: number[];
+}
+
+export interface RoutingCase {
+  scenario_id: string;
+  cross_service: boolean | null;
+  rules: string[];
+  topology: string[];
+  specialists: number | null;
+  second_specialist_in_basis: boolean | null;
+  disagreements: number | null;
+  outcome: string;
+}
+
+export interface BudgetRow {
+  config: string;
+  runs: number;
+  budget_stops: Record<string, number>;
+  runs_dropping_context: number;
+  context_dropped: number;
+  context_compacted: number;
+  mean_estimated_tokens: number;
+  mean_tool_calls: number;
+  mean_steps: number | null;
+}
+
+export interface VerifierRow {
+  config: string;
+  runs: number;
+  claims_supported: number;
+  claims_contradicted: number;
+  claims_insufficient: number;
+  runs_with_contradicted: number;
+  diagnosis_correct: number;
+  mechanism_correct: number;
+}
+
+export interface SafetyRow {
+  config: string;
+  suite: string;
+  runs: number;
+  false_blocks: number;
+  blocked_other_fixes: number;
+  unsafe_attempts: number;
+  unsafe_blocked: number;
+  unsafe_executed: number;
+  unsafe_refused: number;
+  wrong_target_writes: number;
+  runs_flagging_injection: number;
 }
 
 /** A real-cluster run known only from its evaluation record: its full trace was not published, so it has no Trace Explorer view. Every field is the record's own. */

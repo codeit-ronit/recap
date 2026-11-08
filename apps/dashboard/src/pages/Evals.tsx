@@ -31,6 +31,7 @@ import {
   batchTargets,
   batchesOf,
   benchmarkVerdictCounts,
+  comparisonIntegrity,
   configurationMatrix,
   expectedEntries,
   failureGroups,
@@ -39,8 +40,11 @@ import {
   fmtUtc,
   isRedTeam,
   kOfN,
+  labelledHits,
   memoryHitFields,
+  metricLabel,
   modeInfo,
+  movedDifferences,
   modeTabNote,
   nextMode,
   outcomeFromKey,
@@ -55,10 +59,14 @@ import {
   recordTarget,
   recordVerdict,
   retrievalLabel,
+  retrievalRows,
   sampleNote,
   scenarioGroups,
+  setLabel,
+  signedNumber,
   stageNote,
   stateCounts,
+  switchSetting,
   targetFields,
   timeView,
   tokenView,
@@ -1003,6 +1011,433 @@ export function MethodsCards({ batch }: { batch: Pick<dto.BatchSummary, "methods
   );
 }
 
+// --- M6 W4: one-switch comparisons and component evaluations ------------------------------------
+
+/**
+ * A batch's planned comparisons (GET /evals/{batch_id} `comparisons`, measured by the server on
+ * the batch's own records): two configurations that differ in ONE switch, paired scenario by
+ * scenario. Nothing is pooled: each row says how many paired runs it rests on, and a row whose
+ * runs differ in anything else recorded says so.
+ */
+export function ComparisonsCard({
+  view,
+  onOpen,
+}: {
+  view: Pick<dto.BatchView, "comparisons" | "configurations">;
+  onOpen: (runId: string) => void;
+}) {
+  const comparisons = view.comparisons ?? [];
+  if (!comparisons.length) return null;
+  const configurations = view.configurations ?? [];
+  return (
+    <Card
+      title="Comparisons · one switch each"
+      subtitle="Two configurations of this batch that differ in one switch, compared scenario by scenario. Select a row for each scenario and what changed."
+    >
+      <Notice tone="warn" icon="alert" title="Paired runs, small N">
+        A row pairs each scenario with itself under the two configurations. One changed scenario is one scenario, not a rate, and the
+        decisions come from the scripted policy: a difference shows how this code uses the component, not how a model would.
+      </Notice>
+      <DataTable
+        rows={[...comparisons]}
+        rowKey={(r) => r.comparison.name}
+        className="dense evl-comparisons"
+        expand={(r) => <ComparisonDetail result={r} onOpen={onOpen} />}
+        columns={[
+          {
+            key: "comparison",
+            header: "Comparison",
+            render: (r) => (
+              <span className="cell-stack">
+                <span>{r.comparison.name}</span>
+                <span className="muted small">
+                  <Mono>{r.comparison.baseline}</Mono> → <Mono>{r.comparison.variant}</Mono>
+                </span>
+              </span>
+            ),
+          },
+          {
+            key: "switch",
+            header: "Switch",
+            render: (r) => {
+              const before = switchSetting(configurations, r.comparison.baseline, r.comparison.switch);
+              const after = switchSetting(configurations, r.comparison.variant, r.comparison.switch);
+              return (
+                <span className="cell-stack">
+                  <Mono>{r.comparison.switch}</Mono>
+                  <span className="muted small evl-switch" title={`${before} → ${after}`}>
+                    {before} → {after}
+                  </span>
+                </span>
+              );
+            },
+          },
+          { key: "n", header: "Pairs", numeric: true, render: (r) => fmtCount(r.n) },
+          { key: "baseline", header: "Baseline recovered", nowrap: true, render: (r) => kOfN(r.baseline_successes, r.n) },
+          { key: "variant", header: "Variant recovered", nowrap: true, render: (r) => kOfN(r.variant_successes, r.n) },
+          {
+            key: "changed",
+            header: "Outcome changed",
+            render: (r) =>
+              r.only_baseline.length || r.only_variant.length ? (
+                <span className="cell-stack small">
+                  {r.only_baseline.length ? <span>baseline only: {r.only_baseline.join(", ")}</span> : null}
+                  {r.only_variant.length ? <span>variant only: {r.only_variant.join(", ")}</span> : null}
+                </span>
+              ) : (
+                <span className="muted">no scenario</span>
+              ),
+          },
+          {
+            key: "integrity",
+            header: "Differs only in its switch",
+            render: (r) => {
+              const integrity = comparisonIntegrity(r);
+              return (
+                <Chip tone={integrity.ok ? "ok" : "bad"} title={integrity.items.join("; ") || "No other recorded difference between the paired runs"}>
+                  {integrity.ok ? "yes" : integrity.label}
+                </Chip>
+              );
+            },
+          },
+        ]}
+      />
+    </Card>
+  );
+}
+
+export function ComparisonDetail({ result, onOpen }: { result: dto.ComparisonResult; onOpen: (runId: string) => void }) {
+  const moved = movedDifferences(result);
+  const integrity = comparisonIntegrity(result);
+  const sets = Object.entries(result.by_set ?? {});
+  return (
+    <div className="evl-comparison-detail">
+      <KeyValues
+        rows={[
+          ["Measures", result.comparison.question || NOT_RECORDED],
+          ["Would change", result.comparison.decision || NOT_RECORDED],
+          ["Correct diagnosis", `baseline ${kOfN(result.baseline_correct, result.n)} · variant ${kOfN(result.variant_correct, result.n)}`],
+          [
+            "By scenario set",
+            sets.length ? (
+              <span className="chip-row">
+                {sets.map(([name, count]) => (
+                  <Chip key={name} title="Recovered, baseline → variant">
+                    {setLabel(name)}: {kOfN(count.baseline_successes, count.n)} → {kOfN(count.variant_successes, count.n)}
+                  </Chip>
+                ))}
+              </span>
+            ) : (
+              <NotRecorded />
+            ),
+          ],
+        ]}
+      />
+      <DataTable
+        rows={[...result.pairs]}
+        rowKey={(p) => `${p.scenario_id}@${p.seed ?? ""}`}
+        className="dense"
+        empty="No scenario was run by both configurations."
+        columns={[
+          {
+            key: "scenario",
+            header: "Scenario",
+            render: (p) => (
+              <span className="cell-stack">
+                <Mono>{p.scenario_id}</Mono>
+                <span className="muted small">
+                  {setLabel(p.scenario_set)}
+                  {p.seed !== null && p.seed !== undefined ? ` · seed ${p.seed}` : ""}
+                </span>
+              </span>
+            ),
+          },
+          {
+            key: "baseline",
+            header: "Baseline",
+            render: (p) => (
+              <span className="cell-stack">
+                <OutcomeKeyToken outcome={p.baseline} />
+                <RecordButton runId={p.baseline_run} onOpen={onOpen} />
+              </span>
+            ),
+          },
+          {
+            key: "variant",
+            header: "Variant",
+            render: (p) => (
+              <span className="cell-stack">
+                <OutcomeKeyToken outcome={p.variant} />
+                <RecordButton runId={p.variant_run} onOpen={onOpen} />
+              </span>
+            ),
+          },
+        ]}
+      />
+      <h4 className="mini-title">What changed between the paired runs (variant minus baseline, mean per pair)</h4>
+      {moved.length ? (
+        <ul className="evl-plain">
+          {moved.map((d) => (
+            <li key={d.metric}>
+              {metricLabel(d.metric)}: <strong>{signedNumber(d.mean_difference)}</strong>{" "}
+              <span className="muted small">
+                ({fmtCount(d.changed)} of {fmtCount(d.n)} pairs changed; {d.baseline_mean ?? "—"} → {d.variant_mean ?? "—"})
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="muted">No measured difference between the paired runs.</p>
+      )}
+      {integrity.ok ? null : (
+        <Notice tone="bad" icon="alert" title="These runs differ in more than the switch">
+          <TextList items={integrity.items} empty={null} mono />
+        </Notice>
+      )}
+    </div>
+  );
+}
+
+/** The published component evaluations (GET /evals/components, newest first): the newest one. */
+export function ComponentsPanel() {
+  const polled = usePolling(() => api.evalComponents(), null, []);
+  return (
+    <PolledView polled={polled} loadingLabel="Loading the component evaluations…" errorTitle="Could not load the component evaluations">
+      {(view) => <ComponentEvaluations view={view} />}
+    </PolledView>
+  );
+}
+
+export function ComponentEvaluations({ view }: { view: Pick<dto.ComponentsView, "reports"> }) {
+  const report = view.reports?.[0];
+  if (!report) {
+    return (
+      <Card title="Component evaluations">
+        <EmptyView
+          icon="package"
+          title="No component evaluation published"
+          reason="Run python -m evals.components with --publish to measure retrieval, memory, routing, budgets, the verifier and safety on their own."
+        />
+      </Card>
+    );
+  }
+  return (
+    <Card
+      title="Component evaluations"
+      subtitle="Each part of RECAP measured on its own dataset, or on one batch's own runs: never merged into an end-to-end success rate."
+    >
+      <Notice tone="warn" icon="alert" title="Simulated incidents, small N">
+        Counts, not rates. The run-based parts read a scripted batch, so they describe how RECAP's code behaves, not how a model would.
+      </Notice>
+      <KeyValues
+        rows={[
+          ["Report", <Mono key="id">{report.report_id}</Mono>],
+          ["Created", fmtUtc(report.created_at) ?? <NotRecorded />],
+          ["Code", <Mono key="code">{report.code_version}</Mono>],
+          [
+            "Runs read",
+            report.batch_id ? (
+              <a key="batch" href={hrefFor("evals", { mode: "scripted_regression", batch: report.batch_id })}>
+                <Mono>{report.batch_id}</Mono>
+              </a>
+            ) : (
+              "none (retrieval only)"
+            ),
+          ],
+        ]}
+      />
+      {report.retrieval ? <RetrievalDetails component={report.retrieval} /> : null}
+      {report.memory ? <MemoryDetails memory={report.memory} /> : null}
+      {report.routing ? <RoutingDetails routing={report.routing} /> : null}
+      {report.budget.length ? <BudgetDetails rows={report.budget} /> : null}
+      {report.verifier.length ? <VerifierDetails rows={report.verifier} /> : null}
+      {report.safety.length ? <SafetyDetails rows={report.safety} /> : null}
+      <details className="evl-component">
+        <summary>Methods and limitations</summary>
+        <h4 className="mini-title">Methods</h4>
+        <TextList items={report.methods} empty={<NotRecorded />} />
+        <h4 className="mini-title">Limitations</h4>
+        <TextList items={report.limitations} empty={<NotRecorded />} />
+      </details>
+    </Card>
+  );
+}
+
+function RetrievalDetails({ component }: { component: dto.RetrievalComponent }) {
+  const rows = retrievalRows(component);
+  return (
+    <details className="evl-component" open>
+      <summary>
+        Retrieval · {plural(component.corpus_chunks, "runbook chunk")} · {component.rankers.join(", ")}
+      </summary>
+      <p className="evl-help">
+        hit@k: a chunk of the runbook for the query's failure mechanism is in the top k. remediation@k: the chunk with its recommended
+        action is (RECAP's first search keeps 4 chunks, its remediation lookup 2).
+        {component.vectors ? ` Query vectors: ${component.vectors}, read from the file; no model was contacted.` : ""}
+      </p>
+      <DataTable
+        rows={rows}
+        rowKey={(s) => `${s.ranker}-${s.kind}`}
+        className="dense"
+        empty="No retrieval scores."
+        columns={[
+          { key: "ranker", header: "Ranker", render: (s) => <Mono>{s.ranker}</Mono> },
+          { key: "kind", header: "Queries", render: (s) => s.kind },
+          { key: "hit1", header: "hit@1", nowrap: true, render: (s) => kOfN(s.hit_at_1, s.n) },
+          { key: "hit4", header: "hit@4", nowrap: true, render: (s) => kOfN(s.hit_at_4, s.n) },
+          { key: "mrr", header: "MRR@4", numeric: true, render: (s) => s.mrr.toFixed(3) },
+          {
+            key: "fix",
+            header: "remediation@2",
+            nowrap: true,
+            render: (s) => (s.remediation_n ? kOfN(s.remediation_at_2 ?? 0, s.remediation_n) : "—"),
+          },
+          { key: "wrong", header: "Other mechanism at rank 1", numeric: true, render: (s) => fmtCount(s.wrong_mechanism_at_1) },
+        ]}
+      />
+      {component.exposure.length ? (
+        <>
+          <h4 className="mini-title">With the red-team poisoned runbook loaded</h4>
+          <ul className="evl-plain">
+            {component.exposure.map((e) => (
+              <li key={e.kind}>
+                {e.kind} queries (top {e.k}, {e.ranker}): in the results of {kOfN(e.exposed.length, e.n)}; displacing a genuine remediation in{" "}
+                {kOfN(e.displaced.length, e.n)}.
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+      {component.not_measured.length ? <TextList items={component.not_measured.map((m) => `Not measured: ${m}`)} empty={null} /> : null}
+    </details>
+  );
+}
+
+function MemoryDetails({ memory }: { memory: dto.MemoryComponent }) {
+  const labels = Object.entries(memory.by_label);
+  return (
+    <details className="evl-component">
+      <summary>
+        Memory · {plural(memory.hits, "hit")} · unsafe reuse {fmtCount(memory.false_safe)}
+      </summary>
+      <KeyValues
+        rows={[
+          ["Runs with memory on", `${fmtCount(memory.runs)} (${fmtCount(memory.runs_with_hits)} found a similar episode)`],
+          ["Never assessed (the run stopped first)", fmtCount(memory.not_assessed ?? 0)],
+          ["Assessed hits by label", labels.length ? labels.map(([k, v]) => `${k} ${fmtCount(v)}`).join(" · ") : "none"],
+          ["Verdicts right", kOfN(memory.correct, labelledHits(memory))],
+          ["Unsafe reuse (judged safe, wrong fix today)", fmtCount(memory.false_safe)],
+          ["Judged safe with no label to judge by", fmtCount(memory.unlabelled_safe ?? 0)],
+          ["Twins accepted", kOfN(memory.twins_accepted, memory.twins)],
+          ["Fix taken from memory", memory.fix_from_memory.length ? memory.fix_from_memory.join(", ") : "never"],
+          ["Leakage (a hit from outside TRAIN)", memory.leakage.length ? memory.leakage.join("; ") : "none"],
+        ]}
+      />
+    </details>
+  );
+}
+
+function RoutingDetails({ routing }: { routing: dto.RoutingComponent }) {
+  const [crossParallel, cross] = routing.parallel_cross_service;
+  const [singleParallel, single] = routing.parallel_single_service;
+  const [contributed, multi] = routing.second_specialist_contributed;
+  return (
+    <details className="evl-component">
+      <summary>Routing · {routing.config}</summary>
+      <KeyValues
+        rows={[
+          ["Parallel when the cause sits behind the alert", kOfN(crossParallel ?? 0, cross ?? 0)],
+          ["Parallel otherwise", kOfN(singleParallel ?? 0, single ?? 0)],
+          ["A second specialist's evidence in the supported claims", kOfN(contributed ?? 0, multi ?? 0)],
+          ["Rules fired", Object.entries(routing.rules_fired).map(([rule, n]) => `${rule} ×${n}`).join(", ") || "none"],
+        ]}
+      />
+    </details>
+  );
+}
+
+function BudgetDetails({ rows }: { rows: readonly dto.BudgetRow[] }) {
+  return (
+    <details className="evl-component">
+      <summary>Budget and context</summary>
+      <DataTable
+        rows={[...rows]}
+        rowKey={(b) => b.config}
+        className="dense"
+        columns={[
+          { key: "config", header: "Configuration", render: (b) => <Mono>{b.config}</Mono> },
+          { key: "runs", header: "Runs", numeric: true, render: (b) => fmtCount(b.runs) },
+          {
+            key: "stops",
+            header: "Budget stops",
+            render: (b) => Object.entries(b.budget_stops).map(([k, v]) => `${k} ${v}`).join(", ") || "none",
+          },
+          { key: "dropped", header: "Context items dropped", numeric: true, render: (b) => fmtCount(b.context_dropped) },
+          { key: "tokens", header: "Mean est. tokens", numeric: true, render: (b) => fmtCount(Math.round(b.mean_estimated_tokens)) },
+          { key: "tools", header: "Mean tool calls", numeric: true, render: (b) => b.mean_tool_calls.toFixed(1) },
+        ]}
+      />
+    </details>
+  );
+}
+
+function VerifierDetails({ rows }: { rows: readonly dto.VerifierRow[] }) {
+  return (
+    <details className="evl-component">
+      <summary>Verifier</summary>
+      <DataTable
+        rows={[...rows]}
+        rowKey={(v) => v.config}
+        className="dense"
+        columns={[
+          { key: "config", header: "Configuration", render: (v) => <Mono>{v.config}</Mono> },
+          { key: "supported", header: "Claims supported", numeric: true, render: (v) => fmtCount(v.claims_supported) },
+          { key: "contradicted", header: "Contradicted", numeric: true, render: (v) => fmtCount(v.claims_contradicted) },
+          { key: "insufficient", header: "Insufficient", numeric: true, render: (v) => fmtCount(v.claims_insufficient) },
+          { key: "diagnosis", header: "Correct diagnosis", nowrap: true, render: (v) => kOfN(v.diagnosis_correct, v.runs) },
+        ]}
+      />
+    </details>
+  );
+}
+
+function SafetyDetails({ rows }: { rows: readonly dto.SafetyRow[] }) {
+  return (
+    <details className="evl-component">
+      <summary>Safety · legitimate and adversarial runs</summary>
+      <DataTable
+        rows={[...rows]}
+        rowKey={(s) => s.config}
+        className="dense"
+        columns={[
+          {
+            key: "config",
+            header: "Configuration",
+            render: (s) => (
+              <span className="cell-stack">
+                <Mono>{s.config}</Mono>
+                {s.suite === "redteam" ? <Chip tone="bad">red-team</Chip> : null}
+              </span>
+            ),
+          },
+          { key: "runs", header: "Runs", numeric: true, render: (s) => fmtCount(s.runs) },
+          { key: "false", header: "False blocks (today's fix)", numeric: true, render: (s) => (s.suite === "test" ? fmtCount(s.false_blocks) : "—") },
+          {
+            key: "other",
+            header: "Blocks of another fix",
+            numeric: true,
+            render: (s) => (s.suite === "test" ? fmtCount(s.blocked_other_fixes ?? 0) : "—"),
+          },
+          { key: "attempts", header: "Unsafe attempts", numeric: true, render: (s) => fmtCount(s.unsafe_attempts) },
+          { key: "blocked", header: "Blocked", numeric: true, render: (s) => fmtCount(s.unsafe_blocked) },
+          { key: "executed", header: "Executed", numeric: true, render: (s) => fmtCount(s.unsafe_executed) },
+          { key: "wrong", header: "Writes off the root-cause service", numeric: true, render: (s) => fmtCount(s.wrong_target_writes) },
+        ]}
+      />
+    </details>
+  );
+}
+
 // --- the record drawer ---------------------------------------------------------------------------
 
 /**
@@ -1400,6 +1835,7 @@ export function BatchDetail({
         </Notice>
       ) : null}
       <OutcomesCard batch={batch} records={records} onOpen={onOpenRecord} />
+      <ComparisonsCard view={view} onOpen={onOpenRecord} />
       <FailuresCard batch={batch} records={records} onOpen={onOpenRecord} />
       <RecordsCard key={batch.batch_id} records={records} onOpen={onOpenRecord} benchmark={batch.benchmark} />
       <MethodsCards batch={batch} />
@@ -2010,6 +2446,7 @@ export function EvalsBody({
               <EvaluationStatus results={results} startedHere={startedHere} reportBefore={reportBefore.current} note={note} startError={startError} />
             ) : null}
             {batch ? <BatchSection key={batch.batch_id} batchId={batch.batch_id} recordId={recordId} onParams={onParams} /> : null}
+            {mode === "scripted_regression" ? <ComponentsPanel /> : null}
             <div id={howId} className="evl-anchor">
               <CommandsCard mode={mode} />
             </div>

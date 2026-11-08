@@ -7,13 +7,14 @@
 
 A plan (YAML) names the provider (ollama, or groq on its free plan: never a paid API) and
 the runs, in order, in ONE data folder, so a later run can find an earlier run's episode in
-memory. Per run it may force the routing strategy, choose retrieval (bm25 or hybrid), add
-knowledge overlays (a red-team poisoned runbook) and plant a false memory first (both given
-repo-relative). Every run is approved by the SIMULATION auto-approver; the human-approved
-deliverable is a separate `scripts/demo.py --approve ask` run. The whole plan is checked
-before its first run (scenarios, folders and files exist, the provider can be built), so a
-typo never stops a long real-model plan halfway; the repository's own data/ folder is
-refused under any spelling.
+memory. Per run it may force the routing strategy, choose retrieval (bm25 or hybrid), limit
+what memory it reads and turn its memory writes off (so the runs of a comparison stay
+independent), add knowledge overlays (a red-team poisoned runbook) and plant a false memory
+first (both given repo-relative). Every run is approved by the SIMULATION auto-approver;
+the human-approved deliverable is a separate `scripts/demo.py --approve ask` run. The whole
+plan is checked before its first run (scenarios, folders and files exist, the provider can
+be built), so a typo never stops a long real-model plan halfway; the repository's own data/
+folder is refused under any spelling.
 
 The summary (summary.json and summary.md in --out) says only what the run records say:
 the state, the model, its requests and the tokens the server reported, each agent's tool
@@ -125,6 +126,9 @@ class PlannedRun(Contract):
     strategy: Literal["adaptive", "single", "parallel"] = "adaptive"
     retrieval: Literal["bm25", "hybrid"] | None = None  # None: configs/retrieval.yaml
     use_memory: bool = True
+    # False: the run writes no episode, so a later run of the plan cannot find it (M6 W4:
+    # the arms of a comparison stay independent). read_partitions [] reads nothing.
+    memory_write: bool = True
     overlays: list[str] = Field(default_factory=list)  # repo-relative knowledge folders
     # A repo-relative episode YAML planted before this run (red team).
     false_memory: str | None = None
@@ -187,6 +191,20 @@ def settings_for(base: Settings, run: PlannedRun) -> Settings:
     return base.model_copy(update={"paths": paths})
 
 
+def run_config(plan: Plan, run: PlannedRun) -> RunConfig:
+    """A planned run's switches, approved by the simulation auto-approver."""
+    return RunConfig(
+        provider=plan.provider,
+        strategy=run.strategy,
+        retrieval=run.retrieval,
+        use_memory=run.use_memory,
+        memory_write=run.memory_write,
+        memory_read_partitions=run.read_partitions,
+        approval_mode="auto",
+        label=f"live-eval:{run.id}",
+    )
+
+
 async def run_one(base: Settings, plan: Plan, run: PlannedRun) -> tuple[dict[str, Any], EvalRecord]:
     """Run one planned incident; return its summary and its evaluation record."""
     settings = settings_for(base, run)
@@ -196,15 +214,7 @@ async def run_one(base: Settings, plan: Plan, run: PlannedRun) -> tuple[dict[str
         if code != 0:
             raise SystemExit(f"{run.id}: could not plant {run.false_memory}")
     runtime = Runtime(settings)
-    config = RunConfig(
-        provider=plan.provider,
-        strategy=run.strategy,
-        retrieval=run.retrieval,
-        use_memory=run.use_memory,
-        memory_read_partitions=run.read_partitions,
-        approval_mode="auto",
-        label=f"live-eval:{run.id}",
-    )
+    config = run_config(plan, run)
     started = time.perf_counter()
     record = await runtime.run_incident(run.scenario, config)
     seconds = round(time.perf_counter() - started, 1)

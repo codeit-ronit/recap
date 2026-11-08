@@ -25,6 +25,12 @@ class ActionHint(BaseModel):
     action: str
 
 
+def declared_mechanisms(text: str) -> list[str]:
+    """The mechanism of every 'Mechanism:' line in `text`, in order, with or without a
+    recommended action after it (a guide may name a mechanism and deliberately give none)."""
+    return [match.group(1).lower() for match in _MECHANISM_RE.finditer(text)]
+
+
 def parse_action_hints(text: str) -> list[ActionHint]:
     """Pair every 'Recommended action:' line with the closest preceding 'Mechanism:' line."""
     mechanisms = [(m.start(), m.group(1).lower()) for m in _MECHANISM_RE.finditer(text)]

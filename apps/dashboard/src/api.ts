@@ -244,6 +244,8 @@ export const api = {
   published: () => request<dto.PublishedView>("/published"),
   evals: () => request<dto.EvalsView>("/evals"),
   evalBatch: (batchId: string) => request<dto.BatchView>(`/evals/${enc(batchId)}`),
+  /** The published component evaluations (M6 W4): each part of RECAP measured on its own. */
+  evalComponents: () => request<dto.ComponentsView>("/evals/components"),
   /** Replay a committed recording: the server takes its scenario and routing from the
    * manifest and asks for a fresh approval (operator only). */
   startReplay: (fixture: Pick<dto.FixtureView, "id" | "scenario">) =>

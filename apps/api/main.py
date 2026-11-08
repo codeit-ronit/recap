@@ -56,6 +56,7 @@ from apps.api.dto import (
     SCHEMA_HEADER,
     TOTAL_HEADER,
     BatchView,
+    ComponentsView,
     EnvironmentCheck,
     EvalsView,
     EvidenceView,
@@ -583,6 +584,13 @@ def create_app(
     def evals(request: Request) -> Any:
         """Evaluation batches (published and local), one mode each, with their counts."""
         return reader(request).evals()
+
+    # Declared before /evals/{batch_id} too: "components" is never a batch id.
+    @app.get("/evals/components", response_model=ComponentsView)
+    def eval_components(request: Request) -> Any:
+        """The published component evaluations (retrieval, memory, routing, budgets, verifier,
+        safety), each measured on its own: never an end-to-end success rate."""
+        return reader(request).components()
 
     @app.get("/evals/{batch_id}", response_model=BatchView)
     def eval_batch(batch_id: str, request: Request) -> Any:

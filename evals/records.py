@@ -123,6 +123,120 @@ class EvalRecord(Contract):
     # benchmark's verdict, kept apart from RECAP's (`success`) and never merged into it.
     benchmark_verdict: Literal["pass", "fail"] | None = None
 
+    # --- M6 W4: provenance and measurements for controlled comparisons ---------------------
+    # Each is read from the run's own record and trace. Defaults keep older batches valid:
+    # None (or empty) there means "not recorded when that batch was made", never zero.
+    seed: int | None = None
+    fixture_hash: str | None = None
+    router: str | None = None
+    verifier: str | None = None
+    policy_version: str | None = None
+    safety_enabled: bool | None = None
+    planner: str | None = None  # "default", or the red-team "prompt_injected"
+    memory_read: list[str] | None = None  # the partitions the run could read
+    memory_write: str | None = None  # the partition it wrote to; None when writes were off
+    budget_limits: dict[str, Any] = Field(default_factory=dict)  # the run's effective limits
+    context_limits: dict[str, Any] = Field(default_factory=dict)  # pack_tokens, max_item_tokens
+    budget_stop: str | None = None  # the limit that stopped the run, if one did
+    routing_rules: list[str] = Field(default_factory=list)  # the router's rule, per round
+    specialists: int | None = None  # distinct agents that investigated
+    steps: int | None = None  # decisions the run's provider made, across all its agents
+    evidence_by_agent: dict[str, int] = Field(default_factory=dict)  # evidence each recorded
+    # Evidence the final supported claims rest on (their basis), by the agent that observed it:
+    # whether a second specialist contributed to the diagnosis, not just to the trace.
+    supported_basis_by_agent: dict[str, int] = Field(default_factory=dict)
+    disagreements: int | None = None  # distinct agent disagreements over the rounds
+    claims_supported: int | None = None  # the final round's claims, by verifier status
+    claims_contradicted: int | None = None
+    claims_insufficient: int | None = None
+    mechanism_correct: bool | None = None  # the mechanism matches, whatever the service
+    unsafe_attempts: int | None = None  # destructive, high-risk or unknown actions proposed
+    unsafe_blocked: int | None = None  # stopped by RECAP (policy, approval, evidence gate)
+    unsafe_executed: int | None = None  # carried out by the target
+    unsafe_refused: int | None = None  # reached the target, which refused it
+    injection_flags: int | None = None  # flagged untrusted reads (not distinct attacks)
+    action_sources: list[str] = Field(default_factory=list)  # each proposal's: runbook, memory...
+    executed_actions: list[str] = Field(default_factory=list)  # writes the target carried out
+    wrong_target_writes: int | None = None  # of those, aimed off the root-cause service
+    context_packs: int | None = None  # context packs built
+    context_dropped: int | None = None  # items left out of a pack for lack of room, summed
+    context_compacted: int | None = None  # items shortened to fit, summed
+
+
+class EvalConfiguration(Contract):
+    """One configuration a batch's runs were made with (M6 W4): the RunConfig switches its
+    file sets, verbatim. The runner adds what every scored run shares (read-only TRAIN
+    memory, the auto-approver), which the batch's methods state."""
+
+    name: str
+    suite: str  # "test" or "redteam"
+    description: str = ""
+    switches: dict[str, Any] = Field(default_factory=dict)
+
+
+class Comparison(Contract):
+    """Two configurations of one batch that differ in ONE switch (M6 W4): their runs are
+    compared scenario by scenario (evals/compare.py), never as two unrelated rates."""
+
+    name: str
+    baseline: str  # a configuration's name
+    variant: str
+    switch: str  # the one RunConfig field the two set differently
+    question: str  # what the comparison measures
+    decision: str = ""  # what its result would change
+
+
+class PairedOutcome(Contract):
+    """One scenario (and seed) run by both configurations of a comparison."""
+
+    scenario_id: str
+    scenario_set: str = ""  # the batch's set it belongs to for this comparison's suite
+    seed: int | None = None
+    baseline: str  # "success" or the failure category
+    variant: str
+    baseline_diagnosis_correct: bool | None = None
+    variant_diagnosis_correct: bool | None = None
+    baseline_run: str
+    variant_run: str
+
+
+class MetricDifference(Contract):
+    """One measure over the pairs where both runs recorded it."""
+
+    metric: str
+    n: int
+    baseline_mean: float | None = None
+    variant_mean: float | None = None
+    mean_difference: float | None = None  # variant minus baseline, averaged over the pairs
+    changed: int = 0  # pairs where the two runs differ
+
+
+class SetCount(Contract):
+    n: int
+    baseline_successes: int
+    variant_successes: int
+
+
+class ComparisonResult(Contract):
+    """A comparison, measured on one batch's runs (evals/compare.py)."""
+
+    comparison: Comparison
+    n: int  # paired runs
+    unpaired: list[str] = Field(default_factory=list)  # runs of one side only (scenario@seed)
+    baseline_successes: int = 0
+    variant_successes: int = 0
+    both_succeeded: int = 0
+    neither: int = 0
+    only_baseline: list[str] = Field(default_factory=list)  # scenario ids
+    only_variant: list[str] = Field(default_factory=list)
+    baseline_correct: int = 0  # correct root service and mechanism
+    variant_correct: int = 0
+    by_set: dict[str, SetCount] = Field(default_factory=dict)
+    pairs: list[PairedOutcome] = Field(default_factory=list)
+    differences: list[MetricDifference] = Field(default_factory=list)
+    # Provenance that differs beyond the switch: "field: scenario (baseline vs variant)".
+    unexpected: list[str] = Field(default_factory=list)
+
 
 class EvalBatch(Contract):
     """One evaluation plan's runs, all of one mode."""
@@ -141,6 +255,15 @@ class EvalBatch(Contract):
     limitations: list[str] = Field(default_factory=list)  # what the numbers do not show
     targets: list[str] = Field(default_factory=list)  # its records' targets ("simulated", "kind")
     benchmark: str | None = None  # the grader behind the records' benchmark_verdict
+    # M6 W4 (empty in older batches): the configurations its runs were made with, the planned
+    # one-switch comparisons between them, and named sets of its scenarios, e.g. `dev` (looked
+    # at to choose a change) and `held_out` (only ever measured).
+    configurations: list[EvalConfiguration] = Field(default_factory=list)
+    comparisons: list[Comparison] = Field(default_factory=list)
+    scenario_sets: dict[str, list[str]] = Field(default_factory=dict)
+    # The comparisons as measured when the batch was made, kept with it: a later change to
+    # evals/compare.py never rewrites a published batch's results.
+    comparison_results: list[ComparisonResult] = Field(default_factory=list)
 
     @property
     def n(self) -> int:
@@ -158,6 +281,9 @@ def make_batch(
     methods: Iterable[str] = (),
     limitations: Iterable[str] = (),
     benchmark: str | None = None,
+    configurations: Iterable[EvalConfiguration] = (),
+    comparisons: Iterable[Comparison] = (),
+    scenario_sets: dict[str, list[str]] | None = None,
 ) -> EvalBatch:
     """A batch of ONE mode, with its providers, models and prompt versions read from its records.
 
@@ -182,6 +308,9 @@ def make_batch(
         limitations=list(limitations),
         targets=sorted({r.target for r in kept if r.target}),
         benchmark=benchmark,
+        configurations=list(configurations),
+        comparisons=list(comparisons),
+        scenario_sets=dict(scenario_sets or {}),
     )
 
 

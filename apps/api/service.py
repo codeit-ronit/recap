@@ -32,6 +32,7 @@ from pydantic import BaseModel, ValidationError
 from apps.api.dto import (
     API_SCHEMA,
     BatchSource,
+    ComponentsView,
     EnvironmentCheck,
     EnvironmentCheckItem,
     ExecutionBackend,
@@ -66,6 +67,7 @@ from apps.api.views import (
     timeline_view,
     usage_view,
 )
+from evals.components import find_reports
 from evals.published import MANIFEST as PUBLISHED_MANIFEST
 from evals.published import PublishedIndex, PublishedRun, load_published
 from evals.records import EvalBatch, find_batches
@@ -729,6 +731,8 @@ class RunReader:
                 root / "evals" / "reports" / "runs",
             ],
         }
+        # Published component evaluations (evals/components.py --publish), in git.
+        self.components_root = root / "evals" / "reports" / "components"
         self._exports = _ExportCache()
         # Real-cluster runs published with the repository (evals/live/MANIFEST.json): read
         # only, checked byte for byte, never written anywhere (evals/published.py).
@@ -1055,6 +1059,10 @@ class RunReader:
 
     def evals(self) -> Any:
         return self.json(evals_view(self.batches()))
+
+    def components(self) -> Any:
+        """The published component evaluations, newest first (a broken file is skipped)."""
+        return self.json(ComponentsView(reports=find_reports(self.components_root)))
 
     def batch(self, batch_id: str) -> Any | None:
         """One batch by id; published batches win over a local one of the same id."""

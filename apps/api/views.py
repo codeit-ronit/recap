@@ -102,6 +102,7 @@ from apps.api.dto import (
     VersionsView,
     WorkerView,
 )
+from evals.compare import results_of
 from evals.published import PublishedIndex, PublishedRun
 from evals.records import EvalBatch
 from recap.core.config import ProviderSettings
@@ -1901,7 +1902,13 @@ def evals_view(batches: Iterable[tuple[EvalBatch, BatchSource]]) -> EvalsView:
 
 
 def batch_view(batch: EvalBatch, source: BatchSource) -> BatchView:
-    return BatchView(batch=batch_summary(batch, source), records=list(batch.records))
+    return BatchView(
+        batch=batch_summary(batch, source),
+        records=list(batch.records),
+        configurations=list(batch.configurations),
+        comparisons=results_of(batch),
+        scenario_sets=dict(batch.scenario_sets),
+    )
 
 
 # ======================================================================================

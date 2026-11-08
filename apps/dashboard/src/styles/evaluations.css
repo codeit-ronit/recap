@@ -823,7 +823,46 @@
   }
 }
 
+/* --- M6 W4: one-switch comparisons and component evaluations ---------------------------------------- */
+
+.evl-comparisons .evl-switch {
+  display: inline-block;
+  max-width: 28ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.evl-comparison-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+}
+.evl-comparison-detail .mini-title {
+  margin: 0;
+}
+.evl-component {
+  border-top: 1px solid var(--border);
+  padding: var(--space-3) 0 0;
+  margin-top: var(--space-3);
+}
+.evl-component > summary {
+  color: var(--text-2);
+  font-size: var(--fs-md);
+  font-weight: 500;
+  cursor: pointer;
+}
+.evl-component > :not(summary) {
+  margin-top: var(--space-2);
+}
+.evl-component .mini-title {
+  margin: var(--space-3) 0 var(--space-1);
+}
+
 @media (max-width: 560px) {
+  .evl-comparisons .evl-switch {
+    max-width: 18ch;
+  }
   .evl-tab {
     gap: var(--space-2);
     padding: var(--space-2) var(--space-3);

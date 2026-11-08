@@ -180,6 +180,7 @@ def record_from_run(
     by_agent = tool_calls_by_agent(trace)
     diagnosis = _diagnosis(record)
     timing = model_timing(trace)
+    measured = _measurements(record, trace, answer, evidence)
     return EvalRecord(
         run_id=record.run_id,
         mode=mode,
@@ -230,7 +231,109 @@ def record_from_run(
         started_at=history[0].at if history else record.created_at,
         ended_at=history[-1].at if history and record.state in TERMINAL_STATES else None,
         recording=recording if recording is not None else recording_name(record),
+        **measured,
     )
+
+
+def _measurements(
+    record: RunRecord,
+    trace: Sequence[TraceEvent],
+    answer: Mapping[str, Any],
+    evidence: Sequence[Evidence],
+) -> dict[str, Any]:
+    """The M6 W4 provenance and measurements of one run (EvalRecord's newer fields), read
+    from its record, its trace and its evidence registry only: nothing is estimated here."""
+    versions = record.versions
+    config = record.config
+    summary = next((e.payload for e in reversed(trace) if e.category == C.RUN_SUMMARY), {})
+    packs = [e.payload for e in trace if e.category == C.CONTEXT]
+    stops = [e.payload for e in trace if e.category == C.BUDGET]
+    rounds = [e.payload for e in trace if e.category == C.VERIFY_EVIDENCE]
+    report = record.verification
+    statuses = [c.hypothesis.status.value for c in report.checks] if report else []
+    agent_of = {ev.id: ev.agent_role.value for ev in evidence if ev.agent_role is not None}
+    by_agent: dict[str, int] = {}
+    for role in agent_of.values():
+        by_agent[role] = by_agent.get(role, 0) + 1
+    basis: dict[str, int] = {}
+    for check in report.checks if report else []:
+        if check.hypothesis.status.value != "supported":
+            continue
+        for evidence_id in dict.fromkeys(check.basis_evidence_ids):
+            proposer = agent_of.get(evidence_id)
+            if proposer is not None:
+                basis[proposer] = basis.get(proposer, 0) + 1
+    started = {e.agent for e in trace if e.category == C.AGENT_START and e.agent}
+    best = report.best if report else None
+    mechanism = answer.get("mechanism")
+    root = answer.get("root_cause_service")
+    executed = [a for a in record.actions if a.result in ("recovered", "not_recovered")]
+
+    def count(key: str) -> int | None:
+        value = summary.get(key)
+        return int(value) if isinstance(value, int | float) else None
+
+    return {
+        "seed": versions.get("seed") if isinstance(versions.get("seed"), int) else None,
+        "fixture_hash": _text_or_none(versions.get("fixture_hash")),
+        "router": _text_or_none(versions.get("router")),
+        "verifier": _text_or_none(versions.get("verifier")),
+        "policy_version": _text_or_none(versions.get("policy_version")),
+        "safety_enabled": config.safety_enabled,
+        "planner": config.planner,
+        "memory_read": (
+            [p.value for p in config.memory_read_partitions]
+            if config.memory_read_partitions is not None
+            else None
+        ),
+        "memory_write": (
+            config.memory_write_partition.value
+            if config.memory_write and config.memory_write_partition is not None
+            else None
+        ),
+        "budget_limits": record.incident.budget.model_dump(mode="json") if record.incident else {},
+        "context_limits": dict(versions.get("context") or {}),
+        "budget_stop": _text_or_none(stops[-1].get("limit")) if stops else None,
+        "routing_rules": [decision.rule_id for decision in record.strategies],
+        "specialists": len(started) if started else None,
+        "steps": record.usage.steps,
+        "evidence_by_agent": by_agent,
+        "supported_basis_by_agent": basis,
+        "disagreements": len(_distinct_disagreements(rounds)),
+        "claims_supported": statuses.count("supported") if report else None,
+        "claims_contradicted": statuses.count("contradicted") if report else None,
+        "claims_insufficient": statuses.count("insufficient") if report else None,
+        "mechanism_correct": (
+            None if not mechanism else bool(best and best.mechanism.value == mechanism)
+        ),
+        "unsafe_attempts": count("unsafe_attempts"),
+        "unsafe_blocked": count("unsafe_blocked"),
+        "unsafe_executed": count("unsafe_executed"),
+        "unsafe_refused": count("unsafe_refused_by_environment"),
+        "injection_flags": sum(1 for e in trace if e.category == C.INJECTION),
+        "action_sources": [proposal.source for proposal in record.proposals],
+        "executed_actions": [f"{a.action} on {a.target}" for a in executed],
+        "wrong_target_writes": sum(a.target != root for a in executed) if root else None,
+        "context_packs": len(packs),
+        "context_dropped": sum(len(p.get("dropped") or []) for p in packs),
+        # None for a run traced before packs recorded their shortened items (not zero).
+        "context_compacted": (
+            None
+            if packs and not any("compacted" in p for p in packs)
+            else sum(len(p.get("compacted") or []) for p in packs)
+        ),
+    }
+
+
+def _distinct_disagreements(rounds: Sequence[Mapping[str, Any]]) -> set[tuple[Any, ...]]:
+    """Each disagreement once: a round's report is rebuilt from all of the epoch's claims, so
+    one that stays open (or is settled in a later round) appears in every round's report."""
+    return {
+        (d.get("kind"), tuple(sorted(str(c) for c in d.get("claims") or [])))
+        for r in rounds
+        for d in r.get("disagreements") or []
+        if isinstance(d, Mapping)
+    }
 
 
 def check_mode(mode: str, origin: str) -> None:
@@ -764,6 +867,10 @@ def batch_markdown(batch: EvalBatch) -> str:
             f"- `{r.run_id}` ({r.scenario_id}): **{'success' if r.success else r.failure}**: "
             f"{detail}. Diagnosis {diagnosis}; fix: {_cell(r.gateway_outcome) or 'none proposed'}."
         )
+    if batch.comparisons:  # M6 W4; a batch without any keeps its digest unchanged
+        from evals.compare import comparisons_markdown, results_of
+
+        lines += ["", *comparisons_markdown(results_of(batch))]
     lines += ["", "## Methods", ""] + [f"- {m}" for m in batch.methods]
     lines += ["", "## Limitations (what these numbers do not show)", ""]
     lines += [f"- {m}" for m in batch.limitations]
@@ -862,10 +969,15 @@ def _memory_hits(record: RunRecord) -> list[dict[str, Any]]:
     return [
         {
             "episode_id": hit.episode.episode_id,
+            # The episode's source scenario (bookkeeping never shown to agents): it lets a
+            # memory evaluation join a verdict with both scenarios' predeclared answers.
+            "source_scenario": hit.episode.scenario_id,
             "partition": hit.episode.partition.value,
             "similarity": hit.similarity,
             "verified": hit.episode.verified,
             "safe_to_reuse": hit.safe_to_reuse,
+            # False when the run stopped before its first verification: RECAP never judged it.
+            "assessed": hit.mechanism_match is not None,
             "reason": clean_text(hit.reason),
         }
         for hit in record.memory_hits

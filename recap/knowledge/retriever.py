@@ -198,7 +198,7 @@ class KnowledgeRetriever:
             signals[chunk_id] = {"bm25_rank": rank, "bm25": round(score, 4)}
         candidates = lexical
         if hybrid and query_vector is not None:
-            dense = self._dense_search(query_vector, pool)
+            dense = self.dense_search(query_vector, pool)
             for rank, (chunk_id, similarity) in enumerate(dense, start=1):
                 found = signals.setdefault(chunk_id, {})
                 found.update({"dense_rank": rank, "cosine": round(similarity, 4)})
@@ -220,8 +220,10 @@ class KnowledgeRetriever:
             results = self._reranker.rerank(query, results)
         return results[:k]
 
-    def _dense_search(self, query_vector: Sequence[float], pool: int) -> list[tuple[str, float]]:
-        """Chunks ranked by cosine similarity to the query, at or above the cutoff only."""
+    def dense_search(self, query_vector: Sequence[float], pool: int) -> list[tuple[str, float]]:
+        """Chunks ranked by cosine similarity to the query, at or above the cutoff only: the
+        dense half of a hybrid search (public for the retrieval evaluation, evals/components.py,
+        which measures it alone)."""
         scored = [
             (chunk.chunk_id, cosine(query_vector, self._dense[chunk.chunk_id]))
             for chunk in self._chunks

@@ -1,0 +1,41 @@
+# M6 W4 real-model pilot: PREPARED, NOT RUN. The owner decides whether and when to run it.
+#
+# Why W4 did not run it: RECAP's local-memory guard (recap/providers/local_memory.py) refuses
+# qwen3:8b with less than about 7.0 GiB free; this 16 GB laptop had about 5.6 GB free during
+# W4, so every run would have been refused before its first request (as it should be).
+#
+# What it measures that the scripted evaluation cannot: how a real model uses the same
+# components, on the SIMULATED shop, each run approved by the simulation auto-approver. Each
+# pair changes ONE switch. Every run is isolated (it writes no episode and reads no memory)
+# except the memory trio, whose first run must write the episode the others look up.
+#   1-2  routing: the held-out cross-service leak with one investigator, then two specialists
+#   3    retrieval: run 2 again with hybrid search (nomic-embed-text, local, recorded)
+#   4-5  routing on the development set's misleading-logs incident
+#   6-8  memory: a first run writes a LIVE episode (bad-deployment); the look-alike incident
+#        then runs with memory on (it must reject the remembered rollback) and with memory off
+#
+# Budget, from the published qwen3:8b runs on simulated incidents (prompts v4.6 and v4.7,
+# evals/reports/batches/2026-10-2*-real-llm-qwen3-8b-*): 7-23 requests, 19k-91k input and
+# 1.1k-2.4k output tokens, 4-23 minutes per run on this laptop. For these 8 runs: about 120
+# requests, about 450k input and 15k output tokens (as the server reports them), 0.5-3 hours
+# of wall time, $0 (a local model, nothing hosted or paid, no network beyond loopback).
+#
+# How it changes decisions: a routing pair that differs on both incidents is a reason to make
+# parallel (or single) investigation the default for model runs; hybrid search that changes
+# the diagnosis is a reason to keep the embedding model; a look-alike run that reuses the
+# remembered rollback would be a safety finding. One run per arm is not a rate: decoding is
+# seeded (temperature 0, seed 7), but two agents share one server, so a repeat may differ.
+#
+# Run it only with enough free memory (the guard checks again before every run):
+#   OLLAMA_NO_CLOUD=1 ollama serve                     # loopback only
+#   .venv/bin/python scripts/live_eval.py evals/plans/w4-pilot.yaml --out <a folder, not data/>
+provider: ollama
+runs:
+  - {id: leak-single, scenario: m3-inventory-leak-behind-frontend, strategy: single, memory_write: false, read_partitions: []}
+  - {id: leak-parallel, scenario: m3-inventory-leak-behind-frontend, strategy: parallel, memory_write: false, read_partitions: []}
+  - {id: leak-parallel-hybrid, scenario: m3-inventory-leak-behind-frontend, strategy: parallel, retrieval: hybrid, memory_write: false, read_partitions: []}
+  - {id: misleading-single, scenario: test-checkout-misleading-deploy, strategy: single, memory_write: false, read_partitions: []}
+  - {id: misleading-parallel, scenario: test-checkout-misleading-deploy, strategy: parallel, memory_write: false, read_partitions: []}
+  - {id: memory-first, scenario: bad-deployment, read_partitions: []}
+  - {id: look-alike-memory-on, scenario: memory-caution, memory_write: false}
+  - {id: look-alike-memory-off, scenario: memory-caution, use_memory: false, memory_write: false}

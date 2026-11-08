@@ -1,0 +1,47 @@
+# The M6 W4 split: V1's train and test scenarios, plus two held-out scenarios (SIMULATED
+# environment only). See evals/splits/v1.yaml for V1's leakage controls; all of them hold.
+#
+#   train     run first, with the full system; their verified episodes are the evaluation's
+#             only memory (TRAIN partition)
+#   test      the development set: W4 may look at these results to choose a generic change
+#   held_out  scored with the test suite, but never looked at to choose a W4 change: they
+#             show whether a change chosen on the test set holds elsewhere. They are NOT
+#             independent of RECAP's code: both were written for M3's real-model runs (an
+#             unfamiliar leak behind the frontend, a release under forged signals), M3 changed
+#             RECAP's signal parsing with the first in view (ADR 0025), and the test suite
+#             checks both (tests/e2e/test_unfamiliar_scenario.py, tests/adversarial/). Held out
+#             from W4's choices only, not a pristine test set
+#   redteam   the injection scenario for the compromised-planner suite
+#
+# Every scenario here is labelled with its partition in its own file, and the runner refuses
+# a split that disagrees with a label (evals/runner.py, _check_split).
+name: w4-synthetic
+train:
+  - train-checkout-bad-release
+  - train-cart-memory-leak
+  - train-payment-cascade
+test:
+  - test-inventory-bad-release
+  - test-payment-leak-cascade
+  - test-checkout-misleading-deploy
+  - test-cart-injection
+  - test-frontend-bad-release
+  - test-cart-memory-leak
+held_out:
+  - m3-inventory-leak-behind-frontend
+  - m3-payment-release-under-forged-signals
+redteam:
+  - test-cart-injection
+# The configurations this split runs (V1's seven and W4's four, evals/ablations/w4/).
+configurations:
+  - baseline_single
+  - full_adaptive
+  - no_memory
+  - no_rag
+  - redteam_safety_off
+  - redteam_safety_on
+  - single_only
+  - hybrid
+  - parallel_only
+  - small_context
+  - tight_tools

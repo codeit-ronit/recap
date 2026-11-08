@@ -1,0 +1,10 @@
+# Half the context-pack budget of configs/budget.yaml (3000 -> 1500 estimated tokens), chosen
+# before any result was seen: what a smaller context costs and saves.
+name: small_context
+description: "Full system with half the context-pack budget (1500 estimated tokens instead of 3000)."
+suite: test
+config:
+  strategy: adaptive
+  use_rag: true
+  use_memory: true
+  pack_tokens: 1500

@@ -15,7 +15,15 @@ Every approval is granted by the simulation auto-approver. The benchmark is defi
 scripted default policy, so the runner refuses any other provider (LLM evaluation is V2). It
 searches the shipped runbooks with BM25 whatever this process's switches say
 (RECAP_ENABLE_EMBEDDINGS, RECAP_KNOWLEDGE_OVERLAYS are for demo and red-team runs), and
-the report records the search mode and knowledge folders it used.
+the report records the search mode and knowledge folders it used. It always runs on the
+simulator (RECAP_TARGET is ignored), and a configuration may not choose the provider, the
+approvals, the label or the tool latency: those are the same for every scored run.
+
+M6 W4 adds, all optional: a split's `held_out` scenarios (scored with the test suite but
+never looked at to choose a change), one-switch comparisons between configurations
+(evals/comparisons/, checked before anything runs, measured by evals/compare.py), seeds
+(each scored case once per seed), and hybrid retrieval answered from stored query vectors
+(evals/query_vectors.py), so no model server is contacted while measuring.
 
 Outputs: results.json, results.csv and summary.md with per-case outcomes and denominators,
 and batch.json: the same scored runs as an EvalBatch of mode `scripted_regression` (one
@@ -50,15 +58,22 @@ from evals.categorize import (
     record_from_run,
     run_events,
 )
-from evals.records import EvalBatch, load_batch, make_batch, write_batch_file
+from evals.compare import Comparison, compare_all, comparison_problems, load_comparisons
+from evals.datasets import alert_query, proposal_query, scenario_files
+from evals.query_vectors import QueryVectors
+from evals.records import EvalBatch, EvalConfiguration, load_batch, make_batch, write_batch_file
 from recap import __version__
 from recap.core.config import REPO_ROOT, Settings, load_settings
 from recap.core.errors import ConfigError
 from recap.core.ids import new_id, utcnow
+from recap.core.interfaces import LLMProvider
 from recap.core.models import Contract, MemoryPartition, RunConfig, RunRecord, ScenarioInfo
 from recap.environments.registry import create_environment
 from recap.harness.store import RunStore
+from recap.knowledge.embeddings import Embedder
+from recap.knowledge.vectors import VectorIndex
 from recap.memory.store import MemoryAccess
+from recap.providers.factory import create_embedder
 from recap.runtime import Runtime, code_version
 from recap.telemetry.sinks import SqliteTraceSink
 from recap.telemetry.tracer import TraceCategory
@@ -68,6 +83,13 @@ LATEST_DIR = EVALS_DIR / "reports" / "latest"  # the one report kept in git
 # Published evaluation batches (in git), one folder per batch: <batch_id>/batch.json.
 BATCHES_DIR = PUBLISHED_DIR
 BATCH_FILE = "batch.json"
+DEFAULT_SPLIT = EVALS_DIR / "splits" / "v1.yaml"
+# RunConfig fields a configuration may not set: the runner gives every scored run the same
+# (a provider or a recording would make it another evaluation mode, a manual approval would
+# wait forever, a label names the configuration, the latency is the protocol's).
+REFUSED_SWITCHES = frozenset(
+    {"provider", "replay_fixture", "replay_pace", "approval_mode", "label", "tool_latency_ms"}
+)
 
 
 class EvalConfig(Contract):
@@ -83,12 +105,20 @@ class EvalConfig(Contract):
 
 
 class Split(Contract):
-    """Which scenarios build the evaluation memory (train) and which are scored."""
+    """Which scenarios build the evaluation memory (train) and which are scored.
+
+    `held_out` scenarios run with the test suite, but only to be measured: a change to
+    RECAP may be chosen from the test scenarios' results, never from theirs (M6 W4).
+    `configurations` names the configurations the split runs when the caller names none
+    (empty: V1's set).
+    """
 
     name: str
     train: list[str]
     test: list[str]
     redteam: list[str] = Field(default_factory=list)
+    held_out: list[str] = Field(default_factory=list)
+    configurations: list[str] = Field(default_factory=list)
 
 
 class CaseResult(BaseModel):
@@ -157,6 +187,13 @@ class EvalReport(BaseModel):
     retrieval_mode: str = "bm25"
     knowledge_overlays: list[str] = Field(default_factory=list)
     split: Split
+    # M6 W4 (defaults match older reports): the split file, the comparisons file, the seeds
+    # every scored case ran with (none: each scenario's own), and the stored query vectors.
+    split_file: str = "evals/splits/v1.yaml"
+    comparisons_file: str | None = None
+    seeds: list[int] = Field(default_factory=list)
+    query_vectors: str | None = None
+    query_vectors_captured: bool = False  # missing queries were embedded live: not a measurement
     latency: dict[str, int]
     train: list[CaseResult]
     cases: list[CaseResult]
@@ -167,24 +204,28 @@ class EvalReport(BaseModel):
 # --- loading ------------------------------------------------------------------------------------
 
 
-def load_split(path: Path = EVALS_DIR / "splits" / "v1.yaml") -> Split:
+def load_split(path: Path = DEFAULT_SPLIT) -> Split:
     return Split.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")))
 
 
 def load_eval_configs(names: list[str] | None = None) -> list[EvalConfig]:
-    """All configurations, or only `names`: baselines first, then ablations, in file-name order.
+    """V1's configurations, or only `names`: baselines first, then ablations, in file-name order.
 
+    Without `names` this is V1's set (evals/baselines and evals/ablations, not their
+    subfolders), so the default protocol stays the V1 benchmark. A name may also be one of
+    M6 W4's configurations (evals/ablations/w4/), which run when a split or a caller names them.
     Raises ConfigError for a requested name that matches no file, so a typo cannot quietly
     produce a report without the configuration that was asked for.
     """
-    files = sorted((EVALS_DIR / "baselines").glob("*.yaml")) + sorted(
+    default = sorted((EVALS_DIR / "baselines").glob("*.yaml")) + sorted(
         (EVALS_DIR / "ablations").glob("*.yaml")
     )
+    files = default + sorted((EVALS_DIR / "ablations" / "w4").glob("*.yaml"))
     configs = [
         EvalConfig.model_validate(yaml.safe_load(f.read_text(encoding="utf-8"))) for f in files
     ]
     if names is None:
-        return configs
+        return configs[: len(default)]
     known = [c.name for c in configs]
     unknown = [name for name in names if name not in known]
     if unknown:
@@ -196,14 +237,20 @@ def load_eval_configs(names: list[str] | None = None) -> list[EvalConfig]:
 
 def _check_split(split: Split, scenarios: dict[str, ScenarioInfo]) -> None:
     """Refuse to run if the split and the scenario partition labels disagree (leakage guard)."""
+    named = split.train + split.test + split.held_out + split.redteam
+    unknown = [sid for sid in dict.fromkeys(named) if sid not in scenarios]
+    if unknown:
+        raise ValueError(f"the split names unknown scenarios: {', '.join(unknown)}")
     for sid in split.train:
         if scenarios[sid].partition != MemoryPartition.TRAIN:
             raise ValueError(f"{sid} is in the train split but labeled {scenarios[sid].partition}")
-    for sid in split.test + split.redteam:
+    for sid in split.test + split.held_out + split.redteam:
         if scenarios[sid].partition != MemoryPartition.TEST:
             raise ValueError(f"{sid} is in the test split but labeled {scenarios[sid].partition}")
     if set(split.train) & set(split.test):
         raise ValueError("train and test splits overlap")
+    if set(split.held_out) & (set(split.train) | set(split.test)):
+        raise ValueError("the held-out scenarios overlap the train or test split")
 
 
 # --- running ------------------------------------------------------------------------------------
@@ -215,7 +262,8 @@ def _eval_settings(data_dir: Path, read_ms: int, write_ms: int) -> Settings:
     RECAP_KNOWLEDGE_OVERLAYS (extra runbook folders, e.g. a poisoned one) are switches for
     demo and red-team runs; left set in a shell, either would change what every train and
     test run reads, and a hybrid search would call a local model without being recorded."""
-    settings = load_settings(data_dir=data_dir)
+    # target="": the simulator's own configs/, whatever RECAP_TARGET says in this shell.
+    settings = load_settings(data_dir=data_dir, target="")
     options = dict(settings.environment.options, tool_latency_ms=read_ms, write_latency_ms=write_ms)
     environment = settings.environment.model_copy(update={"options": options})
     return settings.model_copy(
@@ -248,8 +296,15 @@ def _scored_config(cfg: EvalConfig) -> RunConfig:
     """A test or red-team run: auto-approved, the configuration's switches, read-only memory.
 
     The memory rule is applied after the YAML switches, so no configuration can turn memory
-    writes on (or read beyond the TRAIN partition) while it is being scored.
+    writes on (or read beyond the TRAIN partition) while it is being scored. Raises
+    ConfigError for a switch the runner sets itself (REFUSED_SWITCHES).
     """
+    refused = sorted(REFUSED_SWITCHES & cfg.config.keys())
+    if refused:
+        raise ConfigError(
+            f"evaluation configuration {cfg.name!r} sets {', '.join(refused)}: the runner sets "
+            "it the same for every scored run (a provider or a recording is another mode)"
+        )
     # Validated construction: a typo in an eval YAML fails loudly instead of being ignored.
     return RunConfig.model_validate(
         {
@@ -259,6 +314,23 @@ def _scored_config(cfg: EvalConfig) -> RunConfig:
             **_memory_fields(MemoryAccess.eval_test()),
         }
     )
+
+
+class EvalRuntime(Runtime):
+    """The evaluation's runtime: a hybrid run embeds its queries from stored query vectors
+    (evals/query_vectors.py), so measuring never contacts a model server."""
+
+    def __init__(self, settings: Settings, query_vectors: QueryVectors | None = None) -> None:
+        super().__init__(settings)
+        self.query_vectors = query_vectors
+
+    def make_embedder(self, provider: LLMProvider) -> Embedder:
+        if self.query_vectors is None:
+            raise ConfigError(
+                "hybrid retrieval in an evaluation needs stored query vectors "
+                "(scripts/evaluate.py --query-vectors)"
+            )
+        return self.query_vectors.embedder()
 
 
 async def _run_case(
@@ -352,17 +424,49 @@ async def run_evaluation(
     read_latency_ms: int = 30,
     write_latency_ms: int = 50,
     progress: Any = print,
+    split_path: Path = DEFAULT_SPLIT,
+    comparisons_path: Path | None = None,
+    seeds: list[int] | None = None,
+    query_vectors_path: Path | None = None,
+    capture_query_vectors: bool = False,
 ) -> EvalReport:
     """Run the full protocol into `out_dir` and return the report (also written to disk).
 
-    Raises ConfigError before any scenario runs if a configuration name is unknown or the
-    default provider is not the scripted policy.
+    Raises ConfigError before any scenario runs if a configuration name is unknown, a
+    configuration sets a switch the runner owns, a comparison does not differ in exactly
+    its one switch, hybrid retrieval has no stored query vectors, or the default provider
+    is not the scripted policy.
+
+    `capture_query_vectors` embeds the queries the stored file lacks with the local model
+    (Ollama, nomic-embed-text) and adds them to `query_vectors_path` afterwards; a run
+    measured that way is a capture, not the measurement (rerun without it, offline).
     """
-    configs = load_eval_configs(config_names)  # first, so a typo creates no files
-    split = load_split()
-    out_dir.mkdir(parents=True, exist_ok=True)
+    split = load_split(split_path)
+    # Before anything is created, so a typo creates no files.
+    configs = load_eval_configs(config_names or split.configurations or None)
+    scored = {cfg.name: _scored_config(cfg) for cfg in configs}
+    comparisons = _comparisons(comparisons_path, configs)
+    hybrid = [cfg.name for cfg in configs if scored[cfg.name].retrieval == "hybrid"]
+    if hybrid and query_vectors_path is None:
+        raise ConfigError(
+            f"{', '.join(hybrid)} search hybrid: give the stored query vectors (--query-vectors)"
+        )
+    if query_vectors_path is not None and not capture_query_vectors:
+        if not query_vectors_path.is_file():
+            raise ConfigError(f"no stored query vectors at {_shown(query_vectors_path)}")
+    if (out_dir / "data").exists():
+        # The train phase must build this evaluation's own memory: episodes left by an earlier
+        # run in the same folder would be read by every scored run.
+        raise ConfigError(
+            f"{_shown(out_dir)} already holds an evaluation's data: an evaluation needs a fresh "
+            "folder (choose another --out)"
+        )
     settings = _eval_settings(out_dir / "data", read_latency_ms, write_latency_ms)
-    runtime = Runtime(settings)
+    vectors = _query_vectors(settings, query_vectors_path, capture_query_vectors)
+    if vectors is not None and hybrid and not capture_query_vectors:
+        _check_query_vectors(vectors, settings, split, configs, scored)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    runtime = EvalRuntime(settings, vectors)
     provider = runtime.make_provider(RunConfig()).info
     if provider.kind != "scripted":
         # The benchmark and its caveats describe the scripted policy only.
@@ -381,20 +485,36 @@ async def run_evaluation(
         train_results.append(result)
         progress(f"  train  {sid:<34} {result.final_state}")
 
-    # 2. TEST and 3. RED-TEAM: memory is read-only from here on.
+    # 2. TEST (with the held-out scenarios) and 3. RED-TEAM: memory is read-only from here on.
     cases: list[CaseResult] = []
     summaries: list[ConfigSummary] = []
     for cfg in configs:
-        scenario_ids = split.test if cfg.suite == "test" else split.redteam
-        config = _scored_config(cfg)
+        scenario_ids = split.test + split.held_out if cfg.suite == "test" else split.redteam
         config_cases = []
-        for sid in scenario_ids:
-            result = await _run_case(runtime, scenarios[sid], config, cfg.name, cfg.suite)
-            config_cases.append(result)
-            progress(f"  {cfg.name:<20} {sid:<34} {result.final_state}")
+        runs_with: list[int | None] = list(seeds) if seeds else [None]  # None: as configured
+        for seed in runs_with:
+            config = scored[cfg.name]
+            if seed is not None:
+                config = config.model_copy(update={"seed": seed})
+            for sid in scenario_ids:
+                result = await _run_case(runtime, scenarios[sid], config, cfg.name, cfg.suite)
+                if vectors is not None and vectors.missing:
+                    # A hybrid run searched for a query the file lacks: its result is not a
+                    # measurement of hybrid retrieval, so the evaluation stops here.
+                    raise ConfigError(
+                        f"{cfg.name} on {sid} searched for queries the stored vectors lack "
+                        f"({len(vectors.missing)}): capture them again "
+                        "(scripts/evaluate.py --capture-query-vectors)"
+                    )
+                config_cases.append(result)
+                shown_seed = f" seed {seed}" if seed is not None else ""
+                progress(f"  {cfg.name:<20} {sid:<34} {result.final_state}{shown_seed}")
         cases.extend(config_cases)
         summaries.append(summarize(cfg.name, cfg.suite, cfg.description, config_cases))
 
+    if vectors is not None and capture_query_vectors and query_vectors_path is not None:
+        added = vectors.save(query_vectors_path)
+        progress(f"  query vectors: {added} new, saved to {_shown(query_vectors_path)}")
     report = EvalReport(
         report_id=out_dir.name,
         created_at=utcnow().isoformat(),
@@ -406,6 +526,11 @@ async def run_evaluation(
         retrieval_mode=settings.retrieval.mode,
         knowledge_overlays=[_shown(folder) for folder in settings.paths.knowledge_overlays],
         split=split,
+        split_file=_shown(split_path),
+        comparisons_file=_shown(comparisons_path) if comparisons_path else None,
+        seeds=list(seeds or []),
+        query_vectors=_shown(query_vectors_path) if query_vectors_path else None,
+        query_vectors_captured=capture_query_vectors,
         latency={"read_ms": read_latency_ms, "write_ms": write_latency_ms},
         train=train_results,
         cases=cases,
@@ -414,9 +539,72 @@ async def run_evaluation(
     )
     write_report(report, out_dir)
     # The same runs in the record format every evaluation mode shares (out_dir/batch.json).
-    batch = scripted_batch(report, runtime.runs, runtime.events, scenarios, configs)
+    batch = scripted_batch(
+        report, runtime.runs, runtime.events, scenarios, configs, comparisons=comparisons
+    )
     write_batch_file(batch, out_dir / BATCH_FILE)
     return report
+
+
+def _comparisons(path: Path | None, configs: list[EvalConfig]) -> list[Comparison]:
+    """The comparisons file's pairs, refused (ConfigError) unless each differs in its switch."""
+    if path is None:
+        return []
+    plan = load_comparisons(path)
+    known = {cfg.name: (cfg.suite, cfg.config) for cfg in configs}
+    # A configuration without its own budget runs the configured one (scenarios may add theirs:
+    # the runs' records are checked again, evals/compare.py).
+    default_budget = load_settings(target="").budget.default_budget.model_dump(mode="json")
+    problems = comparison_problems(plan.comparisons, known, default_budget)
+    if problems:
+        raise ConfigError(f"{_shown(path)}: " + "; ".join(problems))
+    return plan.comparisons
+
+
+def _check_query_vectors(
+    vectors: QueryVectors,
+    settings: Settings,
+    split: Split,
+    configs: list[EvalConfig],
+    scored: dict[str, RunConfig],
+) -> None:
+    """Before any run: the stored query vectors fit the runbook vectors (model, prefix,
+    weights) and hold every alert query and remediation lookup the hybrid runs will make."""
+    stored = settings.paths.root / settings.retrieval.embedder.vectors
+    if not stored.is_file():
+        raise ConfigError("hybrid retrieval needs the stored runbook vectors (build_vector_index)")
+    problem = VectorIndex.load(stored).mismatch(vectors.embedder())
+    if problem:
+        raise ConfigError(f"the stored query vectors do not fit the runbook vectors: {problem}")
+    files = scenario_files()
+    needed: set[str] = set()
+    for cfg in configs:
+        if scored[cfg.name].retrieval != "hybrid":
+            continue
+        for sid in split.test + split.held_out if cfg.suite == "test" else split.redteam:
+            needed.add(alert_query(files[sid]))
+            needed.add(proposal_query(str(files[sid]["expected"]["mechanism"])))
+    missing = sorted(q for q in needed if vectors.lookup(q) is None)
+    if missing:
+        raise ConfigError(
+            f"the stored query vectors lack {len(missing)} of the hybrid runs' queries: capture "
+            "them again (scripts/evaluate.py --capture-query-vectors)"
+        )
+
+
+def _query_vectors(settings: Settings, path: Path | None, capture: bool) -> QueryVectors | None:
+    """The stored query vectors (and, while capturing, the local embedder that adds more)."""
+    if path is None:
+        return None
+    spec = settings.retrieval.embedder
+    if not capture:
+        return QueryVectors.load(path, spec)
+    live = create_embedder(settings, None)  # loopback Ollama only (check_local_embedder)
+    if path.is_file():
+        return QueryVectors.load(path, spec).capturing(live)
+    stored = settings.paths.root / spec.vectors  # the runbook vectors' weights must match
+    weights = VectorIndex.load(stored).meta.get("weights") if stored.is_file() else None
+    return QueryVectors.empty(spec, live, weights=weights)
 
 
 def scripted_batch(
@@ -426,6 +614,8 @@ def scripted_batch(
     scenarios: dict[str, ScenarioInfo],
     configs: list[EvalConfig],
     rebuilt: str = "",
+    *,
+    comparisons: list[Comparison] | None = None,
 ) -> EvalBatch:
     """The scored runs (test and red-team suites) as one `scripted_regression` batch.
 
@@ -451,13 +641,24 @@ def scripted_batch(
                 evidence=runs.evidence(case.run_id),
             )
         )
-    return make_batch(
+    split = report.split
+    sets = {"test": split.test, "held_out": split.held_out, "redteam": split.redteam}
+    batch = make_batch(
         batch_id=report.report_id,
         mode="scripted_regression",
-        title=f"Scripted regression: V1 benchmark ({report.split.name}), scripted policy",
+        title=f"Scripted regression: {'W4 comparisons' if comparisons else 'V1 benchmark'} "
+        f"({split.name}), scripted policy",
         records=records,
         created_at=created_at_of(records, utcnow()),
-        plan="evals/splits/v1.yaml",
+        plan=report.split_file,
+        configurations=[
+            EvalConfiguration(
+                name=cfg.name, suite=cfg.suite, description=cfg.description, switches=cfg.config
+            )
+            for cfg in configs
+        ],
+        comparisons=comparisons or [],
+        scenario_sets={name: ids for name, ids in sets.items() if ids},
         methods=[*_batch_methods(report, configs), *([rebuilt] if rebuilt else [])],
         limitations=[
             *report.caveats,
@@ -471,6 +672,8 @@ def scripted_batch(
             "is a recovery.",
         ],
     )
+    # The comparisons as measured now, kept with the batch (a published result never changes).
+    return batch.model_copy(update={"comparison_results": compare_all(batch)})
 
 
 def _batch_methods(report: EvalReport, configs: list[EvalConfig]) -> list[str]:
@@ -489,6 +692,35 @@ def _batch_methods(report: EvalReport, configs: list[EvalConfig]) -> list[str]:
         lines.append(
             f"{cfg.name} ({cfg.suite} suite): {switches or 'defaults'}; "
             f"{_plural(counts.get(cfg.name, 0), 'run')}."
+        )
+    split = report.split
+    if split.held_out:
+        lines.append(
+            f"Held-out scenarios ({', '.join(split.held_out)}) ran with the test suite but were "
+            "only measured: no W4 change was chosen from their results. They are not independent "
+            "of RECAP's code: earlier milestones developed and regression-test it on them."
+        )
+    if report.seeds:
+        lines.append(
+            f"Every scored case ran once per seed ({', '.join(map(str, report.seeds))}), "
+            "instead of with its scenario's own seed; runs are paired by scenario and seed."
+        )
+    if report.comparisons_file:
+        lines.append(
+            f"One-switch comparisons from {report.comparisons_file}, each checked before any "
+            "run to differ in its switch only, and measured scenario by scenario "
+            "(evals/compare.py)."
+        )
+    if report.query_vectors and report.query_vectors_captured:
+        lines.append(
+            f"A CAPTURE run: hybrid retrieval embedded the queries {report.query_vectors} lacked "
+            "live, with the local Ollama embedder, and added them to it. A capture is not a "
+            "measurement: the measurement reruns with the stored vectors only."
+        )
+    elif report.query_vectors:
+        lines.append(
+            f"Hybrid retrieval embedded its queries from {report.query_vectors} (stored "
+            "nomic-embed-text vectors): no model server was contacted while measuring."
         )
     lines += [
         "Decisions came from RECAP's scripted policy (not an LLM); every approval came from "
@@ -513,6 +745,8 @@ def _switch(value: Any) -> str:
 def _caveats(split: Split) -> list[str]:
     """How to read the numbers honestly (shown in summary.md and on the dashboard)."""
     n_test = _plural(len(split.test), "test scenario")
+    if split.held_out:
+        n_test += f" and {len(split.held_out)} held-out"
     n_redteam = _plural(len(split.redteam), "red-team scenario")
     return [
         "All numbers come from a deterministic SIMULATED environment, not a real cluster.",
@@ -564,7 +798,9 @@ def render_markdown(report: EvalReport) -> str:
         f" write {report.latency['write_ms']} ms",
         f"- {_search_line(report)}",
         f"- Split `{report.split.name}`: train {len(report.split.train)} · test "
-        f"{len(report.split.test)} · red-team {len(report.split.redteam)}",
+        f"{len(report.split.test)}"
+        + (f" · held-out {len(report.split.held_out)}" if report.split.held_out else "")
+        + f" · red-team {len(report.split.redteam)}",
         "",
         "## Protocol",
         "",
@@ -574,7 +810,10 @@ def render_markdown(report: EvalReport) -> str:
         "3. The red-team suite runs injection scenarios with a deliberately compromised planner, "
         "with the safety gateway on and off (off is simulation-only).",
         "",
-        "## Test suite (each row: N = number of test scenarios)",
+        "## Test suite (each row: N = number of test and held-out scenarios, times seeds)",
+        "",
+        "Held-out scenarios are counted in these rows; the batch's comparisons count the "
+        "development (test) and held-out sets apart.",
         "",
         "| configuration | N | outcome as expected | oracle-verified recovery | correct diagnosis "
         "| mean tool calls | mean steps | mean est. tokens | mean latency (ms) | parallel rounds |",
@@ -620,10 +859,12 @@ def render_markdown(report: EvalReport) -> str:
 
 
 def _shown(folder: Path) -> str:
-    """A repo-relative path, or the folder's own name: local folders never reach a report."""
+    """A repo-relative path, or the folder's own name: local folders never reach a report.
+    A relative path is taken from the current folder (as the command line gave it)."""
+    resolved = folder.resolve()
     return (
-        folder.relative_to(REPO_ROOT).as_posix()
-        if folder.is_relative_to(REPO_ROOT)
+        resolved.relative_to(REPO_ROOT).as_posix()
+        if resolved.is_relative_to(REPO_ROOT)
         else folder.name
     )
 
@@ -694,17 +935,28 @@ def rebuild_batch(report_dir: Path) -> EvalBatch:
     database = report_dir / "data" / "recap.db"
     if not database.is_file():
         raise ConfigError(f"{report_dir.name} kept no run data (data/recap.db); rerun it")
-    settings = load_settings(data_dir=report_dir / "data")
+    settings = load_settings(data_dir=report_dir / "data", target="")
     environment = create_environment(settings.environment, "describe")
     scenarios = {s.id: s for s in environment.list_scenarios()}
     configs = load_eval_configs([summary.name for summary in report.summaries])
+    comparisons = (
+        _comparisons(REPO_ROOT / report.comparisons_file, configs)
+        if report.comparisons_file
+        else []
+    )
     rebuilt = (
         f"Rebuilt on {utcnow():%Y-%m-%d} from report {report.report_id}'s own data folder with "
         "evals/runner.py --rebuild-batch (no run was repeated); categories by "
         f"evals/categorize.py at code {code_version(REPO_ROOT)}."
     )
     return scripted_batch(
-        report, RunStore(database), SqliteTraceSink(database), scenarios, configs, rebuilt
+        report,
+        RunStore(database),
+        SqliteTraceSink(database),
+        scenarios,
+        configs,
+        rebuilt,
+        comparisons=comparisons,
     )
 
 

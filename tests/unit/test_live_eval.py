@@ -18,6 +18,7 @@ from evals.records import EvalRecord, load_batch
 from recap.core.config import REPO_ROOT, Settings
 from recap.core.models import RunConfig, RunRecord
 from recap.harness.store import RunStore
+from recap.memory.store import MemoryAccess
 from recap.providers.factory import create_provider
 from recap.providers.protocol import PROMPT_VERSION
 from recap.runtime import Runtime
@@ -26,6 +27,7 @@ from scripts import live_eval
 from scripts.live_eval import (
     EXIT_REFUSED,
     EXIT_STOPPED,
+    Plan,
     PlannedRun,
     check_plan,
     load_plan,
@@ -135,6 +137,20 @@ async def test_a_plan_with_mistakes_is_refused_before_anything_runs(
     assert await main([str(path), "--out", str(tmp_path / "out")]) == 2
     said = capsys.readouterr().err
     assert "no-such-scenario" in said and "no-such-folder" in said and "none.yaml" in said
+
+
+def test_a_planned_run_can_read_nothing_and_write_nothing_to_memory() -> None:
+    """The arms of a comparison stay independent (M6 W4): a run that writes no episode can
+    never be found by a later run of the same plan, and [] reads no partition at all."""
+    plan = Plan(provider="ollama", runs=[])
+    isolated = live_eval.run_config(
+        plan, PlannedRun(id="a", scenario="bad-deployment", memory_write=False, read_partitions=[])
+    )
+    assert (isolated.memory_write, isolated.memory_read_partitions) == (False, [])
+    assert MemoryAccess.from_run_config(isolated).readable_partitions == []
+    default = live_eval.run_config(plan, PlannedRun(id="b", scenario="bad-deployment"))
+    assert (default.memory_write, default.memory_read_partitions) == (True, None)
+    assert default.label == "live-eval:b" and default.approval_mode == "auto"
 
 
 def test_a_plan_with_an_unknown_strategy_or_retrieval_does_not_load(tmp_path: Path) -> None:
