@@ -33,6 +33,7 @@ from apps.api.dto import (
     SCHEMA_HEADER,
     TOTAL_HEADER,
     BatchView,
+    ComponentsView,
     EvalsView,
     EvidenceView,
     ProviderView,
@@ -48,7 +49,8 @@ from apps.api.dto import (
 from apps.api.main import create_app
 from apps.api.service import RunRefused, check_run_request
 from apps.api.views import CONCURRENCY_NOTE, REPLAY_NOTE, SCRIPTED_NOTE
-from evals.records import EvalBatch, EvalRecord, write_batch
+from evals.components import ComponentReport, write_report
+from evals.records import Comparison, EvalBatch, EvalConfiguration, EvalRecord, write_batch
 from recap.core.config import Settings
 from recap.core.models import EnvironmentInfo, IncidentState, ProviderInfo, RunConfig, RunRecord
 from recap.providers.factory import REPLAY_ENV, create_provider
@@ -767,6 +769,66 @@ def test_evaluation_batches_are_listed_by_source_and_read_by_id(settings: Settin
     assert [r.run_id for r in full.records] == ["r1", "r2"]
     assert missing.status_code == 404
     assert set(legacy.json()) == {"running", "progress", "report", "error"}
+
+
+def test_a_batch_view_carries_its_configurations_and_measured_comparisons(
+    settings: Settings, tmp_path: Path
+) -> None:
+    """M6 W4: a batch planned with one-switch comparisons is read with them measured on its
+    own records (evals/compare.py); GET /evals/components lists the published component
+    reports, and "components" is never read as a batch id."""
+
+    def run(label: str, scenario: str, success: bool) -> EvalRecord:
+        return EvalRecord(
+            run_id=f"{label}-{scenario}",
+            mode="scripted_regression",
+            scenario_id=scenario,
+            label=label,
+            strategy="single" if label == "single_only" else "parallel",
+            success=success,
+            oracle_verified=success,
+            failure="" if success else "oracle_not_recovered",
+        )
+
+    batch = EvalBatch(
+        batch_id="2026-11-08-w4-local",
+        mode="scripted_regression",
+        title="w4",
+        created_at=datetime(2026, 11, 8, tzinfo=UTC),
+        records=[run("single_only", "s1", False), run("parallel_only", "s1", True)],
+        configurations=[
+            EvalConfiguration(name="single_only", suite="test", switches={"strategy": "single"}),
+            EvalConfiguration(
+                name="parallel_only", suite="test", switches={"strategy": "parallel"}
+            ),
+        ],
+        comparisons=[
+            Comparison(
+                name="single-vs-parallel",
+                baseline="single_only",
+                variant="parallel_only",
+                switch="strategy",
+                question="q",
+            )
+        ],
+        scenario_sets={"test": ["s1"]},
+    )
+    write_batch(batch, settings.paths.data_dir / "evals" / "batches")
+    report = ComponentReport(
+        report_id="c1", created_at=datetime(2026, 11, 8, tzinfo=UTC), code_version="abc"
+    )
+    write_report(report, tmp_path / "components" / "c1")
+    with client_for(Runtime(settings)) as client:
+        client.app.state.reader.components_root = tmp_path / "components"  # type: ignore[attr-defined]
+        full = BatchView.model_validate(client.get("/evals/2026-11-08-w4-local").json())
+        components = ComponentsView.model_validate(client.get("/evals/components").json())
+
+    assert [c.name for c in full.configurations] == ["single_only", "parallel_only"]
+    [compared] = full.comparisons
+    assert (compared.n, compared.baseline_successes, compared.variant_successes) == (1, 0, 1)
+    assert compared.only_variant == ["s1"] and compared.unexpected == []
+    assert full.scenario_sets == {"test": ["s1"]}
+    assert [r.report_id for r in components.reports] == ["c1"]
 
 
 # --- what a response must never carry ---------------------------------------------------------

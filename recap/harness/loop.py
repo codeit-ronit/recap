@@ -170,6 +170,7 @@ class AgentHarness:
                     "budget_tokens": pack.budget_tokens,
                     "items": pack.ids(),
                     "dropped": pack.dropped_ids,
+                    "compacted": pack.compacted_ids(),
                     "estimate": True,
                 },
                 agent=role.value,

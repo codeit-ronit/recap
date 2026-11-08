@@ -1,0 +1,7 @@
+name: parallel_only
+description: "Full system but every round runs two specialists in parallel (telemetry and infrastructure), never a single investigator."
+suite: test
+config:
+  strategy: parallel
+  use_rag: true
+  use_memory: true

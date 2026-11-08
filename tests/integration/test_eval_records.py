@@ -680,9 +680,20 @@ def test_a_published_batch_keeps_its_promises(path: Path) -> None:
     assert publish_problems(batch) == []
 
 
-# Fields added in M5, unset in batches written before them.
-NEW_BATCH_FIELDS = {"targets": [], "benchmark": None}
-NEW_RECORD_FIELDS = {"target": "", "benchmark_verdict": None}
+# Fields added in M5 and in M6 W4, unset in batches written before them.
+NEW_BATCH_FIELDS = {
+    "targets": [],
+    "benchmark": None,
+    "configurations": [],
+    "comparisons": [],
+    "scenario_sets": {},
+    "comparison_results": [],
+}
+_W4_FIELDS = list(EvalRecord.model_fields)[list(EvalRecord.model_fields).index("seed") :]
+NEW_RECORD_FIELDS = {"target": "", "benchmark_verdict": None} | {
+    name: EvalRecord.model_fields[name].get_default(call_default_factory=True)
+    for name in _W4_FIELDS
+}
 
 
 def _as_written(dumped: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:

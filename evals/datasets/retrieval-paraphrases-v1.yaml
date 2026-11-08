@@ -1,0 +1,21 @@
+# Hand-written retrieval queries (M6 W4): incidents described the way an operator might say
+# them, mostly without the runbooks' own words. Each names the failure mechanism whose
+# runbook should answer it; the relevant chunks are derived from that (evals/datasets.py).
+#
+# Provenance and caveat: written on 2026-11-08 by the evaluator, before any retrieval result
+# for them existed, and never edited after seeing one. The evaluator had read the runbooks,
+# so this is NOT an independent test set: it checks how each retriever copes with wording
+# that differs from the corpus, on a small N (12), and nothing more.
+queries:
+  - {id: para-bad-deployment-1, mechanism: bad_deployment, text: "errors started right after we shipped the new version of the inventory service"}
+  - {id: para-bad-deployment-2, mechanism: bad_deployment, text: "the latest release of the payment service broke checkout, how do we go back to the previous build"}
+  - {id: para-bad-deployment-3, mechanism: bad_deployment, text: "frontend began failing minutes after a rollout finished"}
+  - {id: para-bad-deployment-4, mechanism: bad_deployment, text: "since this morning's update users cannot add items to their cart"}
+  - {id: para-resource-pressure-1, mechanism: resource_pressure, text: "the cart service keeps restarting and its memory climbs until the container is killed"}
+  - {id: para-resource-pressure-2, mechanism: resource_pressure, text: "payment pods get OOM killed and come back again and again"}
+  - {id: para-resource-pressure-3, mechanism: resource_pressure, text: "inventory slows down over a few hours and then crashes while its memory use keeps growing"}
+  - {id: para-resource-pressure-4, mechanism: resource_pressure, text: "a service runs out of RAM and restarts in a loop"}
+  - {id: para-dependency-failure-1, mechanism: dependency_failure, text: "checkout fails because a service it calls further down is broken"}
+  - {id: para-dependency-failure-2, mechanism: dependency_failure, text: "errors spread from one service to everything that depends on it"}
+  - {id: para-dependency-failure-3, mechanism: dependency_failure, text: "the frontend errors are caused by a backend it calls, not by the frontend itself"}
+  - {id: para-dependency-failure-4, mechanism: dependency_failure, text: "requests time out because an upstream dependency is unavailable"}

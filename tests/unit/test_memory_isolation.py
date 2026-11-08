@@ -133,6 +133,14 @@ def test_access_from_run_config_copies_the_memory_switches() -> None:
     assert MemoryAccess.from_run_config(RunConfig()) == MemoryAccess.default()
 
 
+def test_an_explicit_empty_read_list_reads_no_partition(mixed_store: ExperienceStore) -> None:
+    """[] means "read nothing", not "the defaults" (found in the M6 W4 audit: an empty list
+    used to fall back to the default partitions, which a caller asking for none never meant)."""
+    access = MemoryAccess.from_run_config(RunConfig(memory_read_partitions=[]))
+    assert access.readable_partitions == []
+    assert found_ids(mixed_store, access) == set()
+
+
 @pytest.mark.parametrize("family", ["bad_deployment", "secret-family-label"])
 def test_failure_family_never_appears_in_hit_reasons(tmp_path: Path, family: str) -> None:
     # "bad_deployment" is also a mechanism name: reasons use plain words for mechanisms,

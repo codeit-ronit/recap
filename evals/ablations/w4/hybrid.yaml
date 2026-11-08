@@ -1,0 +1,8 @@
+name: hybrid
+description: "Full system with hybrid runbook search (BM25 fused with nomic-embed-text vectors), its queries answered from stored query vectors: no model server is contacted."
+suite: test
+config:
+  strategy: adaptive
+  use_rag: true
+  use_memory: true
+  retrieval: hybrid

@@ -1,0 +1,62 @@
+# The M6 W4 comparisons (evals/compare.py). Each pair differs in ONE RunConfig switch: the
+# runner refuses a pair that differs in anything else before a run starts, and the analysis
+# checks from the runs' own records that nothing else changed.
+#
+# The decisions come from RECAP's scripted policy, not a model: a difference shows how this
+# policy uses a component on simulated incidents, not how an LLM would.
+name: w4
+comparisons:
+  - name: single-vs-parallel
+    baseline: single_only
+    variant: parallel_only
+    switch: strategy
+    question: "Single investigator in every round vs two specialists in parallel in every round"
+    decision: "Whether a second specialist adds a recovery or a correct diagnosis worth its tool calls"
+  - name: adaptive-vs-single
+    baseline: single_only
+    variant: full_adaptive
+    switch: strategy
+    question: "Fixed single investigator vs RECAP's adaptive routing (rules RT0-RT7)"
+    decision: "Whether adaptive routing earns its place over always staying single"
+  - name: adaptive-vs-parallel
+    baseline: parallel_only
+    variant: full_adaptive
+    switch: strategy
+    question: "Fixed parallel specialists vs adaptive routing"
+    decision: "Whether adaptive routing saves tool calls without losing recoveries"
+  - name: rag-off-vs-on
+    baseline: no_rag
+    variant: full_adaptive
+    switch: use_rag
+    question: "No runbook retrieval vs BM25 runbook retrieval"
+    decision: "What runbook retrieval contributes to recoveries and diagnosis"
+  - name: bm25-vs-hybrid
+    baseline: full_adaptive
+    variant: hybrid
+    switch: retrieval
+    question: "BM25 vs hybrid (BM25 + nomic-embed-text) runbook search, end to end"
+    decision: "Whether semantic retrieval changes outcomes enough to justify an embedding model"
+  - name: memory-off-vs-on
+    baseline: no_memory
+    variant: full_adaptive
+    switch: use_memory
+    question: "No experience memory vs read-only TRAIN memory"
+    decision: "What experience memory contributes, and whether it is ever reused unsafely"
+  - name: tool-budget
+    baseline: full_adaptive
+    variant: tight_tools
+    switch: budget.max_tool_calls
+    question: "The configured tool-call budget (30) vs half of it (15)"
+    decision: "How much tool-call headroom the runs need before a budget stop costs a recovery"
+  - name: context-budget
+    baseline: full_adaptive
+    variant: small_context
+    switch: pack_tokens
+    question: "The configured context-pack budget (3000 estimated tokens) vs half of it (1500)"
+    decision: "Whether a smaller context saves tokens without dropping evidence the runs need"
+  - name: safety-on-vs-off
+    baseline: redteam_safety_off
+    variant: redteam_safety_on
+    switch: safety_enabled
+    question: "A compromised planner with the safety gateway off (simulation only) vs on"
+    decision: "What the gateway prevents; a recovery is not expected on either side"

@@ -33,7 +33,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from evals.records import EvalMode, EvalRecord
+from evals.components import ComponentReport
+from evals.records import ComparisonResult, EvalConfiguration, EvalMode, EvalRecord
 from recap.core.models import (
     Disagreement,
     EnvironmentInfo,
@@ -1207,6 +1208,18 @@ class EvalsView(Versioned):
 class BatchView(Versioned):
     batch: BatchSummary
     records: list[EvalRecord]
+    # M6 W4 (empty for older batches): the configurations its runs were made with, its
+    # one-switch comparisons measured on its records (evals/compare.py) and its scenario sets.
+    configurations: list[EvalConfiguration] = Field(default_factory=list)
+    comparisons: list[ComparisonResult] = Field(default_factory=list)
+    scenario_sets: dict[str, list[str]] = Field(default_factory=dict)
+
+
+class ComponentsView(Versioned):
+    """The published component evaluations (evals/components.py), newest first: each part of
+    RECAP measured on its own dataset, never merged into an end-to-end success rate."""
+
+    reports: list[ComponentReport] = Field(default_factory=list)
 
 
 # ======================================================================================

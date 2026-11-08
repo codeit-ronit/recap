@@ -919,6 +919,10 @@ class ContextPack(Contract):
         """IDs of packed items, optionally only one kind."""
         return [i.item_id for i in self.items if kind is None or i.kind == kind]
 
+    def compacted_ids(self) -> list[str]:
+        """IDs of packed items that were shortened to fit their item limit."""
+        return [i.item_id for i in self.items if i.compacted]
+
 
 # ======================================================================================
 # 8. Routing
@@ -1151,6 +1155,11 @@ class RunConfig(Contract):
     replay_pace: float = Field(0.0, ge=0.0, le=1.0)
     seed: int | None = None  # None -> scenario seed
     budget: RunBudget | None = None  # None -> scenario budget or defaults
+    # This run's context budget (None -> configs/budget.yaml): the estimated tokens one context
+    # pack may hold, and the most one item may keep before it is compacted. For budget
+    # ablations (M6 W4); the effective values are recorded in the run's versions.
+    pack_tokens: int | None = Field(None, ge=100)
+    max_item_tokens: int | None = Field(None, ge=32)
     tool_latency_ms: int | None = None  # override simulated tool latency
     label: str = ""  # e.g. the eval configuration name
 

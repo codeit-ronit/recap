@@ -73,6 +73,13 @@ class VectorIndex:
         """The texts this index has no vector for."""
         return [text for text in texts if self.key(text) not in self._vectors]
 
+    def extended(
+        self, vectors: Mapping[str, Sequence[float]], meta: Mapping[str, Any]
+    ) -> VectorIndex:
+        """This index plus `vectors` (keyed by the text that was embedded), with `meta`."""
+        keyed = {**self._vectors, **{self.key(text): v for text, v in vectors.items()}}
+        return VectorIndex(self.embedder, self.dimensions, self.document_prefix, keyed, meta)
+
     def mismatch(self, embedder: Embedder) -> str:
         """Why these vectors cannot be compared with `embedder`'s, in plain words ("" when
         they can).

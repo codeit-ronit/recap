@@ -14,7 +14,21 @@
  */
 
 import type { TargetFields } from "../components/DataSourceBadge";
-import type { BatchOutcomes, BatchSummary, EvalMode, EvalModeInfo, EvalRecord, EvalsView, StageTiming } from "../dto";
+import type {
+  BatchOutcomes,
+  BatchSummary,
+  ComparisonResult,
+  EvalConfiguration,
+  EvalMode,
+  EvalModeInfo,
+  EvalRecord,
+  EvalsView,
+  MemoryComponent,
+  MetricDifference,
+  RetrievalComponent,
+  RetrievalScore,
+  StageTiming,
+} from "../dto";
 import type { Tone } from "../format";
 
 export const NOT_RECORDED = "Not recorded";
@@ -736,6 +750,18 @@ export const CLI_COMMANDS: Readonly<Record<EvalMode, readonly CliCommand[]>> = {
       command: ".venv/bin/python scripts/evaluate.py --no-latest",
       note: "Writes only evals/reports/runs/<report id>/ (git-ignored).",
     },
+    {
+      title: "The W4 comparisons (held-out scenarios, one switch per pair, hybrid search offline)",
+      command:
+        ".venv/bin/python scripts/evaluate.py --split evals/splits/w4.yaml --no-latest --publish --comparisons evals/comparisons/w4.yaml --query-vectors evals/datasets/query-vectors-v1.json",
+      note: "About a minute; the scripted policy. Publishes its batch and leaves the V1 report in evals/reports/latest/ as it is. Hybrid search reads its query vectors from the stored file: no model server is contacted.",
+    },
+    {
+      title: "The component evaluations of a batch",
+      command:
+        ".venv/bin/python -m evals.components --batch evals/reports/batches/<batch id>/batch.json --query-vectors evals/datasets/query-vectors-v1.json",
+      note: "Seconds; offline. Retrieval on its own dataset; memory, routing, budgets, verifier and safety from the batch's runs. --publish writes it under evals/reports/components/.",
+    },
   ],
   offline_replay: [
     {
@@ -803,3 +829,96 @@ export const CLI_COMMANDS: Readonly<Record<EvalMode, readonly CliCommand[]>> = {
     },
   ],
 };
+
+// --- M6 W4: one-switch comparisons and component evaluations ------------------------------------
+
+/** What a configuration set a switch to, in words ("default" when its file leaves it out). */
+export function switchSetting(
+  configurations: readonly EvalConfiguration[] | undefined,
+  name: string,
+  key: string,
+): string {
+  const config = (configurations ?? []).find((c) => c.name === name);
+  if (!config || !(key in config.switches)) return "default";
+  return settingText(config.switches[key]);
+}
+
+/** A switch's value as text: nested values (a budget) as "key value" pairs. */
+export function settingText(value: unknown): string {
+  if (value === null || value === undefined) return "default";
+  if (typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([key, inner]) => `${key} ${settingText(inner)}`)
+      .join(", ");
+  }
+  return String(value);
+}
+
+const METRIC_LABELS: Readonly<Record<string, string>> = {
+  tool_calls: "tool calls",
+  steps: "decisions",
+  estimated_tokens: "estimated tokens",
+  rounds: "rounds",
+  specialists: "agents",
+  retrieved_docs: "runbook sections retrieved",
+  memory_hits: "memory hits",
+  context_dropped: "context items dropped",
+  context_compacted: "context items shortened",
+  claims_supported: "supported claims",
+  claims_insufficient: "claims left insufficient",
+  disagreements: "disagreements",
+  unsafe_blocked: "unsafe actions blocked",
+  unsafe_executed: "unsafe actions executed",
+  seconds: "wall seconds (with simulated latency)",
+};
+
+export function metricLabel(metric: string): string {
+  return METRIC_LABELS[metric] ?? metric.replaceAll("_", " ");
+}
+
+/** A difference with its sign: "+1.5", "−2.88", "±0" ("—" when missing). */
+export function signedNumber(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  const digits = Number.isInteger(value) ? 0 : 2;
+  const shown = grouped(Math.abs(value), digits);
+  return value > 0 ? `+${shown}` : value < 0 ? `\u2212${shown}` : `\u00b1${shown}`;
+}
+
+/** The measures that changed in at least one pair, in the comparison's own order. */
+export function movedDifferences(result: Pick<ComparisonResult, "differences">): MetricDifference[] {
+  return (result.differences ?? []).filter((d) => d.n > 0 && d.changed > 0);
+}
+
+export interface Integrity {
+  ok: boolean;
+  label: string;
+  items: string[];
+}
+
+/** Whether a comparison measured its switch alone: no other recorded difference, no unpaired run. */
+export function comparisonIntegrity(result: Pick<ComparisonResult, "unexpected" | "unpaired">): Integrity {
+  const items = [...(result.unexpected ?? []), ...(result.unpaired ?? []).map((u) => `unpaired: ${u}`)];
+  if (!items.length) return { ok: true, label: "only the switch", items };
+  return { ok: false, label: plural(items.length, "other difference"), items };
+}
+
+const SET_LABELS: Readonly<Record<string, string>> = {
+  test: "development",
+  held_out: "held-out",
+  redteam: "red-team",
+};
+
+/** A scenario set's name for people: the test set is the development set when a held-out set exists. */
+export function setLabel(name: string): string {
+  return SET_LABELS[name] ?? (name || "unlabelled");
+}
+
+/** Retrieval scores over every query of a kind (the per-partition rows stay in the report file). */
+export function retrievalRows(component: Pick<RetrievalComponent, "scores"> | null | undefined): RetrievalScore[] {
+  return (component?.scores ?? []).filter((s) => !s.partition);
+}
+
+/** Memory hits that were assessed and have a label: the verdicts' denominator. */
+export function labelledHits(memory: Pick<MemoryComponent, "hits" | "not_assessed" | "by_label">): number {
+  return memory.hits - (memory.not_assessed ?? 0) - (memory.by_label?.unlabelled ?? 0);
+}

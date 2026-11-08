@@ -1,0 +1,19 @@
+# The run budget of configs/budget.yaml with max_tool_calls halved (30 -> 15), chosen before
+# any result was seen. RunConfig.budget replaces the whole budget (a scenario's own budget
+# too), so every other limit is written out at its configured value. The comparison's switch
+# is budget.max_tool_calls: the runner refuses it if the budgets differ in another limit, and
+# evals/compare.py checks again from the runs' records that only max_tool_calls differed.
+name: tight_tools
+description: "Full system with half the tool-call budget (15 instead of 30); every other limit unchanged."
+suite: test
+config:
+  strategy: adaptive
+  use_rag: true
+  use_memory: true
+  budget:
+    max_steps: 30
+    max_tool_calls: 15
+    max_elapsed_seconds: 120.0
+    max_estimated_tokens: 120000
+    max_parallel_agents: 2
+    max_model_tokens: 200000
