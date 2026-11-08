@@ -169,8 +169,8 @@ Redis only coordinates: the run records stay the source of truth, a worker that 
 jobs settled from each run's persisted evidence, and a fix that may have reached the target is
 never sent again ([ADR 0034](docs/decisions/0034-durable-workers-redis-coordinates-the-run-records-decide.md)).
 [infra/compose/](infra/compose/README.md) packages the API, Mission Control, Redis and workers
-for Docker Compose; it was written and checked offline but **not yet started** (no container
-engine on the build machine).
+for Docker Compose: built and verified with real containers on Apple silicon (linux/arm64;
+amd64 not verified), including a worker restart, a worker crash and a Redis restart.
 
 ### Run an incident on a real cluster (M5)
 
@@ -370,8 +370,8 @@ Status words: **implemented** (works and is tested, against the simulator; rows 
 | Learned routing policy | not yet built | — | Planned contextual bandit |
 | Neural reranker | not yet built | `Reranker` interface in [recap/core/interfaces.py](recap/core/interfaces.py) | V1 uses a lexical reranker |
 | Per-person approvals | not yet built | — | Since M1 approvals come from one authenticated operator token, not individual people; on a real cluster (M5) an approval proves a terminal or a token holder and a timing, not which person decided |
-| Durable workers (Redis job queue) | implemented, opt-in (M6) | [recap/workers/](recap/workers/), [apps/worker/](apps/worker/__main__.py) | `RECAP_EXECUTION_BACKEND=redis`: idempotent, bounded submission, atomic claims, heartbeats, cancellation, graceful shutdown; a dead worker's job is settled from the run's persisted evidence, and only a run that provably sent no write runs again (as a new run, with a fresh approval); tested with real worker processes killed at seven points, against an in-repo fake Redis ([ADR 0034](docs/decisions/0034-durable-workers-redis-coordinates-the-run-records-decide.md)) |
-| Docker / Compose packaging | written, not started (M6) | [infra/compose/](infra/compose/README.md) | API, Mission Control, Redis, workers, optional Prometheus; localhost-only, non-root, read-only containers; checked offline, never built or started (no container engine on the build machine) |
+| Durable workers (Redis job queue) | implemented, opt-in (M6) | [recap/workers/](recap/workers/), [apps/worker/](apps/worker/__main__.py) | `RECAP_EXECUTION_BACKEND=redis`: idempotent, bounded submission, atomic claims, heartbeats, cancellation, graceful shutdown; a dead worker's job is settled from the run's persisted evidence, and only a run that provably sent no write runs again (as a new run, with a fresh approval); tested with real worker processes killed at seven points (against an in-repo fake Redis), and against a real Redis 7.4 and in Docker Compose ([ADR 0034](docs/decisions/0034-durable-workers-redis-coordinates-the-run-records-decide.md)) |
+| Docker / Compose packaging | implemented, verified locally (M6) | [infra/compose/](infra/compose/README.md) | API, Mission Control, Redis, workers, optional Prometheus; localhost-only, non-root, read-only containers; built and run with real containers on Apple silicon (colima, linux/arm64): 34 end-to-end checks and the browser smoke test passed; linux/amd64 not verified |
 | Crash-resume of in-flight runs | not yet built | [recap/harness/store.py](recap/harness/store.py) | An interrupted run is not resumed; with the Redis backend (M6) it is closed from its persisted evidence and, when no write can have landed, run again as a new run |
 
 Other known limits: pattern-based injection detection is not production-grade (the protection is the gateway); one MCP subprocess per run adds about 0.4–0.5 s; SQLite files are trusted local state. On SREGym's cluster RBAC alone limits RECAP's writer (no admission policy there) and clocks go unchecked; published runs are files to read, not runs Mission Control can open ([docs/m5-report.md](docs/m5-report.md#10-known-failures-and-limitations)).
@@ -502,7 +502,7 @@ Full details: [docs/threat-model.md](docs/threat-model.md) and [recap/safety/REA
 │   ├── kind-scenarios/    4 Kind demo faults (M5)
 │   └── sregym-scenarios/  1 SREGym problem (M5)
 ├── infra/                 how RECAP runs; kind/: the Kind demo cluster; aws/: the owner's VM;
-│                          sregym/: SREGym on that VM (M5); compose/: Docker Compose (M6, not started)
+│                          sregym/: SREGym on that VM (M5); compose/: Docker Compose (M6)
 ├── integrations/sregym/   SREGym adapter (the Kubernetes adapter in external-harness mode);
 │                          the pre-M5 tool mapping
 ├── recap/                 the Python package
@@ -564,7 +564,7 @@ CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on every push and
 | Learned router (contextual bandit) | Spend parallel compute only where it pays off | Many logged runs with verified outcomes; the existing `RoutingSignals` and `LearnedRouter` interface | Medium |
 | Hybrid retrieval + neural reranker | BM25 misses synonyms ("OOM" vs "out of memory") | A larger, realistic runbook corpus; the `Reranker` interface | Medium |
 | Crash-resume from checkpoints | An interrupted run is recorded but not resumed | Safe replay of each stage from `RunStore` checkpoints | Medium |
-| Docker packaging | Redis-backed workers exist and Compose files are written (M6); building and starting them, and larger load tests, remain | A machine where the images can be built and started | Medium |
+| Docker packaging | Redis-backed workers and Docker Compose are built and verified on Apple silicon (M6); linux/amd64 images, a hosted deployment and larger load tests remain | An amd64 machine; a host | Medium |
 | Static demo site (GitHub Pages) | A shareable link that replays real recorded runs in the dashboard, clearly labeled as a recording | The dashboard's replay (M4) without a running API: an export of the replayed run | Medium |
 | OpenTelemetry collector | Nested spans in a real trace viewer | The `TraceSink` interface; a local collector | Low |
 | Trajectory distillation | Learn a policy from verified runs, the long-term goal | Only with enough valid, verified trajectory data and a free GPU | Low, conditional |

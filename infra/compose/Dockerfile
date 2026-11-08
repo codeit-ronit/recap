@@ -8,14 +8,14 @@
 # Build context: the repository root (../.. from here); .dockerignore keeps out data/, .env,
 # .git, node_modules, caches and the test suite.
 #
-# Base images are pinned by version. The python image is the one infra/kind/app/Dockerfile
-# pins by digest; the node, nginx, redis and prometheus tags are pinned by version only:
-# after a first pull, pin each by digest too (infra/compose/README.md, "Pinning digests").
-# Every base image is published for linux/amd64 and linux/arm64.
+# Base images are pinned by version and by their multi-arch index digest (each covers
+# linux/amd64 and linux/arm64), so every build starts from the same bytes. The python image is
+# the one infra/kind/app/Dockerfile pins; the others were read on 2026-11-08 with
+# `docker manifest inspect` (infra/compose/README.md, "Pinning digests").
 
 ARG PYTHON_IMAGE=python:3.12.16-alpine3.24@sha256:e6dae589c1c05976188fd3bd019afd091445fc533ed2ea29001beddc7368a9c8
-ARG NODE_IMAGE=node:22.12.0-alpine3.21
-ARG NGINX_IMAGE=nginxinc/nginx-unprivileged:1.27.3-alpine
+ARG NODE_IMAGE=node:22.12.0-alpine3.21@sha256:51eff88af6dff26f59316b6e356188ffa2c422bd3c3b76f2556a2e7e89d080bd
+ARG NGINX_IMAGE=nginxinc/nginx-unprivileged:1.27.3-alpine@sha256:9e7238f579a54582263a960d1b0094b4a3ecce641342eda3f8e2ff82b1703d2b
 
 # --- the dashboard's static files ----------------------------------------------------------
 FROM ${NODE_IMAGE} AS dashboard-build

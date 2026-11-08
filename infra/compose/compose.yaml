@@ -25,6 +25,9 @@ x-hardened: &hardened
 
 x-recap-env: &recap-env
   RECAP_DATA_DIR: /data
+  # The model-usage ledger (free-tier caps) defaults to ~/.local/state; the containers' user
+  # has no home and a read-only root filesystem, so it lives in the shared data volume.
+  RECAP_USAGE_LEDGER: /data/llm-usage.db
   RECAP_EXECUTION_BACKEND: redis
   RECAP_REDIS_URL: redis://redis:6379/0
   RECAP_QUEUE_CAPACITY: ${RECAP_QUEUE_CAPACITY:-20}
@@ -36,7 +39,7 @@ x-recap-env: &recap-env
 
 services:
   redis:
-    image: redis:7.4.2-alpine
+    image: redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952
     # Append-only file, fsync every second: a restarted Redis keeps its queue (a second at most
     # is lost; every run's outcome lives in SQLite either way). No RDB snapshots.
     command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--save", ""]
@@ -88,11 +91,10 @@ services:
     <<: *hardened
 
   worker:
-    build: # the api's image (one build: the second is a cache hit)
-      context: ../..
-      dockerfile: infra/compose/Dockerfile
-      target: recap
+    # The api service builds this image; two services building one tag race when they tag it
+    # (seen with the classic builder). Never pulled: it exists only locally.
     image: recap:local
+    pull_policy: never
     command: ["python", "-m", "apps.worker"]
     environment:
       <<: *recap-env
@@ -137,7 +139,7 @@ services:
     <<: *hardened
 
   prometheus:
-    image: prom/prometheus:v2.55.1
+    image: prom/prometheus:v2.55.1@sha256:2659f4c2ebb718e7695cb9b25ffa7d6be64db013daba13e05c875451cf51b0d3
     profiles: [metrics] # only with --profile metrics (and RECAP_METRICS=1 for the API)
     command:
       - --config.file=/etc/prometheus/prometheus.yml

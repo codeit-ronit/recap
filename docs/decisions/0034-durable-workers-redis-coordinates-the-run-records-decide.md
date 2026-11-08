@@ -69,7 +69,8 @@ instead.
 7. **Optional, and packaged without being required.** RECAP starts and runs without Redis; the
    Redis backend is chosen explicitly. `infra/compose/` packages the API, the dashboard, Redis,
    workers and an optional Prometheus (localhost-only ports, non-root, no capabilities, read-only
-   root filesystems, health-gated startup); it was written and checked offline, not started.
+   root filesystems, health-gated startup); built and verified with real containers on Apple
+   silicon on 2026-11-08 (linux/arm64; amd64 not verified).
 
 ## Consequences
 

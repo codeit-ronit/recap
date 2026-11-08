@@ -215,6 +215,26 @@ async def test_parallel_trace_events_in_any_order_give_the_same_record(
     assert rebuilt.stages == expected.stages and rebuilt.seconds == expected.seconds
 
 
+async def test_a_state_change_has_one_time_in_the_record_and_in_the_trace(
+    settings: Settings,
+) -> None:
+    """Each state change is timestamped once (M6): its trace event carries the time its
+    StateChange recorded, so durations derived from the record and from the trace agree to
+    the microsecond. Before, the CREATED event was stamped ~0.5 ms later, after the run's
+    setup, and the two rounded durations disagreed in about 9 runs out of 10."""
+    runtime = Runtime(settings)
+    record = await runtime.run_incident("bad-deployment", RunConfig(approval_mode="auto"))
+    moves = [e for e in runtime.events.list_events(record.run_id) if e.category == C.STATE]
+    assert [e.payload["to"] for e in moves] == [change.state.value for change in record.history]
+    assert [e.ts for e in moves] == [change.at for change in record.history]  # exactly
+    events = runtime.events.list_events(record.run_id)
+    from_record = record_from_run(record, events, mode="scripted_regression")
+    from_trace = record_from_run(
+        record.model_copy(update={"history": []}), events, mode="scripted_regression"
+    )
+    assert (from_trace.stages, from_trace.seconds) == (from_record.stages, from_record.seconds)
+
+
 # --- a model server that reports no token counts --------------------------------------------------
 
 

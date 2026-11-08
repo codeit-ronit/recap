@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
+from datetime import datetime
 from typing import Any
 
 from recap.core.ids import new_id, utcnow
@@ -90,15 +91,21 @@ class Tracer:
         agent: str | None = None,
         duration_ms: float | None = None,
         usage: Usage | None = None,
+        ts: datetime | None = None,
     ) -> TraceEvent:
-        """Create one event, redact it, and write it to all sinks."""
+        """Create one event, redact it, and write it to all sinks.
+
+        `ts` is the time of something that was already timestamped: a state change's trace
+        event carries the time its StateChange recorded, so the run's record and its trace
+        hold one time for the one event. Every other event is timestamped here, now.
+        """
         self._seq += 1
         event = TraceEvent(
             event_id=new_id("evt"),
             run_id=self.run_id,
             seq=self._seq,
             stage=self.stage,
-            ts=utcnow(),
+            ts=ts or utcnow(),
             agent=agent,
             category=category,
             payload=self._redact(payload or {}),

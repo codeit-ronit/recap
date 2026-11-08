@@ -44,6 +44,7 @@ import type {
   ApprovalRequest,
   EnvironmentInfo,
   ExperienceEpisode,
+  Interruption,
   ProviderInfo,
   RunConfig,
   RunConfigInput,
@@ -75,6 +76,7 @@ import {
   mergeBySeq,
   missingPrerequisites,
   oracleView,
+  interruptedLook,
   outcomeView,
   providerChoices,
   queueNotice,
@@ -1622,8 +1624,16 @@ function RunPanel({
 
   const summaryEvent = lastOf(events, "run.summary")?.payload as RunSummaryPayload | undefined;
   const queued = queueNotice(detail.data?.status, detail.data?.job, record?.interruption, events.length > 0);
+  // A run closed after its worker stopped reads "Interrupted" (or "Needs reconciliation"), not
+  // the stored state's "Failed" (M6); the record's interruption, or the closing summary's.
+  const interruption = record?.interruption ?? ((obj(summaryEvent).interrupted ?? null) as Interruption | null);
+  const halted = current === "FAILED" ? interruptedLook(interruption) : null;
   const transport = transportView(stream.transport, stream.resumes, stream.lastSeq, finished, events.length, !!stream.error);
-  const caption = current ? (
+  const caption = halted ? (
+    <>
+      <strong>{halted.label}.</strong> {halted.caption}
+    </>
+  ) : current ? (
     <>
       <strong>{stateLabel(current)}.</strong> {stageHelp(current, environment)}
     </>
@@ -1650,7 +1660,11 @@ function RunPanel({
         subtitle={
           <span className="chip-row">
             {current ? (
-              <StateToken state={current} size="sm" />
+              halted ? (
+                <StatusToken tone={halted.tone} icon={halted.icon} label={halted.label} title={halted.title} size="sm" />
+              ) : (
+                <StateToken state={current} size="sm" />
+              )
             ) : (
               <StatusToken tone="neutral" icon="clock" label={detail.data?.status === "queued" ? "Queued" : "Starting"} size="sm" />
             )}
@@ -1670,7 +1684,7 @@ function RunPanel({
         {/* Nothing to say about where decisions come from before the run has started (M6: a queued run). */}
         {events.length || record ? <RunBannerView banner={banner} replay={runSummary?.replay ?? null} /> : null}
         {live && !signedIn && manual !== false ? <SignInPrompt what="approve or reject this run's fix" /> : null}
-        <StateStepper states={states} running={live} times={times} caption={caption} />
+        <StateStepper states={states} running={live} times={times} caption={caption} exit={halted} />
         {stream.transport === "recorded" ? (
           <div className="muted small">
             {detail.data?.status === "published"

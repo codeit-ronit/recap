@@ -310,6 +310,11 @@ class JobView(ApiModel):
     category: str | None  # why it ended or ran again (recap/workers/queue.py)
     detail: str | None
     cancel_requested: bool
+    # What the run will run with, from the job's stored configuration (so a page can say so
+    # before the run's first event): the provider chosen for it (null: the server's default)
+    # and the committed recording it replays, if any.
+    provider: str | None = None
+    replay_fixture: str | None = None
 
 
 class RunDetail(Versioned):

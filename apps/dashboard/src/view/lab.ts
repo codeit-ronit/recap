@@ -1086,3 +1086,38 @@ export function queueNotice(
   }
   return null;
 }
+
+/**
+ * How the live run page names a run closed after its worker stopped (RunRecord.interruption):
+ * "Interrupted" or "Needs reconciliation" instead of the stored state's "Failed". The stored
+ * state stays FAILED and stays visible, as the token's title and in the caption.
+ */
+export interface InterruptedLook {
+  label: string;
+  tone: Tone;
+  icon: IconName;
+  caption: string;
+  title: string;
+}
+
+export function interruptedLook(interruption: Interruption | null | undefined): InterruptedLook | null {
+  if (!interruption) return null;
+  const title = "Stored state: FAILED. Closed after its worker stopped (RunRecord.interruption).";
+  if (interruption.needs_reconciliation) {
+    return {
+      label: "Needs reconciliation",
+      tone: "bad",
+      icon: "shield",
+      caption: "Its worker stopped after a fix may have reached the target: not retried, a person must check the target. Stored state: Failed.",
+      title,
+    };
+  }
+  const after = interruption.retried_as ? " and the incident ran again as a new run" : "";
+  return {
+    label: "Interrupted",
+    tone: "warn",
+    icon: "alert",
+    caption: `Its worker stopped before any fix reached the target; the run was closed from its persisted evidence${after}. Stored state: Failed.`,
+    title,
+  };
+}

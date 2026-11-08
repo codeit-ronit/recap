@@ -579,6 +579,8 @@ def job_view(job: Job, *, position: int | None, worker_alive: bool | None) -> Jo
         category=job.category or None,
         detail=job.detail or None,
         cancel_requested=job.cancel_requested,
+        provider=_str(job.config.get("provider")),
+        replay_fixture=_str(job.config.get("replay_fixture")),
     )
 
 

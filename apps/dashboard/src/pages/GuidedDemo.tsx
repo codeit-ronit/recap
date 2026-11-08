@@ -403,6 +403,8 @@ export interface DemoRunViewProps {
   environment: Partial<EnvironmentInfo> | null;
   summary: dto.RunSummary | null;
   record: RunRecord | null;
+  /** M6: the run's job (Redis backend): what a queued run will replay, before its first event. */
+  job?: dto.JobView | null;
   detailLoading: boolean;
   /** The approval: waiting for a person, the request, and whether its dialog can be reopened. */
   waiting: boolean;
@@ -426,7 +428,9 @@ export function DemoRunView(props: DemoRunViewProps) {
   const actors = useMemo(() => activeActors(events, progress), [events, progress]);
   const activity = useMemo(() => recentActivity(events), [events]);
   const notices = useMemo(() => demoNotices(events), [events]);
-  const replay = provider?.origin === "replay" || summary?.provider_kind === "replay";
+  // A queued run (Redis backend) has no event or record yet: its job says what it will replay.
+  const queuedReplay = !events.length && !record && !!props.job?.replay_fixture;
+  const replay = provider?.origin === "replay" || summary?.provider_kind === "replay" || queuedReplay;
   // A real-cluster run published with the repository: historical, told step by step, never acted on.
   const published = summary?.status === "published";
   const simulated = placeOf(events).simulated !== false && environment?.is_simulated !== false;
@@ -454,7 +458,13 @@ export function DemoRunView(props: DemoRunViewProps) {
   return (
     <div className="demo">
       {replay ? (
-        <DemoProvenance words={runProvenance(provider)} />
+        <DemoProvenance
+          words={
+            queuedReplay
+              ? `Queued for a worker: it will replay the committed recording ${props.job?.replay_fixture} offline, with no model called. Its steps appear as soon as a worker starts it.`
+              : runProvenance(provider)
+          }
+        />
       ) : published ? (
         <HistoricalBanner summary={summary} />
       ) : (
@@ -606,6 +616,7 @@ function DemoRun({
         environment={environment}
         summary={detail.data?.summary ?? null}
         record={record}
+        job={detail.data?.job ?? null}
         detailLoading={detail.loading}
         waiting={approval.waitingManual}
         request={waitingRequest}

@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { MAIN_FLOW, TERMINAL_STATES, stateLabel, stateTone } from "../format";
+import type { Tone } from "../format";
 import { fmtOffset } from "../view/lab";
 import { Icon } from "./Icon";
 
@@ -14,6 +15,8 @@ type StepStatus = "done" | "current" | "stopped here" | "skipped" | "not reached
  * `times`: when the run first entered each state (ms after its first event), shown under the
  * step. `caption`: what the current stage means, announced politely when it changes. Each
  * step's status is also written out for screen readers: it never depends on color alone.
+ * `exit`: plain words for how the run ended when the stored terminal state alone would mislead
+ * (M6: a run closed after its worker stopped is stored as FAILED but reads "Interrupted").
  */
 export function StateStepper({
   states,
@@ -21,12 +24,14 @@ export function StateStepper({
   times,
   caption,
   label = "Run stages",
+  exit,
 }: {
   states: string[];
   running: boolean;
   times?: Readonly<Record<string, number>>;
   caption?: ReactNode;
   label?: string;
+  exit?: { label: string; tone: Tone } | null;
 }) {
   const current = states.length ? states[states.length - 1] : null;
   const visited = new Set(states);
@@ -85,7 +90,16 @@ export function StateStepper({
           );
         })}
       </ol>
-      {failed ? (
+      {failed && exit ? (
+        <div className={`stepper-exit tone-${exit.tone}`}>
+          <Icon name="alert" size={14} />
+          <span>
+            <strong>{exit.label}</strong>
+            {stoppedAt ? <> while {stateLabel(stoppedAt).toLowerCase()}</> : null}
+            <span className="sr-only"> (stored state: {stateLabel(failed)})</span>
+          </span>
+        </div>
+      ) : failed ? (
         <div className={`stepper-exit tone-${stateTone(failed)}`}>
           <Icon name={failed === "BUDGET_EXHAUSTED" || failed === "QUOTA_EXHAUSTED" ? "stop" : "x"} size={14} />
           <span>

@@ -9,7 +9,7 @@ import { test } from "node:test";
 import type { JobView } from "../src/dto.ts";
 import { stillGoing } from "../src/format.ts";
 import type { Interruption } from "../src/types.ts";
-import { outcomeView, queueNotice } from "../src/view/lab.ts";
+import { interruptedLook, outcomeView, queueNotice } from "../src/view/lab.ts";
 import { glanceCounts, outcomeLook } from "../src/view/system.ts";
 
 const JOB: JobView = {
@@ -98,4 +98,21 @@ test("the two new outcomes have words, tones and an at-a-glance group", () => {
   ]);
   assert.equal(counts.other, 1);
   assert.equal(counts.failed, 1);
+});
+
+test("an interrupted run is named for what happened, the stored FAILED kept for inspection", () => {
+  assert.equal(interruptedLook(null), null);
+  const ran = interruptedLook(interruption());
+  assert.ok(ran);
+  assert.equal(ran.label, "Interrupted");
+  assert.equal(ran.tone, "warn");
+  assert.match(ran.caption, /^Its worker stopped before any fix reached the target;/);
+  assert.match(ran.caption, /ran again as a new run\. Stored state: Failed\.$/);
+  assert.match(ran.title, /^Stored state: FAILED/);
+  const person = interruptedLook(interruption({ needs_reconciliation: true, write: "applied", retried_as: null }));
+  assert.ok(person);
+  assert.equal(person.label, "Needs reconciliation");
+  assert.equal(person.tone, "bad");
+  assert.match(person.caption, /a person must check the target\. Stored state: Failed\.$/);
+  assert.doesNotMatch(interruptedLook(interruption({ retried_as: null }))?.caption ?? "", /ran again/);
 });

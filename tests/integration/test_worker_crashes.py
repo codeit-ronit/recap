@@ -246,8 +246,11 @@ def test_window_3_killed_while_investigating_a_new_run_starts_afresh(
     assert old is not None and old.state == IncidentState.FAILED and old.interruption is not None
     assert (old.interruption.phase, old.interruption.cause) == ("before_write", "worker_lost")
     assert old.interruption.retried_as == done.run_id and not old.interruption.needs_reconciliation
-    summary = trace_is_whole(runtime, job.run_id)[-1]
+    closing = trace_is_whole(runtime, job.run_id)
+    summary = closing[-1]
     assert summary.payload["interrupted"]["retried_as"] == done.run_id
+    # The move to FAILED has one time, in the record and in the trace.
+    assert closing[-2].payload["to"] == "FAILED" and closing[-2].ts == old.history[-1].at
     assert applied_writes(runtime, job.run_id) == []
     assert len(applied_writes(runtime, done.run_id)) == 1
 
