@@ -85,8 +85,9 @@ def test_the_profile_selects_the_sregym_adapter_with_its_own_allowlists(profile:
 def test_the_profile_builds_offline_and_lists_its_scenario(profile: Any) -> None:
     env = create_environment(profile.environment, "describe")  # never contacts the cluster
     assert isinstance(env, SREGymEnvironment)
-    [scenario] = env.list_scenarios()
-    assert scenario.id == SCENARIO and scenario.partition.value == "demo"  # not held out
+    scenarios = {s.id: s for s in env.list_scenarios()}
+    scenario = scenarios[SCENARIO]
+    assert scenario.partition.value == "demo"  # M5's development problem: not held out
     assert scenario.expected["fix"] == "execute_rollback"  # evaluation only
     info = env.describe()
     assert info.namespace == "hotel-reservation" and info.name == "SREGym on Kind cluster kind"
@@ -99,8 +100,30 @@ def test_nothing_an_agent_reads_names_the_answer(profile: Any) -> None:
     env = create_environment(profile.environment, "describe")
     text = f"{env.describe().description} {env.describe().name}".lower()
     assert not any(word in text for word in ANSWER)
-    [scenario] = env.list_scenarios()
-    assert scenario.alert_service == "frontend"  # the alert rule's preferred name: not the cause
+    for scenario in env.list_scenarios():  # M5's problem and W5's held-out ones alike
+        assert scenario.alert_service == "frontend"  # the rule's preferred name: not the cause
+
+
+def test_the_w5_held_out_problems_are_blind_neutral_and_never_remembered(profile: Any) -> None:
+    """M6 W5: nobody read a held-out problem's answer before its runs, so its file has none;
+    its id, title and description name no mechanism; the held-out test partition is never
+    consolidated into experience memory; and every one waits for the same generic alert."""
+    from recap.environments.kubernetes.scenario import list_kind_scenarios
+
+    folder = REPO_ROOT / "fixtures" / "sregym-scenarios"
+    specs = [s for s in list_kind_scenarios(folder) if s.id.startswith("sregym-w5-")]
+    assert [s.id for s in specs] == [f"sregym-w5-{n}" for n in range(1, 6)]
+    m5 = next(s for s in list_kind_scenarios(folder) if s.id == SCENARIO)
+    for spec in specs:
+        assert (spec.family, spec.expected, spec.partition.value) == ("unlabelled", {}, "test")
+        assert spec.external is not None and spec.external.commit == m5.external.commit
+        assert spec.external.problem != m5.external.problem  # never the development problem
+        words = spec.external.problem.split("_")
+        visible = f"{spec.id} {spec.title} {spec.description}".lower()
+        assert not [
+            w for w in words if len(w) > 3 and w not in {"hotel", "reservation"} and w in visible
+        ]
+        assert spec.alert == m5.alert and spec.budget == m5.budget
 
 
 def test_get_system_reports_the_adapter_as_implemented_and_live() -> None:

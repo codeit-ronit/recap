@@ -1,0 +1,167 @@
+# M6 W5: the held-out SREGym evaluation, FROZEN before its first scored run.
+#
+# Real model (qwen3:8b on the owner's VM), real Kubernetes (SREGym's own cluster), five SREGym
+# problems RECAP was never run on, a person approving every write. Human approval makes this a
+# human-in-the-loop evaluation: never an unassisted benchmark score, never comparable with a
+# leaderboard that uses other intervention rules. The protocol in words: docs/w5-protocol.md.
+#
+# Machine-checked: scripts/w5_freeze.py check (the hashes below) before every scored run, and
+# tests/unit/test_w5_manifest.py (this file against the scenario files and the selection).
+schema: recap-w5-manifest-v1
+status: frozen          # frozen -> running -> completed (the hashes stay as the record)
+written: 2026-11-09
+
+freeze:
+  files_sha256: 14e79284a68b9288bcdfe77d8f75170414734cddaa445caf52db37ea8ec5dd5c
+  packages_sha256: 54e0b651e00d200ed2881a34e45cd725e8a2c2f1c97c5c085f99adb166c661f9
+  roots: [recap, configs, fixtures/knowledge, fixtures/knowledge-overlays/kubernetes,
+          fixtures/sregym-scenarios, integrations/sregym, infra/sregym, apps/api,
+          scripts/demo.py, scripts/live_eval.py, evals/categorize.py, evals/records.py,
+          pyproject.toml]
+  code: the commit that adds this file (git log -1 --format=%H -- evals/frozen/w5-heldout-sregym.yaml);
+        every scored run records it as its code version, never with +dirty
+  rule: >-
+    Nothing under the roots changes from the first scored run until the last grade is
+    recorded. A change before the first scored run (e.g. after the setup pilot) is a new
+    freeze: new hashes, a new commit, said so in the report.
+
+model:
+  provider: ollama-vm     # configs/providers.yaml: self-hosted on the owner's VM, $0 per request
+  model: qwen3:8b
+  weights: sha256:a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f  # pinned: a run refuses any other file
+  ollama: recorded with each run (provider_info.server)
+  mode: tools             # investigation steps by native tool calls; proposals as JSON
+  think: false
+  temperature: 0.0
+  seed: 7
+  context_tokens: 16384
+  max_output_tokens: 1024
+  request_timeout_seconds: 900
+  reached_through: the SSH tunnel (Mac 127.0.0.1:11435 -> VM 127.0.0.1:11434); Ollama listens on the VM's loopback only
+prompts: prompts-v4.7
+agents:
+  strategy: adaptive      # RECAP's router (rules RT0-RT7): one investigator or two specialists
+  router: rules-router-v1
+  max_parallel_agents: 2
+  max_investigation_rounds: 2
+  max_mitigation_attempts: 2
+verifier: evidence-rule-verifier-v1
+safety:
+  policy: policy-sregym-hotel-v2
+  approval: manual        # at the terminal, the owner types the target service's name, for that one action, once
+  approval_ttl_seconds: 900
+  remediations: [execute_rollback, restart_service]
+  writer: RBAC lets recap-writer patch Deployments in hotel-reservation only (infra/sregym/recap-rbac.yaml)
+rag:
+  mode: bm25              # RECAP_ENABLE_EMBEDDINGS unset: no embedding model is involved
+  k: 4
+  corpus: [fixtures/knowledge, fixtures/knowledge-overlays/kubernetes]   # hashed with the freeze
+memory:
+  data_folder: ~/recap-w5-heldout    # new and empty before the first scored run
+  reads: [train, live]               # a real model's default partitions: both empty
+  writes: none                       # held-out test scenarios are never consolidated
+budgets:                             # configs/targets/sregym-hotel/budget.yaml and each scenario
+  max_steps: 30
+  max_tool_calls: 30
+  max_elapsed_seconds: 3600          # approval waits excluded
+  max_estimated_tokens: 120000
+  max_model_tokens: 200000
+  pack_tokens: 3000
+  max_item_tokens: 400
+config_hash: 34fab689410b24cf        # load_settings(target="sregym-hotel") at the freeze
+shell:                               # the run's environment: nothing else that RECAP reads
+  RECAP_TARGET: sregym-hotel
+  RECAP_DATA_DIR: ~/recap-w5-heldout
+  unset: [RECAP_PROVIDER, RECAP_ENABLE_EMBEDDINGS, RECAP_KNOWLEDGE_OVERLAYS, RECAP_REPLAY]
+
+sregym:
+  release: "1.1"
+  commit: a90b43cc973158120119a9f388081eac4f7adb36
+  applications_commit: afd5b947fbafefc110e7dc00acd698cb2683dc7f
+  registry: sregym/conductor/problems/registry.py
+  registry_sha256: e7a7f5189ee347d0f98150a01248c29657bc4d43f1feeff06a8dd7f5cab4e83c
+  cluster: kind-kind (SREGym's four-node Kind cluster, Kubernetes 1.32.1, on the owner's VM)
+  namespace: hotel-reservation
+  deploy: bash infra/sregym/sregym.sh deploy <problem>   # SREGym's external harness deploys and injects
+  grade: bash infra/sregym/sregym.sh grade <problem>     # SREGym's mitigation oracle, exit 0 = pass
+
+selection:
+  read: the registry's problem ids only (its keys); no problem definition, injected change,
+        mitigation oracle or solution of any problem was opened
+  inventory: {problems: 101, naming_the_hotel_app: 30}
+  used_before: [misconfig_app_hotel_res]   # M5: rehearsals, adapter fixes and five runs (docs/m5-progress.md)
+  criteria:
+    - in the pinned registry and named for the hotel-reservation app (the only app the sregym-hotel profile allows)
+    - never used by RECAP
+    - "writable - the name points at a field of a workload's Deployment or pod template, the one
+      object kind RECAP may change (rollback to an earlier revision, restart)"
+    - "observable - by Kubernetes semantics alone, the named fault keeps pods from starting,
+      restarts them or keeps them unready, the only symptoms this target measures (no metrics,
+      no probes; status, readiness and restarts only)"
+    - every problem meeting all four, at most five; run in the registry's own order
+  candidates:   # the 30 hotel names, in registry order, each with its decision
+    - {problem: misconfig_app_hotel_res, decision: excluded, why: used in M5}
+    - {problem: ephemeral_port_range_hotel_reservation, decision: excluded, why: "not writable: node kernel networking"}
+    - {problem: search_rate_retry_collapse_hotel_reservation, decision: excluded, why: "not writable: application behaviour; latency and errors are not measured here"}
+    - {problem: configmap_drift_hotel_reservation, decision: excluded, why: "not writable: a ConfigMap"}
+    - {problem: cfs_cpu_throttling_hotel_reservation, decision: excluded, why: "not observable: throttling slows pods without stopping them"}
+    - {problem: feature_flag_latent_bug_hotel_reservation, decision: excluded, why: "not writable: application configuration"}
+    - {problem: finalizer_deadlock_controller_hotel_reservation, decision: excluded, why: "not writable: finalizers and a controller"}
+    - {problem: duplicate_pvc_mounts_hotel_reservation, decision: selected, why: "volume mounts in the pod template; pods that cannot mount never start"}
+    - {problem: liveness_probe_too_aggressive_hotel_reservation, decision: selected, why: "a probe in the pod template; failing liveness restarts containers"}
+    - {problem: init_container_dependency_hang_hotel_reservation, decision: selected, why: "an init container in the pod template; a hung init container keeps pods unready"}
+    - {problem: missing_configmap_hotel_reservation, decision: excluded, why: "not writable: a ConfigMap to create"}
+    - {problem: missing_service_hotel_reservation, decision: excluded, why: "not writable: a Service to create"}
+    - {problem: nightly_rebalance_oom_hotel_reservation, decision: excluded, why: "not writable: a scheduled job's load"}
+    - {problem: node_clock_drift_hotel_reservation, decision: excluded, why: "not writable: a node"}
+    - {problem: priority_preemption_cascade_hotel_reservation, decision: excluded, why: "not writable: priority classes and scheduling"}
+    - {problem: readiness_probe_misconfiguration_hotel_reservation, decision: selected, why: "a probe in the pod template; failing readiness keeps pods unready"}
+    - {problem: rolling_update_misconfigured_hotel_reservation, decision: excluded, why: "not observable: a rollout strategy alone does not stop pods"}
+    - {problem: sidecar_port_conflict_hotel_reservation, decision: selected, why: "container ports in the pod template; a container that cannot bind its port crash-loops"}
+    - {problem: service_port_conflict_hotel_reservation, decision: excluded, why: "not writable: a Service"}
+    - {problem: wrong_dns_policy_hotel_reservation, decision: excluded, why: "not observable: pods run; whether resolution failures stop them depends on the app"}
+    - {problem: service_wrong_pod_selection_hotel_reservation, decision: excluded, why: "not writable: a Service selector"}
+    - {problem: wrong_service_selector_hotel_reservation, decision: excluded, why: "not writable: a Service selector"}
+    - {problem: expired_tls_hotel_reservation, decision: excluded, why: "not writable: a certificate"}
+    - {problem: node_conntrack_exhaustion_hotel_reservation, decision: excluded, why: "not writable: a node"}
+    - {problem: pod_cidr_exhaustion_hotel_reservation, decision: excluded, why: "not writable: cluster networking"}
+    - {problem: calico_route_reflector_label_drift_hotel_reservation, decision: excluded, why: "not writable: the network plugin"}
+    - {problem: admission_webhook_tls_mismatch_hotel_reservation, decision: excluded, why: "not writable: an admission webhook"}
+    - {problem: psa_restricted_blocks_recreation_hotel_reservation, decision: excluded, why: "not writable: Pod Security Admission"}
+    - {problem: cumulative_admission_webhook_timeout_hotel_reservation, decision: excluded, why: "not writable: admission webhooks"}
+    - {problem: cronjob_sidecar_blocks_completion_hotel_reservation, decision: excluded, why: "not writable: a CronJob"}
+
+problems:       # scored, in this order; none is replaced after a result is seen
+  - {scenario: sregym-w5-1, problem: duplicate_pvc_mounts_hotel_reservation}
+  - {scenario: sregym-w5-2, problem: liveness_probe_too_aggressive_hotel_reservation}
+  - {scenario: sregym-w5-3, problem: init_container_dependency_hang_hotel_reservation}
+  - {scenario: sregym-w5-4, problem: readiness_probe_misconfiguration_hotel_reservation}
+  - {scenario: sregym-w5-5, problem: sidecar_port_conflict_hotel_reservation}
+
+pilot:          # setup and compatibility only: never counted as held-out evidence
+  scenario: sregym-misconfig-app-hotel-res
+  problem: misconfig_app_hotel_res
+  data_folder: ~/recap-w5-pilot   # its own folder: a verified pilot writes a memory episode
+
+outcomes:       # every attempted problem gets exactly one row; nothing is dropped
+  not_deployed: SREGym's harness could not deploy or inject it (no RECAP run)
+  no_alert: RECAP's alert rule never fired within 300 s (the run ends at reset; no investigation)
+  run: a RECAP run ended; its failure category (evals/categorize.py) or a verified recovery,
+       and SREGym's grader verdict recorded apart (pass, fail, or not graded)
+  assisted: any operator hint beyond approving or rejecting the exact action; reported apart
+
+stop_conditions:
+  - the cost meter reaches its stop line, or one more problem would cross it
+  - the operator is not there, or an approval expires (900 s)
+  - the freeze check fails before a scored run
+  - credentials or secret values appear somewhere unexpected
+  - the environment cannot be isolated (SREGym's harness resets the cluster before each problem)
+  - the model fails for the same infrastructure reason twice
+  - benchmark integrity is in doubt, or continuing would mean changing frozen behaviour
+
+cost:
+  cap_usd: 5              # proposed by the owner; nothing starts before the owner approves it
+  stop_line: 0.7          # no new work past 70% of the cap ($3.50), or when one more problem would cross it
+  meter: scripts/aws_cost_meter.py
+  prices_usd: {instance_hour: 0.2222, public_ipv4_hour: 0.005, gp3_gb_month: 0.0912}   # AWS Price List API, 2026-11-09
+  instance: {id: i-09a55033889ca1466, type: m6a.2xlarge, region: ap-south-1, disk: 150 GB gp3}

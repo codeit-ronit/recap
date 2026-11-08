@@ -561,7 +561,8 @@ class KubernetesEnvironment(TargetEnvironment):
                 f"target's harness is '{self.options.harness}'"
             )
         if external:
-            named = {spec.alert.service, str(spec.expected.get("root_cause_service", ""))}
+            # A blind held-out problem names no root cause (its answer was not read before it).
+            named = {spec.alert.service, str(spec.expected.get("root_cause_service") or "")} - {""}
             if unknown := sorted(named - set(self.services)):
                 raise ValueError(
                     f"scenario '{spec.id}' names services this target does not allow: "

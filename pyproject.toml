@@ -43,7 +43,8 @@ markers = [
 # Type checking is scoped (M4, M5, M6): the core interfaces (recap/core, the provider protocol,
 # the recordings), the modules M4 added (the typed API, the evaluation records and their
 # categorizer, the demo and type-generation scripts), M5's Kubernetes adapter and API load
-# test, M6's workers and W4's evaluation modules. Code outside this list is not retyped.
+# test, M6's workers, W4's evaluation modules and W5's freeze and cost tools. Code outside
+# this list is not retyped.
 # CI runs `mypy` with exactly this list.
 python_version = "3.11"
 plugins = ["pydantic.mypy"]
@@ -72,6 +73,8 @@ files = [
     "scripts/recordings_manifest.py",
     "scripts/secret_scan.py",
     "scripts/seed_demo.py",
+    "scripts/w5_freeze.py",
+    "scripts/aws_cost_meter.py",
 ]
 follow_imports = "silent"
 ignore_missing_imports = true
