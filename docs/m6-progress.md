@@ -240,6 +240,87 @@ Until W2 is pushed, a clone of GitHub has v0.6.0, without this work; the local r
   - the Incident Lab demo and the guided demo (approve, restart, reject).
 - **Pages-only regression run on the seeded demo data:** **100 passed, 0 failed, 1 skipped** (the skip is the demo flows, already run above). It checked this server's own scripted, replayed, blocked and out-of-budget runs alongside the published ones. A first pass failed 2 checks: my new "no control that acts" check matched the audit log's "Approved 11" filter chip. The check now matches the actual action labels exactly.
 
+## W3: durable workers and Docker Compose (2026-11-08)
+
+**What exists now:**
+- **An optional Redis backend.** With `RECAP_EXECUTION_BACKEND=redis`, `POST /incidents/run` queues the incident and worker processes (`python -m apps.worker`) run it through the unchanged harness (`Runtime.run_incident`). The default stays in-process; RECAP starts and runs without Redis or Docker.
+- **Crash safety.** A worker that dies leaves its job to another worker, which settles it from the run's persisted evidence, never from Redis. A run that provably sent no write runs again as a new run with a fresh approval; one whose fix may have reached the target is never retried and ends as `needs_reconciliation`.
+- **Docker Compose** for the API, Mission Control, Redis, workers and an optional Prometheus, in `infra/compose/`. **Written and checked offline only: never built or started** (the setup it needs is below).
+
+The design is in [ADR 0034](decisions/0034-durable-workers-redis-coordinates-the-run-records-decide.md).
+
+**How it works:**
+- **The queue** (`recap/workers/queue.py`; a small RESP client, `resp.py`, instead of a new dependency):
+  - submission is idempotent (an `Idempotency-Key` names one job for a day; the same key with another request is refused, 422) and bounded (a full queue answers 429 with `Retry-After`);
+  - claiming is atomic (`BLMOVE` into the worker's own list); every multi-key change is one `MULTI/EXEC`;
+  - workers refresh a heartbeat key with a TTL; one silent past it is dead;
+  - a job's status says what happened to the job (queued, running, completed, failed, cancelled, needs_reconciliation) and its `category` why; whether the incident was resolved is the run record's to say.
+- **The worker** (`recap/workers/worker.py`): bounded concurrency (always 1 on a live target), cancellation at the next heartbeat, graceful shutdown (stop claiming, a grace period, then cancel and settle), fencing (a worker that cannot refresh its heartbeat before the TTL would run out cancels its own runs), and recovery of dead workers' jobs beside the heartbeats. It checks every job again exactly as the API checks a request, so a job written to Redis some other way runs only what the API would start.
+- **Reconciliation** (`recap/workers/reconcile.py`) reads four records outside Redis: the run's checkpoint, its trace, the approval log and the target's own audit log (the new `TargetEnvironment.recorded_write`). It closes the run as FAILED with an `Interruption` (phase, write state, cause, the run it continued as), expires its pending requests and revokes its unused approvals (`ApprovalStore.void_for_run`), then requeues the job or ends it. Every step can be repeated: a settling that stops halfway is completed from the saved interruption, and a closed run's record is final (`RunStore.save` ignores a later checkpoint without the interruption).
+- **The API and Mission Control:** new run statuses `queued`, `interrupted`, `cancelled`; new outcomes `interrupted`, `needs_reconciliation`; `RunStarted` gains `job_id`, `queue_position` and `duplicate`; `GET /runs/{id}` adds the run's `job`; new read-only `GET /queue` and `GET /jobs/{id}`; queue metrics on `/metrics`; `/health` names the backend. A worker's run streams from its stored trace, so `Last-Event-ID` resumes it and a restart loses no event. The live run page shows a notice (queued, interrupted, ran again as run X with a link, or needs reconciliation); nothing was redesigned.
+
+**The seven crash windows,** each tested by killing a real worker process with SIGKILL at that exact point (`RECAP_FAULT_INJECTION=1`, `recap/workers/faults.py`) and letting a second worker process recover:
+
+| Window | What the evidence shows | What happens | Test |
+|---|---|---|---|
+| 1. before the claim | nothing claimed | the job stays queued and runs once, elsewhere | `test_window_1_...` |
+| 2. claimed, model not called | no record, no event | the same run id runs again (attempt 2) | `test_window_2_...` |
+| 3. investigating | no write-ahead record | closed; a new run investigates afresh, with a fresh approval | `test_window_3_...` |
+| 4. awaiting approval | a pending request | the request is expired (a late "yes" authorizes nothing); a new run asks again | `test_window_4_...` |
+| 5. right before the write | write-ahead record; the simulator's action log has no attempt | the approval stays used; a new run with a fresh approval; on a target that cannot tell, `needs_reconciliation` instead | `test_window_5_...` (2 tests) |
+| 6. write applied, outcome not recorded | write-ahead record; the action log has the applied write | never sent again: `needs_reconciliation`; still exactly one applied write | `test_window_6_...` |
+| 7. verifying the recovery | the fix's outcome is recorded | `needs_reconciliation`; one applied write | `test_window_7_...` |
+
+Every interrupted run's trace stays gapless and ends with a `run.summary` that carries the interruption. Delivery is at least once, never exactly once: only a run that provably sent nothing is retried.
+
+**Found and fixed while building:**
+- **Recovery inside the heartbeat loop.** A slow settling delayed the heartbeat past its TTL, so the worker fenced itself off and cancelled the retry it had just started, three times, until the job ran out of attempts (found by the long Redis outage test). Recovery now runs beside the heartbeats.
+- **Leftovers after a long Redis outage.** A worker that stopped its runs while Redis was away could not settle them, and once it re-registered nobody else would. It now settles its own leftovers, read under the claim lock so a job being claimed is never mistaken for one.
+- **A run that ended just before its worker died.** Memory consolidation runs between a run's final checkpoint and its `run.summary`; a worker dying in between would have been settled as interrupted, relabelling a resolved run. A final state in the record now means the run ended.
+- **The trace is ahead of the checkpoint.** The controller traces a state change before it saves its checkpoint, so a crash in between left the record one state behind (found by window 7). The state is now read from the trace.
+- **A queued run's configuration.** Storing the full configuration would have marked every field as chosen, so a scenario's own overrides would not apply in a worker. The queue stores only the fields the request set; a replayed recording run by a worker proves the parity.
+- **Redis contents were trusted.** The worker now re-checks every job with the API's own rules (forged jobs with safety off, a paid provider, an unknown scenario or a malformed configuration are refused and start nothing).
+- **The RESP client** returned a server error from a single command instead of raising it, and ignored errors inside a transaction; both raise now, with tests.
+
+**Tests:**
+- **Python, new** (Redis is the in-repo fake server, `tests/fake_redis.py`, a real TCP server so separate processes share it):
+  - `tests/unit/test_job_queue.py` (13): the client, configuration, idempotency, capacity, claim atomicity with four threads, cancel, finish/requeue/unclaim, heartbeat expiry and fencing, the settling lock.
+  - `tests/unit/test_reconcile.py` (18): every phase and write state, a run cancelled by its worker, the trace ahead of the checkpoint, the simulator's and the cluster's audit logs, a closed record staying final, voiding approvals.
+  - `tests/integration/test_workers.py` (9): a run end to end, bounded concurrency with a person approving each fix, cancelling a queued and a running job, a stopping worker handing its run back and the retry asking again, a dead worker's job run by another, forged jobs refused, a run that ended before its worker died keeping its outcome, a short and a long Redis outage.
+  - `tests/integration/test_worker_crashes.py` (8): the seven windows above, with real processes.
+  - `tests/e2e/test_api_workers.py` (7): the typed contracts, the Idempotency-Key, 429, cancel before start, live SSE from before a worker starts and resuming it, an API restart while a run waits for a person, a Redis outage (503 for what needs the queue, reads still served), published runs still read-only, a replay run by a worker, and the default in-process backend.
+  - `tests/unit/test_compose_files.py` (11): the Compose files, offline.
+  - `tests/integration/test_workers_redis.py` (2): the same semantics against a real Redis; **skipped** here (`RECAP_TEST_REDIS_URL` unset, no Redis installed).
+  - One queue-metrics test in `tests/unit/test_api_metrics.py`.
+- **Python, full suite, run once:** **2361 passed, 2 failed, 9 skipped** (2372 tests). The 9 skips: the 6 live-cluster tests, the optional OpenTelemetry test, and the 2 real-Redis tests. The 2 failures:
+  - `tests/unit/test_contract_examples.py[run_record]`, caused by W3: the committed example run record predates the new `interruption` field. Fixed by adding `"interruption": null` to `tests/fixtures/contracts/run_record.json` only (the export script regenerates all twelve examples with new ids and timestamps, which would have hidden a one-field change); the contract tests pass (14).
+  - `tests/integration/test_m4_robustness.py::test_parallel_trace_events_in_any_order_give_the_same_record`, **not caused by W3**: it fails 4 times in 5 on the committed W2 code too (checked on a clean export of HEAD). The run's first history entry (CREATED) is about 0.5 ms older than its trace event (the other states: 7-60 µs), so durations rounded to the millisecond from the two sources disagree about half the time; it passed in W2's full run by chance. Left unchanged (outside W3); a fix is proposed in the report.
+  - After the full run I added one test (a run that ended before its worker died) and the fix above; every W3 test file and the contract tests then passed in one focused rerun (81 passed).
+- **Ruff, format, mypy:** clean; mypy's scope now includes `recap/workers` and `apps/worker` (52 files).
+- **Dashboard:** `npm test`: **694 passed** (689 before, plus 5 new in `tests/workers.test.ts`; two existing assertions now read "Running" instead of "Running in this server", which is no longer true with workers); `tsc` and `vite build` pass.
+- **A live check with real processes** (no Docker): the fake Redis as its own process, `uvicorn` with `RECAP_EXECUTION_BACKEND=redis`, and `python -m apps.worker`, on a temporary data folder. Checked through HTTP:
+  - a run submitted before any worker existed: `queued`, position 1; the same Idempotency-Key returned the same run (`duplicate: true`); `GET /queue` showed it;
+  - the worker took it; the run waited for approval; `GET /queue` showed the worker alive and holding the job; `python -m apps.worker --check` passed;
+  - approved through the API as the operator: RESOLVED, the oracle verified; the job completed (category RESOLVED);
+  - its SSE stream: 68 events, in order, gapless, ending with `run.summary`; resumed after id 10: exactly the 58 that follow;
+  - a second run waiting for approval, then SIGTERM to the worker: after its 3-second grace it settled the job ("worker_stopped awaiting_approval; runs again as run-…"), unregistered and exited 0; the old run read `interrupted`, its request expired;
+  - a new worker ran the retry, which asked for a fresh approval (a different proposal); approving the old request answered 409; the fresh one resolved the incident (attempt 2).
+  - Screenshots of Mission Control for the queued run and the interrupted one: `~/Desktop/RECAP_M6_W3_screenshots.zip`. The first capture showed a "SOURCE NOT RECORDED · TARGET NOT RECORDED" banner and a "Starting" chip on a run that had not started; the live run page now shows "Queued" and no banner until the run has events or a record.
+
+**Docker: blocked, not claimed.** The Docker CLI and colima 0.10.3 are installed; the Compose plugin and Redis are not, and colima is not running. With the owner's approval, the setup is:
+1. `brew install docker-compose`, then add `"cliPluginsExtraDirs": ["/opt/homebrew/lib/docker/cli-plugins"]` to `~/.docker/config.json` (what the formula's caveats ask);
+2. `colima start --cpu 4 --memory 6` (a local VM: no cloud, no cost);
+3. `docker compose -f infra/compose/compose.yaml up --build -d`, then the checks in [infra/compose/README.md](../infra/compose/README.md).
+
+For the real-Redis test without Docker: `brew install redis`, `redis-server --port 6380 --save "" --appendonly no`, then `RECAP_TEST_REDIS_URL=redis://127.0.0.1:6380/15 .venv/bin/pytest tests/integration/test_workers_redis.py`.
+
+**Limitations:**
+- Not exactly once: a job can be attempted more than once; only a run that provably sent nothing runs again, so some crashes end in `needs_reconciliation`.
+- Fencing relies on timing; the protections against a duplicate write do not (single-use approvals, capability nonces, the namespace lease on a live target).
+- A worker's run-event metrics (tool calls, tokens) are not exported: workers have no metrics endpoint yet; `/metrics` reports the queue from Redis.
+- The Compose setup has never been built or run; its README lists what is unverified. Containers record `code_version: "unknown"` (no git checkout in the image).
+- A trace event written by a worker presumed dead (frozen past its TTL, then woken) could share a sequence number with the closing events; the closed record itself cannot be overwritten.
+
 ## Workstream status
 
 | Workstream | Status |
@@ -247,4 +328,5 @@ Until W2 is pushed, a clone of GitHub has v0.6.0, without this work; the local r
 | W0 baseline, evidence, cost | done |
 | W1 Mission Control UX and guided demo | done: implemented and checked; the manual review is the owner's |
 | W2 published-run import | done: implemented and checked locally; the owner's review is pending |
-| W3–W7 | not started: not authorized yet |
+| W3 durable workers and Docker Compose | done: implemented and tested locally; Compose written, not started (needs the setup above); the owner's review is pending |
+| W4–W7 | not started: not authorized yet |
