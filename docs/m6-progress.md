@@ -403,6 +403,171 @@ RECAP_API_PORT=8001 docker compose -f infra/compose/compose.yaml --profile metri
 colima stop recap && docker context use default
 ```
 
+## W4: AI architecture evaluation (2026-11-08)
+
+The owner authorized W4 only. Local decisions carried out first: the obsolete
+`"credsStore": "desktop"` was removed from `~/.docker/config.json` (backed up, JSON
+validated, every other key unchanged); the `recap` colima profile is kept and stopped; AWS was
+not touched. No paid or hosted model, no EC2, no SREGym, no Kubernetes.
+
+**What W4 measured, in one paragraph.** What each existing component contributes, with the
+components RECAP already has: routing (single, parallel, adaptive), runbook retrieval (BM25,
+dense, hybrid), experience memory, run budgets and context packs, the verifier and the safety
+gateway. Nine one-switch comparisons end to end, and each component on its own dataset. All
+on the simulated shop with the scripted policy, so the results describe RECAP's code paths,
+not a language model's choices; the real-model pilot is planned, not run.
+
+**What exists now:**
+- **Every evaluation record says what could explain a difference** (`evals/records.py`): the
+  seed, router, verifier and policy versions, memory partitions read and written, effective
+  budget and context limits, the limit that stopped the run, router rules per round, agents
+  and decisions, evidence per agent and the evidence the supported claims rest on per agent,
+  distinct disagreements, claims by verifier status, unsafe actions, context items dropped and
+  shortened, each proposal's source, the writes carried out and those aimed off the root-cause
+  service. Older batches load and round-trip unchanged (a test checks all ten).
+- **One-switch comparisons** (`evals/compare.py`, `evals/comparisons/w4.yaml`): refused before
+  any run unless the two configurations differ in exactly the declared switch (one budget
+  limit allowed: `budget.max_tool_calls`); measured pair by pair, by scenario and seed; any
+  recorded provenance beyond the switch is listed; results are kept with the batch.
+- **The W4 split** (`evals/splits/w4.yaml`): V1's 3 train and 6 test scenarios plus 2 held-out
+  scenarios, and four new configurations in `evals/ablations/w4/` (`parallel_only`, `hybrid`,
+  `tight_tools`, `small_context`, each limit chosen before any result). The default protocol
+  (`scripts/evaluate.py`, the dashboard's Run evaluation) and `evals/reports/latest/` stay the
+  V1 benchmark.
+- **Component evaluations** (`evals/components.py`, `GET /evals/components`): retrieval with
+  four rankers, memory verdicts, routing, budget and context, the verifier and safety; their
+  datasets are generated from the fixtures and documented (`evals/datasets/README.md`).
+- **Hybrid retrieval offline**: 27 query vectors embedded once with the local nomic-embed-text
+  and stored (`evals/datasets/query-vectors-v1.json`, weights digest equal to the runbook
+  vectors'); an evaluation answers every query from the file, refuses one it lacks, and checks
+  before the first run that the file fits and covers the runs.
+- **Small RECAP changes**: `RunConfig.pack_tokens` and `max_item_tokens` (a run's own context
+  budget, recorded in its versions, its cuts traced); an explicit empty memory read list now
+  reads nothing (it fell back to the defaults); `KnowledgeRetriever.dense_search` is public;
+  `declared_mechanisms` reads a runbook's `Mechanism:` lines; `live_eval` plans can turn a
+  run's memory writes off.
+- **Guards**: a configuration cannot set the provider, a recording, approvals, the label or
+  the latency; the simulator is forced whatever `RECAP_TARGET` says; an evaluation needs a
+  fresh data folder; leakage tests (no evaluation data or scenario id in RECAP's code, no
+  scenario answer in the runbooks or prompts, the split's sets apart, no SREGym problem).
+- **Mission Control**: the Evaluations page shows a batch's comparisons (one row per pair; each
+  scenario and every measure that moved on demand; a flag when runs differ beyond the switch)
+  and the component evaluations in the scripted tab, one section per component.
+- **A real-model pilot plan** (`evals/plans/w4-pilot.yaml`): 8 runs of qwen3:8b on simulated
+  incidents, each pair one switch, isolated memory; budget about 120 requests, 450k input and
+  15k output tokens, 0.5 to 3 hours, $0. Not run: RECAP's local-memory guard needs about
+  7.0 GiB free and this laptop had about 5.6 GB.
+
+The design is in [ADR 0035](decisions/0035-one-switch-comparisons-separate-component-datasets-nothing-pooled.md);
+how to run and read it is in [evaluation.md](evaluation.md) section 13.
+
+**The independent review, and what it changed.** Three read-only reviewers (measurement,
+leakage and protocol, compatibility) checked the code before the final runs, each finding
+reproduced before it was reported. Fixed, each with a test:
+- `scripts/evaluate.py` would have failed by default: the new `hybrid` configuration sat in
+  V1's folder and needs stored vectors (the W4 configurations moved to `evals/ablations/w4/`);
+- a scenario in both the test and the red-team sets (the injection scenario) was labelled
+  red-team in every test-suite comparison (sets now follow the comparison's suite);
+- the `budget` switch let any limit differ unseen (now `budget.<limit>`, checked before and
+  after; context switches allow only their own key);
+- the weights guard failed open when a server or a file named no weights digest (refused);
+  the component scorer did not check that query and runbook vectors fit (refused);
+- an evaluation could reuse an earlier one's data folder and its TRAIN memory (refused);
+- memory verdicts counted hits the run never assessed; false blocks counted blocks of a wrong
+  fix; a capture run's batch claimed no model was contacted; a configuration's own seed was
+  dropped; persisting disagreements were counted once per round; batches made before W4 were
+  scored with their missing values read as zeros (refused); results were recomputed from the
+  current code instead of kept;
+- the two held-out scenarios were described as never used for tuning, which is not true: M3
+  changed RECAP's signal parsing with one of them in view (ADR 0025) and the test suite checks
+  both. They are held out from W4's choices only, and every document now says so.
+
+**Results** (batch [`20261108-w4-scripted`](../evals/reports/batches/20261108-w4-scripted/README.md),
+code `46ea1d5f50cc`, clean; counts out of 8 paired runs, 6 development and 2 held-out):
+
+| comparison | recovered, baseline → variant | what changed |
+|---|---|---|
+| single → parallel | 8 → 8 | −2.9 tool calls, −3,887 est. tokens per run |
+| single → adaptive | 8 → 8 | −2.9 tool calls per run (the 4 runs routed parallel: 19 → 11 or 12 tool calls on the cross-service ones) |
+| parallel → adaptive | 8 → 8 | −1.1 decisions, −574 est. tokens per run |
+| no RAG → RAG | 4 → 8 | the three development bad releases and the held-out forged-signals release recover only with runbooks |
+| BM25 → hybrid | 8 → 8 | −219 est. tokens per run |
+| no memory → memory | 8 → 8 | +1,521 est. tokens per run; no outcome |
+| tool budget 30 → 15 | 8 → 7 | the held-out forged-signals release stops at 15 tool calls |
+| context pack 3000 → 1500 | 8 → 8 | 23 context items dropped in 4 runs; −337 est. tokens |
+| safety gateway off → on | (red team) | the unsafe write executed → blocked |
+
+- Seeds 1, 2 and 3 instead of each scenario's own ([`20261108-w4-scripted-seeds`](../evals/reports/batches/20261108-w4-scripted-seeds/README.md),
+  222 runs): no outcome changed in any of the 74 cases; every case's token estimate moved.
+- The trial run during development and the final run agree on all 66 cases they share, and on
+  all 32 cases they share with the committed V1 report: W4 changed no scripted outcome. The
+  final results were measured at `8e26832`, then measured again at `46ea1d5` (which only names
+  a batch's seeds in its title and changes how repeats are shown): every record, comparison and
+  component number came out identical, and the published results are the second measurement.
+- Components ([`20261108-w4-components`](../evals/reports/components/20261108-w4-components/README.md)):
+  no ranker puts the mechanism's runbook first for a raw alert (0 of 17; top 4: BM25 9, dense
+  11, hybrid 7); the remediation lookup finds it every time; on the hand-written paraphrases
+  dense ranks best (MRR 0.69 vs hybrid 0.60, BM25 0.54) and the reranker barely matters; the
+  poisoned runbook reaches BM25's top 4 for 13 of 17 alerts without ever displacing a genuine
+  remediation. Memory: 79 of 79 verdicts right, 0 unsafe reuse, 7 of 7 twins accepted, 0
+  leakage. Routing: parallel on 4 of 4 cross-service incidents, 0 of 4 others; the second
+  specialist's evidence is in the supported claims in all 4. Safety: 0 false blocks, 0 writes
+  off the root cause on legitimate runs.
+
+**Improvements: succeeded, failed, inconclusive.** No change to RECAP's decision-making was
+justified by the development results: every development scenario already recovers with the
+full system, and the failures appear only in ablations. Succeeded: the evaluation itself
+(provenance, paired comparisons, component datasets, offline hybrid) and the generic fixes
+above, including one real RECAP bug (the empty memory read list). Inconclusive: hybrid versus
+dense retrieval (dense ranked best on 12 evaluator-written queries; hybrid changed no outcome)
+and the context budget (half the budget changed nothing here); both need independent queries
+or a real model, not tuning on these.
+
+**Model executions in W4:** 27 embedding requests to the local nomic-embed-text (Ollama 0.34.4,
+loopback, cloud off, started for the capture and stopped after); 0 LLM requests; 0 hosted or
+paid requests; $0.
+
+**Regression.**
+- The full Python suite, once: **2443 passed, 14 skipped, 0 failed** (the skips need the live
+  Kind cluster, a real Redis for W3's seven integration tests, which ran against a container in
+  W3, or the optional OTel extra). After the last small code change (titles and display) the
+  tests that read the published batches and the W4 tests ran again: all passed.
+- `ruff check`, `ruff format --check` and `mypy` (now also over the W4 modules): clean.
+  `scripts/gen_dashboard_types.py --check`: current.
+- Dashboard: 709 tests passed, `tsc --noEmit` and `npm run build` pass.
+- Browser smoke test against a local API with a seeded demo folder (port 8002, the owner's own
+  server holds 8000): **133 passed, 0 failed**, the Evaluations page at 1440 px and 390 px
+  included; the comparisons card and the component evaluations were also checked on screenshots.
+- `scripts/secret_scan.py`: no secrets. `scripts/recordings_manifest.py --check`: both
+  recordings match their pins.
+- The default V1 protocol still runs (`scripts/evaluate.py` with no option; a test checks its
+  seven configurations), and its committed report in `evals/reports/latest/` is unchanged.
+
+**Limitations.** Simulated incidents and a scripted policy: no claim about language models.
+Eight scored scenarios per configuration (six development, two held-out that earlier
+milestones developed RECAP against). Retrieval relevance is document-level; the paraphrases
+are evaluator-written; memory labels come from exact fixes. The real-model pilot and any
+SREGym run are not part of W4.
+
+**Git.** Local commits only, nothing pushed: `8e26832` (the evaluation code, tests, datasets
+and the dashboard), `46ea1d5` (a seeded batch's title, repeats shown as counts, one-limit
+switches on the page), and the checkpoint that adds these results and documents (with a
+docstring-only rewording in `evals/runner.py`). The working tree is clean after it. The
+`recap` colima profile stays stopped; AWS was not touched.
+
+**What W5 needs.** The owner's authorization and an AWS spending cap. Held-out SREGym on the
+owner's stopped VM (`i-09a55033889ca1466`, m6a.2xlarge, profile `amlc-personal`, ap-south-1,
+model `ollama-vm`): a frozen configuration (the code at the W4 commits, prompts v4.7, its
+config hash), SREGym problems never used for development, a person approving each fix, and
+SREGym's grader kept apart from RECAP's oracle. SREGym's cluster was deleted after M5, so it
+is set up again first (`sregym.sh setup`, `deploy`, `ec2.sh creds sregym`: about an hour).
+M5's SREGym runs took 15 to 25 minutes each, plus the time a person takes to approve. A
+bounded pilot of 3 to 5 runs is then about 3 to 4 hours of VM time: at W0's measured rate
+(3.7 hours cost about $0.85, so about $0.23 an hour) roughly $1 of compute, plus the disk's
+$0.47 a day while the VM is kept. A cap of $5 covers it with room for one retry; the VM is
+stopped as soon as the runs end. Optionally first, at $0: the local W4 pilot plan, when the
+laptop has the memory.
+
 ## Workstream status
 
 | Workstream | Status |
@@ -411,4 +576,5 @@ colima stop recap && docker context use default
 | W1 Mission Control UX and guided demo | done: implemented and checked; the manual review is the owner's |
 | W2 published-run import | done: implemented and checked locally; the owner's review is pending |
 | W3 durable workers and Docker Compose | done: implemented, then verified with real containers and a real Redis (linux/arm64); the owner's review is pending |
-| W4–W7 | not started: not authorized yet |
+| W4 AI architecture evaluation | done: measured on the simulator with the scripted policy; the real-model pilot is planned, not run; the owner's review is pending |
+| W5–W7 | not started: not authorized yet |

@@ -677,7 +677,7 @@ def scripted_batch(
 
 
 def _seeds_text(seeds: list[int]) -> str:
-    """", seeds 1, 2, 3" for a batch run once per seed ("" with each scenario's own seed)."""
+    """The title's seeds, for a batch run once per seed: ', seeds 1, 2, 3' (else nothing)."""
     return f", seeds {', '.join(map(str, seeds))}" if seeds else ""
 
 

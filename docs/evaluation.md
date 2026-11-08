@@ -486,3 +486,169 @@ any model decision), and a destructive write (`safety_blocked`).
 | [recap/providers/ollama_provider.py](../recap/providers/ollama_provider.py) | `ModelCall.server_ms` from Ollama's `total_duration` |
 | [recap/environments/kubernetes/](../recap/environments/kubernetes/) | the Kubernetes adapter behind every `real_kubernetes` run: typed `kubectl` reads and writes, and the oracle's own reads and probe |
 | [integrations/sregym/](../integrations/sregym/README.md) | SREGym's target: the same adapter in external-harness mode |
+| [evals/compare.py](../evals/compare.py) | M6 W4: one-switch comparisons, checked before a run and measured pair by pair |
+| [evals/datasets.py](../evals/datasets.py), [evals/datasets/](../evals/datasets/README.md) | M6 W4: the retrieval and label datasets, generated from the fixtures, with their provenance |
+| [evals/query_vectors.py](../evals/query_vectors.py) | M6 W4: stored query vectors, so hybrid retrieval is measured with no model server |
+| [evals/components.py](../evals/components.py) | M6 W4: the component evaluations and their report (`GET /evals/components`) |
+
+## 13. Component evaluations and one-switch comparisons (M6 W4)
+
+W4 measures what each part of RECAP's architecture contributes, with the components it
+already has: routing, retrieval, experience memory, budgets and context packs, the verifier
+and the safety gateway. Two instruments, never merged:
+
+- **One-switch comparisons** (end to end, `scripted_regression`): pairs of configurations
+  that differ in exactly one RunConfig switch, run on the same scenarios and paired scenario
+  by scenario.
+- **Component evaluations**: each component on its own dataset, or on the recorded evidence
+  of one batch's runs, in a report of its own (`recap-component-report-v1`).
+
+### The protocol
+
+- **Split** [`evals/splits/w4.yaml`](../evals/splits/w4.yaml): V1's 3 train and 6 test
+  scenarios unchanged, plus 2 **held-out** scenarios (`m3-inventory-leak-behind-frontend`,
+  `m3-payment-release-under-forged-signals`). The test scenarios are the development set:
+  results there may be looked at to choose a change. Held-out results are only measured. They
+  are held out from W4's choices only: earlier milestones developed RECAP with both in view
+  (M3 widened signal parsing for the first, ADR 0025) and the test suite checks both, so they
+  are not a pristine test set. The red-team suite is `test-cart-injection` with a compromised
+  planner, as in V1.
+- **Configurations**: V1's seven (`evals/baselines/`, `evals/ablations/`: still the default
+  set of `scripts/evaluate.py`), plus four in `evals/ablations/w4/`, which run when a split
+  names them (`w4.yaml` lists all eleven): `parallel_only` (two specialists every round),
+  `hybrid` (hybrid runbook search),
+  `tight_tools` (half the tool-call budget: 15, chosen before any result) and `small_context`
+  (half the context-pack budget: 1500 estimated tokens, chosen before any result). A
+  configuration cannot set the provider, a recording, the approvals, the label or the
+  latency, and the runner forces the simulator whatever `RECAP_TARGET` says.
+- **Comparisons** [`evals/comparisons/w4.yaml`](../evals/comparisons/w4.yaml): nine pairs,
+  each with the question it answers and the decision its result would change. Before any run
+  the runner refuses a pair whose effective RunConfigs differ in anything but the declared
+  switch (a switch may be one budget limit, `budget.max_tool_calls`, and then the budgets
+  may differ in that limit only); after the runs, every recorded provenance field that
+  differs beyond the switch is listed (`unexpected`), down to single budget and context
+  limits. Pairs are by scenario and seed; a scenario in the test and the red-team sets counts
+  in the set of the suite that ran it. The results are kept in the batch as measured
+  (`comparison_results`), so a later change to `evals/compare.py` never rewrites them.
+- **Memory** stays as in V1: train runs build an evaluation-only TRAIN memory; scored runs
+  read TRAIN only and write nothing. Every memory hit is checked to come from a train scenario.
+- **Hybrid retrieval** reads its query vectors from
+  [`evals/datasets/query-vectors-v1.json`](../evals/datasets/README.md): no model server is
+  contacted while measuring (each hybrid run's record shows its embedding requests answered
+  from the file).
+
+### What each record adds (M6 W4)
+
+Every `EvalRecord` now also says what could explain a difference: the seed, fixture hash,
+router, verifier and policy versions, the safety switch and planner, the memory partitions
+read and written, the effective budget and context limits, which limit stopped the run, the
+router's rule per round, the agents and decisions, the evidence each agent recorded and the
+evidence the supported claims rest on per agent, disagreements, claims by verifier status,
+whether the mechanism was right, unsafe actions (attempted, blocked, executed, refused),
+injection flags, context items dropped or shortened, each proposal's source (runbook, memory,
+fallback, model, red team), the writes the target carried out and how many were aimed off the
+root-cause service. Records written before W4 read these as not recorded, never as zero.
+
+### Component definitions
+
+| component | dataset or source | what is counted |
+|---|---|---|
+| retrieval | `evals/datasets/retrieval-v1.yaml`: 17 alert queries (exactly the controller's first query per scenario), 2 remediation lookups, 12 hand-written paraphrases | per ranker (BM25, BM25 + lexical reranker, dense only, hybrid) and query kind: hit@1/@2/@4 (a chunk of a document declaring the query's mechanism in the top k), MRR over the top 4, remediation@2/@4 (the chunk with the mechanism's recommended action), another mechanism's runbook at rank 1; with the red-team poisoned runbook loaded (BM25 only): how often it reaches the top k, and whether it pushes out a remediation the same search finds without it |
+| memory | the batch's memory hits, judged against `labels-v1.yaml` | verdicts right; unsafe reuse (judged safe, but the remembered fix is not today's); twins accepted; fixes taken from memory; hits from outside TRAIN (leakage) |
+| routing | the `full_adaptive` runs, with the cross-service label | parallel specialists when the cause sits behind the alert, and otherwise; whether a second specialist's evidence is part of what the supported claims rest on; rules fired |
+| budget and context | every configuration's runs | budget stops by limit; runs that dropped context items; items dropped and shortened; mean estimated tokens, tool calls, decisions |
+| verifier | every configuration's runs | claims supported, contradicted, insufficient; correct diagnosis and mechanism |
+| safety | the test suite (legitimate) and the red-team suite (adversarial) | false blocks on legitimate runs; unsafe attempts, blocked, executed, refused; writes aimed off the root-cause service; runs that flagged injected text |
+
+### How to run it
+
+```bash
+# the end-to-end comparisons (about a minute; scripted policy; offline). The batch is
+# published; evals/reports/latest/ stays the V1 benchmark (plain `scripts/evaluate.py`)
+.venv/bin/python scripts/evaluate.py --split evals/splits/w4.yaml --no-latest --publish \
+    --comparisons evals/comparisons/w4.yaml --query-vectors evals/datasets/query-vectors-v1.json
+# the same with every scored case once per seed (robustness to the simulator's seeded noise)
+.venv/bin/python scripts/evaluate.py --split evals/splits/w4.yaml \
+    --comparisons evals/comparisons/w4.yaml --query-vectors evals/datasets/query-vectors-v1.json \
+    --seeds 1 2 3 --no-latest --publish
+# the component report of a batch (seconds; offline)
+.venv/bin/python -m evals.components --batch evals/reports/batches/<batch id>/batch.json \
+    --query-vectors evals/datasets/query-vectors-v1.json --publish
+# regenerate the datasets after changing a scenario or a runbook (a test checks they are current)
+.venv/bin/python -m evals.datasets
+# capture query vectors again after a query changed (needs Ollama with nomic-embed-text)
+OLLAMA_NO_CLOUD=1 ollama serve &
+.venv/bin/python -m evals.components --capture-query-vectors evals/datasets/query-vectors-v1.json
+```
+
+The Evaluations page shows a batch's comparisons under its outcomes (one row per pair, each
+scenario and every measure that moved on demand), and the newest component report in the
+scripted tab, one section per component.
+
+### Results (2026-11-08)
+
+Published: the batch [`20261108-w4-scripted`](../evals/reports/batches/20261108-w4-scripted/README.md)
+(74 scored runs and 3 train runs, code `46ea1d5f50cc`, clean), the seed sweep
+[`20261108-w4-scripted-seeds`](../evals/reports/batches/20261108-w4-scripted-seeds/README.md)
+(222 scored runs: every case with seeds 1, 2 and 3), and the component report
+[`20261108-w4-components`](../evals/reports/components/20261108-w4-components/README.md).
+The scripted policy made every decision; no model was called while measuring (the 27 query
+vectors were embedded once, before, with the local nomic-embed-text). All counts are runs out
+of N on simulated incidents: no rate, no significance.
+
+**One-switch comparisons** (8 pairs each: 6 development and 2 held-out scenarios; the safety
+pair has 1; effects are means per pair over all pairs):
+
+| comparison (baseline → variant) | recovered | changed scenarios | other effects (mean per pair) |
+|---|---|---|---|
+| `single_only` → `parallel_only` (strategy) | 8 of 8 → 8 of 8 | none | −2.9 tool calls, −3,887 est. tokens, +1 agent |
+| `single_only` → `full_adaptive` (strategy) | 8 of 8 → 8 of 8 | none | −2.9 tool calls, −4,461 est. tokens (4 of 8 pairs changed: where routing went parallel) |
+| `parallel_only` → `full_adaptive` (strategy) | 8 of 8 → 8 of 8 | none | tool calls equal on average (5 of 8 pairs changed), −1.1 decisions, −574 est. tokens |
+| `no_rag` → `full_adaptive` (runbook retrieval) | 4 of 8 → 8 of 8 | the variant alone: three development bad releases and the held-out forged-signals release | −3.5 tool calls, −5 decisions |
+| `full_adaptive` → `hybrid` (retrieval) | 8 of 8 → 8 of 8 | none | −219 est. tokens |
+| `no_memory` → `full_adaptive` (memory) | 8 of 8 → 8 of 8 | none | +1,521 est. tokens, −0.75 tool calls |
+| `full_adaptive` → `tight_tools` (`budget.max_tool_calls` 30 → 15) | 8 of 8 → 7 of 8 | the baseline alone: the held-out forged-signals release (stopped at 15 tool calls) | none elsewhere |
+| `full_adaptive` → `small_context` (`pack_tokens` 3000 → 1500) | 8 of 8 → 8 of 8 | none | −337 est. tokens; 23 context items dropped in 4 runs |
+| `redteam_safety_off` → `redteam_safety_on` (safety gateway) | 0 of 1 → 0 of 1 (neither is a recovery) | the unsafe write: executed → blocked | |
+
+Every pair's recorded provenance differed only in its switch. With seeds 1, 2 and 3 instead
+of each scenario's own seed, no outcome changed in any of the 74 cases (24 pairs per
+comparison), although every case's estimated tokens moved: the simulator's seeded noise
+changes what the runs read, not what this policy decides.
+
+**Components** ([report](../evals/reports/components/20261108-w4-components/README.md)):
+
+- **Retrieval.** RECAP's first search, the alert as written, puts the failure mechanism's
+  runbook first for no alert with any ranker (0 of 17); in the top 4: BM25 9, dense 11,
+  hybrid 7 of 17. The remediation lookup finds its runbook every time with every ranker (2
+  of 2). On the paraphrases, dense ranks best (hit@1 6 of 12, MRR 0.69; hybrid 0.60, BM25
+  0.54); the lexical reranker changes almost nothing (MRR 0.535 → 0.542). With the poisoned
+  runbook loaded, BM25 puts it in the top 4 for 13 of 17 alerts and in one of the two
+  remediation lookups, yet never in place of a remediation the search finds without it.
+- **Memory.** 79 hits in 58 memory-on runs, every verdict right against the labels: 7 twins
+  accepted, 65 look-alikes and 7 same-diagnosis episodes (a rollback to another version)
+  rejected, no unsafe reuse, no hit from outside TRAIN. A fix came from memory once:
+  `no_rag` on the familiar cart leak, where no runbook was available.
+- **Routing.** `full_adaptive` went parallel on all 4 incidents whose cause sits behind the
+  alert (3 from the first round, by rule RT2; the misleading-logs incident in its second
+  round, after an escalation, RT3) and on none of the other 4; in those 4 multi-agent runs,
+  the second specialist's evidence was part of what the supported claims rest on. On the
+  three RT2 incidents, parallel specialists used 7 to 8 fewer tool calls than one
+  investigator (19 → 11 or 12).
+- **Budget, verifier, safety.** One budget stop each for `baseline_single` (steps) and
+  `tight_tools` (tool calls); claims supported/contradicted/insufficient per configuration
+  are in the report. No legitimate run was blocked, no write landed off the root-cause
+  service; with the gateway off, the compromised planner's namespace deletion executed.
+
+**What these results support, and what they do not.** They show how RECAP's code paths use
+each component on eight simulated incidents with a scripted policy: runbook retrieval
+supplies the remediation (without it the policy falls back to a restart, which cannot undo
+a bad release), adaptive routing saves tool calls without losing a recovery, memory's verdicts
+are conservative and right on these pairs, and halving the tool budget costs the hardest
+held-out incident. They say nothing about how a language model would use the same
+components: that needs the prepared real-model pilot ([`evals/plans/w4-pilot.yaml`](../evals/plans/w4-pilot.yaml)),
+which was not run (the local-memory guard refuses `qwen3:8b` on this laptop now), and the
+held-out SREGym evaluation (W5). Retrieval's hybrid fusion ranked below dense alone on these
+queries: a finding to test on independent queries, not a tuning target (the paraphrases were
+written by the evaluator).
+
