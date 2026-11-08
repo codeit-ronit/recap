@@ -788,7 +788,7 @@ test("active incidents: listed first, with their state, liveness and a link to t
   const card = between(html, 'id="ov-active"', "Recent runs</h2>");
   const cardText = textOf(card);
   assert.match(cardText, /Active incidents 1/);
-  assert.match(cardText, /Awaiting approval Running in this server REPLAY · RECORDED REAL-LLM RUN qwen3:8b \/ SIMULATED TARGET/);
+  assert.match(cardText, /Awaiting approval Running REPLAY · RECORDED REAL-LLM RUN qwen3:8b \/ SIMULATED TARGET/);
   assert.equal(count(cardText, "Awaiting approval"), 1, "the state says it once");
   assert.ok(hrefs(card).includes("#/live?run=run-live000001"));
   // The header's status is the one polite live region (relative times in the card do not re-announce).

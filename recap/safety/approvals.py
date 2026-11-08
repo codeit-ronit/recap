@@ -392,6 +392,34 @@ class ApprovalStore:
         if moved:
             self._wake(proposal_id)
 
+    def void_for_run(self, run_id: str, reason: str) -> list[str]:
+        """After the process running `run_id` stopped: expire its pending requests and revoke
+        its unused approvals, so nothing a person does later can act for a run that no longer
+        runs (a new attempt asks again). A used approval stays as it is: it records what was
+        done. Returns "<proposal>: expired|revoked" for each change."""
+        now = utcnow()
+        changed: list[str] = []
+        with self._transaction() as conn:
+            rows = conn.execute(
+                "SELECT * FROM approval_requests WHERE run_id = ? ORDER BY rowid", (run_id,)
+            ).fetchall()
+            for row in rows:
+                proposal_id = row["proposal_id"]
+                if row["status"] == PENDING:
+                    if conn.execute(_MOVE_STATUS, (EXPIRED, proposal_id, PENDING)).rowcount:
+                        _event(conn, proposal_id, "expired", SYSTEM_ACTOR, now, row, reason)
+                        changed.append(f"{proposal_id}: expired")
+                elif row["status"] == APPROVED:
+                    approval = conn.execute(
+                        "SELECT consumed_at FROM approvals WHERE proposal_id = ?", (proposal_id,)
+                    ).fetchone()
+                    if approval is not None and approval["consumed_at"] is None:
+                        self._revoke(conn, row, SYSTEM_ACTOR, now, note=reason)
+                        changed.append(f"{proposal_id}: revoked")
+        for change in changed:
+            self._wake(change.split(":", 1)[0])
+        return changed
+
     # --- approvals -----------------------------------------------------------------------
 
     def get_approval(self, approval_id: str) -> Approval | None:

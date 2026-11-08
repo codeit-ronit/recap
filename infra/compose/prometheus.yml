@@ -1,0 +1,11 @@
+# Prometheus for RECAP's Compose setup (the `metrics` profile; M6 W3).
+# The API answers GET /metrics only with RECAP_METRICS=1 (apps/api/metrics.py); with the Redis
+# backend it also reports the queue: depth, capacity, workers alive and the jobs' outcomes.
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: recap-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:8000"]

@@ -1161,6 +1161,40 @@ class StateChange(Contract):
     reason: str = ""
 
 
+class WriteEvidence(Contract):
+    """What a target's own audit log says about one authorized write (recorded_write)."""
+
+    state: Literal["applied", "refused", "not_applied", "unknown"]
+    detail: str = ""
+
+
+class Interruption(Contract):
+    """Set when the process running this incident stopped (a worker crash or restart) and a
+    recovering worker closed the run from its persisted evidence (recap/workers/reconcile.py).
+
+    `write` says what happened to the run's authorized write, as far as the evidence shows:
+    none (no write was ever sent), not_applied, applied, refused, or unknown. A run whose write
+    may have reached the target is never retried: `needs_reconciliation` asks a person to look.
+    """
+
+    at: datetime
+    phase: Literal[
+        "before_start",
+        "before_write",
+        "awaiting_approval",
+        "write_in_flight",
+        "after_write",
+        "verifying",
+    ]
+    write: Literal["none", "not_applied", "applied", "refused", "unknown"]
+    needs_reconciliation: bool
+    detail: str
+    retried_as: str | None = None  # the run of the next attempt, when the job ran again
+    # worker_lost: the worker died mid-run; worker_stopped: it was stopped (or fenced itself
+    # off) and cancelled the run.
+    cause: Literal["worker_lost", "worker_stopped"] | None = None
+
+
 class RunRecord(Contract):
     """The persisted checkpoint of one run. The API and dashboard read this."""
 
@@ -1192,3 +1226,4 @@ class RunRecord(Contract):
     versions: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
+    interruption: Interruption | None = None  # M6: closed after its process stopped

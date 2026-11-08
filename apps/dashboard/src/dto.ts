@@ -3,14 +3,16 @@
 //     .venv/bin/python scripts/gen_dashboard_types.py
 // tests/unit/test_dashboard_types.py fails when this file is out of date.
 
-import type { Disagreement, EnvironmentInfo, Evidence, FailureMechanism, IncidentState, RunRecord, SourceType, StrategyMode, TrustLevel } from "./types";
+import type { Disagreement, EnvironmentInfo, Evidence, FailureMechanism, IncidentState, Interruption, RunRecord, SourceType, StrategyMode, TrustLevel } from "./types";
 
 export type EvalMode = "scripted_regression" | "offline_replay" | "real_llm" | "real_kubernetes";
 export type ProviderOrigin = "scripted" | "local_llm" | "free_hosted_llm" | "paid_llm" | "replay";
 export type ApiSchema = "recap-api-v1";
 export type ProviderClass = "scripted" | "local_llm" | "free_hosted_llm" | "paid_llm" | "replay";
-export type RunStatus = "running" | "finished" | "error" | "external" | "unknown" | "published";
-export type RunOutcome = "in_progress" | "resolved" | "failed" | "error" | "cancelled" | "approval_rejected" | "approval_expired" | "safety_blocked" | "budget_exhausted" | "quota_deferred";
+export type RunStatus = "running" | "finished" | "error" | "external" | "unknown" | "published" | "queued" | "interrupted" | "cancelled";
+export type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "needs_reconciliation";
+export type ExecutionBackend = "inprocess" | "redis";
+export type RunOutcome = "in_progress" | "resolved" | "failed" | "error" | "cancelled" | "approval_rejected" | "approval_expired" | "safety_blocked" | "budget_exhausted" | "quota_deferred" | "interrupted" | "needs_reconciliation";
 export type ComponentState = "active" | "available" | "unavailable" | "disabled" | "planned" | "error";
 export type TrustClass = "untrusted_tool_output" | "untrusted_runbook_text" | "untrusted_memory_text" | "untrusted_alert_text" | "recap_trusted_text";
 export type FixtureIntegrity = "intact" | "altered" | "missing";
@@ -117,6 +119,27 @@ export interface RunSummary extends ApiModel {
   labels: string[];
   not_recorded: string[];
   published: PublishedProvenance | null;
+  interruption: Interruption | null;
+}
+
+/** One incident in the Redis job queue (M6): its attempts, who runs it, and why it ended. */
+export interface JobView extends ApiModel {
+  job_id: string;
+  status: JobStatus;
+  run_id: string;
+  runs: string[];
+  scenario_id: string;
+  attempt: number;
+  max_attempts: number;
+  position: number | null;
+  worker: string | null;
+  worker_alive: boolean | null;
+  submitted_at: string | null;
+  claimed_at: string | null;
+  finished_at: string | null;
+  category: string | null;
+  detail: string | null;
+  cancel_requested: boolean;
 }
 
 /** GET /runs/{id}: the summary, plus the stored record and evidence as before. */
@@ -126,17 +149,50 @@ export interface RunDetail extends Versioned {
   record: RunRecord | null;
   evidence: Evidence[];
   error: string | null;
+  job: JobView | null;
 }
 
 /** POST /incidents/run (202): the new run's id and what it will run with. */
 export interface RunStarted extends Versioned {
   run_id: string;
-  status: "started";
+  status: "started" | "queued";
   scenario_id: string;
   provider: string;
   provider_class: ProviderOrigin;
   replay_fixture: string | null;
   labels: string[];
+  job_id: string | null;
+  queue_position: number | null;
+  duplicate: boolean;
+}
+
+/** One registered worker, from its heartbeat (M6). */
+export interface WorkerView extends ApiModel {
+  worker_id: string;
+  alive: boolean;
+  host: string | null;
+  pid: number | null;
+  started_at: string | null;
+  concurrency: number | null;
+  target: string | null;
+  jobs: string[];
+}
+
+/** GET /queue: how incidents are executed, and with Redis, the queue and its workers. */
+export interface QueueView extends Versioned {
+  backend: ExecutionBackend;
+  reachable: boolean;
+  address: string | null;
+  error: string | null;
+  depth: number | null;
+  capacity: number | null;
+  max_attempts: number | null;
+  heartbeat_seconds: number | null;
+  heartbeat_ttl_seconds: number | null;
+  running: number;
+  workers: WorkerView[];
+  jobs: JobView[];
+  counters: Record<string, number>;
 }
 
 /** One HTTP request a provider sent to a model (an `llm.call` event). */

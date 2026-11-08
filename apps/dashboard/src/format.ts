@@ -97,6 +97,14 @@ export function isTerminal(state: string | null | undefined): boolean {
   return !!state && TERMINAL_STATES.has(state);
 }
 
+/**
+ * Whether a run may still add events (GET /runs/{id} `status`): running (in this server, or in a
+ * worker with the Redis backend), queued for a worker, or interrupted and not settled yet (M6).
+ */
+export function stillGoing(status: string | null | undefined): boolean {
+  return status === "running" || status === "queued" || status === "interrupted";
+}
+
 export function stateTone(state: string | null | undefined): Tone {
   switch (state) {
     case "RESOLVED":

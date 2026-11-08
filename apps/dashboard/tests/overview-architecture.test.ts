@@ -610,7 +610,10 @@ test("a duration is measured, still running, or not recorded: never a guess", ()
 test("active incidents are the unfinished runs, and liveness says whether this server can follow them", () => {
   const list = [run({ terminal: false, status: "running", outcome: "in_progress" }), run({}), run({ terminal: false, status: "external", outcome: "in_progress" })];
   assert.equal(activeRuns(list).length, 2);
-  assert.equal(livenessLook("running").label, "Running in this server");
+  assert.equal(livenessLook("running").label, "Running");
+  assert.equal(livenessLook("queued").label, "Queued for a worker");
+  assert.equal(livenessLook("interrupted").tone, "warn");
+  assert.equal(livenessLook("cancelled").label, "Cancelled before it started");
   assert.equal(livenessLook("external").label, "Not running in this server");
   assert.equal(livenessLook("error").tone, "bad");
   assert.equal(livenessLook("unknown").label, "Status unknown");

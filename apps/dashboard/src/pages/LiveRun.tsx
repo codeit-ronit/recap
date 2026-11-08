@@ -32,6 +32,7 @@ import {
   plural,
   searchModeLabel,
   stateLabel,
+  stillGoing,
   str,
   tsMs,
 } from "../format";
@@ -76,6 +77,7 @@ import {
   oracleView,
   outcomeView,
   providerChoices,
+  queueNotice,
   rationaleAuthor,
   readinessView,
   recoverySignals,
@@ -290,7 +292,7 @@ export function useLabRunEvents(runId: string): LabRunEvents {
       try {
         const detail = await api.run(runId);
         if (cancelled || finished) return;
-        if (detail.status !== "running") {
+        if (!stillGoing(detail.status)) {
           if (detail.status === "external" || detail.status === "published") setState((s) => ({ ...s, transport: "recorded" }));
           add(await api.events(runId, lastSeq));
           stop();
@@ -1591,7 +1593,12 @@ function RunPanel({
   const live = !finished && stream.transport !== "recorded";
 
   // The run's record and typed summary: once now (replay provenance), again once it ends.
-  const detail = usePolling(() => api.runView(runId), (d) => (finished && d?.status === "running" ? 800 : null), [runId, finished]);
+  // A queued or interrupted run (Redis backend, M6) is read again until a worker takes it or settles it.
+  const detail = usePolling(
+    () => api.runView(runId),
+    (d) => (d?.status === "queued" || d?.status === "interrupted" ? 2000 : finished && d?.status === "running" ? 800 : null),
+    [runId, finished],
+  );
   const record = detail.data?.record ?? null;
   const runSummary = detail.data?.summary ?? null;
 
@@ -1614,6 +1621,7 @@ function RunPanel({
   const { phase, waitingManual, shown, setOpenId, reviewable, modal } = useRunApproval({ runId, events, live, finished, current, provider, decideOn });
 
   const summaryEvent = lastOf(events, "run.summary")?.payload as RunSummaryPayload | undefined;
+  const queued = queueNotice(detail.data?.status, detail.data?.job, record?.interruption, events.length > 0);
   const transport = transportView(stream.transport, stream.resumes, stream.lastSeq, finished, events.length, !!stream.error);
   const caption = current ? (
     <>
@@ -1641,7 +1649,11 @@ function RunPanel({
         }
         subtitle={
           <span className="chip-row">
-            {current ? <StateToken state={current} size="sm" /> : <StatusToken tone="neutral" icon="clock" label="Starting" size="sm" />}
+            {current ? (
+              <StateToken state={current} size="sm" />
+            ) : (
+              <StatusToken tone="neutral" icon="clock" label={detail.data?.status === "queued" ? "Queued" : "Starting"} size="sm" />
+            )}
             <StatusToken tone={transport.tone} icon={transport.icon} label={transport.label} detail={transport.detail || undefined} size="sm" />
             <Elapsed startIso={events[0]?.ts ?? null} endIso={events[events.length - 1]?.ts ?? null} live={live} />
           </span>
@@ -1655,7 +1667,8 @@ function RunPanel({
           </span>
         }
       >
-        <RunBannerView banner={banner} replay={runSummary?.replay ?? null} />
+        {/* Nothing to say about where decisions come from before the run has started (M6: a queued run). */}
+        {events.length || record ? <RunBannerView banner={banner} replay={runSummary?.replay ?? null} /> : null}
         {live && !signedIn && manual !== false ? <SignInPrompt what="approve or reject this run's fix" /> : null}
         <StateStepper states={states} running={live} times={times} caption={caption} />
         {stream.transport === "recorded" ? (
@@ -1664,6 +1677,19 @@ function RunPanel({
               ? "A published historical run: its recorded trace, read-only. Nothing runs now."
               : "Started by another process: showing its recorded events; live updates are unavailable here."}
           </div>
+        ) : null}
+        {queued ? (
+          <Notice tone={queued.tone} icon={queued.icon} title={queued.title}>
+            {queued.body}
+            {queued.next ? (
+              <>
+                {" "}
+                <a href={hrefFor("live", { run: queued.next })}>
+                  Open run <Mono>{queued.next}</Mono>
+                </a>
+              </>
+            ) : null}
+          </Notice>
         ) : null}
         {stream.error ? <ErrorView error={stream.error} title="Live updates interrupted" /> : null}
       </Card>

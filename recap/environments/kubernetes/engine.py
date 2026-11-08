@@ -50,7 +50,7 @@ import httpx
 from recap.core.errors import CapabilityError
 from recap.core.ids import utcnow
 from recap.core.interfaces import TargetEnvironment
-from recap.core.models import EnvironmentInfo, ScenarioInfo
+from recap.core.models import EnvironmentInfo, ScenarioInfo, WriteEvidence
 from recap.core.observations import (
     ActionOutcome,
     AlertSignal,
@@ -942,6 +942,30 @@ class KubernetesEnvironment(TargetEnvironment):
             message=reason,
             executed_at=utcnow(),
         )
+
+    def recorded_write(self, approval_id: str, proposal_digest: str) -> WriteEvidence:
+        """The adapter's write audit, read locally (the cluster is not contacted). The audit row
+        is written after the cluster answers, so a missing row cannot prove that nothing changed:
+        only "executed" and "refused" are conclusive; anything else is unknown (fail closed)."""
+        rows = [
+            row
+            for row in self.state.writes()
+            if row.get("approval_id") == approval_id[:128]
+            and (not proposal_digest or row.get("proposal_digest") == proposal_digest[:128])
+        ]
+        outcomes = [str(row.get("outcome")) for row in rows]
+        if "executed" in outcomes:
+            return WriteEvidence(state="applied", detail="the adapter audited it as executed")
+        if outcomes and all(outcome == "refused" for outcome in outcomes):
+            detail = "the adapter refused it before the cluster was touched"
+            return WriteEvidence(state="refused", detail=detail)
+        if outcomes:
+            detail = f"the adapter audited it as {outcomes[-1]}"
+            return WriteEvidence(state="unknown", detail=detail)
+        detail = (
+            "no audit row; the adapter audits a write after the cluster answers: proves nothing"
+        )
+        return WriteEvidence(state="unknown", detail=detail)
 
     def _audit_write(self, action: AuthorizedAction, outcome: str, detail: dict[str, Any]) -> None:
         if not self.state.exists():

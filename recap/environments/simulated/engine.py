@@ -23,7 +23,7 @@ from typing import Any
 
 from recap.core.errors import CapabilityError
 from recap.core.interfaces import TargetEnvironment
-from recap.core.models import EnvironmentInfo, ScenarioInfo
+from recap.core.models import EnvironmentInfo, ScenarioInfo, WriteEvidence
 from recap.core.observations import (
     ActionOutcome,
     AlertSignal,
@@ -221,6 +221,25 @@ class SimulatedEnvironment(TargetEnvironment):
             return {**state, "executor_key": public_key}, None
 
         self.store.update(bind)
+
+    def recorded_write(self, approval_id: str, proposal_digest: str) -> WriteEvidence:
+        """The run's own action log: every authorized attempt is recorded in the same
+        transaction as its change and its nonce, so no entry means nothing was applied."""
+        state = self.store.load()
+        if state is None:
+            return WriteEvidence(state="not_applied", detail="the environment was never reset")
+        entries = [
+            entry
+            for entry in state.get("action_log", [])
+            if entry.get("approval_id") == approval_id
+            and (not proposal_digest or entry.get("proposal_digest") == proposal_digest)
+        ]
+        if any(entry.get("ok") for entry in entries):
+            return WriteEvidence(state="applied", detail="the action log records it as applied")
+        if entries:
+            return WriteEvidence(state="refused", detail=str(entries[-1].get("message", ""))[:200])
+        detail = "the action log holds no authorized attempt with this approval"
+        return WriteEvidence(state="not_applied", detail=detail)
 
     async def execute_authorized(self, action: AuthorizedAction) -> ActionOutcome:
         """Apply a write only if its capability allows exactly it: check, apply, save in ONE

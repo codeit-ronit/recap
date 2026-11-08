@@ -58,6 +58,7 @@ from recap.core.models import (
     StrategyDecision,
     TraceEvent,
     VerificationReport,
+    WriteEvidence,
 )
 from recap.core.observations import (
     ActionOutcome,
@@ -149,6 +150,17 @@ class TargetEnvironment(ABC):
         Verification and the change must happen together (one transaction), and the
         capability's nonce must be recorded so it can never be used twice.
         """
+
+    def recorded_write(self, approval_id: str, proposal_digest: str) -> WriteEvidence:
+        """What this target's own audit log holds about the write that this approval
+        authorized: read after a crash to learn whether the write reached the target.
+
+        "unknown" by default: a target that cannot tell is never assumed unchanged, and the
+        caller fails closed (recap/workers/reconcile.py).
+        """
+        return WriteEvidence(
+            state="unknown", detail=f"{type(self).__name__} keeps no audit log RECAP can read"
+        )
 
     # --- oracle (trusted, independent of agents) ------------------------------------------
     @abstractmethod

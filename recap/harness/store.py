@@ -40,12 +40,19 @@ class RunStore:
         self._conn.commit()
 
     def save(self, record: RunRecord) -> None:
-        """Insert or update the checkpoint of one run."""
+        """Insert or update the checkpoint of one run.
+
+        A run closed after its process stopped (its record has an `interruption`, M6) is
+        final: a later checkpoint without one, from a process that was presumed dead but was
+        not (a frozen or partitioned worker), is ignored, so it cannot undo the closing.
+        """
         self._conn.execute(
             "INSERT INTO runs (run_id, scenario_id, state, label, created_at, updated_at, record)"
             " VALUES (?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT(run_id) DO UPDATE SET state=excluded.state,"
-            " updated_at=excluded.updated_at, record=excluded.record",
+            " updated_at=excluded.updated_at, record=excluded.record"
+            " WHERE json_extract(runs.record, '$.interruption') IS NULL"
+            " OR json_extract(excluded.record, '$.interruption') IS NOT NULL",
             (
                 record.run_id,
                 record.scenario_id,

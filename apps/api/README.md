@@ -42,8 +42,10 @@ curl -H "Authorization: Bearer $(cat data/operator-token)" http://127.0.0.1:8000
 | GET | `/scenarios` | available scenarios (ground-truth fields are for evaluation only; agents never see them) |
 | GET | `/replays` | the committed recordings of real model runs (`fixtures/recordings/MANIFEST.json`): model, prompt version, agents, who approved the original fix, a short SHA-256, and whether each can be replayed here (`integrity`: `intact`, `altered` or `missing`; `launchable`, and why not) |
 | GET | `/auth/session` | **operator** · who the token belongs to (`{operator, actor}`); 401 without a valid token |
-| POST | `/incidents/run` | **operator** · `{scenario_id, config}` → starts a run (202): `{run_id, provider, provider_class, replay_fixture, labels}`; see "Starting a run" below |
-| POST | `/runs/{id}/cancel` | **operator** · cancels a run this server is running (202); its pending approval request expires; 404 unknown, 409 not running here |
+| POST | `/incidents/run` | **operator** · `{scenario_id, config}` → starts a run (202): `{run_id, status, provider, provider_class, replay_fixture, labels, job_id, queue_position, duplicate}`; see "Starting a run" below. An `Idempotency-Key` header (1-128 of `A-Za-z0-9._:-`) names one submission: repeated with the same request it returns that run (`duplicate: true`) and starts nothing; with another request 422. With the Redis backend (below) the run is `queued`; a full queue → 429 with `Retry-After`, Redis unreachable → 503 |
+| POST | `/runs/{id}/cancel` | **operator** · cancels a run (202, `status: cancelling`); its pending approval request expires; 404 unknown, 409 not running here. With the Redis backend a queued run is taken off the queue (`status: cancelled`: nothing ran) and a worker's run stops at the worker's next heartbeat |
+| GET | `/queue` | how runs execute (`backend`: `inprocess` or `redis`) and, with Redis, the queue's depth and capacity, the workers (alive or not, from their heartbeats) and the newest jobs; read-only. `reachable: false` when Redis does not answer (runs, traces and approvals stay readable) |
+| GET | `/jobs/{id}` | one job of the Redis queue: its attempts (each a run), its worker, why it ended (`category`); 404 unknown, 503 Redis unreachable |
 | GET | `/runs` | run summaries, newest first, as a JSON array; filters `provider_class`, `provider` (provider id or model), `scenario`, `state`, `environment`, `label`; pages with `limit` (1-1000, default 50) and `offset`; the number of matching runs is in the `X-Total-Count` header |
 | GET | `/runs/{id}` | `{schema_version, status, summary, record, evidence, error}`: the typed summary plus the stored checkpoint and evidence as before |
 | GET | `/runs/{id}/timeline` | one page of the run's trace as typed entries (`after_seq`, `limit` 1-2000, filters `agent`, `round`, `kind`, `tool`), plus the run's agent lanes, rounds (with overlap), counts and retries; `next_after_seq` is the next page's cursor |
@@ -51,7 +53,7 @@ curl -H "Authorization: Bearer $(cat data/operator-token)" http://127.0.0.1:8000
 | GET | `/runs/{id}/retrieval` | runbook searches (stage, who wrote the query, BM25 or hybrid, results with ranks, signals and who cited them), refused agent searches, memory searches, reuse verdicts and what was written |
 | GET | `/runs/{id}/usage` | per model: requests, the server's own token counts (null when it reported none), summed request time, server time and the difference; RECAP's estimated context tokens (labeled an estimate); the budget; the run's own cost line |
 | GET | `/runs/{id}/events` | stored trace events (`?after_seq=`) |
-| GET | `/runs/{id}/stream` | **SSE**: replays stored events; for a run this server is running, then live ones until `run.summary`; resumes after `Last-Event-ID` or `after_seq` (below) |
+| GET | `/runs/{id}/stream` | **SSE**: replays stored events; for a run this server is running, then live ones until `run.summary`; a worker's run (Redis backend) is followed from the trace the worker stores, from before it starts until its `run.summary`; resumes after `Last-Event-ID` or `after_seq` (below) |
 | GET | `/approvals/pending` | proposals waiting for a human |
 | POST | `/approvals/{proposal_id}` | **operator** · `{decision, proposal_digest, confirm_target?}` — approve/reject ONE exact proposal; on a target that is not simulated, approving needs `confirm_target`, the proposal's target service typed exactly (otherwise 400 and nothing is decided), and the decision log records how and when it came; the approver recorded is the signed-in operator (an `actor` field is refused with 422). A rejection also revokes an approval that was not used yet; approving after a rejection, deciding an expired request, or rejecting after the gateway used the approval (right before sending the write) → 409 |
 | GET | `/approvals/{proposal_id}/events` | the proposal's append-only decision log (requested, approved, rejected, revoked, expired, consumed, refused) |
@@ -105,6 +107,25 @@ prompt, writing the answer) adds up to 474.3 s; about 259 s inside Ollama were n
 trace keeps only Ollama's total, not its compute time, so the API cannot show that wait yet.
 In a replay, request times are the original run's, while agent turn times (lanes, a round's
 wall time and overlap) are the replay's own.
+
+## Execution backends (M6)
+
+By default the API runs each incident as a task in its own process. With
+`RECAP_EXECUTION_BACKEND=redis` and `RECAP_REDIS_URL=redis://host:6379/0`, `POST /incidents/run`
+queues it in Redis and worker processes (`python -m apps.worker`) execute it through the same
+harness ([recap/workers/](../../recap/workers/), [ADR 0034](../../docs/decisions/0034-durable-workers-redis-coordinates-the-run-records-decide.md)).
+Nothing connects to Redis until a request needs it: the API starts without Redis, and only what
+needs the queue answers 503 while it is away. A run's `status` then also says `queued`,
+`interrupted` (its worker stopped and no worker has settled it yet) or `cancelled` (taken off
+the queue before it started); `GET /runs/{id}` adds the run's `job`. A run closed after its
+worker stopped has `record.interruption`, and its outcome is `interrupted` (no fix reached the
+target; it may have run again as `retried_as`) or `needs_reconciliation` (a fix may have
+reached the target: never retried, a person checks the target).
+
+Settings: `RECAP_QUEUE_CAPACITY` (20), `RECAP_JOB_MAX_ATTEMPTS` (3),
+`RECAP_WORKER_HEARTBEAT_SECONDS` (5), `RECAP_WORKER_HEARTBEAT_TTL_SECONDS` (20),
+`RECAP_REDIS_PREFIX` (`recap`); for a worker, `RECAP_WORKER_CONCURRENCY` (1; always 1 on a live
+target) and `RECAP_WORKER_GRACE_SECONDS` (25).
 
 ## Starting a run: which provider
 

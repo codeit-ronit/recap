@@ -4,7 +4,9 @@ The HTTP layer stays thin: it validates requests and calls this module.
 
     RunManager          owns the Runtime, the background asyncio tasks, the live event hub
                         used for server-sent events (SSE), and the approval channel through
-                        which humans approve or reject proposals from the dashboard
+                        which humans approve or reject proposals from the dashboard; with
+                        RECAP_EXECUTION_BACKEND=redis (M6) it queues runs for workers instead
+                        and follows their stored traces
     check_run_request   decides what a client may start (scenario, safety, the per-run
                         provider choice, a replay's committed recording)
     RunReader           reads what runs persisted (checkpoints, stored traces, evidence),
@@ -18,11 +20,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import AsyncIterator, Collection, Sequence
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ValidationError
 
@@ -31,8 +34,11 @@ from apps.api.dto import (
     BatchSource,
     EnvironmentCheck,
     EnvironmentCheckItem,
+    ExecutionBackend,
     ExportProvenance,
     FixtureIntegrity,
+    JobView,
+    QueueView,
     RunDetail,
     RunStarted,
     RunStatus,
@@ -47,10 +53,12 @@ from apps.api.views import (
     environment_run_label,
     evals_view,
     evidence_view,
+    job_view,
     origin_labels,
     provider_view,
     published_provenance,
     published_view,
+    queue_view,
     replays_view,
     retrieval_view,
     run_summary,
@@ -71,15 +79,20 @@ from evals.runner import (
 )
 from recap.core.config import REPO_ROOT, Settings
 from recap.core.errors import ConfigError
-from recap.core.ids import new_id, utcnow
+from recap.core.ids import canonical_json, new_id, sha256_hex, utcnow
 from recap.core.models import TERMINAL_STATES, Evidence, RunConfig, RunRecord, TraceEvent
 from recap.providers.recordings import MANIFEST, FixtureInfo, list_fixtures, sha256_of
 from recap.runtime import Runtime
 from recap.safety.approvals import ExternalApprovalChannel
 from recap.telemetry.sinks import BroadcastHub
 from recap.telemetry.tracer import TraceCategory
+from recap.workers.queue import IDEMPOTENCY_KEY, IdempotencyConflict, Job, JobQueue, QueueConfig
+from recap.workers.resp import Redis, RedisError
 
 KEEPALIVE_SECONDS = 15
+POLL_SECONDS = 0.5  # how often the stream of a worker's run reads its stored trace (M6)
+REDIS_TIMEOUT_SECONDS = 2.0  # the API's Redis calls: a request never waits long for the queue
+REDIS_BACKOFF_SECONDS = 2.0  # after Redis did not answer, reads skip it this long
 RUN_SCAN_LIMIT = 10_000  # GET /runs filters and counts at most this many of the newest runs
 EVENT_PAGE = 5_000  # trace events read from SQLite per query
 ENVIRONMENT_CHECK_SECONDS = 20.0  # POST /environment/check: the preflight's whole time
@@ -97,10 +110,33 @@ def sse_frame(event: TraceEvent, paths: LocalPaths | None = None) -> str:
     return f"id: {event.seq}\nevent: trace\ndata: {data}\n\n"
 
 
-class RunManager:
-    """Starts runs as background tasks and streams their trace events."""
+def request_digest(scenario_id: str, config: RunConfig) -> str:
+    """What a submission asked for, for an Idempotency-Key's check."""
+    asked = config.model_dump(mode="json", exclude_unset=True)  # what the worker will run
+    return sha256_hex(canonical_json({"scenario_id": scenario_id, "config": asked}))
 
-    def __init__(self, runtime: Runtime | None = None) -> None:
+
+@dataclass(frozen=True)
+class Submission:
+    """What POST /incidents/run did: started a run here, or queued it for a worker (M6)."""
+
+    run_id: str
+    status: Literal["started", "queued"]
+    job: Job | None = None
+    position: int | None = None  # 1 = claimed next
+    duplicate: bool = False  # the Idempotency-Key named an earlier submission: nothing new
+
+
+class RunManager:
+    """Starts runs as background tasks and streams their trace events.
+
+    With RECAP_EXECUTION_BACKEND=redis (M6), runs are queued for workers instead
+    (recap/workers/): the run's job says where it stands, and its stream follows the trace the
+    worker stores. Nothing connects to Redis until a request needs it, so the API starts, and
+    serves every read, without Redis; only what needs the queue answers 503 then.
+    """
+
+    def __init__(self, runtime: Runtime | None = None, *, queue: JobQueue | None = None) -> None:
         self.runtime = runtime or Runtime(hub=BroadcastHub())
         if self.runtime.hub is None:  # live streaming needs a hub on the runtime
             self.runtime.hub = BroadcastHub()
@@ -114,6 +150,17 @@ class RunManager:
         self.eval_task: asyncio.Task[EvalReport] | None = None
         self.eval_dir: Path | None = None
         self.eval_log: list[str] = []
+        if queue is None:
+            config = QueueConfig.from_environment()
+            if config is not None:
+                queue = JobQueue(config, Redis(config.url, timeout=REDIS_TIMEOUT_SECONDS))
+        self.queue = queue
+        self._idempotent: dict[str, tuple[str, str]] = {}  # in-process: key -> (run, request)
+        self._queue_down_until = 0.0
+
+    @property
+    def backend(self) -> ExecutionBackend:
+        return "inprocess" if self.queue is None else "redis"
 
     # --- the configured target -------------------------------------------------------------
 
@@ -159,6 +206,42 @@ class RunManager:
 
     # --- incident runs ---------------------------------------------------------------------
 
+    def submit(
+        self, scenario_id: str, config: RunConfig, *, idempotency_key: str = ""
+    ) -> Submission:
+        """Start one incident run here, or queue it for a worker (the Redis backend).
+
+        An Idempotency-Key names one submission: the same key with the same request returns
+        that submission again and starts nothing; with another request it raises
+        IdempotencyConflict. Only the Redis backend keeps keys across a restart (a day). The
+        Redis backend raises QueueFull when the queue is at capacity and RedisError when Redis
+        does not answer (nothing was queued, or a retry with the same key finds it).
+        """
+        if idempotency_key and not IDEMPOTENCY_KEY.fullmatch(idempotency_key):
+            raise ValueError("an Idempotency-Key is 1 to 128 letters, digits, '.', '_', ':' or '-'")
+        digest = request_digest(scenario_id, config)
+        if self.queue is None:
+            earlier = self._idempotent.get(idempotency_key) if idempotency_key else None
+            if earlier is not None:
+                if earlier[1] != digest:
+                    raise IdempotencyConflict(earlier[0])
+                return Submission(earlier[0], "started", duplicate=True)
+            run_id = self.start_run(scenario_id, config)
+            if idempotency_key:
+                self._idempotent[idempotency_key] = (run_id, digest)
+            return Submission(run_id, "started")
+        job, created = self.queue.submit(
+            run_id=new_id("run"),
+            scenario_id=scenario_id,
+            # Only the fields the request set: the worker's RunConfig then has the same
+            # model_fields_set, so scenario overrides apply exactly as in-process.
+            config=config.model_dump(mode="json", exclude_unset=True),
+            idempotency_key=idempotency_key,
+            request_digest=digest,
+        )
+        position = self.queue.position(job.job_id) if job.status == "queued" else None
+        return Submission(job.run_id, "queued", job=job, position=position, duplicate=not created)
+
     def start_run(self, scenario_id: str, config: RunConfig) -> str:
         """Start a run in the background and return its id immediately."""
         run_id = new_id("run")
@@ -171,17 +254,35 @@ class RunManager:
         self.tasks[run_id] = task
         return run_id
 
-    def cancel(self, run_id: str) -> bool:
-        """Cancel a run this server is running; False if it is not running here.
+    def cancel(self, run_id: str) -> str | None:
+        """Cancel a run: "cancelling" (it stops at its next step), "cancelled" (a queued run,
+        taken off the queue: nothing ran), or None when there is nothing to cancel.
 
-        The controller ends a cancelled run as FAILED ("run cancelled") and expires a
-        pending approval request, so nobody can approve it afterwards.
+        The controller ends a cancelled run as FAILED ("run cancelled") and expires a pending
+        approval request, so nobody can approve it afterwards. A worker's run is cancelled at
+        the worker's next heartbeat. Raises RunRefused for a run that was retried as another
+        one, and RedisError when Redis does not answer.
         """
         task = self.tasks.get(run_id)
-        if task is None or task.done():
-            return False
-        task.cancel()
-        return True
+        if task is not None:
+            if task.done():
+                return None
+            task.cancel()
+            return "cancelling"
+        if self.queue is None:
+            return None
+        job = self.queue.job_for_run(run_id)
+        if job is None:
+            return None
+        if job.run_id != run_id:
+            raise RunRefused(
+                409,
+                f"run '{run_id}' was interrupted and runs again as '{job.run_id}': cancel that run",
+            )
+        outcome = self.queue.request_cancel(job)
+        if outcome == "finished":
+            return None
+        return "cancelled" if outcome == "cancelled" else "cancelling"
 
     def _remember_error(self, run_id: str, task: asyncio.Task[RunRecord]) -> None:
         if not task.cancelled() and task.exception() is not None:
@@ -193,7 +294,10 @@ class RunManager:
         A run this server started is 'running', 'finished' or 'error'. A run started by
         another process (the CLI, or an earlier server) is 'finished' once its stored state
         is terminal and 'external' until then: its live events exist only in that process.
-        'unknown' means there is no such run.
+        'unknown' means there is no such run. With the Redis backend, a run that is not
+        finished takes its status from its job: 'queued', 'running' (a worker runs it; its
+        stream follows the stored trace), 'interrupted' (its worker stopped and nobody has
+        settled it yet), 'cancelled' (taken off the queue) or 'error' (it failed to start).
         """
         record = None if run_id in self.tasks else self.runtime.runs.get(run_id)
         return self.status_for(run_id, record)
@@ -202,19 +306,106 @@ class RunManager:
         """status(), for a caller that has already read the run's record (None: no record)."""
         task = self.tasks.get(run_id)
         if task is None:
-            if record is None:
-                return "unknown"
-            return "finished" if record.state in TERMINAL_STATES else "external"
+            if record is not None and record.state in TERMINAL_STATES:
+                return "finished"
+            job = self._job(run_id)
+            if job is not None and job.run_id == run_id:
+                if job.status == "queued":
+                    return "queued"
+                if job.status == "running":
+                    return "running" if self._worker_alive(job.worker) else "interrupted"
+                if record is None:
+                    return "cancelled" if job.status == "cancelled" else "error"
+            return "unknown" if record is None else "external"
         if not task.done():
             return "running"
         return "error" if run_id in self.errors else "finished"
+
+    # --- the job queue (M6) -------------------------------------------------------------------
+
+    def _job(self, run_id: str) -> Job | None:
+        """The job of a run; None without the Redis backend, or while Redis does not answer."""
+        if self.queue is None or time.monotonic() < self._queue_down_until:
+            return None
+        try:
+            return self.queue.job_for_run(run_id)
+        except RedisError:
+            self._queue_down_until = time.monotonic() + REDIS_BACKOFF_SECONDS
+            return None
+
+    def _worker_alive(self, worker_id: str) -> bool:
+        if self.queue is None:
+            return False
+        try:
+            return self.queue.alive(worker_id)
+        except RedisError:
+            return True  # unknown: never call a run interrupted on a guess
+
+    def job_for(self, run_id: str) -> JobView | None:
+        """The run's job (GET /runs/{id}); None without one, or while Redis does not answer."""
+        job = self._job(run_id)
+        return self._job_view(job) if job is not None else None
+
+    def job(self, job_id: str) -> JobView | None:
+        """GET /jobs/{id}. Raises RedisError when Redis does not answer."""
+        if self.queue is None:
+            return None
+        found = self.queue.get(job_id)
+        return self._job_view(found) if found is not None else None
+
+    def _job_view(self, job: Job) -> JobView | None:
+        assert self.queue is not None
+        try:
+            position = self.queue.position(job.job_id) if job.status == "queued" else None
+            alive = self.queue.alive(job.worker) if job.status == "running" else None
+        except RedisError:
+            return None
+        return job_view(job, position=position, worker_alive=alive)
+
+    def queue_view(self) -> QueueView:
+        """GET /queue: how runs execute and, with Redis, the queue, its workers and jobs."""
+        running = sum(1 for task in self.tasks.values() if not task.done())
+        if self.queue is None:
+            return queue_view("inprocess", running=running)
+        try:
+            snapshot = self.queue.snapshot()
+        except RedisError as exc:
+            error = f"Redis did not answer: {exc}"
+            return queue_view("redis", running=running, config=self.queue.config, error=error)
+        return queue_view("redis", running=running, config=self.queue.config, snapshot=snapshot)
+
+    def queue_reachable(self) -> bool | None:
+        """Whether Redis answers a PING (None: the in-process backend has no queue)."""
+        if self.queue is None:
+            return None
+        try:
+            return self.queue.redis.ping()
+        except RedisError:
+            return False
+
+    def _job_may_continue(self, run_id: str) -> bool:
+        """Whether a worker may still add events to this run's trace."""
+        if self.queue is None:
+            return False
+        try:
+            job = self.queue.job_for_run(run_id)
+        except RedisError:  # unknown: keep following unless the run has ended
+            record = self.runtime.runs.get(run_id)
+            return record is None or record.state not in TERMINAL_STATES
+        return job is not None and job.run_id == run_id and not job.terminal
 
     async def stream(self, run_id: str, after_seq: int = 0) -> AsyncIterator[str]:
         """Replay stored events after `after_seq`; for a run this server is running, then
         forward live ones. Each event is sent once: a live event already replayed is skipped.
 
-        Any other run has no live events in this process, so its stream ends after the replay.
+        Any other run has no live events in this process, so its stream ends after the replay;
+        with the Redis backend, a run a worker runs (or will run) is followed from its stored
+        trace instead (_follow_stored).
         """
+        if self.queue is not None and run_id not in self.tasks:
+            async for frame in self._follow_stored(run_id, after_seq):
+                yield frame
+            return
         queue = self.hub.subscribe(run_id)  # subscribe first so nothing is missed
         # Decided before the replay: if the run ends in between, its last events are then
         # either in the replay or already waiting in the queue.
@@ -244,6 +435,39 @@ class RunManager:
                     return
         finally:
             self.hub.unsubscribe(run_id, queue)
+
+    async def _follow_stored(self, run_id: str, after_seq: int) -> AsyncIterator[str]:
+        """Stream a worker's run from SQLite: stored events after `after_seq`, then each new one
+        as the worker stores it, in seq order, until its run.summary (written by the worker,
+        or by whoever closed the run after its worker stopped). The trace is persisted before
+        it is streamed, so a worker that stops loses no event, and a client that reconnects
+        with Last-Event-ID resumes right after the last event it received."""
+        last = after_seq
+        quiet = 0.0
+        while True:
+            events = await asyncio.to_thread(
+                self.runtime.events.list_events, run_id, last, EVENT_PAGE
+            )
+            for event in events:
+                last = event.seq
+                yield sse_frame(event, self.paths)
+                if event.category == TraceCategory.RUN_SUMMARY:
+                    return
+            if events:
+                quiet = 0.0
+                continue
+            if not await asyncio.to_thread(self._job_may_continue, run_id):
+                # Events stored between the read above and that check are still sent.
+                for event in await asyncio.to_thread(
+                    self.runtime.events.list_events, run_id, last, EVENT_PAGE
+                ):
+                    yield sse_frame(event, self.paths)
+                return
+            await asyncio.sleep(POLL_SECONDS)
+            quiet += POLL_SECONDS
+            if quiet >= KEEPALIVE_SECONDS:
+                quiet = 0.0
+                yield ": keep-alive\n\n"
 
     # --- evaluations ------------------------------------------------------------------------
 
@@ -546,12 +770,17 @@ class RunReader:
             summary = self._summary(record, status)
             # A published run's registry contents were not exported (PUBLISHED_LIMITATIONS).
             evidence = [] if status == "published" else self.runtime.runs.evidence(run_id)
+        job = self.manager.job_for(run_id) if status != "published" else None
+        error = self.manager.errors.get(run_id)
+        if error is None and status == "error" and job is not None:
+            error = job.detail  # a worker's run that failed before it recorded anything
         detail = RunDetail(
             status=status,
             summary=summary,
             record=record,
             evidence=evidence,
-            error=self.manager.errors.get(run_id),
+            error=error,
+            job=job,
         )
         return self.json(detail)
 
@@ -609,7 +838,14 @@ class RunReader:
         )
         return self.json(view)
 
-    def run_started(self, run_id: str, scenario_id: str, config: RunConfig) -> Any:
+    def run_started(
+        self,
+        run_id: str,
+        scenario_id: str,
+        config: RunConfig,
+        *,
+        submission: Submission | None = None,
+    ) -> Any:
         """The 202 answer of POST /incidents/run: what the new run will run with."""
         settings = self.runtime.settings
         name = config.provider or settings.providers.default
@@ -625,6 +861,11 @@ class RunReader:
             replay_fixture=config.replay_fixture,
             labels=labels + origin_labels(spec.origin, committed_fixture=committed),
         )
+        if submission is not None:
+            started.status = submission.status
+            started.job_id = submission.job.job_id if submission.job is not None else None
+            started.queue_position = submission.position
+            started.duplicate = submission.duplicate
         return self.json(started)
 
     def events(self, run_id: str) -> list[TraceEvent]:

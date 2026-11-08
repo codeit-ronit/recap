@@ -522,6 +522,27 @@ export interface StateChange {
   reason: string;
 }
 
+/**
+ * M6: how a run was closed after the worker running it stopped mid-run (RunRecord.interruption),
+ * read from its persisted evidence (recap/workers/reconcile.py). A run whose fix may have
+ * reached the target is never retried: `needs_reconciliation` asks a person to check it.
+ */
+export interface Interruption {
+  at: ISODateTime;
+  phase:
+    | "before_start"
+    | "before_write"
+    | "awaiting_approval"
+    | "write_in_flight"
+    | "after_write"
+    | "verifying";
+  write: "none" | "not_applied" | "applied" | "refused" | "unknown";
+  needs_reconciliation: boolean;
+  detail: string;
+  retried_as: string | null; // the run of the next attempt, when the job ran again
+  cause: "worker_lost" | "worker_stopped" | null; // died, or was stopped and cancelled the run
+}
+
 export interface RunRecord {
   run_id: string;
   scenario_id: string;
@@ -551,6 +572,7 @@ export interface RunRecord {
   versions: Record<string, unknown>;
   created_at: ISODateTime;
   updated_at: ISODateTime;
+  interruption?: Interruption | null; // M6: closed after its worker stopped mid-run
 }
 
 // ===================================================================================
@@ -563,6 +585,8 @@ export interface HealthResponse {
   environment: string;
   provider: string;
   label: string;
+  execution_backend?: "inprocess" | "redis"; // M6: where runs execute
+  queue_reachable?: boolean | null; // M6: Redis answered (null: in-process, no queue)
 }
 
 /** GET /system: which implementation is plugged into each interface. */
@@ -607,9 +631,20 @@ export interface RunSummary {
 /**
  * RunManager.status() (apps/api/service.py). A run started by another process (the CLI, an
  * earlier server) is "finished" once its stored state is terminal and "external" until
- * then: its live events exist only in that process.
+ * then: its live events exist only in that process. With the Redis execution backend (M6):
+ * "queued" (waiting for a worker), "interrupted" (its worker stopped; not settled yet) and
+ * "cancelled" (taken off the queue before it started).
  */
-export type RunStatus = "running" | "finished" | "error" | "unknown" | "external" | "published";
+export type RunStatus =
+  | "running"
+  | "finished"
+  | "error"
+  | "unknown"
+  | "external"
+  | "published"
+  | "queued"
+  | "interrupted"
+  | "cancelled";
 
 /** GET /runs/{id}. `record` is null while a just-started run has no checkpoint yet. */
 export interface RunDetail {
@@ -619,6 +654,8 @@ export interface RunDetail {
   error: string | null;
   /** The typed summary (apps/api/dto.py RunSummary); a published run's carries its provenance. */
   summary?: import("./dto").RunSummary | null;
+  /** M6: the run's job in the Redis queue (where it waits, which attempt), when there is one. */
+  job?: import("./dto").JobView | null;
 }
 
 /** RunConfig fields the dashboard sends when starting a run. */
