@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { ApiError, api, toApiError } from "../api";
 import type { Page } from "../api";
 import { ApprovalCountdown, ApprovalModal } from "../components/ApprovalCard";
+import { HistoricalBanner } from "../components/Historical";
 import { Mono } from "../components/Badge";
 import { Card, Notice, PageHeader, Segmented, Toggle } from "../components/Card";
 import { Icon } from "../components/Icon";
@@ -426,6 +427,8 @@ export function DemoRunView(props: DemoRunViewProps) {
   const activity = useMemo(() => recentActivity(events), [events]);
   const notices = useMemo(() => demoNotices(events), [events]);
   const replay = provider?.origin === "replay" || summary?.provider_kind === "replay";
+  // A real-cluster run published with the repository: historical, told step by step, never acted on.
+  const published = summary?.status === "published";
   const simulated = placeOf(events).simulated !== false && environment?.is_simulated !== false;
   const shown = (pinned ? progress.steps.find((s) => s.id === pinned) : null) ?? progress.current ?? progress.steps[0];
   const following = !pinned || pinned === progress.current?.id;
@@ -452,6 +455,8 @@ export function DemoRunView(props: DemoRunViewProps) {
     <div className="demo">
       {replay ? (
         <DemoProvenance words={runProvenance(provider)} />
+      ) : published ? (
+        <HistoricalBanner summary={summary} />
       ) : (
         <Notice tone="info" icon="info" title="This run is not a replay">
           The guided view tells any run's steps from its trace, but only a replay of a recording is the demo. {banner.explanation}
@@ -478,9 +483,15 @@ export function DemoRunView(props: DemoRunViewProps) {
         <Toggle checked={interview} onChange={props.onInterview} label="Presenter notes" />
         <Toggle checked={technical} onChange={props.onTechnical} label="Technical details" />
         {live && !finished ? <StopRunButton runId={runId} signedIn={signedIn} /> : null}
-        <button type="button" className="btn" onClick={props.onRestart} disabled={!signedIn || props.restarting} title={signedIn ? "Start the demo again: a new replay run" : "Sign in to start a run"}>
-          <Icon name="refresh" size={14} /> {props.restarting ? "Restarting…" : "Restart"}
-        </button>
+        {published ? (
+          <a className="btn" href={hrefFor("published")}>
+            <Icon name="package" size={14} /> All published runs
+          </a>
+        ) : (
+          <button type="button" className="btn" onClick={props.onRestart} disabled={!signedIn || props.restarting} title={signedIn ? "Start the demo again: a new replay run" : "Sign in to start a run"}>
+            <Icon name="refresh" size={14} /> {props.restarting ? "Restarting…" : "Restart"}
+          </button>
+        )}
       </div>
       {props.restartError ? <ErrorView error={props.restartError} title="Could not restart the demo" /> : null}
       {props.streamError ? <ErrorView error={props.streamError} title="Live updates interrupted" /> : null}

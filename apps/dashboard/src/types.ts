@@ -609,7 +609,7 @@ export interface RunSummary {
  * earlier server) is "finished" once its stored state is terminal and "external" until
  * then: its live events exist only in that process.
  */
-export type RunStatus = "running" | "finished" | "error" | "unknown" | "external";
+export type RunStatus = "running" | "finished" | "error" | "unknown" | "external" | "published";
 
 /** GET /runs/{id}. `record` is null while a just-started run has no checkpoint yet. */
 export interface RunDetail {
@@ -617,6 +617,8 @@ export interface RunDetail {
   record: RunRecord | null;
   evidence: Evidence[];
   error: string | null;
+  /** The typed summary (apps/api/dto.py RunSummary); a published run's carries its provenance. */
+  summary?: import("./dto").RunSummary | null;
 }
 
 /** RunConfig fields the dashboard sends when starting a run. */

@@ -1104,7 +1104,7 @@ export function RunSafetyView({ data, runId, live }: { data: RunSafetyData; runI
   const proposals = data.evidence.proposals;
   const decisions = traceDecisions(data.requests, data.decisions ?? []);
   const lifecycles = proposalIds(data.detail, data.evidence).map((id) => permissionLifecycle(id, data.approvals, live, decisions.get(id) ?? null));
-  const outcomes = runLayerOutcomes({ gateway, checks: data.evidence.proposal_checks, lifecycles, writes: data.writes, counts, live });
+  const outcomes = runLayerOutcomes({ gateway, checks: data.evidence.proposal_checks, lifecycles, writes: data.writes, counts, live, decisions });
   const blocked = blockedActions({ actions: record?.actions ?? [], gateway, checks: data.evidence.proposal_checks, proposals, lifecycles });
   const injections = injectionRows(data.evidence.injection_flags, data.flags);
   const requests = requestFacts(data.requests);
@@ -1178,7 +1178,11 @@ export function RunSafetyView({ data, runId, live }: { data: RunSafetyData; runI
           <Card title="Approval log for this run" subtitle="GET /approvals/{proposal_id}/events for each proposal this run made, oldest first." flush>
             <ApprovalLogTable
               events={[...data.approvals].sort((a, b) => a.event_id - b.event_id)}
-              empty="This run asked for no approval."
+              empty={
+                decisions.size
+                  ? "This server's approval log holds no entry for this run: it was decided elsewhere. Its trace records the request and the decision (above)."
+                  : "This run asked for no approval."
+              }
               linkRuns={false}
             />
           </Card>

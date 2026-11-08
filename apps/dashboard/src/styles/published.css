@@ -1,0 +1,141 @@
+/* Published Runs (pages/Published.tsx): the runs you can open, and every real-cluster run.
+   The historical banner's styles are global (styles.css): run pages show it too. */
+
+.pub {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+  min-width: 0;
+}
+.pub .historical-banner {
+  margin-bottom: 0;
+}
+
+.pub-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: var(--space-4);
+}
+.pub-run {
+  display: grid;
+  gap: var(--space-3);
+  align-content: start;
+  min-width: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+.pub-run-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.pub-run-title {
+  margin: 0;
+  font-size: var(--fs-lg);
+  line-height: 1.35;
+}
+.pub-facts {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+.pub-facts > div {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: var(--space-2);
+}
+.pub-facts dt {
+  color: var(--muted);
+}
+.pub-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.pub-notes {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: var(--space-4);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+.pub-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.pub-files {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.pub-table-section + .pub-table-section {
+  margin-top: var(--space-5);
+}
+.pub-table-title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-lg);
+}
+.pub-detail {
+  min-width: 220px;
+  overflow-wrap: anywhere;
+}
+.pub-approvals {
+  display: block;
+  margin-top: 2px;
+}
+.pub-category {
+  font-weight: 650;
+}
+.pub-rejected {
+  margin: 4px 0 0;
+  padding-left: var(--space-4);
+}
+
+.pub-limits {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+.pub-limits > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-5);
+  cursor: pointer;
+  font-weight: 650;
+}
+.pub-limits > summary::-webkit-details-marker {
+  display: none;
+}
+.pub-limits > summary .icon {
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+.pub-limits[open] > summary .icon {
+  transform: rotate(90deg);
+}
+.pub-limits ul {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0 var(--space-5) var(--space-4) calc(var(--space-5) + var(--space-4));
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
+@media (max-width: 560px) {
+  .pub-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

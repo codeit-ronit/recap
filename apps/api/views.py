@@ -68,7 +68,11 @@ from apps.api.dto import (
     ProposalView,
     ProviderLimitsView,
     ProviderView,
+    PublishedProvenance,
+    PublishedView,
+    RecordWithoutTraceView,
     RefusedSearchView,
+    RejectedArtifactView,
     ReplayProvenance,
     ReplaysView,
     RetrievalView,
@@ -92,6 +96,7 @@ from apps.api.dto import (
     VerificationView,
     VersionsView,
 )
+from evals.published import PublishedIndex, PublishedRun
 from evals.records import EvalBatch
 from recap.core.config import ProviderSettings
 from recap.core.models import (
@@ -446,14 +451,19 @@ def replay_provenance(
     )
 
 
+PUBLISHED_LABEL = "PUBLISHED · HISTORICAL · READ-ONLY"
+
+
 def run_summary(
     record: RunRecord,
     status: RunStatus,
     *,
     fixtures: Sequence[FixtureInfo] = (),
     exports: Mapping[str, ExportProvenance] | None = None,
+    published: PublishedProvenance | None = None,
 ) -> RunSummary:
-    """One run's identity, provenance and outcome, from its checkpoint alone."""
+    """One run's identity, provenance and outcome, from its checkpoint alone (and, for a
+    published run, where its checked files are)."""
     missing: list[str] = []
     info = record.provider_info
     if info is None:
@@ -527,8 +537,9 @@ def run_summary(
         recording=file_id(own_recording),
         episode_id=record.episode_id,
         error=record.error,
-        labels=run_labels(record, replay),
+        labels=([PUBLISHED_LABEL] if published else []) + run_labels(record, replay),
         not_recorded=missing,
+        published=published,
     )
 
 
@@ -925,8 +936,13 @@ def evidence_view(
     evidence: Sequence[Evidence],
     events: Sequence[TraceEvent],
     status: RunStatus,
+    *,
+    registry_recorded: bool = True,
 ) -> EvidenceView:
-    """The evidence registry, every claim with its citations, and every verdict on them."""
+    """The evidence registry, every claim with its citations, and every verdict on them.
+
+    `registry_recorded=False` (a published run): the registry's contents were not exported,
+    so a cited ID missing from it is not a finding, and the view says what is not recorded."""
     author = text_author(record)
     known = {item.id for item in evidence}
     rounds_by_seq = event_rounds(events)
@@ -990,8 +1006,13 @@ def evidence_view(
     cited += [
         i for v in [*verifications, *([final] if final else [])] for i in v.unknown_evidence_ids
     ]
-    unknown = sorted({i for i in cited if i not in known})
+    unknown = sorted({i for i in cited if i not in known}) if registry_recorded else []
     missing = [] if events else ["trace events (verification history, proposal checks, flags)"]
+    if not registry_recorded:
+        missing.append(
+            "the evidence registry's contents (the tool outputs the agents read): not published "
+            "with this run; each evidence ID and the tool that produced it are in the trace"
+        )
     if record is None:
         missing.append("run record (findings, proposals, policy verdicts)")
     return EvidenceView(
@@ -1764,6 +1785,79 @@ def batch_view(batch: EvalBatch, source: BatchSource) -> BatchView:
 # ======================================================================================
 # Small readers for stored payloads (old or partial traces must never crash a view)
 # ======================================================================================
+
+
+# ======================================================================================
+# Published real-cluster runs (evals/published.py)
+# ======================================================================================
+
+# What the published files do not hold, in plain words (GET /published `limitations`).
+PUBLISHED_LIMITATIONS = (
+    "The evidence registry's contents (the tool outputs the agents read) were not exported: "
+    "each evidence ID, the tool that produced it and the verifier's verdicts are in the trace, "
+    "and what the model was shown is in the run's recording.jsonl.",
+    "The approval decision log of the server that ran it was not exported: each request and "
+    "decision is in the trace and the run record, as evidence of a past decision only.",
+    "Runs that failed or were blocked are published as evaluation records only: their full "
+    "traces stay in the owner's run stores, so they have no Trace Explorer view here.",
+    "SREGym's grader was run by hand after each graded run: its verdict is the evaluation "
+    "record's benchmark_verdict, kept apart from RECAP's oracle, and its output for the passing "
+    "run is quoted in evals/live/README.md.",
+    "A person approved every fix that ran: these are human-in-the-loop runs, one sample each, "
+    "counted and never turned into a success rate.",
+)
+
+
+def published_provenance(run: PublishedRun, folder: str) -> PublishedProvenance:
+    """Where a published run comes from, as its checked files and evaluation record say."""
+    return PublishedProvenance(
+        folder=folder,
+        files=sorted(run.entry.files),
+        integrity="verified",
+        target=run.entry.target,
+        title=run.entry.title,
+        notes=list(run.entry.notes),
+        recording_id=run.recording_id,
+        batch_id=run.batch.batch_id,
+        benchmark=run.batch.benchmark,
+        benchmark_verdict=run.eval_record.benchmark_verdict,
+        approvals=list(run.eval_record.approvals),
+    )
+
+
+def published_view(index: PublishedIndex, summaries: Sequence[RunSummary]) -> PublishedView:
+    """GET /published: the runs that loaded, the records without a trace, the refusals."""
+    batches = {run.batch.batch_id: run.batch for run in index.runs}
+    batches.update({item.batch.batch_id: item.batch for item in index.records_without_trace})
+    return PublishedView(
+        manifest_schema=index.schema_version,
+        runs=list(summaries),
+        records_without_trace=[
+            RecordWithoutTraceView(
+                run_id=item.record.run_id,
+                batch_id=item.batch.batch_id,
+                target=item.record.target,
+                scenario_id=item.record.scenario_id,
+                started_at=item.record.started_at,
+                final_state=item.record.final_state,
+                oracle_verified=item.record.oracle_verified,
+                failure=item.record.failure,
+                failure_detail=item.record.failure_detail,
+                approvals=list(item.record.approvals),
+                benchmark_verdict=item.record.benchmark_verdict,
+                model=item.record.model,
+                provider=item.record.provider,
+            )
+            for item in index.records_without_trace
+        ],
+        rejected=[
+            RejectedArtifactView(folder=r.folder, run_id=r.run_id, reason=r.reason)
+            for r in index.rejected
+        ],
+        manifest_error=index.manifest_error,
+        benchmarks={batch_id: b.benchmark for batch_id, b in batches.items() if b.benchmark},
+        limitations=list(PUBLISHED_LIMITATIONS),
+    )
 
 
 def _str(value: Any) -> str | None:

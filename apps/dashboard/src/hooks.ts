@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, openRunStream, toApiError } from "./api";
 import { getToken, onTokenChange } from "./auth";
 import type { ApiError } from "./api";
+import type * as dto from "./dto";
 import type { EnvironmentInfo, RunSummary, SystemSummary, TraceEvent } from "./types";
 
 // ======================================================================================
@@ -17,6 +18,7 @@ import type { EnvironmentInfo, RunSummary, SystemSummary, TraceEvent } from "./t
 export const PAGES = [
   "overview",
   "demo",
+  "published",
   "live",
   "timeline",
   "evidence",
@@ -33,6 +35,7 @@ export type PageId = (typeof PAGES)[number];
 export const PAGE_LABELS: Readonly<Record<PageId, string>> = {
   overview: "Overview",
   demo: "Guided Demo",
+  published: "Published Runs",
   live: "Incident Lab",
   timeline: "Trace Explorer",
   evidence: "Evidence & Decisions",
@@ -48,7 +51,7 @@ export const PAGE_LABELS: Readonly<Record<PageId, string>> = {
  * incident, and what RECAP knows, remembers and measures.
  */
 export const NAV_GROUPS: readonly { label: string; pages: readonly PageId[] }[] = [
-  { label: "Start here", pages: ["overview", "demo"] },
+  { label: "Start here", pages: ["overview", "demo", "published"] },
   { label: "Investigate", pages: ["live", "timeline", "evidence", "safety"] },
   { label: "Learn & measure", pages: ["knowledge", "memory", "evals", "architecture"] },
 ];
@@ -399,6 +402,8 @@ export interface PageProps {
 export interface RunSelection {
   runId: string | null;
   runs: Polled<RunSummary[]>;
+  /** The real-cluster runs published with the repository (GET /published), read once. */
+  published?: Polled<dto.PublishedView>;
   select: (runId: string) => void;
 }
 
@@ -408,6 +413,7 @@ export interface RunSelection {
  */
 export function useRunSelection(route: Route): RunSelection {
   const runs = usePolling(() => api.runs(100), 5000, []);
+  const published = usePolling(() => api.published(), null, []);
   const requested = route.params.get("run");
   const latest = runs.data && runs.data.length ? runs.data[0].run_id : null;
   const runId = requested ?? latest;
@@ -427,7 +433,7 @@ export function useRunSelection(route: Route): RunSelection {
     navigate(current.page, { ...paramsOf(current), run: id });
   }, []);
 
-  return { runId, runs, select };
+  return { runId, runs, published, select };
 }
 
 /**

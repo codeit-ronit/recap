@@ -194,6 +194,10 @@ export function OverviewHero({ liveAction: live }: { liveAction: string | null }
             </a>
           </>
         )}
+        <a className="btn" href={hrefFor("published")}>
+          <Icon name="package" size={14} />
+          Real Kubernetes runs
+        </a>
         <a className="btn btn-ghost" href={hrefFor("architecture")}>
           <Icon name="architecture" size={14} />
           Explore the technology

@@ -35,12 +35,18 @@ export function NoRuns() {
       title={`No runs yet. Start one in the ${lab}`}
       icon="live"
       action={
-        <a className="btn btn-primary" href={hrefFor("live")}>
-          <Icon name="play" size={14} /> Open the {lab}
-        </a>
+        <span className="chip-row">
+          <a className="btn btn-primary" href={hrefFor("live")}>
+            <Icon name="play" size={14} /> Open the {lab}
+          </a>
+          <a className="btn" href={hrefFor("published")}>
+            <Icon name="package" size={14} /> Open a published real-cluster run
+          </a>
+        </span>
       }
     >
-      Every view on this dashboard is built from runs the backend recorded; none exist yet.
+      Every view on this dashboard is built from runs the backend recorded; this server has none yet. The real Kubernetes runs published with the
+      repository can be opened offline.
     </EmptyState>
   );
 }

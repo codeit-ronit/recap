@@ -1020,7 +1020,13 @@ export async function storedRun(runId: string, scenarioId: string): Promise<dto.
   }
 }
 
-/** Whether this server stores the run, with links to its trace when it does. */
+/** The run as published with the repository (GET /published, M6), or null when it is not. */
+export async function publishedRun(runId: string): Promise<dto.RunSummary | null> {
+  const view = await api.published();
+  return view.runs.find((run) => run.run_id === runId) ?? null;
+}
+
+/** Whether this server stores the run (or the repository publishes it), with links to its trace when so. */
 export function TraceAvailabilityView({
   runId,
   polled,
@@ -1029,10 +1035,15 @@ export function TraceAvailabilityView({
   polled: Pick<Polled<dto.RunSummary | null>, "data" | "error" | "loading" | "refresh">;
 }) {
   if (polled.data) {
+    const published = polled.data.status === "published";
     return (
       <div className="evl-trace ok" role="status">
-        <Icon name="check" size={16} />
-        <span className="evl-trace-text">This server stores this run: its full trace is one click away.</span>
+        <Icon name={published ? "package" : "check"} size={16} />
+        <span className="evl-trace-text">
+          {published
+            ? "Published with the repository: its full trace is one click away, historical and read-only."
+            : "This server stores this run: its full trace is one click away."}
+        </span>
         <span className="evl-trace-links">
           <a className="btn btn-small btn-primary" href={hrefFor("timeline", { run: runId })}>
             <Icon name="timeline" size={13} />
@@ -1062,7 +1073,7 @@ export function TraceAvailabilityView({
 }
 
 function TraceAvailability({ runId, scenarioId }: { runId: string; scenarioId: string }) {
-  const polled = usePolling(() => storedRun(runId, scenarioId), null, [runId, scenarioId]);
+  const polled = usePolling(async () => (await storedRun(runId, scenarioId)) ?? (await publishedRun(runId)), null, [runId, scenarioId]);
   return <TraceAvailabilityView runId={runId} polled={polled} />;
 }
 

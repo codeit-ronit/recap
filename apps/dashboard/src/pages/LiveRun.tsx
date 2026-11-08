@@ -291,7 +291,7 @@ export function useLabRunEvents(runId: string): LabRunEvents {
         const detail = await api.run(runId);
         if (cancelled || finished) return;
         if (detail.status !== "running") {
-          if (detail.status === "external") setState((s) => ({ ...s, transport: "recorded" }));
+          if (detail.status === "external" || detail.status === "published") setState((s) => ({ ...s, transport: "recorded" }));
           add(await api.events(runId, lastSeq));
           stop();
           return;
@@ -325,9 +325,10 @@ export function useLabRunEvents(runId: string): LabRunEvents {
       }
     };
 
+    // A published run (historical, read-only) is shown the same way: its recorded trace, once.
     void api.run(runId).then(
       (detail) => {
-        if (detail.status === "external") void showRecorded();
+        if (detail.status === "external" || detail.status === "published") void showRecorded();
         else follow();
       },
       // Status unknown (e.g. the API is restarting): the stream and its fallbacks retry.
@@ -1658,7 +1659,11 @@ function RunPanel({
         {live && !signedIn && manual !== false ? <SignInPrompt what="approve or reject this run's fix" /> : null}
         <StateStepper states={states} running={live} times={times} caption={caption} />
         {stream.transport === "recorded" ? (
-          <div className="muted small">Started by another process: showing its recorded events; live updates are unavailable here.</div>
+          <div className="muted small">
+            {detail.data?.status === "published"
+              ? "A published historical run: its recorded trace, read-only. Nothing runs now."
+              : "Started by another process: showing its recorded events; live updates are unavailable here."}
+          </div>
         ) : null}
         {stream.error ? <ErrorView error={stream.error} title="Live updates interrupted" /> : null}
       </Card>

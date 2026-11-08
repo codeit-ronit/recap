@@ -103,16 +103,17 @@ function shell(overrides: Partial<AppShellProps> = {}): string {
 
 // --- routes ------------------------------------------------------------------------------------
 
-test("ten routes in the agreed order, each with its Mission Control label", () => {
+test("eleven routes in the agreed order, each with its Mission Control label", () => {
   assert.deepEqual(
     [...PAGES],
-    ["overview", "demo", "live", "timeline", "evidence", "safety", "knowledge", "memory", "evals", "architecture"],
+    ["overview", "demo", "published", "live", "timeline", "evidence", "safety", "knowledge", "memory", "evals", "architecture"],
   );
   assert.deepEqual(
     PAGES.map((p) => PAGE_LABELS[p]),
     [
       "Overview",
       "Guided Demo",
+      "Published Runs",
       "Incident Lab",
       "Trace Explorer",
       "Evidence & Decisions",
@@ -143,7 +144,7 @@ test("the navigation's three groups cover every route once, in route order", () 
   assert.equal(headings.length, 3);
   // Each group's list is named by its heading.
   for (const heading of headings) assert.equal(withAttr(html, "aria-labelledby", heading.attrs.id).length, 1);
-  assert.match(textOf(html), /Start here Overview Guided Demo Investigate Incident Lab Trace Explorer Evidence & Decisions Safety & Approvals Learn & measure Knowledge/);
+  assert.match(textOf(html), /Start here Overview Guided Demo Published Runs Investigate Incident Lab Trace Explorer Evidence & Decisions Safety & Approvals Learn & measure Knowledge/);
 });
 
 test("hash routes keep working: deep links, the run parameter, the new knowledge route, unknown paths", () => {
@@ -160,10 +161,10 @@ test("hash routes keep working: deep links, the run parameter, the new knowledge
 
 // --- navigation and landmarks ------------------------------------------------------------------
 
-test("the navigation lists the ten pages in order, and only the current one has aria-current", () => {
+test("the navigation lists the eleven pages in order, and only the current one has aria-current", () => {
   const html = shell({ page: "knowledge" });
   const links = tags(html, "a").filter((a) => (a.attrs.class ?? "").split(" ").includes("nav-item"));
-  assert.equal(links.length, 10);
+  assert.equal(links.length, 11);
   assert.deepEqual(
     links.map((a) => a.attrs.href),
     PAGES.map((p) => `#/${p}`),
