@@ -18,6 +18,8 @@ One short checkpoint per workstream. The M5 handoff is [m5-report.md](m5-report.
   - a timeout now reports the run's status, state and error;
   - the wait is 180 s on a shared CI runner.
 - No product code changed. The next CI run will show the cause if it fails again.
+- **Pending remote CI verification:** nothing has been pushed since, so no CI run has exercised the
+  change. It is a diagnostic improvement, not a proven fix.
 
 **Test commands:**
 - `python -m pytest`: 2264 passed, 7 skipped at v0.6.0.
@@ -155,11 +157,94 @@ every recorded outcome are untouched. Nothing was pushed.
 5. **Interview mode** from the Overview. Try a phone-width window (390 px).
 6. **Judge:** is the plain language accurate and short enough? Is the amber "not enough evidence yet" of round one clear, and is the refused-answer notice clear?
 
+## W2: published real-cluster runs, offline and read-only (2026-11-08)
+
+**What a fresh checkout can now do:**
+1. Start the API with an empty data folder.
+2. Open **Published Runs**.
+3. Open M5's real SREGym run, or a Kind run, in Trace Explorer, Evidence & Decisions, Safety &
+   Approvals, Knowledge, Experience Memory, the Incident Lab or step by step.
+
+No AWS, cluster or model is involved. Every page shows the run as "Recorded real Kubernetes
+execution — historical, read-only". The design is in
+[ADR 0033](decisions/0033-published-real-cluster-runs-read-only-behind-the-same-views.md).
+
+**How it works:**
+- **The allowlist.** `evals/live/MANIFEST.json` (schema `recap-published-runs-v1`) lists the four exported real-cluster runs.
+  - Each entry gives the folder, run id, target (`kind` or `sregym`), evaluation batch, and the SHA-256 and size of each of the four files.
+  - The title and notes are a person's; every other fact comes from the files.
+- **The loader.** `evals/published.py` shows a run only after these checks:
+  - the folder is a real folder inside `evals/live/`, with no links and size caps;
+  - each file's bytes match their pins; the bytes are read once, then parsed as JSON only;
+  - the record and every trace event validate against `RunRecord` and `TraceEvent`;
+  - the files agree: one run id, the declared real target, the run's own recording, every approval in the trace, and the final state matching both the trace and the evaluation record;
+  - no text is shaped like a credential (the reason never repeats it).
+  - A run that fails is refused whole and listed with the reason.
+  - `scripts/published_runs.py --check` runs the same checks; `--update` re-pins after a deliberate change.
+- **The API:**
+  - new `GET /published`;
+  - the run views fall back to a published run when this server does not hold the id, with the new status `published`;
+  - `GET /runs` still lists only this server's own runs;
+  - events and stream serve the recorded trace, then end;
+  - cancel answers 409;
+  - the run's approvals are never loaded into the approval store, so they cannot be decided again or reused;
+  - its recording is not a replay fixture.
+- **The dashboard:**
+  - a Published Runs page (in Start here, linked from the Overview and the no-runs state);
+  - the historical banner and a "PUBLISHED · READ-ONLY" top-bar marker on every run page;
+  - published runs in the run picker, in a group of their own;
+  - Evaluations' record drawer links a published run's trace;
+  - the Guided Demo's step-by-step view of a published run.
+- **The grader stays separate.** SREGym's grader verdict is shown next to RECAP's oracle, never merged. The SREGym run's notes say it is not a held-out benchmark result.
+
+**Open the SREGym run from a fresh checkout** (no AWS, cluster or model):
+1. Install once: `python -m venv .venv && .venv/bin/pip install -c constraints.txt -e ".[dev]"`.
+2. Build the dashboard: `cd apps/dashboard && npm ci && npm run build && cd ../..`.
+3. Start the API on an empty folder: `RECAP_DATA_DIR="$(mktemp -d)" .venv/bin/uvicorn apps.api.main:app`.
+4. Open http://127.0.0.1:8000/#/published and choose the SREGym card's **Trace Explorer**, **Evidence & Decisions**, **Safety & Approvals** or **Step by step**. Signing in is not needed to look.
+
+Until W2 is pushed, a clone of GitHub has v0.6.0, without this work; the local repository already has it.
+
+**Found and fixed while building:**
+- **Evidence views.** Exports carry no evidence contents, so Trace Explorer and Evidence & Decisions said "not in this run", "This run recorded no tool result" and "Observations 0". They now say the registry was not published.
+- **Safety & Approvals.** It said "No approval requested" and "This run asked for no approval", because the original server's decision log was not exported. It now shows the trace's recorded decision: "Approved (in the run's trace)".
+- **Phone layout.** Hidden screen-reader text inside a table widened the page at 390 px. Table scroll boxes now contain it, a global style fix.
+
+**Published, and not published:**
+- **Full traces (4):**
+  - Kind `run-047aac6eb0` (M5's deliverable);
+  - Kind `run-f5b9e5bf45` (the red-team run with instructions planted in the logs);
+  - Kind `run-34a3580d2f` (Mission Control's acceptance run);
+  - SREGym `run-9d7f47104d` (SREGym's grader: pass; not held out).
+- **Evaluation records only (8):**
+  - Kind: cancelled; rejected twice; insufficient evidence.
+  - SREGym: blocked by the evidence gate (grader: fail); approval expired; wrong mechanism twice.
+  - Their full traces are only in the owner's run stores (`~/recap-kind-runs`, `~/recap-sregym-runs`; backed up in W0). Publishing any of them is the owner's decision: export, add a manifest entry with prose, then `--check`.
+- **Not exported for any run:**
+  - the evidence registry's contents (the tool outputs; what the model was shown is in `recording.jsonl`);
+  - the original server's approval decision log.
+- **SREGym's grader.** It was run by hand. Its verdict is the evaluation record's `benchmark_verdict`, and its output for the passing run is quoted in `evals/live/README.md`.
+- **The M2 and M3 simulated exports** in `evals/live/` are not on the allowlist. W2 is about the real-cluster runs; the M3 golden run is the Guided Demo's replay.
+
+**Tests:**
+- **Python, new:**
+  - `tests/unit/test_published_runs.py`: 26 tests on copies of the real exports, covering altered, replaced and missing files, schema and version mismatches, files that disagree, links, path traversal, credentials, malformed JSON, oversized files, and offline loading.
+  - `tests/e2e/test_api_published.py`: 6 tests covering the list, every run view, the grader kept separate, read-only enforcement, a tampered artifact never served, and this server's own copy winning.
+  - Both files pass, and so do the existing API and contract tests.
+- **Python, full suite, run once:** **2297 passed, 7 skipped, 0 failed**. Also clean: `ruff check`, `ruff format --check`, `mypy`, the secret scan, and the recordings manifest check.
+- **Dashboard:** `npm test`: **689 passed** (669 before, plus 20 new); `tsc` and `vite build` pass.
+- **Browser smoke test on an empty data folder** (a fresh checkout), on the final build: **77 of 77 passed.** It covered:
+  - published runs on every run page at 1440 px;
+  - Published Runs and a published trace at 390 px;
+  - cancel refused (409) even when signed in;
+  - the Incident Lab demo and the guided demo (approve, restart, reject).
+- **Pages-only regression run on the seeded demo data:** **100 passed, 0 failed, 1 skipped** (the skip is the demo flows, already run above). It checked this server's own scripted, replayed, blocked and out-of-budget runs alongside the published ones. A first pass failed 2 checks: my new "no control that acts" check matched the audit log's "Approved 11" filter chip. The check now matches the actual action labels exactly.
+
 ## Workstream status
 
 | Workstream | Status |
 |---|---|
 | W0 baseline, evidence, cost | done |
 | W1 Mission Control UX and guided demo | done: implemented and checked; the manual review is the owner's |
-| W2 published-run import | next, not started |
+| W2 published-run import | done: implemented and checked locally; the owner's review is pending |
 | W3–W7 | not started: not authorized yet |

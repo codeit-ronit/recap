@@ -1,5 +1,12 @@
 # Real-model runs, exported for checking
 
+**Open them in Mission Control, offline:** the real-cluster runs below (the three Kind runs and
+the SREGym run) are listed in [`MANIFEST.json`](MANIFEST.json), which pins every file's SHA-256
+and size. The API shows a run on its **Published Runs** page only after checking it
+([evals/published.py](../published.py), [ADR 0033](../../docs/decisions/0033-published-real-cluster-runs-read-only-behind-the-same-views.md));
+`python scripts/published_runs.py --check` runs the same checks. After a deliberate change to
+an export, `--update` re-pins its files (review the prose too).
+
 Each folder is one real RECAP run, exported with `scripts/export_run_trace.py` so that
 anyone can check what happened:
 
