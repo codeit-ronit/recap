@@ -259,6 +259,15 @@ RECAP_DATA_DIR=~/recap-demo uvicorn apps.api.main:app      # http://127.0.0.1:80
    stops for your approval in the same dialog as the Incident Lab, and offers presenter notes
    (**Interview mode**), the technical details on demand, and Restart.
 
+   **Published Runs** (since M6) opens M5's real Kubernetes runs on a fresh checkout, offline:
+   three on the Kind cluster and the SREGym run, with SREGym's grader verdict kept apart from
+   RECAP's oracle. No cluster, model or cloud account is needed. The server shows a run only
+   after checking its files against `evals/live/MANIFEST.json` (pinned SHA-256s, RECAP's
+   schemas, the files agreeing with each other and with the run's evaluation record:
+   [ADR 0033](docs/decisions/0033-published-real-cluster-runs-read-only-behind-the-same-views.md)).
+   Each run opens in Trace Explorer, Evidence & Decisions and Safety & Approvals, marked
+   historical and read-only; the failed and blocked runs are listed from their evaluation records.
+
    ![Overview: environment and providers, recent runs with their data source, outcomes counted per data source](docs/screenshots/overview.png)
 
 2. **Incident Lab**: sign in, then **Replay** the two-agent recording at the *Watchable* pace
@@ -298,8 +307,9 @@ RECAP_DATA_DIR=~/recap-demo uvicorn apps.api.main:app      # http://127.0.0.1:80
 Every number on these screens comes from the API's typed views of what the runs stored
 ([ADR 0027](docs/decisions/0027-a-typed-read-only-api-over-the-run-records.md),
 [ADR 0030](docs/decisions/0030-mission-control-reads-only-typed-server-facts.md)); a fact a run
-did not record is shown as "Not recorded". A browser smoke test checks all ten pages, the
-replay-and-approve flow and the guided demo (approve, restart, reject): `node apps/dashboard/e2e/smoke.mjs --base http://127.0.0.1:8000
+did not record is shown as "Not recorded". A browser smoke test checks all eleven pages, the
+published real-cluster runs (read-only), the replay-and-approve flow and the guided demo
+(approve, restart, reject): `node apps/dashboard/e2e/smoke.mjs --base http://127.0.0.1:8000
 --token-file ~/recap-demo/operator-token`.
 
 ## Component status
@@ -515,7 +525,7 @@ The `test_audit_*.py` files reproduce each finding of the independent V1 audit; 
 
 Since M5 the Kubernetes adapter is also tested offline, over a fake cluster with synthetic data: the `tests/unit/test_kind_*.py` files, [tests/unit/test_sregym_adapter.py](tests/unit/test_sregym_adapter.py) and the whole pipeline in [tests/e2e/test_kind_pipeline.py](tests/e2e/test_kind_pipeline.py). Six acceptance tests need the real Kind cluster ([tests/e2e/test_kind_live.py](tests/e2e/test_kind_live.py), marker `live_cluster`): they are skipped unless `RECAP_LIVE_KIND=1` is set, never run in CI, and all six passed on the cluster in M5's W3 (2026-11-02). They have not run since, and nine later commits changed the adapter: the real-model runs exercised its reads and its rollback again (the last on 2026-11-07), but its restart has not run on a real cluster since W3, and the Kind demo's dependency-crash scenario has never run on one.
 
-The dashboard has its own tests, [apps/dashboard/tests/](apps/dashboard/tests/): **668** view-helper and rendered-component tests (honest labels, empty and error states, escaped untrusted text, no token or full digest on screen), run with `npm test` (Node's built-in test runner; it needs a Node version that runs TypeScript natively, and CI uses Node 24). `apps/dashboard/e2e/smoke.mjs` drives the installed Chrome through all ten pages, the replay-and-approve demo and the guided demo against a running server (72 of 72 checks on the seeded demo data for 0.5.0; no result is recorded for this release candidate); it is run by hand, not in CI.
+The dashboard has its own tests, [apps/dashboard/tests/](apps/dashboard/tests/): **668** view-helper and rendered-component tests (honest labels, empty and error states, escaped untrusted text, no token or full digest on screen), run with `npm test` (Node's built-in test runner; it needs a Node version that runs TypeScript natively, and CI uses Node 24). `apps/dashboard/e2e/smoke.mjs` drives the installed Chrome through all eleven pages, the published runs, the replay-and-approve demo and the guided demo against a running server (72 of 72 checks on the seeded demo data for 0.5.0; no result is recorded for this release candidate); it is run by hand, not in CI.
 
 CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on every push and pull request: it installs the exact versions in `constraints.txt`, then runs ruff (lint and format), mypy on its configured scope (the core interfaces, the M4 modules and the Kubernetes adapter), the secret scan of the files and the whole git history, the recordings manifest check, the full test suite (including the offline replay of both committed real-model runs), the smoke test, and the dashboard's tests and strict TypeScript build. It needs no secrets, no model and no network service.
 
