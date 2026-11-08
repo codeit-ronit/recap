@@ -283,3 +283,10 @@ def test_a_disagreement_that_stays_open_over_rounds_counts_once() -> None:
     other = {"kind": "detail_conflict", "claims": ["a on cart"], "resolved": False}
     rounds = [{"disagreements": [conflict]}, {"disagreements": [settled, other]}, {"checks": []}]
     assert len(_distinct_disagreements(rounds)) == 2
+
+
+def test_a_scenario_repeated_once_per_seed_is_shown_once_with_its_count() -> None:
+    from evals.compare import counted
+
+    assert counted(["a", "b", "a", "a"]) == "a ×3, b"
+    assert counted([]) == ""

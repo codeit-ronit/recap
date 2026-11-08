@@ -832,15 +832,20 @@ export const CLI_COMMANDS: Readonly<Record<EvalMode, readonly CliCommand[]>> = {
 
 // --- M6 W4: one-switch comparisons and component evaluations ------------------------------------
 
-/** What a configuration set a switch to, in words ("default" when its file leaves it out). */
+/** What a configuration set a switch to, in words ("default" when its file leaves it out). A
+ * dotted switch names one value inside another: "budget.max_tool_calls". */
 export function switchSetting(
   configurations: readonly EvalConfiguration[] | undefined,
   name: string,
   key: string,
 ): string {
   const config = (configurations ?? []).find((c) => c.name === name);
-  if (!config || !(key in config.switches)) return "default";
-  return settingText(config.switches[key]);
+  let value: unknown = config?.switches;
+  for (const part of key.split(".")) {
+    if (value === null || typeof value !== "object" || !(part in value)) return "default";
+    value = (value as Record<string, unknown>)[part];
+  }
+  return settingText(value);
 }
 
 /** A switch's value as text: nested values (a budget) as "key value" pairs. */
@@ -921,4 +926,11 @@ export function retrievalRows(component: Pick<RetrievalComponent, "scores"> | nu
 /** Memory hits that were assessed and have a label: the verdicts' denominator. */
 export function labelledHits(memory: Pick<MemoryComponent, "hits" | "not_assessed" | "by_label">): number {
   return memory.hits - (memory.not_assessed ?? 0) - (memory.by_label?.unlabelled ?? 0);
+}
+
+/** Scenario ids once each, a repeat (one per seed) as a count: "a ×3, b". */
+export function countedScenarios(ids: readonly string[]): string {
+  const counts = new Map<string, number>();
+  for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1);
+  return [...counts].map(([id, n]) => (n === 1 ? id : `${id} \u00d7${n}`)).join(", ");
 }

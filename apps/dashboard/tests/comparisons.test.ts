@@ -9,6 +9,7 @@ import { test } from "node:test";
 import type { EvalConfiguration, MetricDifference, RetrievalScore } from "../src/dto";
 import {
   comparisonIntegrity,
+  countedScenarios,
   metricLabel,
   movedDifferences,
   retrievalRows,
@@ -27,6 +28,8 @@ test("a switch a configuration leaves out reads 'default'; a nested one reads as
   assert.equal(switchSetting(CONFIGS, "full_adaptive", "strategy"), "adaptive");
   assert.equal(switchSetting(CONFIGS, "full_adaptive", "budget"), "default");
   assert.equal(switchSetting(CONFIGS, "tight_tools", "budget"), "max_steps 30, max_tool_calls 15");
+  assert.equal(switchSetting(CONFIGS, "tight_tools", "budget.max_tool_calls"), "15");
+  assert.equal(switchSetting(CONFIGS, "full_adaptive", "budget.max_tool_calls"), "default");
   assert.equal(switchSetting(undefined, "x", "strategy"), "default");
   assert.equal(settingText(false), "false");
 });
@@ -86,4 +89,9 @@ test("scenario sets have names for people, and the retrieval table shows every q
     [""],
   );
   assert.deepEqual(retrievalRows(null), []);
+});
+
+test("a scenario repeated once per seed is shown once, with its count", () => {
+  assert.equal(countedScenarios(["a", "b", "a", "a"]), "a ×3, b");
+  assert.equal(countedScenarios([]), "");
 });
