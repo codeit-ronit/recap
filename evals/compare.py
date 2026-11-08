@@ -352,7 +352,7 @@ def comparisons_markdown(results: Sequence[ComparisonResult]) -> list[str]:
         lines.append(
             f"| {c.name}: `{c.baseline}` vs `{c.variant}` | {c.switch} | {r.n} | "
             f"{r.baseline_successes} of {r.n} | {r.variant_successes} of {r.n} | "
-            f"{', '.join(r.only_baseline) or '-'} | {', '.join(r.only_variant) or '-'} | "
+            f"{counted(r.only_baseline) or '-'} | {counted(r.only_variant) or '-'} | "
             f"{r.baseline_correct} / {r.variant_correct} | "
             f"{'none' if not r.unexpected else f'{len(r.unexpected)} difference(s)'} |"
         )
@@ -378,6 +378,14 @@ def comparisons_markdown(results: Sequence[ComparisonResult]) -> list[str]:
             + "; ".join([*r.unexpected, *(f"unpaired {u}" for u in r.unpaired)])
         )
     return lines + [""]
+
+
+def counted(scenarios: Sequence[str]) -> str:
+    """Scenario ids once each, a repeat (one per seed) as a count: "a ×3, b"."""
+    counts: dict[str, int] = {}
+    for sid in scenarios:
+        counts[sid] = counts.get(sid, 0) + 1
+    return ", ".join(sid if n == 1 else f"{sid} ×{n}" for sid, n in counts.items())
 
 
 def _signed(value: float | None) -> str:

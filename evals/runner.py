@@ -647,7 +647,7 @@ def scripted_batch(
         batch_id=report.report_id,
         mode="scripted_regression",
         title=f"Scripted regression: {'W4 comparisons' if comparisons else 'V1 benchmark'} "
-        f"({split.name}), scripted policy",
+        f"({split.name}{_seeds_text(report.seeds)}), scripted policy",
         records=records,
         created_at=created_at_of(records, utcnow()),
         plan=report.split_file,
@@ -674,6 +674,11 @@ def scripted_batch(
     )
     # The comparisons as measured now, kept with the batch (a published result never changes).
     return batch.model_copy(update={"comparison_results": compare_all(batch)})
+
+
+def _seeds_text(seeds: list[int]) -> str:
+    """", seeds 1, 2, 3" for a batch run once per seed ("" with each scenario's own seed)."""
+    return f", seeds {', '.join(map(str, seeds))}" if seeds else ""
 
 
 def _batch_methods(report: EvalReport, configs: list[EvalConfig]) -> list[str]:

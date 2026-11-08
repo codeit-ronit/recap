@@ -33,6 +33,7 @@ import {
   benchmarkVerdictCounts,
   comparisonIntegrity,
   configurationMatrix,
+  countedScenarios,
   expectedEntries,
   failureGroups,
   fmtCount,
@@ -1081,8 +1082,8 @@ export function ComparisonsCard({
             render: (r) =>
               r.only_baseline.length || r.only_variant.length ? (
                 <span className="cell-stack small">
-                  {r.only_baseline.length ? <span>baseline only: {r.only_baseline.join(", ")}</span> : null}
-                  {r.only_variant.length ? <span>variant only: {r.only_variant.join(", ")}</span> : null}
+                  {r.only_baseline.length ? <span>baseline only: {countedScenarios(r.only_baseline)}</span> : null}
+                  {r.only_variant.length ? <span>variant only: {countedScenarios(r.only_variant)}</span> : null}
                 </span>
               ) : (
                 <span className="muted">no scenario</span>

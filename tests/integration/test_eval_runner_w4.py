@@ -421,3 +421,8 @@ def test_a_rebuilt_batch_keeps_its_comparisons(
     rebuilt = runner.rebuild_batch(out_dir)
     assert [c.name for c in rebuilt.comparisons] == [c.name for c in batch.comparisons]
     assert [r.n for r in rebuilt.comparison_results] == [r.n for r in batch.comparison_results]
+
+
+def test_a_seeded_batch_names_its_seeds_in_its_title() -> None:
+    assert runner._seeds_text([1, 2, 3]) == ", seeds 1, 2, 3"
+    assert runner._seeds_text([]) == ""
