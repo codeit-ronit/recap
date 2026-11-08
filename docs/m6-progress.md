@@ -568,6 +568,78 @@ $0.47 a day while the VM is kept. A cap of $5 covers it with room for one retry;
 stopped as soon as the runs end. Optionally first, at $0: the local W4 pilot plan, when the
 laptop has the memory.
 
+## W5 preparation: the held-out SREGym evaluation, frozen (2026-11-09)
+
+The owner provisionally accepted W4 and authorized W5's preparation only: no AWS start, no
+scored run, no W6 or W7. Nothing on AWS was started or changed; the checks below are free
+describe calls and the AWS Price List API.
+
+**What was checked:**
+- Git: HEAD `9acf7ea`, clean, 12 local commits not pushed.
+- M5's SREGym integration: the adapter in external-harness mode, the `sregym-hotel` profile
+  (19 allowlisted services in `hotel-reservation`, rollback and restart only, a writer that may
+  patch Deployments only, manual approval expiring after 900 s), the pinned SREGym (release 1.1,
+  commit `a90b43cc…`, applications `afd5b947…`), and the grader (`run-oracle.py`, recorded by
+  hand next to RECAP's own verdict, never merged).
+- What M5 used: `misconfig_app_hotel_res` only (five runs; every M5 document and log names no
+  other problem).
+- The model M5 used on the VM: `qwen3:8b`, weights `sha256:a3de86cd…`, the same in all five runs.
+- AWS: instance `i-09a55033889ca1466` (m6a.2xlarge, ap-south-1c) **stopped** since 2026-11-07
+  09:30 UTC, no public address; its 150 GB gp3 disk attached and encrypted. Prices from the
+  Price List API: $0.2222 an hour for the instance, $0.005 for its public IPv4 address while it
+  runs, $0.0912 per GB-month for the disk (about $0.46 a day). Remaining credits were not
+  re-queried (Cost Explorer charges per request); the last recorded figure was about $6.75 spent
+  of $100 by 2026-11-07, plus the disk since.
+
+**The held-out set.** SREGym 1.1's registry lists 101 problems; 30 name the hotel-reservation
+app. Only those names were read (the registry's keys; no problem definition, injected change,
+mitigation oracle or solution). A rule written down first keeps the problems RECAP was never run
+on whose fault, by name, sits in what RECAP may write (a workload's Deployment or pod template)
+and shows as a symptom RECAP can measure (pods not starting, restarting or unready). Exactly
+five qualify: `duplicate_pvc_mounts`, `liveness_probe_too_aggressive`,
+`init_container_dependency_hang`, `readiness_probe_misconfiguration` and
+`sidecar_port_conflict` (each `_hotel_reservation`), run in the registry's order as
+`sregym-w5-1` to `-5`. The 25 others and why each was excluded are in the manifest.
+
+**Generic plumbing (the only code changes):**
+- Blind scenario files: a held-out external problem may carry no answer (`family: unlabelled`,
+  `expected: {}`), and only such a problem; the answers are written after the runs.
+- A model-weights pin: an Ollama provider may name its weights digest and refuses any other;
+  `ollama-vm` is pinned to M5's weights.
+- `scripts/w5_freeze.py`: one hash over every tracked file under the frozen roots, one over the
+  installed packages; checked before every scored run.
+- `scripts/aws_cost_meter.py`: a conservative time-based cost estimate from the VM's own state;
+  no new step past 70% of the cap.
+
+**Frozen:** [evals/frozen/w5-heldout-sregym.yaml](../evals/frozen/w5-heldout-sregym.yaml) (the
+manifest) and [w5-protocol.md](w5-protocol.md) (the protocol, the session's exact commands, the
+stop conditions, what is recorded, and what happens after); design in
+[ADR 0036](decisions/0036-a-blind-frozen-held-out-evaluation.md).
+
+**Estimated cost:** setup about 1 hour (VM start, SREGym's cluster recreated, the app's images
+pulled), the pilot about 40 minutes, each held-out problem about 30 to 45 minutes (SREGym's
+deploy, RECAP's run of 15 to 25 minutes as in M5, the approval, the grade): about 4.5 to 6 hours
+of VM time, about $1.00 to $1.40 of compute and IPv4, plus the disk's $0.46 a day (paid whether
+the VM runs or not). Proposed cap $5; stop line $3.50; the meter stops new work earlier if one
+more problem would cross it.
+
+**Checks before the cloud:**
+- Focused contract and safety tests: **805 passed** (the SREGym and Kubernetes adapters, the
+  runbooks, the provider and its weights pin, consolidation and memory isolation, the contract
+  examples, live plans and the grader's verdicts kept apart, W4's leakage tests, the gateway, the
+  policies, approvals, the adversarial suite, the API's approval path, and the new W5 tests: the
+  manifest against the scenario files and the selection, blind scenarios, the cost meter).
+- The full Python suite, once: **2465 passed, 14 skipped, 0 failed** (the skips need the live
+  Kind cluster, a real Redis, or the optional OTel extra). `ruff`, `ruff format --check`, `mypy`
+  (now also over the freeze and cost tools), the dashboard types check and the secret scan: clean.
+- `scripts/w5_freeze.py check` after the commit: both hashes match, the tree is clean.
+- Benchmark compatibility, without reading any solution: the five problems are in the pinned
+  registry and named for the hotel-reservation app; RECAP's reader may read pods, events, pod
+  logs, Deployments and ReplicaSets there and its writer may patch Deployments, which covers the
+  symptoms each name implies (scheduling and mount events, restarts, unready pods, crash loops).
+  Whether SREGym's harness deploys each one, and whether RECAP's alert fires, is part of the
+  evaluation: a problem that does not deploy or never alerts is reported as such, not replaced.
+
 ## Workstream status
 
 | Workstream | Status |
@@ -577,4 +649,5 @@ laptop has the memory.
 | W2 published-run import | done: implemented and checked locally; the owner's review is pending |
 | W3 durable workers and Docker Compose | done: implemented, then verified with real containers and a real Redis (linux/arm64); the owner's review is pending |
 | W4 AI architecture evaluation | done: measured on the simulator with the scripted policy; the real-model pilot is planned, not run; the owner's review is pending |
-| W5–W7 | not started: not authorized yet |
+| W5 held-out SREGym evaluation | prepared and frozen; not run: the owner's approval of the AWS session is pending |
+| W6–W7 | not started: not authorized yet |

@@ -14,6 +14,11 @@ is provenance for evaluation (the harness, its pinned release and the problem id
 `family` and `expected` are ground truth for evaluation only, exactly as in the simulator's
 scenario files: reset returns nothing but the measured alert. Unknown fields are refused,
 so a typo fails at load time instead of silently changing the incident.
+
+A held-out external problem can be BLIND (M6 W5): `family: unlabelled` and `expected: {}`,
+so nobody has to read the benchmark's answer to write the file before its runs. Only an
+external problem in the TEST partition may be blind; its answer is added after the frozen
+evaluation, from the benchmark's own definition, and the runs are judged again with it.
 """
 
 from __future__ import annotations
@@ -71,7 +76,8 @@ class KindScenarioSpec(Contract):
     id: str = Field(pattern=SCENARIO_ID.pattern)
     title: str
     description: str = ""
-    family: Literal["bad_deployment", "resource_pressure", "misleading_logs"]
+    # "unlabelled": a blind held-out external problem (no answer was read before its runs).
+    family: Literal["bad_deployment", "resource_pressure", "misleading_logs", "unlabelled"]
     partition: MemoryPartition
     seed: int = 0  # recorded with the run; a real cluster is not deterministic
     tags: list[str] = Field(default_factory=list)
@@ -87,6 +93,8 @@ class KindScenarioSpec(Contract):
     @field_validator("expected")
     @classmethod
     def _check_expected(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if not value:  # blind: allowed for a held-out external problem only (checked below)
+            return {}
         return ExpectedOutcome.model_validate(value).model_dump(mode="json", exclude_none=True)
 
     @field_validator("budget")
@@ -108,6 +116,17 @@ class KindScenarioSpec(Contract):
 
     @model_validator(mode="after")
     def _check_services(self) -> KindScenarioSpec:
+        blind = self.family == "unlabelled" or not self.expected
+        if blind and not (
+            self.external is not None
+            and self.partition == MemoryPartition.TEST
+            and self.family == "unlabelled"
+            and not self.expected
+        ):
+            raise ValueError(
+                "only a held-out external problem may be blind (family unlabelled, expected "
+                "empty, partition test, an external harness); others need their answer"
+            )
         if self.external is not None:
             # The harness owns the fault: RECAP neither restores nor injects anything. The
             # adapter checks the alert and expected service against its own allowlist.

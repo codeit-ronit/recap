@@ -46,6 +46,9 @@ providers:
     runs_on: owner_vm                    # this machine's memory guard does not apply
     base_url: "http://127.0.0.1:11435"   # the tunnel's end on this machine's loopback
     model: "qwen3:8b"                    # pulled on the VM; the same weights digest as locally
+    # The weights every M5 run on this VM used: a run refuses any other file (a re-pulled tag),
+    # so the frozen W5 evaluation keeps its model (M6 W5).
+    weights: "sha256:a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f"
     mode: tools
     think: false
     context_tokens: 16384

@@ -42,6 +42,7 @@ these notes explain why RECAP looks the way it does.
 | [0033](0033-published-real-cluster-runs-read-only-behind-the-same-views.md) | Published real-cluster runs: an allowlisted, pinned, read-only source behind the same views | accepted | `evals/live/MANIFEST.json` pins each published run's files; checked before shown (schemas, cross-file agreement, no credentials), refused whole otherwise; status `published` in the same run views; never written, followed, replayed or approved again; SREGym's grader kept apart (M6). |
 | [0034](0034-durable-workers-redis-coordinates-the-run-records-decide.md) | Durable workers: Redis coordinates, the run records decide, and an uncertain write is never retried | accepted | Optional `RECAP_EXECUTION_BACKEND=redis`: idempotent, bounded submission and atomic claims; a dead worker's job is settled from the run's persisted evidence (write-ahead record, approvals, the target's audit log); a retry is a new run with a fresh approval, and a write that may have landed ends as `needs_reconciliation`; Docker Compose packaging built and verified with real containers (arm64) (M6). |
 | [0035](0035-one-switch-comparisons-separate-component-datasets-nothing-pooled.md) | One switch per comparison, a dataset per component, and nothing pooled across kinds of evidence | accepted | Records carry every switch a run used; one-switch comparisons checked before the runs and again from their records, paired by scenario; held-out scenarios only measured; retrieval, memory, routing, budgets, verifier and safety each on their own dataset, in a component report that is never a success rate; hybrid retrieval measured offline from stored query vectors (M6). |
+| [0036](0036-a-blind-frozen-held-out-evaluation.md) | A blind, frozen held-out evaluation: no answer before the runs, a pinned model, and a freeze checked before every run | accepted | Held-out SREGym problems chosen from the registry's names by a rule committed first; blind scenario files (answers only after the runs); an Ollama provider pinned to one weights digest; one hash over every file that decides RECAP's behaviour, checked before each scored run; a time-based cost gate (M6). |
 
 ## How the decisions fit together
 
@@ -98,6 +99,8 @@ these notes explain why RECAP looks the way it does.
 - **0035** evaluates the architecture by its components (M6): one switch per comparison,
   checked twice; a dataset of its own for each component; and nothing pooled across
   configurations, components or evaluation modes.
+- **0036** freezes a held-out evaluation before it runs (M6): problems chosen by name, scenario
+  files with no answer until afterwards, a pinned model, and a freeze checked before every run.
 
 The [threat model](../threat-model.md) builds on 0004, 0005, 0007, 0014, 0015 and 0032. It lists
 every threat RECAP defends against, where the defense lives in the code, and the test that

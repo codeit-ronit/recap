@@ -208,6 +208,10 @@ class ProviderSettings(Contract):
     max_output_tokens: int = Field(1024, ge=16)
     temperature: float = 0.0
     seed: int | None = 7
+    # Ollama: the weights file the model must be (its digest, "sha256:..."), or None. Set, a run
+    # refuses a server whose model differs (a re-pulled tag), so a frozen evaluation keeps
+    # its model (M6 W5).
+    weights: str | None = Field(None, pattern=r"^sha256:[0-9a-f]{64}$")
     request_timeout_seconds: float = Field(300.0, gt=0)
     max_attempts: int = Field(2, ge=1, le=3)  # per decision: first try + corrective retries
     record: bool = True  # record every model exchange under data/recordings/ (for replay)

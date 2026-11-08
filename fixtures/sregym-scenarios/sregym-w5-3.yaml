@@ -1,0 +1,25 @@
+# M6 W5 HELD-OUT problem 3 of 5 (evals/plans/w5-heldout-sregym.yaml): a SREGym 1.1 problem RECAP
+# was never run on, deployed and injected by SREGym's own external harness. BLIND: nobody read
+# its definition, its injected change, its mitigation oracle or a solution before the frozen
+# evaluation, so there is no answer here yet (family unlabelled, expected empty). The id, the
+# title and the description are neutral: the harness's problem name below states a mechanism,
+# and none of these fields reaches an agent anyway (they see the measured alert only). Held-out
+# test partition: a run of it is never written to experience memory.
+id: sregym-w5-3
+title: "SREGym 1.1 held-out problem 3 of 5 (hotel reservation)"
+description: "W5 held-out evaluation: SREGym's harness deployed the hotel-reservation app and injected this problem."
+family: unlabelled
+partition: test
+seed: 0           # recorded with the run; neither the cluster nor the model is deterministic
+tags: [sregym, benchmark, external, held-out, w5]
+external: {harness: sregym, release: "1.1", commit: a90b43cc973158120119a9f388081eac4f7adb36,
+           problem: init_container_dependency_hang_hotel_reservation}
+# The same generic rule for every W5 problem (and M5's): any allowlisted service crash-looping
+# or unready fires the alert, which names what failed; frontend is only the preferred name
+# when several fire.
+alert: {service: frontend, not_ready: true, crash_looping: true, rounds: 2, timeout_seconds: 300}
+# Added after the frozen evaluation, from SREGym's own definition of the problem.
+expected: {}
+budget: {max_elapsed_seconds: 3600}
+run_overrides: {}
+requires_memory_of: []

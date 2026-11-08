@@ -170,6 +170,14 @@ class OllamaProvider(HttpLLMProvider):
                 f"context_tokens={self.context_tokens} is larger than {self.model}'s context "
                 f"window ({window})"
             )
+        weights = weights_digest(body)
+        pinned = self.settings.weights
+        if pinned and weights != pinned:
+            # A frozen evaluation names its model's weights: a re-pulled tag is another model.
+            raise ProviderError(
+                f"{self.model} on this server is the weights {weights or 'of an unknown file'}, "
+                f"not the pinned {pinned}: refused"
+            )
         details = body.get("details") or {}
         self.capabilities = {
             "ollama_version": (version.body or {}).get("version"),
@@ -178,7 +186,7 @@ class OllamaProvider(HttpLLMProvider):
             "parameter_size": details.get("parameter_size"),
             "quantization": details.get("quantization_level"),
             # The exact weights file, so a run names the model it used beyond its tag.
-            "weights": weights_digest(body),
+            "weights": weights,
         }
         # The run record shows these facts (ProviderInfo.server) once they are known.
         self.info = self.info.model_copy(update={"server": dict(self.capabilities)})
