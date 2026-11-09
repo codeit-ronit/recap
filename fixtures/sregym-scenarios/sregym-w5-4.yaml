@@ -1,4 +1,4 @@
-# M6 W5 HELD-OUT problem 4 of 5 (evals/plans/w5-heldout-sregym.yaml): a SREGym 1.1 problem RECAP
+# M6 W5 HELD-OUT problem 4 of 5 (evals/frozen/w5-heldout-sregym.yaml): a SREGym 1.1 problem RECAP
 # was never run on, deployed and injected by SREGym's own external harness. BLIND: nobody read
 # its definition, its injected change, its mitigation oracle or a solution before the frozen
 # evaluation, so there is no answer here yet (family unlabelled, expected empty). The id, the

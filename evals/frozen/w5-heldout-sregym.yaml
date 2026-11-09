@@ -8,7 +8,7 @@
 # Machine-checked: scripts/w5_freeze.py check (the hashes below) before every scored run, and
 # tests/unit/test_w5_manifest.py (this file against the scenario files and the selection).
 schema: recap-w5-manifest-v1
-status: frozen          # frozen -> running -> completed (the hashes stay as the record)
+status: completed       # frozen -> running -> completed (the hashes stay as the record)
 written: 2026-11-09
 
 freeze:
@@ -165,3 +165,23 @@ cost:
   meter: scripts/aws_cost_meter.py
   prices_usd: {instance_hour: 0.2222, public_ipv4_hour: 0.005, gp3_gb_month: 0.0912}   # AWS Price List API, 2026-11-09
   instance: {id: i-09a55033889ca1466, type: m6a.2xlarge, region: ap-south-1, disk: 150 GB gp3}
+
+results:        # added after the evaluation ended (2026-11-09); the hashes above are its record
+  ended: "2026-11-09T12:09Z"
+  attempted: 3              # of 5: stopped by a stop condition and the owner's decision
+  stopped_by: >-
+    the model failed for the same infrastructure reason twice (CPU-only inference on the VM too
+    slow for two parallel specialists: a specialist ran out of time in sregym-w5-1, a model request
+    did not answer within 900 s in sregym-w5-2), and the owner chose to end the evaluation
+  runs:         # every attempted problem; their answers were written into the scenario files after
+    - {scenario: sregym-w5-1, run: run-7bc5159b6d, recap: FAILED, category: wrong_mechanism, sregym: fail, minutes: 52}
+    - {scenario: sregym-w5-2, run: run-db560f6568, recap: FAILED, category: missed_crucial_tool, sregym: fail, minutes: 35}
+    - {scenario: sregym-w5-3, run: run-62f9029f00, recap: FAILED, category: cancelled, sregym: fail, minutes: 28,
+       note: cancelled by the operator (Ctrl-C) in its second investigation round}
+  not_attempted: [sregym-w5-4, sregym-w5-5]   # still blind: their definitions were never read
+  finding: >-
+    none of the three faults was within RECAP's two remediations (each changes a Deployment's spec
+    but not its image), and sregym-w5-2's fault is on a workload outside the profile's allowlist
+  batch: evals/reports/batches/2026-11-09-w5-heldout-sregym-qwen3-8b
+  evidence: evals/frozen/w5-evidence
+  cost_usd: 1.10            # the cost meter's estimate for the whole W5 window (4.24 running hours)

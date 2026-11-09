@@ -1,14 +1,14 @@
-# M6 W5 HELD-OUT problem 2 of 5 (evals/plans/w5-heldout-sregym.yaml): a SREGym 1.1 problem RECAP
-# was never run on, deployed and injected by SREGym's own external harness. BLIND: nobody read
-# its definition, its injected change, its mitigation oracle or a solution before the frozen
-# evaluation, so there is no answer here yet (family unlabelled, expected empty). The id, the
-# title and the description are neutral: the harness's problem name below states a mechanism,
-# and none of these fields reaches an agent anyway (they see the measured alert only). Held-out
-# test partition: a run of it is never written to experience memory.
+# M6 W5 HELD-OUT problem 2 of 5 (evals/frozen/w5-heldout-sregym.yaml): a SREGym 1.1 problem RECAP
+# was never run on, deployed and injected by SREGym's own external harness. BLIND during the
+# frozen evaluation (family unlabelled, expected empty: nobody read its definition before its
+# run). The answer below was written after the evaluation ended (2026-11-09), from SREGym's own
+# definition at the pinned commit, and the batch was judged again with it. The id, the title and
+# the description stay neutral, and none of these fields reaches an agent (they see the measured
+# alert only). Held-out test partition: a run of it is never written to experience memory.
 id: sregym-w5-2
 title: "SREGym 1.1 held-out problem 2 of 5 (hotel reservation)"
 description: "W5 held-out evaluation: SREGym's harness deployed the hotel-reservation app and injected this problem."
-family: unlabelled
+family: bad_deployment
 partition: test
 seed: 0           # recorded with the run; neither the cluster nor the model is deterministic
 tags: [sregym, benchmark, external, held-out, w5]
@@ -18,8 +18,15 @@ external: {harness: sregym, release: "1.1", commit: a90b43cc973158120119a9f38808
 # or unready fires the alert, which names what failed; frontend is only the preferred name
 # when several fire.
 alert: {service: frontend, not_ready: true, crash_looping: true, rounds: 2, timeout_seconds: 300}
-# Added after the frozen evaluation, from SREGym's own definition of the problem.
-expected: {}
+# SREGym's answer (sregym/conductor/problems/liveness_probe_too_aggressive.py and its injector,
+# at the pinned commit): SREGym adds a synthetic workload of its own, aux-service, to the
+# namespace and re-creates its Deployment with a liveness probe of initialDelaySeconds 0,
+# periodSeconds 1 and failureThreshold 1 and a termination grace period of 0, so its pods are
+# killed before they settle. aux-service is not one of the hotel-reservation services this
+# profile allowlists (configs/targets/sregym-hotel/): RECAP could neither observe nor change it,
+# and a run of this file is now refused at reset for that reason. The fix edits the probe.
+expected: {root_cause_service: aux-service, mechanism: bad_deployment, fix: edit_deployment,
+           fix_params: {change: "relax aux-service's liveness probe and its zero grace period"}}
 budget: {max_elapsed_seconds: 3600}
 run_overrides: {}
 requires_memory_of: []

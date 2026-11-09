@@ -1,0 +1,30 @@
+# problem 1 (sregym-w5-1): gate before its deploy
+frozen: HEAD 042e0db212d1f166e4a6dd569cc185bbd770faeb, 169 files and the packages match the manifest
+window since 2026-11-09T05:01:08.143768+00:00 (cap $5.00, stop line $3.50): instance stopped; 2.82 running hours = $0.64 compute, $0.06 disk; estimated $0.70 so far, $2.80 before the stop line
+model through the tunnel: qwen3:8b sha256:a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f
+port 9954 after the deploy:
+LISTEN 0      4096   127.0.0.1:9954 0.0.0.0:*
+
+# problem 2 (sregym-w5-2): gate before its deploy
+frozen: HEAD 042e0db212d1f166e4a6dd569cc185bbd770faeb, 169 files and the packages match the manifest
+window since 2026-11-09T05:01:08.143768+00:00 (cap $5.00, stop line $3.50): instance stopped; 2.82 running hours = $0.64 compute, $0.11 disk; estimated $0.75 so far, $2.75 before the stop line
+model through the tunnel: qwen3:8b sha256:a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f
+port 9954 after the deploy:
+LISTEN 0      4096   127.0.0.1:9954 0.0.0.0:*
+
+# problem 3 (sregym-w5-3): gate before its deploy
+frozen: HEAD 042e0db212d1f166e4a6dd569cc185bbd770faeb, 169 files and the packages match the manifest
+window since 2026-11-09T05:01:08.143768+00:00 (cap $5.00, stop line $3.50): instance running; 3.69 running hours = $0.84 compute, $0.12 disk; estimated $0.96 so far, $2.54 before the stop line
+model through the tunnel: qwen3:8b sha256:a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f
+port 9954 after the deploy:
+LISTEN 0      4096   127.0.0.1:9954 0.0.0.0:*
+
+# the VM's shutdown backstop, as set before each problem
+Shutdown scheduled for Mon 2026-11-09 10:16:04 UTC, use 'shutdown -c' to cancel.
+Shutdown scheduled for Mon 2026-11-09 10:16:04 UTC, use 'shutdown -c' to cancel.
+active
+Shutdown scheduled for Mon 2026-11-09 10:19:12 UTC, use 'shutdown -c' to cancel.
+Shutdown scheduled for Mon 2026-11-09 10:21:55 UTC, use 'shutdown -c' to cancel.
+Shutdown scheduled for Mon 2026-11-09 12:38:05 UTC, use 'shutdown -c' to cancel.
+Shutdown scheduled for Mon 2026-11-09 12:40:47 UTC, use 'shutdown -c' to cancel.
+Shutdown scheduled for Mon 2026-11-09 13:29:42 UTC, use 'shutdown -c' to cancel.
