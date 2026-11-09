@@ -1,6 +1,6 @@
 {
   "schema_version": "recap-published-runs-v1",
-  "description": "The real Kubernetes runs published with this repository (M5: Kind and SREGym), readable offline in Mission Control. Only the folders listed here are read; every file's SHA-256 and size are pinned (evals/published.py). The titles and notes are written by a person and checked in review; every other fact comes from the files.",
+  "description": "The real Kubernetes runs published with this repository (M5: Kind and SREGym; M6 W5: the held-out SREGym runs), readable offline in Mission Control. Only the folders listed here are read; every file's SHA-256 and size are pinned (evals/published.py). The titles and notes are written by a person and checked in review; every other fact comes from the files.",
   "runs": [
     {
       "run_id": "run-047aac6eb0",
@@ -115,6 +115,96 @@
         "README.md": {
           "sha256": "56e9161a09a810c0789afc77d044721123ef9ac8028619edbb43a5d0190d1dfd",
           "bytes": 6048
+        }
+      }
+    },
+    {
+      "run_id": "run-7bc5159b6d",
+      "folder": "2026-11-09-qwen3-8b-sregym-w5-heldout-1-prompts-v4.7",
+      "target": "sregym",
+      "batch": "2026-11-09-w5-heldout-sregym-qwen3-8b",
+      "title": "SREGym held-out 1 (frontend replicas sharing one volume): no fix proposed, an unsupported memory-pressure claim; the grader failed it",
+      "notes": [
+        "Held out and blind (M6 W5): RECAP was never run on this problem before, its scenario file held no answer during the run, and everything that decides RECAP's behaviour was frozen and checked before it (evals/frozen/w5-heldout-sregym.yaml).",
+        "The fault changes frontend's Deployment without changing its image, so neither of RECAP's remediations (a rollback to an earlier image, a restart) could fix it. The agents looked at frontend but claimed memory pressure without memory evidence, and the verifier did not accept it; one specialist ran out of time.",
+        "SREGym's own grader (run-oracle.py) was run by hand after the run; its verdict (fail) is kept apart from RECAP's oracle. No fix was proposed, so no approval was asked for."
+      ],
+      "files": {
+        "run.json": {
+          "sha256": "5891131da183d89cdbde8c0fe7cd5652181bb5f3c1617938bad4e737a5bf0d6e",
+          "bytes": 20745
+        },
+        "trace.jsonl": {
+          "sha256": "61ac2b8652ae4a79d3510f030dae0efa20360209dfad4743f6f13af8a6fe2dab",
+          "bytes": 91644
+        },
+        "recording.jsonl": {
+          "sha256": "ee3043a171387694c6a2c619f0ce5252b4350adb0bd6ead8aad95e4abd594cf3",
+          "bytes": 238453
+        },
+        "README.md": {
+          "sha256": "ba550d3de2740a80abb276d49ff066780f7d22aee27f6bd973b03111c67f26a6",
+          "bytes": 6642
+        }
+      }
+    },
+    {
+      "run_id": "run-db560f6568",
+      "folder": "2026-11-09-qwen3-8b-sregym-w5-heldout-2-prompts-v4.7",
+      "target": "sregym",
+      "batch": "2026-11-09-w5-heldout-sregym-qwen3-8b",
+      "title": "SREGym held-out 2 (an aggressive liveness probe on SREGym's own aux-service): no fix proposed; the grader failed it",
+      "notes": [
+        "Held out and blind (M6 W5): RECAP was never run on this problem before, its scenario file held no answer during the run, and everything that decides RECAP's behaviour was frozen and checked before it (evals/frozen/w5-heldout-sregym.yaml).",
+        "The fault is on aux-service, a workload SREGym adds outside the hotel-reservation services this profile allowlists: RECAP could not observe it. One specialist's model request did not answer within 900 s (CPU-only inference under two parallel agents).",
+        "SREGym's own grader (run-oracle.py) was run by hand after the run; its verdict (fail) is kept apart from RECAP's oracle. No fix was proposed, so no approval was asked for."
+      ],
+      "files": {
+        "run.json": {
+          "sha256": "2379c00c5d0b6859f0395d02d56d4fc7cf090fe624724fc23fd887c7ac56dfb1",
+          "bytes": 19029
+        },
+        "trace.jsonl": {
+          "sha256": "8a6b9ef881c0b1adeab5d07f78c39728d10f2db6da4d93fdd845de07c7342739",
+          "bytes": 60166
+        },
+        "recording.jsonl": {
+          "sha256": "465f96e70ce44129c02142a3722478996c0f2dc52c5664020db40031e366952c",
+          "bytes": 207117
+        },
+        "README.md": {
+          "sha256": "3cc52e8c14037335f63a8115d3ef3ec3a8a30305e02279bccba5f289e15ac017",
+          "bytes": 4727
+        }
+      }
+    },
+    {
+      "run_id": "run-62f9029f00",
+      "folder": "2026-11-09-qwen3-8b-sregym-w5-heldout-3-prompts-v4.7",
+      "target": "sregym",
+      "batch": "2026-11-09-w5-heldout-sregym-qwen3-8b",
+      "title": "SREGym held-out 3 (a hanging init container on frontend): cancelled by the operator in round 2; the grader failed it",
+      "notes": [
+        "Held out and blind (M6 W5): RECAP was never run on this problem before, its scenario file held no answer during the run, and everything that decides RECAP's behaviour was frozen and checked before it (evals/frozen/w5-heldout-sregym.yaml).",
+        "The operator cancelled the run (Ctrl-C) 28 minutes in, during its second investigation round; every hypothesis of its first round had been contradicted. The fault (an init container on frontend's Deployment, the same image) was outside RECAP's two remediations.",
+        "SREGym's own grader (run-oracle.py) was run by hand after the run; its verdict (fail) is kept apart from RECAP's oracle. No fix was proposed, so no approval was asked for."
+      ],
+      "files": {
+        "run.json": {
+          "sha256": "e8fedd0da55cd500208d032c66ff9cdabb895d14766040b90aa89986276ca418",
+          "bytes": 22237
+        },
+        "trace.jsonl": {
+          "sha256": "b96c0a138b4f8a2d797770a3b17af8aff2cfb9c2733a2f5ec32da9f785ec1c26",
+          "bytes": 64839
+        },
+        "recording.jsonl": {
+          "sha256": "bfa35550bc05a9f5d1e7ef378de15fd4c42abb837e94e51af986ebd518450cc8",
+          "bytes": 148938
+        },
+        "README.md": {
+          "sha256": "6e972e8fb97ba8d1636d9bdb7aa8f84257af37f372a25ba8f6e990af8c9f235e",
+          "bytes": 5107
         }
       }
     }

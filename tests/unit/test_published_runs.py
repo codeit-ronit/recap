@@ -31,6 +31,7 @@ from evals.records import find_batches
 BATCHES = find_batches([BATCHES_DIR])
 KIND = ("run-047aac6eb0", "run-f5b9e5bf45", "run-34a3580d2f")
 SREGYM = "run-9d7f47104d"
+W5 = ("run-7bc5159b6d", "run-db560f6568", "run-62f9029f00")  # M6 W5: the held-out SREGym runs
 SREGYM_FOLDER = "2026-11-07-qwen3-8b-sregym-human-approved-prompts-v4.7"
 
 
@@ -82,7 +83,7 @@ def test_the_committed_published_runs_all_load_with_their_provenance() -> None:
     index = load_published()
     assert index.manifest_error is None
     assert index.rejected == ()
-    assert [run.run_id for run in index.runs] == [*KIND, SREGYM]
+    assert [run.run_id for run in index.runs] == [*KIND, SREGYM, *W5]
     assert check_published() == []
     for run in index.runs:
         assert run.record.run_id == run.run_id
@@ -94,8 +95,11 @@ def test_the_committed_published_runs_all_load_with_their_provenance() -> None:
         assert run.record.provider_info is not None
         assert run.record.provider_info.origin == "local_llm"
         assert run.record.provider_info.model == "qwen3:8b"
-        assert run.eval_record.final_state == "RESOLVED"
-        assert run.eval_record.oracle_verified is True
+        if run.entry.run_id in W5:  # the held-out runs: no fix proposed, nothing verified
+            assert run.eval_record.final_state == "FAILED" and not run.eval_record.oracle_verified
+        else:
+            assert run.eval_record.final_state == "RESOLVED"
+            assert run.eval_record.oracle_verified is True
         assert run.batch.mode == "real_kubernetes"
     assert {index.get(r).entry.target for r in KIND} == {"kind"}  # type: ignore[union-attr]
 
@@ -137,7 +141,7 @@ def test_an_altered_file_is_refused_whole_and_the_others_still_load(tmp_path: Pa
     trace.write_bytes(trace.read_bytes().replace(b"geo", b"gEo", 1))
     index = load(manifest)
     assert "does not match the SHA-256 and size the manifest pins" in rejected_reason(index, SREGYM)
-    assert [run.run_id for run in index.runs] == list(KIND)
+    assert [run.run_id for run in index.runs] == [*KIND, *W5]
 
 
 def test_a_missing_file_or_an_unpinned_required_file_is_refused(tmp_path: Path) -> None:
@@ -331,7 +335,7 @@ def test_loading_reads_only_and_opens_no_connection(
 
     monkeypatch.setattr(socket, "socket", no_network)
     index = load(manifest)
-    assert len(index.runs) == 4
+    assert len(index.runs) == len(KIND) + 1 + len(W5)
     after = {p: p.read_bytes() for p in sorted(manifest.parent.rglob("*")) if p.is_file()}
     assert after == before
 
@@ -340,9 +344,9 @@ def test_refresh_pins_repins_a_deliberately_changed_file_only(tmp_path: Path) ->
     manifest = copy_published(tmp_path)
     readme = manifest.parent / SREGYM_FOLDER / "README.md"
     readme.write_text(readme.read_text() + "\nA correction made in review.\n")
-    assert len(load(manifest).runs) == 3
+    assert len(load(manifest).runs) == len(KIND) + len(W5)
     assert refresh_pins(manifest) == [f"{SREGYM_FOLDER}/README.md"]
-    assert len(load(manifest).runs) == 4
+    assert len(load(manifest).runs) == len(KIND) + 1 + len(W5)
     assert refresh_pins(manifest) == []
 
 

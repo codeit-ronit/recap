@@ -1,0 +1,604 @@
+{
+  "run_id": "run-62f9029f00",
+  "scenario_id": "sregym-w5-3",
+  "config": {
+    "strategy": "adaptive",
+    "use_rag": true,
+    "retrieval": null,
+    "use_memory": true,
+    "memory_write": true,
+    "memory_read_partitions": [
+      "train",
+      "live"
+    ],
+    "memory_write_partition": "live",
+    "safety_enabled": true,
+    "approval_mode": "manual",
+    "planner": "default",
+    "provider": "ollama-vm",
+    "replay_fixture": null,
+    "replay_pace": 0.0,
+    "seed": null,
+    "budget": null,
+    "pack_tokens": null,
+    "max_item_tokens": null,
+    "tool_latency_ms": null,
+    "label": ""
+  },
+  "incident": {
+    "incident_id": "inc-220e56a82d",
+    "scenario_id": "sregym-w5-3",
+    "service": "reservation",
+    "affected_services": [
+      "reservation",
+      "user"
+    ],
+    "symptoms": [
+      "reservation: a container is in CrashLoopBackOff (crash loop)",
+      "user: a container is in CrashLoopBackOff (crash loop)"
+    ],
+    "created_at": "2026-11-09T11:41:24.716701Z",
+    "environment": "sregym",
+    "metadata": {
+      "source": "recap-kind-probe",
+      "namespace": "hotel-reservation"
+    },
+    "budget": {
+      "max_steps": 30,
+      "max_tool_calls": 30,
+      "max_elapsed_seconds": 3600.0,
+      "max_estimated_tokens": 120000,
+      "max_parallel_agents": 2,
+      "max_model_tokens": 200000
+    }
+  },
+  "state": "FAILED",
+  "history": [
+    {
+      "state": "CREATED",
+      "at": "2026-11-09T11:41:24.722018Z",
+      "reason": "incident created"
+    },
+    {
+      "state": "RETRIEVING",
+      "at": "2026-11-09T11:41:25.287734Z",
+      "reason": "gather runbooks and past experience"
+    },
+    {
+      "state": "INVESTIGATING",
+      "at": "2026-11-09T11:41:25.290009Z",
+      "reason": "investigate with read-only tools"
+    },
+    {
+      "state": "FAILED",
+      "at": "2026-11-09T12:09:12.763996Z",
+      "reason": "run cancelled"
+    }
+  ],
+  "environment": {
+    "kind": "sregym",
+    "name": "SREGym on Kind cluster kind",
+    "namespace": "hotel-reservation",
+    "is_simulated": false,
+    "supported_actions": [
+      "rollback",
+      "restart"
+    ],
+    "description": "SREGym 1.1 on its own Kind cluster kind (context kind-kind), not production: 19 Deployments of a benchmark application in namespace hotel-reservation, deployed and broken by SREGym's own harness, read through typed kubectl operations with RECAP's own identities. The only writes are a rollback to a named revision and a rolling restart, each with a signed single-use capability; SREGym's own oracle grades the result.",
+    "stabilization_timeout_seconds": 240.0,
+    "stabilization_poll_seconds": 5.0
+  },
+  "provider": "ollama-vm:qwen3:8b",
+  "provider_info": {
+    "name": "ollama-vm:qwen3:8b",
+    "kind": "llm",
+    "origin": "local_llm",
+    "model": "qwen3:8b",
+    "description": "The same open-weight model, served by Ollama on the owner's own AWS VM (no GPU) and reached through an SSH tunnel (infra/aws/ec2.sh tunnel). Self-hosted: no third party, no per-request charge.",
+    "mode": "tools",
+    "prompt_version": "prompts-v4.7",
+    "replay_of": null,
+    "recording": "data/recordings/20261109-114114-ollama-vm-96d120.jsonl",
+    "red_team": false,
+    "server": {
+      "ollama_version": "0.34.4",
+      "capabilities": [
+        "completion",
+        "tools",
+        "thinking"
+      ],
+      "context_length": 40960,
+      "parameter_size": "8.2B",
+      "quantization": "Q4_K_M",
+      "weights": "sha256:a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f"
+    }
+  },
+  "strategies": [
+    {
+      "mode": "parallel",
+      "reason": "2 services are affected: look at telemetry and infrastructure side by side",
+      "rule_id": "RT2-cross-service",
+      "selected_agents": [
+        "telemetry_investigator",
+        "infrastructure_investigator"
+      ],
+      "provider": "ollama-vm:qwen3:8b",
+      "budget": {
+        "telemetry_investigator": 8,
+        "infrastructure_investigator": 8
+      },
+      "signals": {
+        "services_affected": 2,
+        "symptom_categories": [
+          "availability"
+        ],
+        "memory_hits": 0,
+        "top_memory_similarity": 0.0,
+        "familiar_success": false,
+        "memory_conflict": false,
+        "prior_failed_attempts": 0,
+        "escalation": false,
+        "disagreement": false,
+        "remaining_tool_calls": 30,
+        "remaining_steps": 30,
+        "max_parallel_agents": 2
+      },
+      "round": 1
+    },
+    {
+      "mode": "parallel",
+      "reason": "2 services are affected: look at telemetry and infrastructure side by side",
+      "rule_id": "RT2-cross-service",
+      "selected_agents": [
+        "telemetry_investigator",
+        "infrastructure_investigator"
+      ],
+      "provider": "ollama-vm:qwen3:8b",
+      "budget": {
+        "telemetry_investigator": 8,
+        "infrastructure_investigator": 8
+      },
+      "signals": {
+        "services_affected": 2,
+        "symptom_categories": [
+          "availability"
+        ],
+        "memory_hits": 0,
+        "top_memory_similarity": 0.0,
+        "familiar_success": false,
+        "memory_conflict": false,
+        "prior_failed_attempts": 0,
+        "escalation": true,
+        "disagreement": false,
+        "remaining_tool_calls": 19,
+        "remaining_steps": 21,
+        "max_parallel_agents": 2
+      },
+      "round": 2
+    }
+  ],
+  "findings": [
+    {
+      "agent_role": "telemetry_investigator",
+      "evidence_ids": [
+        "ev-62f902-r1t01",
+        "ev-62f902-r1t02",
+        "ev-62f902-r1t03",
+        "ev-62f902-r1t04",
+        "ev-62f902-r1t05"
+      ],
+      "doc_refs": [
+        "runbook-memory-pressure#overview-1",
+        "runbook-k8s-crash-loops-and-rollouts#diagnosis-crash-loop-or-image-pull-1",
+        "runbook-k8s-crash-loops-and-rollouts#symptoms-1",
+        "runbook-memory-pressure#symptoms-1",
+        "policy-change-management#overview-1"
+      ],
+      "hypotheses": [
+        {
+          "claim": "The reservation and user services are failing due to a dependency failure on the Jaeger service.",
+          "mechanism": "dependency_failure",
+          "target_service": "reservation",
+          "supporting_evidence_ids": [
+            "ev-62f902-r1t01",
+            "ev-62f902-r1t02"
+          ],
+          "contradicting_evidence_ids": [],
+          "status": "proposed",
+          "details": {
+            "dependency": "jaeger"
+          },
+          "origin": "investigation",
+          "proposed_by": "telemetry_investigator",
+          "confidence_note": "The error logs clearly indicate that the services are unable to initialize the Jaeger agent, pointing directly to a failure in the Jaeger service."
+        }
+      ],
+      "proposed_next_steps": [
+        "Check the status and logs of the Jaeger service to confirm its failure.",
+        "Verify if there are any recent deployments or changes affecting the Jaeger service."
+      ],
+      "outcome": "hypothesis",
+      "usage": {
+        "steps": 4,
+        "tool_calls": 5,
+        "estimated_tokens": 13567,
+        "actual_input_tokens": 13654,
+        "actual_output_tokens": 438,
+        "external_cost_usd": 0.0,
+        "is_estimate": false,
+        "unreported_calls": 0,
+        "model_requests": 4
+      },
+      "summary": "The reservation and user services are crashing due to a failure in initializing the Jaeger agent. Both services are encountering an error while looking up the Jaeger server at 10.96.0.10:53, which suggests a dependency failure on the Jaeger service.",
+      "error": null,
+      "started_at": "2026-11-09T11:41:25.290948Z",
+      "finished_at": "2026-11-09T12:03:10.534902Z",
+      "round": 1,
+      "partial": false
+    },
+    {
+      "agent_role": "infrastructure_investigator",
+      "evidence_ids": [
+        "ev-62f902-r1i01",
+        "ev-62f902-r1i02",
+        "ev-62f902-r1i03",
+        "ev-62f902-r1i04",
+        "ev-62f902-r1i05",
+        "ev-62f902-r1i06",
+        "ev-62f902-r1i07"
+      ],
+      "doc_refs": [
+        "runbook-memory-pressure#overview-1",
+        "runbook-k8s-crash-loops-and-rollouts#diagnosis-crash-loop-or-image-pull-1",
+        "runbook-k8s-crash-loops-and-rollouts#symptoms-1",
+        "runbook-memory-pressure#symptoms-1"
+      ],
+      "hypotheses": [
+        {
+          "claim": "The reservation service is experiencing a crash loop due to memory pressure.",
+          "mechanism": "resource_pressure",
+          "target_service": "reservation",
+          "supporting_evidence_ids": [
+            "ev-62f902-r1i01",
+            "ev-62f902-r1i05"
+          ],
+          "contradicting_evidence_ids": [],
+          "status": "proposed",
+          "details": {},
+          "origin": "investigation",
+          "proposed_by": "infrastructure_investigator",
+          "confidence_note": "The CrashLoopBackOff status and the lack of recent deployments suggest memory pressure as a possible cause. Further investigation into memory metrics and logs is needed."
+        },
+        {
+          "claim": "The user service is experiencing a crash loop due to memory pressure.",
+          "mechanism": "resource_pressure",
+          "target_service": "user",
+          "supporting_evidence_ids": [
+            "ev-62f902-r1i02",
+            "ev-62f902-r1i06"
+          ],
+          "contradicting_evidence_ids": [],
+          "status": "proposed",
+          "details": {},
+          "origin": "investigation",
+          "proposed_by": "infrastructure_investigator",
+          "confidence_note": "The CrashLoopBackOff status and the lack of recent deployments suggest memory pressure as a possible cause. Further investigation into memory metrics and logs is needed."
+        }
+      ],
+      "proposed_next_steps": [
+        "Check memory metrics for reservation and user services.",
+        "Investigate logs for reservation and user services to identify specific errors.",
+        "Verify if there were any recent deployments for reservation and user services that could have caused the issue."
+      ],
+      "outcome": "hypothesis",
+      "usage": {
+        "steps": 5,
+        "tool_calls": 7,
+        "estimated_tokens": 19344,
+        "actual_input_tokens": 19939,
+        "actual_output_tokens": 576,
+        "external_cost_usd": 0.0,
+        "is_estimate": false,
+        "unreported_calls": 0,
+        "model_requests": 5
+      },
+      "summary": "The reservation and user services are experiencing crash loops, likely due to memory pressure or recent deployments. Both services show CrashLoopBackOff status, and their deployments have not been recorded, suggesting potential issues with memory or dependencies.",
+      "error": null,
+      "started_at": "2026-11-09T11:41:25.295250Z",
+      "finished_at": "2026-11-09T12:03:49.750075Z",
+      "round": 1,
+      "partial": false
+    }
+  ],
+  "verification": {
+    "status": "contradicted",
+    "best": null,
+    "checks": [
+      {
+        "hypothesis": {
+          "claim": "The reservation and user services are failing due to a dependency failure on the Jaeger service.",
+          "mechanism": "dependency_failure",
+          "target_service": "reservation",
+          "supporting_evidence_ids": [
+            "ev-62f902-r1t01",
+            "ev-62f902-r1t02"
+          ],
+          "contradicting_evidence_ids": [
+            "ev-62f902-r1t01"
+          ],
+          "status": "contradicted",
+          "details": {
+            "dependency": "jaeger"
+          },
+          "origin": "investigation",
+          "proposed_by": "telemetry_investigator",
+          "confidence_note": "The error logs clearly indicate that the services are unable to initialize the Jaeger agent, pointing directly to a failure in the Jaeger service."
+        },
+        "passed": [
+          "every cited evidence ID exists in this run (2 checked)"
+        ],
+        "failed": [
+          "reservation's logs show no 'upstream jaeger call failed' errors"
+        ],
+        "rule_ids": [
+          "V1-structural",
+          "V4-dependency"
+        ],
+        "proposers": [
+          "telemetry_investigator"
+        ],
+        "basis_evidence_ids": [],
+        "detail": "jaeger"
+      },
+      {
+        "hypothesis": {
+          "claim": "The reservation service is experiencing a crash loop due to memory pressure.",
+          "mechanism": "resource_pressure",
+          "target_service": "reservation",
+          "supporting_evidence_ids": [
+            "ev-62f902-r1i01",
+            "ev-62f902-r1i05"
+          ],
+          "contradicting_evidence_ids": [
+            "ev-62f902-r1i05"
+          ],
+          "status": "contradicted",
+          "details": {},
+          "origin": "investigation",
+          "proposed_by": "infrastructure_investigator",
+          "confidence_note": "The CrashLoopBackOff status and the lack of recent deployments suggest memory pressure as a possible cause. Further investigation into memory metrics and logs is needed."
+        },
+        "passed": [
+          "every cited evidence ID exists in this run (2 checked)"
+        ],
+        "failed": [
+          "cannot confirm or rule out memory pressure on reservation: no memory metric",
+          "reservation is observed healthy (ev-62f902-r1i05): there is nothing on it to fix, so it is not this incident's root cause"
+        ],
+        "rule_ids": [
+          "V1-structural",
+          "V3-resource",
+          "V6-conflict-resolution"
+        ],
+        "proposers": [
+          "infrastructure_investigator"
+        ],
+        "basis_evidence_ids": [],
+        "detail": ""
+      },
+      {
+        "hypothesis": {
+          "claim": "The user service is experiencing a crash loop due to memory pressure.",
+          "mechanism": "resource_pressure",
+          "target_service": "user",
+          "supporting_evidence_ids": [
+            "ev-62f902-r1i02",
+            "ev-62f902-r1i06"
+          ],
+          "contradicting_evidence_ids": [
+            "ev-62f902-r1i06"
+          ],
+          "status": "contradicted",
+          "details": {},
+          "origin": "investigation",
+          "proposed_by": "infrastructure_investigator",
+          "confidence_note": "The CrashLoopBackOff status and the lack of recent deployments suggest memory pressure as a possible cause. Further investigation into memory metrics and logs is needed."
+        },
+        "passed": [
+          "every cited evidence ID exists in this run (2 checked)"
+        ],
+        "failed": [
+          "cannot confirm or rule out memory pressure on user: no memory metric",
+          "user is observed healthy (ev-62f902-r1i06): there is nothing on it to fix, so it is not this incident's root cause"
+        ],
+        "rule_ids": [
+          "V1-structural",
+          "V3-resource",
+          "V6-conflict-resolution"
+        ],
+        "proposers": [
+          "infrastructure_investigator"
+        ],
+        "basis_evidence_ids": [],
+        "detail": ""
+      }
+    ],
+    "unknown_evidence_ids": [],
+    "merged_evidence_ids": [
+      "ev-62f902-r1t01",
+      "ev-62f902-r1t02",
+      "ev-62f902-r1t03",
+      "ev-62f902-r1t04",
+      "ev-62f902-r1t05",
+      "ev-62f902-r1i01",
+      "ev-62f902-r1i02",
+      "ev-62f902-r1i03",
+      "ev-62f902-r1i04",
+      "ev-62f902-r1i05",
+      "ev-62f902-r1i06",
+      "ev-62f902-r1i07"
+    ],
+    "focus_services": [
+      "reservation",
+      "user"
+    ],
+    "summary": "The evidence contradicts every hypothesis (3 contradicted); nothing can be acted on.",
+    "disagreements": [],
+    "leads": []
+  },
+  "retrieved_docs": [
+    {
+      "chunk": {
+        "chunk_id": "runbook-memory-pressure#overview-1",
+        "doc_path": "fixtures/knowledge/runbook-memory-pressure.md",
+        "title": "Runbook: memory pressure and crash loops",
+        "heading": "Overview",
+        "text": "Memory pressure means a container is using nearly all of its memory limit. When it\ncrosses the limit it is killed and restarted, and if the leak continues the pod ends up\nin a crash loop.",
+        "checksum": "e8dd49ce9fda",
+        "provenance": {
+          "source": "fixtures/knowledge",
+          "kind": "synthetic runbook authored for RECAP V1",
+          "license": "MIT (this repository)"
+        },
+        "token_estimate": 47
+      },
+      "score": 8.434719290495147,
+      "rank": 1,
+      "retriever": "bm25",
+      "reranker": "lexical-heading-boost",
+      "signals": {
+        "bm25_rank": 1.0,
+        "bm25": 8.0973
+      }
+    },
+    {
+      "chunk": {
+        "chunk_id": "runbook-k8s-crash-loops-and-rollouts#diagnosis-crash-loop-or-image-pull-1",
+        "doc_path": "fixtures/knowledge-overlays/kubernetes/runbook-k8s-crash-loops-and-rollouts.md",
+        "title": "Runbook: Kubernetes rollouts that stall and pods that crash loop",
+        "heading": "Diagnosis: crash loop or image pull",
+        "text": "1. Call `get_k8s_like_events` for the service. `CrashLoopBackOff` means the code starts and\n   exits; `BackOff` after an `OOMKilled` termination means memory (see the readiness and\n   memory runbook); `ImagePullBackOff` means the image itself.\n2. For a crash loop, read `get_service_logs`: the last lines before each exit name the\n   error. An exception tagged with a release, such as `[build <release>]` or\n   `(version=<release>)`, points at the code of that release.\n3. For an image-pull back-off the logs are empty. Compare the newest revision with the one\n   before it in `get_recent_deployments`.\n4. Compare times with `get_recent_deployments` and the `error_rate` metric. A crash loop\n   that begins within minutes of the service's own release makes that release a suspect. A\n   crash loop on a service that was not released points elsewhere: memory, configuration, or\n   a dependency it needs at start-up.",
+        "checksum": "140aaf4db2f6",
+        "provenance": {
+          "source": "fixtures/knowledge-overlays/kubernetes",
+          "kind": "synthetic runbook authored for RECAP V1",
+          "license": "MIT (this repository)"
+        },
+        "token_estimate": 229
+      },
+      "score": 8.273133736462304,
+      "rank": 2,
+      "retriever": "bm25",
+      "reranker": "lexical-heading-boost",
+      "signals": {
+        "bm25_rank": 2.0,
+        "bm25": 7.6367
+      }
+    },
+    {
+      "chunk": {
+        "chunk_id": "runbook-k8s-crash-loops-and-rollouts#symptoms-1",
+        "doc_path": "fixtures/knowledge-overlays/kubernetes/runbook-k8s-crash-loops-and-rollouts.md",
+        "title": "Runbook: Kubernetes rollouts that stall and pods that crash loop",
+        "heading": "Symptoms",
+        "text": "- `CrashLoopBackOff`: a container starts, exits, and the kubelet waits longer before each\n  restart. The restarts metric climbs and ready replicas stay below desired.\n- `ImagePullBackOff` or `ErrImagePull`: the node cannot pull the image. The pod is stuck\n  before its container starts, so it writes no logs at all.\n- A rollout that is stuck: fewer updated replicas than desired and, once the progress\n  deadline has passed, the Deployment condition `ProgressDeadlineExceeded`.\n- Errors that begin when the rollout begins, on the service being rolled out.",
+        "checksum": "140aaf4db2f6",
+        "provenance": {
+          "source": "fixtures/knowledge-overlays/kubernetes",
+          "kind": "synthetic runbook authored for RECAP V1",
+          "license": "MIT (this repository)"
+        },
+        "token_estimate": 139
+      },
+      "score": 5.111857121286858,
+      "rank": 3,
+      "retriever": "bm25",
+      "reranker": "lexical-heading-boost",
+      "signals": {
+        "bm25_rank": 3.0,
+        "bm25": 4.7186
+      }
+    },
+    {
+      "chunk": {
+        "chunk_id": "runbook-memory-pressure#symptoms-1",
+        "doc_path": "fixtures/knowledge/runbook-memory-pressure.md",
+        "title": "Runbook: memory pressure and crash loops",
+        "heading": "Symptoms",
+        "text": "- `OOMKilled` events: a container exceeded its memory limit and was killed.\n- `BackOff` events and a `CrashLoopBackOff` status while the pod keeps restarting.\n- Readiness probe failures, so fewer replicas are ready than desired.\n- The memory metric climbs toward the limit; logs show heap warnings and\n  `OutOfMemoryError` lines.\n- The error rate rises because the remaining replicas take all the traffic.",
+        "checksum": "e8dd49ce9fda",
+        "provenance": {
+          "source": "fixtures/knowledge",
+          "kind": "synthetic runbook authored for RECAP V1",
+          "license": "MIT (this repository)"
+        },
+        "token_estimate": 102
+      },
+      "score": 4.619017321841596,
+      "rank": 4,
+      "retriever": "bm25",
+      "reranker": "lexical-heading-boost",
+      "signals": {
+        "bm25_rank": 5.0,
+        "bm25": 4.4343
+      }
+    }
+  ],
+  "retrieval": {
+    "mode": "bm25",
+    "embedder": null,
+    "server": null,
+    "embedding_requests": 0,
+    "embedding_input_tokens": null,
+    "replayed_requests": 0,
+    "agent_searches": 1
+  },
+  "memory_hits": [],
+  "proposals": [],
+  "safety_decisions": [],
+  "pending_approval": null,
+  "approvals": [],
+  "actions": [],
+  "recovery": null,
+  "episode_id": null,
+  "usage": {
+    "steps": 11,
+    "tool_calls": 11,
+    "estimated_tokens": 13293,
+    "actual_input_tokens": 33593,
+    "actual_output_tokens": 1014,
+    "external_cost_usd": 0.0,
+    "is_estimate": false,
+    "unreported_calls": 0,
+    "model_requests": 9
+  },
+  "outcome_note": "run cancelled",
+  "error": null,
+  "versions": {
+    "recap": "0.6.0",
+    "schema": "recap.v1",
+    "prompt_version": "prompts-v4.7",
+    "config_hash": "34fab689410b24cf",
+    "fixture_hash": "586da8b321ef52d7",
+    "code_version": "042e0db212d1",
+    "policy_version": "policy-sregym-hotel-v2",
+    "router": "rules-router-v1",
+    "verifier": "evidence-rule-verifier-v1",
+    "provider": "ollama-vm:qwen3:8b",
+    "provider_origin": "local_llm",
+    "recording": "data/recordings/20261109-114114-ollama-vm-96d120.jsonl",
+    "environment": "sregym",
+    "seed": 0,
+    "context": {
+      "pack_tokens": 3000,
+      "max_item_tokens": 400
+    },
+    "knowledge_overlays": [
+      "fixtures/knowledge-overlays/kubernetes"
+    ],
+    "transport": "mcp-stdio"
+  },
+  "created_at": "2026-11-09T11:41:24.722135Z",
+  "updated_at": "2026-11-09T12:09:12.773746Z",
+  "interruption": null
+}

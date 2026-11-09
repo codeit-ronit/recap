@@ -31,10 +31,19 @@ def test_the_held_out_problems_are_the_blind_scenario_files_in_order(
     specs = {s.id: s for s in list_kind_scenarios(SCENARIOS)}
     problems = manifest["problems"]
     assert 3 <= len(problems) <= 5
+    # Blind until the evaluation ends; then only the problems it attempted carry an answer (from
+    # SREGym's own definitions), and those it never attempted stay blind.
+    answered = {run["scenario"] for run in manifest.get("results", {}).get("runs", [])}
+    if manifest["status"] != "completed":
+        assert not answered
     for entry in problems:
         spec = specs[entry["scenario"]]
         assert spec.external is not None and spec.external.problem == entry["problem"]
-        assert (spec.family, spec.expected, spec.partition.value) == ("unlabelled", {}, "test")
+        assert spec.partition.value == "test"
+        if entry["scenario"] in answered:
+            assert spec.family != "unlabelled" and spec.expected["root_cause_service"]
+        else:
+            assert (spec.family, spec.expected) == ("unlabelled", {})
         assert spec.external.commit == manifest["sregym"]["commit"]
     assert len({p["problem"] for p in problems}) == len(problems)
 

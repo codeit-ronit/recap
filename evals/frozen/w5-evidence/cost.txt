@@ -1,0 +1,18 @@
+# cost-00-open
+cost window opened at 2026-11-09T05:01:08.143768+00:00 with a cap of $5.00
+# cost-01-after-setup
+window since 2026-11-09T05:01:08.143768+00:00 (cap $5.00, stop line $3.50): instance running; 0.06 running hours = $0.01 compute, $0.00 disk; estimated $0.02 so far, $3.48 before the stop line
+# cost-02-before-pilot
+window since 2026-11-09T05:01:08.143768+00:00 (cap $5.00, stop line $3.50): instance running; 0.19 running hours = $0.04 compute, $0.00 disk; estimated $0.05 so far, $3.45 before the stop line
+# cost-03-after-idle-stop
+window since 2026-11-09T05:01:08.143768+00:00 (cap $5.00, stop line $3.50): instance stopped; 0.97 running hours = $0.22 compute, $0.02 disk; estimated $0.24 so far, $3.26 before the stop line
+# cost-04-before-pilot
+window since 2026-11-09T05:01:08.143768+00:00 (cap $5.00, stop line $3.50): instance running; 1.25 running hours = $0.28 compute, $0.03 disk; estimated $0.31 so far, $3.19 before the stop line
+# cost-05-after-pilot
+window since 2026-11-09T05:01:08.143768+00:00 (cap $5.00, stop line $3.50): instance running; 1.82 running hours = $0.41 compute, $0.04 disk; estimated $0.46 so far, $3.04 before the stop line
+# cost-after-idle-stop
+window since 2026-11-09T05:01:08.143768+00:00 (cap $5.00, stop line $3.50): instance stopped; 2.82 running hours = $0.64 compute, $0.06 disk; estimated $0.70 so far, $2.80 before the stop line
+# cost-after-stop
+window since 2026-11-09T05:01:08.143768+00:00 (cap $5.00, stop line $3.50): instance stopped; 4.24 running hours = $0.96 compute, $0.13 disk; estimated $1.10 so far, $2.40 before the stop line
+# cost-close
+window since 2026-11-09T05:01:08.143768+00:00 (cap $5.00, stop line $3.50): instance stopped; 4.24 running hours = $0.96 compute, $0.14 disk; estimated $1.10 so far, $2.40 before the stop line

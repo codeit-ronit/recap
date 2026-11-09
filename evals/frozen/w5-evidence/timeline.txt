@@ -1,0 +1,55 @@
+# Stage A (setup and the development pilot; times UTC, 2026-11-09)
+start requested 2026-11-09T05:01:09Z
+setup started 05:02:58Z
+setup ended 05:04:56Z
+pilot deploy started 05:05:18Z
+pilot deploy ended 05:10:32Z
+ready for the pilot 05:12:29Z
+found stopped 05:59:32Z (idle guard; pilot not started)
+session 2: start requested 06:24:35Z
+launch 2026-11-09T06:24:41+00:00; absolute shutdown in 60 min (launch + 61 min)
+cluster check 06:26:02Z
+pilot redeploy started 06:26:17Z
+pilot redeploy ended 06:31:01Z
+teardown+setup+deploy started 06:31:40Z
+teardown+setup+deploy ended 06:39:41Z
+ready for the pilot 06:41:13Z
+grade start 07:14:41Z
+grade end 07:14:53Z
+pilot run run-4ee61b5cb9 (data folder ~/recap-w5-pilot): created 06:42:47Z, RESOLVED 07:07:58Z; RECAP oracle verified; rollback of geo approved at the terminal 07:06:43Z
+pilot SREGym grader (run-oracle.py): Success True, exit 0 (grader-pilot.txt)
+stage A done: development pilot only, never counted as held-out evidence
+
+# Stage B (the held-out problems)
+07:16:04Z stage B: absolute shutdown moved to +180 min (cap $5, stop line $3.50, $0.46 so far)
+07:25:29Z stage B script ready (run-heldout.sh); waiting for the owner
+08:15:24Z the VM was found stopped by its idle guard (owner not yet started; tunnel closed by the VM ~08:10Z)
+08:28:22Z problem 1: gate
+08:28:25Z problem 1: the VM is stopped (its idle guard stops it when unused): starting it and rebuilding SREGym's cluster (about 6 minutes)
+08:31:45Z problem 1: the VM is running and SREGym's cluster is new
+08:31:53Z problem 1: the tunnel to the VM is open
+08:31:55Z problem 1: SREGym deploys and injects it (about 5 minutes; its output goes to a file)
+08:37:05Z problem 1: deployed. RECAP runs now: approve (type the service's name) or reject (anything else)
+09:29:35Z problem 1: RECAP's run ended (exit 1): run-7bc5159b6d FAILED
+09:29:36Z problem 1: SREGym grades it (its output goes to a file)
+09:31:47Z problem 1: graded
+10:47:12Z problem 2: gate
+10:47:16Z problem 2: the VM is stopped (its idle guard stops it when unused): starting it and rebuilding SREGym's cluster (about 6 minutes)
+10:50:37Z problem 2: the VM is running and SREGym's cluster is new
+10:50:44Z problem 2: the tunnel to the VM is open
+10:50:47Z problem 2: SREGym deploys and injects it (about 5 minutes; its output goes to a file)
+10:56:11Z problem 2: deployed. RECAP runs now: approve (type the service's name) or reject (anything else)
+11:30:54Z problem 2: RECAP's run ended (exit 1): run-db560f6568 FAILED
+11:30:54Z problem 2: SREGym grades it (its output goes to a file)
+11:31:17Z problem 2: graded
+11:39:36Z problem 3: gate
+11:39:42Z problem 3: SREGym deploys and injects it (about 5 minutes; its output goes to a file)
+11:41:11Z problem 3: deployed. RECAP runs now: approve (type the service's name) or reject (anything else)
+12:09:13Z problem 3: RECAP's run ended (exit 130): run-62f9029f00 FAILED
+12:09:13Z problem 3: SREGym grades it (its output goes to a file)
+12:09:17Z problem 3: graded
+12:09:17Z STOPPED at problem 3: RECAP's run ended abnormally (exit 130); it was graded
+12:10:30Z problem 3: the grade at 12:09:13Z was interrupted too (exit 130, no output: grader-w5-3-interrupted.txt); graded again by Claude
+12:11:38Z problem 3: graded (exit 1; output not read)
+12:13:08Z SREGym's cluster torn down and the VM stopped by Claude (idle after the stop at problem 3)
+12:30:38Z evaluation ended by the owner's decision after problem 3 (stop condition: the model failed for the same infrastructure reason, CPU inference too slow under parallel agents, in problems 1 and 2); problems 4 and 5 not attempted, their files stay blind and unread

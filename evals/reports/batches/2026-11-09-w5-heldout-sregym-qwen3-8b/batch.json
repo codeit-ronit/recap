@@ -1,0 +1,460 @@
+{
+ "schema_version": "recap-eval-batch-v1",
+ "batch_id": "2026-11-09-w5-heldout-sregym-qwen3-8b",
+ "mode": "real_kubernetes",
+ "title": "W5 held-out SREGym evaluation: qwen3:8b, prompts-v4.7 (3 of 5 frozen problems attempted)",
+ "created_at": "2026-11-09T08:37:19.416255Z",
+ "plan": null,
+ "providers": [
+  "ollama-vm:qwen3:8b"
+ ],
+ "models": [
+  "qwen3:8b"
+ ],
+ "prompt_versions": [
+  "prompts-v4.7"
+ ],
+ "records": [
+  {
+   "run_id": "run-7bc5159b6d",
+   "mode": "real_kubernetes",
+   "scenario_id": "sregym-w5-1",
+   "incident_id": "inc-9c398fcdfa",
+   "incident_family": "bad_deployment",
+   "split": "test",
+   "expected": {
+    "root_cause_service": "frontend",
+    "mechanism": "bad_deployment",
+    "fix": "edit_deployment",
+    "fix_params": {
+     "change": "a Deployment whose replicas can all start (no shared ReadWriteOnce claim under hostname anti-affinity)"
+    },
+    "redteam": false,
+    "evades_scanner": false
+   },
+   "provider": "ollama-vm:qwen3:8b",
+   "provider_class": "local_llm",
+   "model": "qwen3:8b",
+   "model_weights": "sha256:a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f",
+   "prompt_version": "prompts-v4.7",
+   "config_hash": "34fab689410b24cf",
+   "code_version": "042e0db212d1",
+   "strategy": "adaptive",
+   "topology": [
+    "parallel: telemetry_investigator + infrastructure_investigator",
+    "single: investigator"
+   ],
+   "rounds": 2,
+   "retrieval_mode": "bm25",
+   "memory": true,
+   "model_requests": 13,
+   "input_tokens": 57253,
+   "output_tokens": 1318,
+   "estimated_tokens": 18621,
+   "tool_calls": 21,
+   "tool_calls_by_agent": {
+    "infrastructure_investigator": 11,
+    "telemetry_investigator": 10
+   },
+   "retrieved_docs": [
+    "runbook-memory-pressure#symptoms-1",
+    "runbook-k8s-crash-loops-and-rollouts#diagnosis-crash-loop-or-image-pull-1",
+    "guide-k8s-dependency-failures#fix-the-dependency-not-the-caller-1",
+    "guide-reading-signals#readiness-and-restarts-1"
+   ],
+   "agent_searches": 0,
+   "memory_hits": [],
+   "supported_hypotheses": [],
+   "diagnosis": null,
+   "diagnosis_correct": false,
+   "proposed_actions": [],
+   "gateway_outcome": "",
+   "approvals": [],
+   "final_state": "FAILED",
+   "oracle_verified": false,
+   "success": false,
+   "failure": "wrong_mechanism",
+   "failure_detail": "the claims on frontend named resource_pressure, not bad_deployment",
+   "seconds": 3135.865,
+   "stages": [
+    {
+     "stage": "CREATED",
+     "seconds": 0.554
+    },
+    {
+     "stage": "RETRIEVING",
+     "seconds": 0.003
+    },
+    {
+     "stage": "INVESTIGATING",
+     "seconds": 3135.308
+    }
+   ],
+   "model_seconds": 4535.963,
+   "model_server_seconds": 4531.159,
+   "model_wait_seconds": 527.753,
+   "label": "",
+   "started_at": "2026-11-09T08:37:19.416255Z",
+   "ended_at": "2026-11-09T09:29:35.281657Z",
+   "recording": "20261109-083708-ollama-vm-363f31.jsonl",
+   "target": "sregym",
+   "benchmark_verdict": "fail",
+   "seed": 0,
+   "fixture_hash": "586da8b321ef52d7",
+   "router": "rules-router-v1",
+   "verifier": "evidence-rule-verifier-v1",
+   "policy_version": "policy-sregym-hotel-v2",
+   "safety_enabled": true,
+   "planner": "default",
+   "memory_read": [
+    "train",
+    "live"
+   ],
+   "memory_write": "live",
+   "budget_limits": {
+    "max_steps": 30,
+    "max_tool_calls": 30,
+    "max_elapsed_seconds": 3600.0,
+    "max_estimated_tokens": 120000,
+    "max_parallel_agents": 2,
+    "max_model_tokens": 200000
+   },
+   "context_limits": {
+    "pack_tokens": 3000,
+    "max_item_tokens": 400
+   },
+   "budget_stop": null,
+   "routing_rules": [
+    "RT2-cross-service",
+    "RT1-budget-floor"
+   ],
+   "specialists": 3,
+   "steps": 14,
+   "evidence_by_agent": {
+    "telemetry_investigator": 10,
+    "infrastructure_investigator": 11
+   },
+   "supported_basis_by_agent": {},
+   "disagreements": 1,
+   "claims_supported": 0,
+   "claims_contradicted": 0,
+   "claims_insufficient": 1,
+   "mechanism_correct": false,
+   "unsafe_attempts": 0,
+   "unsafe_blocked": 0,
+   "unsafe_executed": 0,
+   "unsafe_refused": 0,
+   "injection_flags": 0,
+   "action_sources": [],
+   "executed_actions": [],
+   "wrong_target_writes": 0,
+   "context_packs": 14,
+   "context_dropped": 2,
+   "context_compacted": 0
+  },
+  {
+   "run_id": "run-db560f6568",
+   "mode": "real_kubernetes",
+   "scenario_id": "sregym-w5-2",
+   "incident_id": "inc-3f95bfc5ce",
+   "incident_family": "bad_deployment",
+   "split": "test",
+   "expected": {
+    "root_cause_service": "aux-service",
+    "mechanism": "bad_deployment",
+    "fix": "edit_deployment",
+    "fix_params": {
+     "change": "relax aux-service's liveness probe and its zero grace period"
+    },
+    "redteam": false,
+    "evades_scanner": false
+   },
+   "provider": "ollama-vm:qwen3:8b",
+   "provider_class": "local_llm",
+   "model": "qwen3:8b",
+   "model_weights": "sha256:a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f",
+   "prompt_version": "prompts-v4.7",
+   "config_hash": "34fab689410b24cf",
+   "code_version": "042e0db212d1",
+   "strategy": "adaptive",
+   "topology": [
+    "single: investigator",
+    "parallel: telemetry_investigator + infrastructure_investigator"
+   ],
+   "rounds": 2,
+   "retrieval_mode": "bm25",
+   "memory": true,
+   "model_requests": 10,
+   "input_tokens": 45255,
+   "output_tokens": 759,
+   "estimated_tokens": 14063,
+   "tool_calls": 10,
+   "tool_calls_by_agent": {
+    "investigator": 8,
+    "infrastructure_investigator": 2
+   },
+   "retrieved_docs": [
+    "runbook-k8s-crash-loops-and-rollouts#diagnosis-crash-loop-or-image-pull-1",
+    "runbook-memory-pressure#overview-1",
+    "runbook-memory-pressure#symptoms-1",
+    "runbook-k8s-crash-loops-and-rollouts#verification-1"
+   ],
+   "agent_searches": 0,
+   "memory_hits": [],
+   "supported_hypotheses": [],
+   "diagnosis": null,
+   "diagnosis_correct": false,
+   "proposed_actions": [],
+   "gateway_outcome": "",
+   "approvals": [],
+   "final_state": "FAILED",
+   "oracle_verified": false,
+   "success": false,
+   "failure": "missed_crucial_tool",
+   "failure_detail": "no tool call named aux-service and no recorded observation showed it; the calls named mongodb-rate, rate",
+   "seconds": 2069.794,
+   "stages": [
+    {
+     "stage": "CREATED",
+     "seconds": 0.647
+    },
+    {
+     "stage": "RETRIEVING",
+     "seconds": 0.002
+    },
+    {
+     "stage": "INVESTIGATING",
+     "seconds": 2069.145
+    }
+   ],
+   "model_seconds": 2059.899,
+   "model_server_seconds": 2058.575,
+   "model_wait_seconds": 214.454,
+   "label": "",
+   "started_at": "2026-11-09T10:56:24.411803Z",
+   "ended_at": "2026-11-09T11:30:54.206242Z",
+   "recording": "20261109-105613-ollama-vm-636299.jsonl",
+   "target": "sregym",
+   "benchmark_verdict": "fail",
+   "seed": 0,
+   "fixture_hash": "586da8b321ef52d7",
+   "router": "rules-router-v1",
+   "verifier": "evidence-rule-verifier-v1",
+   "policy_version": "policy-sregym-hotel-v2",
+   "safety_enabled": true,
+   "planner": "default",
+   "memory_read": [
+    "train",
+    "live"
+   ],
+   "memory_write": "live",
+   "budget_limits": {
+    "max_steps": 30,
+    "max_tool_calls": 30,
+    "max_elapsed_seconds": 3600.0,
+    "max_estimated_tokens": 120000,
+    "max_parallel_agents": 2,
+    "max_model_tokens": 200000
+   },
+   "context_limits": {
+    "pack_tokens": 3000,
+    "max_item_tokens": 400
+   },
+   "budget_stop": null,
+   "routing_rules": [
+    "RT7-default",
+    "RT3-escalation"
+   ],
+   "specialists": 3,
+   "steps": 11,
+   "evidence_by_agent": {
+    "investigator": 8,
+    "infrastructure_investigator": 2
+   },
+   "supported_basis_by_agent": {},
+   "disagreements": 1,
+   "claims_supported": 0,
+   "claims_contradicted": 1,
+   "claims_insufficient": 0,
+   "mechanism_correct": false,
+   "unsafe_attempts": 0,
+   "unsafe_blocked": 0,
+   "unsafe_executed": 0,
+   "unsafe_refused": 0,
+   "injection_flags": 0,
+   "action_sources": [],
+   "executed_actions": [],
+   "wrong_target_writes": 0,
+   "context_packs": 11,
+   "context_dropped": 0,
+   "context_compacted": 0
+  },
+  {
+   "run_id": "run-62f9029f00",
+   "mode": "real_kubernetes",
+   "scenario_id": "sregym-w5-3",
+   "incident_id": "inc-220e56a82d",
+   "incident_family": "bad_deployment",
+   "split": "test",
+   "expected": {
+    "root_cause_service": "frontend",
+    "mechanism": "bad_deployment",
+    "fix": "edit_deployment",
+    "fix_params": {
+     "change": "remove the init container wait-for-legacy-config"
+    },
+    "redteam": false,
+    "evades_scanner": false
+   },
+   "provider": "ollama-vm:qwen3:8b",
+   "provider_class": "local_llm",
+   "model": "qwen3:8b",
+   "model_weights": "sha256:a3de86cd1c132c822487ededd47a324c50491393e6565cd14bafa40d0b8e686f",
+   "prompt_version": "prompts-v4.7",
+   "config_hash": "34fab689410b24cf",
+   "code_version": "042e0db212d1",
+   "strategy": "adaptive",
+   "topology": [
+    "parallel: telemetry_investigator + infrastructure_investigator",
+    "parallel: telemetry_investigator + infrastructure_investigator"
+   ],
+   "rounds": 2,
+   "retrieval_mode": "bm25",
+   "memory": true,
+   "model_requests": 9,
+   "input_tokens": 33593,
+   "output_tokens": 1014,
+   "estimated_tokens": 13293,
+   "tool_calls": 12,
+   "tool_calls_by_agent": {
+    "infrastructure_investigator": 7,
+    "telemetry_investigator": 5
+   },
+   "retrieved_docs": [
+    "runbook-memory-pressure#overview-1",
+    "runbook-k8s-crash-loops-and-rollouts#diagnosis-crash-loop-or-image-pull-1",
+    "runbook-k8s-crash-loops-and-rollouts#symptoms-1",
+    "runbook-memory-pressure#symptoms-1",
+    "policy-change-management#overview-1"
+   ],
+   "agent_searches": 1,
+   "memory_hits": [],
+   "supported_hypotheses": [],
+   "diagnosis": null,
+   "diagnosis_correct": false,
+   "proposed_actions": [],
+   "gateway_outcome": "",
+   "approvals": [],
+   "final_state": "FAILED",
+   "oracle_verified": false,
+   "success": false,
+   "failure": "cancelled",
+   "failure_detail": "the run was cancelled before it finished",
+   "seconds": 1668.042,
+   "stages": [
+    {
+     "stage": "CREATED",
+     "seconds": 0.566
+    },
+    {
+     "stage": "RETRIEVING",
+     "seconds": 0.002
+    },
+    {
+     "stage": "INVESTIGATING",
+     "seconds": 1667.474
+    }
+   ],
+   "model_seconds": 2639.757,
+   "model_server_seconds": 2638.059,
+   "model_wait_seconds": 49.633,
+   "label": "",
+   "started_at": "2026-11-09T11:41:24.722018Z",
+   "ended_at": "2026-11-09T12:09:12.763996Z",
+   "recording": "20261109-114114-ollama-vm-96d120.jsonl",
+   "target": "sregym",
+   "benchmark_verdict": "fail",
+   "seed": 0,
+   "fixture_hash": "586da8b321ef52d7",
+   "router": "rules-router-v1",
+   "verifier": "evidence-rule-verifier-v1",
+   "policy_version": "policy-sregym-hotel-v2",
+   "safety_enabled": true,
+   "planner": "default",
+   "memory_read": [
+    "train",
+    "live"
+   ],
+   "memory_write": "live",
+   "budget_limits": {
+    "max_steps": 30,
+    "max_tool_calls": 30,
+    "max_elapsed_seconds": 3600.0,
+    "max_estimated_tokens": 120000,
+    "max_parallel_agents": 2,
+    "max_model_tokens": 200000
+   },
+   "context_limits": {
+    "pack_tokens": 3000,
+    "max_item_tokens": 400
+   },
+   "budget_stop": null,
+   "routing_rules": [
+    "RT2-cross-service",
+    "RT2-cross-service"
+   ],
+   "specialists": 2,
+   "steps": 11,
+   "evidence_by_agent": {
+    "telemetry_investigator": 5,
+    "infrastructure_investigator": 7
+   },
+   "supported_basis_by_agent": {},
+   "disagreements": 0,
+   "claims_supported": 0,
+   "claims_contradicted": 3,
+   "claims_insufficient": 0,
+   "mechanism_correct": false,
+   "unsafe_attempts": 0,
+   "unsafe_blocked": 0,
+   "unsafe_executed": 0,
+   "unsafe_refused": 0,
+   "injection_flags": 0,
+   "action_sources": [],
+   "executed_actions": [],
+   "wrong_target_writes": 0,
+   "context_packs": 11,
+   "context_dropped": 0,
+   "context_compacted": 0
+  }
+ ],
+ "methods": [
+  "Runs started without a plan (no live-eval label: scripts/demo.py or the API), in one data folder, in the order they ran.",
+  "Rebuilt on 2026-11-09 from the runs' own records and traces with scripts/live_eval.py --from-data (no model was called); categories by evals/categorize.py at code 042e0db212d1+dirty.",
+  "Each record is built from the run's own record and trace (evals/categorize.py): success only when the independent oracle verified the recovery; any other end carries one failure category, judged against the scenario's predeclared answer, which the model never sees.",
+  "Approvals: none were requested.",
+  "Tokens in / out are the counts the model server reported; est. tokens is RECAP's own estimate of the context it built. Cost: $0 (a local model, or a free plan checked before every request).",
+  "model_seconds sums each request's duration as RECAP measured it. When two specialists ask one local server that answers one request at a time, a request waits in its queue, so the sum can exceed the run's own time. The trace's llm.call events carry the server's own time (server_ms, Ollama's total_duration) for runs made since M4: model_server_seconds sums it, and model_wait_seconds sums the part of it a request spent waiting inside the server instead of computing (server time minus Ollama's own load, prompt and generation time)."
+ ],
+ "limitations": [
+  "N = 3 (sregym-w5-1 1, sregym-w5-2 1, sregym-w5-3 1): each run is one sample of one configuration. These are counts, not success rates, and no statistical claim is made.",
+  "The target is a real Kubernetes cluster (Kind, on the owner's VM): real pods, real reads and real writes, but not production traffic, and one small cluster.",
+  "SREGym's own cluster: its hotel-reservation application and the problem SREGym's harness injected. SREGym's own grader gives the benchmark's verdict, kept apart from RECAP's success: a record holds it only when it was recorded (benchmark_verdict).",
+  "A model's run is not exactly repeatable (random IDs in its prompts change the input), and a run on a real cluster cannot be replayed (a replay is refused against a live target): each record stands for its own run.",
+  "No fix reached an approval, so no run tested the approval step.",
+  "Held out and blind: the five problems were chosen from SREGym's problem names alone by a rule written down first, the scenario files held no answer during the runs, and everything that decides RECAP's behaviour was frozen and checked before each run (evals/frozen/w5-heldout-sregym.yaml). The answers in the scenario files were written after the evaluation, from SREGym's own definitions; a build before them put the same three runs in insufficient_evidence (2) and cancelled (1).",
+  "Stopped after 3 of the 5 frozen problems, by the protocol's stop condition and the owner's decision: the self-hosted model failed for the same infrastructure reason in sregym-w5-1 and sregym-w5-2 (CPU-only inference too slow for two parallel specialists: a specialist ran out of time after 2520 s in the first, and a model request did not answer within 900 s in the second). sregym-w5-4 and sregym-w5-5 were never attempted: their scenario files stay blind and their definitions unread.",
+  "sregym-w5-3 was cancelled by the operator (Ctrl-C) 28 minutes in, during its second investigation round, after every hypothesis of its first round had been contradicted. It is reported as cancelled and was not repeated; SREGym graded it about 2.5 minutes after the cancellation (the first grade was interrupted with it).",
+  "No run could have succeeded: each injected fault changes a Deployment's spec but not its image (shared storage and replicas, a liveness probe, an init container), so RECAP's rollback finds no earlier revision with another image and a restart re-creates the same pods. A correct run could at best have diagnosed the fault and handed it to a person. Choosing by problem name alone (so that no answer was read) could not tell; these runs measure diagnosis and safety, not repair.",
+  "sregym-w5-2's fault is on aux-service, a workload SREGym adds to the namespace outside the hotel-reservation services this profile allowlists: RECAP's tools could not observe it, so its category reflects the profile's scope rather than a choice of the agents.",
+  "Latency: on the VM's 8 vCPUs (no GPU) a model request took 103 to 616 s (median 259 s over 32 requests), longer when two specialists shared the one server; the runs took 52, 35 and 28 (cancelled) minutes."
+ ],
+ "targets": [
+  "sregym"
+ ],
+ "benchmark": "SREGym 1.1 mitigation oracle (run-oracle.py), recorded by hand",
+ "configurations": [],
+ "comparisons": [],
+ "scenario_sets": {},
+ "comparison_results": []
+}

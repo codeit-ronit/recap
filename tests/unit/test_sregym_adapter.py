@@ -105,17 +105,24 @@ def test_nothing_an_agent_reads_names_the_answer(profile: Any) -> None:
 
 
 def test_the_w5_held_out_problems_are_blind_neutral_and_never_remembered(profile: Any) -> None:
-    """M6 W5: nobody read a held-out problem's answer before its runs, so its file has none;
-    its id, title and description name no mechanism; the held-out test partition is never
-    consolidated into experience memory; and every one waits for the same generic alert."""
+    """M6 W5: nobody read a held-out problem's answer before its runs, so its file had none
+    until the evaluation ended (then only the attempted problems got theirs); its id, title and
+    description name no mechanism; the held-out test partition is never consolidated into
+    experience memory; and every one waits for the same generic alert."""
     from recap.environments.kubernetes.scenario import list_kind_scenarios
+    from scripts.w5_freeze import load_manifest
 
     folder = REPO_ROOT / "fixtures" / "sregym-scenarios"
     specs = [s for s in list_kind_scenarios(folder) if s.id.startswith("sregym-w5-")]
     assert [s.id for s in specs] == [f"sregym-w5-{n}" for n in range(1, 6)]
     m5 = next(s for s in list_kind_scenarios(folder) if s.id == SCENARIO)
+    answered = {run["scenario"] for run in load_manifest().get("results", {}).get("runs", [])}
     for spec in specs:
-        assert (spec.family, spec.expected, spec.partition.value) == ("unlabelled", {}, "test")
+        if spec.id in answered:
+            assert spec.family != "unlabelled" and spec.expected["root_cause_service"]
+        else:
+            assert (spec.family, spec.expected) == ("unlabelled", {})
+        assert spec.partition.value == "test"
         assert spec.external is not None and spec.external.commit == m5.external.commit
         assert spec.external.problem != m5.external.problem  # never the development problem
         words = spec.external.problem.split("_")
