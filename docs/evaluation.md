@@ -8,7 +8,8 @@ The decision behind it is [ADR 0029](decisions/0029-one-evaluation-record-per-ru
 Three of the four modes run against RECAP's **simulated** shop (five services,
 deterministic). The fourth, `real_kubernetes` (M5), holds a real model's runs on real
 Kubernetes clusters: RECAP's Kind demo cluster and SREGym's own cluster, both Kind clusters
-run by the owner, neither of them production (section 9).
+run by the owner, neither of them production (section 9; M6's held-out SREGym runs: section
+14).
 
 ## 1. Four modes, never mixed
 
@@ -270,8 +271,9 @@ shaped like a secret is refused, and nothing is written.
   holds a benchmark's verdicts, `benchmark` names the grader and each record's
   `benchmark_verdict` says `pass` or `fail` (empty: not graded). The API counts them apart
   from RECAP's outcomes (`outcomes.benchmark_verdicts`: pass, fail, not graded) and never
-  adds them to the successes. The README's run table does not show them; the SREGym batch
-  states them in a limitation added with `--limitation`.
+  adds them to the successes. The README's run table does not show them: M5's SREGym batch
+  states them in a limitation added with `--limitation`, and the W5 batch's are quoted in
+  [w5-protocol.md](w5-protocol.md#results) (section 14).
 - Read a count with its N: "1 of 2" means one run of two, not 50%.
 - Compare runs only within a batch and only with similar runs: the routing, retrieval and
   memory columns say how each was made.
@@ -292,6 +294,9 @@ Built only from runs that really happened (`evals/reports/batches/`):
 | `2026-10-26-real-llm-qwen3-8b-m4-unfamiliar-single` | `real_llm` | 1 | 1 success (M4 code, single agent) |
 | `2026-11-03-real-kubernetes-qwen3-8b-prompts-v4.7` | `real_kubernetes` (`kind`) | 7 | 3 success, 2 `approval_rejected`, 1 `insufficient_evidence`, 1 `cancelled` |
 | `2026-11-03-real-kubernetes-sregym-qwen3-8b-prompts-v4.7` | `real_kubernetes` (`sregym`) | 5 | 1 success, 1 `safety_blocked`, 1 `approval_rejected`, 2 `wrong_mechanism`; SREGym's grader: 1 pass, 1 fail, 3 not graded |
+| `20261108-w4-scripted` | `scripted_regression` | 74 | 63 success, 8 `oracle_not_recovered`, 2 `budget_exhausted`, 1 `safety_blocked` (eleven configurations together: section 13) |
+| `20261108-w4-scripted-seeds` | `scripted_regression` | 222 | 189 success, 24 `oracle_not_recovered`, 6 `budget_exhausted`, 3 `safety_blocked` (the same cases with seeds 1, 2 and 3) |
+| `2026-11-09-w5-heldout-sregym-qwen3-8b` | `real_kubernetes` (`sregym`) | 3 | 1 `wrong_mechanism`, 1 `missed_crucial_tool`, 1 `cancelled`; SREGym's grader: 3 fail |
 
 - The scripted batch was rebuilt from the run data of the committed V1 report
   (`evals/reports/latest/`, git `0e217a1`): same runs, same ids, and its records agree with
@@ -315,9 +320,16 @@ Built only from runs that really happened (`evals/reports/batches/`):
   TypeScript sources being written at the same time (no Python file). One run each: the
   single run's success next to the owner-approved parallel run's says nothing about which
   topology is better.
-- The two `real_kubernetes` batches hold every finished M5 run of a real model on a cluster,
+- M5's two `real_kubernetes` batches hold every finished M5 run of a real model on a cluster,
   failures included, rebuilt on 2026-11-07 from the runs' stored records and traces. Section 9
   explains each run, and the one attempt that never finished.
+- The two W4 batches come from `scripts/evaluate.py` with the W4 split, every decision by the
+  scripted policy: nine configurations on eight scenarios (six development, two held out from
+  W4's choices) and the two red-team configurations on one. Their totals mix configurations,
+  so section 13 reads them pair by pair; the seeds batch repeats every scored case with seeds
+  1, 2 and 3.
+- The W5 batch holds the three held-out runs, made with RECAP frozen and categorized with
+  answers written only after the runs (section 14).
 
 ## 9. Real clusters: the `real_kubernetes` batches (M5)
 
@@ -402,7 +414,9 @@ with SREGym's grader output quoted there.
   RECAP was changed between them because of them. A person approved every fix, so they are
   human-in-the-loop and not comparable with SREGym's leaderboard. A benchmark claim needs
   SREGym problems RECAP was never run on, a split committed before the first scored run, and
-  RECAP frozen while they run ([benchmark-plan.md](benchmark-plan.md)).
+  RECAP frozen while they run ([benchmark-plan.md](benchmark-plan.md)). M6 W5 then ran three
+  problems RECAP was never run on, chosen by a rule committed before the first scored run,
+  with RECAP frozen (section 14).
 - **Small clusters, not production.** One small Kind cluster per target and no production
   traffic. The Kind demo's app was written for RECAP: its log lines use phrasings RECAP's
   parsers already read, so a success there shows that the path works on a real cluster, not
@@ -445,16 +459,17 @@ any model decision), and a destructive write (`safety_blocked`).
 ## 11. What the numbers cannot show
 
 - **Tiny samples.** The real-model batches hold 1 to 7 runs each: one run per configuration
-  in M3 and M4, and in M5 runs made while RECAP's code changed between them. A count of 1 of 2
-  is not a 50% success rate, and no comparison between models, prompts, routings or targets
-  here is statistically meaningful.
+  in M3 and M4, in M5 runs made while RECAP's code changed between them, and in M6 W5 one run
+  per held-out problem with RECAP frozen. A count of 1 of 2 is not a 50% success rate, and no
+  comparison between models, prompts, routings or targets here is statistically meaningful.
 - **A simulated target, or a small real one.** The shop is deterministic and its faults are
   written by hand. The `real_kubernetes` runs met real pods, delays and failures, but on two
   small Kind clusters with no production traffic, and the Kind demo's app was written for
   RECAP (section 9).
-- **Not a benchmark score.** The SREGym runs are one development problem, not held out, and
-  a person approved every fix: nothing here is comparable with SREGym's leaderboard
-  (section 9).
+- **Not a benchmark score.** M5's SREGym runs are one development problem, not held out, and
+  a person approved every fix; W5's held-out runs reached 3 of 5 problems and solved none,
+  with a person in the loop for approvals (none was asked). Nothing here is comparable with
+  SREGym's leaderboard (sections 9 and 14).
 - **Model runs are not repeatable.** Random IDs in the prompts change the model's input from
   run to run; only a replay of a recording repeats a run exactly, and a replay is not a new
   sample. A run on a real cluster cannot be replayed at all.
@@ -462,11 +477,12 @@ any model decision), and a destructive write (`safety_blocked`).
   playbooks and heuristics; its successes say the pipeline works, nothing about language
   models.
 - **Approvals by the simulation auto-approver** do not test human review. In the published
-  simulated batches only the owner-approved `real_llm` run had a person decide; in the two
+  simulated batches only the owner-approved `real_llm` run had a person decide; in M5's two
   `real_kubernetes` batches every approval request went to the owner, at an interactive
-  terminal or, for `run-34a3580d2f`, in the dashboard (one request expired unanswered). The
-  decision log proves a terminal, or in the dashboard a holder of the operator token, and a
-  timing, not which person decided.
+  terminal or, for `run-34a3580d2f`, in the dashboard (one request expired unanswered), and
+  W5's held-out runs proposed no fix, so they asked for none. The decision log proves a
+  terminal, or in the dashboard a holder of the operator token, and a timing, not which person
+  decided.
 - **Categories are one reason per run**, judged against a predeclared answer. A second
   problem in the same run shows only in the detail text, and an incident without a
   predeclared answer only ever gets `insufficient_evidence` for an unsolved investigation.
@@ -490,6 +506,7 @@ any model decision), and a destructive write (`safety_blocked`).
 | [evals/datasets.py](../evals/datasets.py), [evals/datasets/](../evals/datasets/README.md) | M6 W4: the retrieval and label datasets, generated from the fixtures, with their provenance |
 | [evals/query_vectors.py](../evals/query_vectors.py) | M6 W4: stored query vectors, so hybrid retrieval is measured with no model server |
 | [evals/components.py](../evals/components.py) | M6 W4: the component evaluations and their report (`GET /evals/components`) |
+| [scripts/w5_freeze.py](../scripts/w5_freeze.py), [scripts/aws_cost_meter.py](../scripts/aws_cost_meter.py) | M6 W5: the freeze check before every scored run, and the time-based AWS cost meter with its stop line |
 
 ## 13. Component evaluations and one-switch comparisons (M6 W4)
 
@@ -647,8 +664,70 @@ a bad release), adaptive routing saves tool calls without losing a recovery, mem
 are conservative and right on these pairs, and halving the tool budget costs the hardest
 held-out incident. They say nothing about how a language model would use the same
 components: that needs the prepared real-model pilot ([`evals/plans/w4-pilot.yaml`](../evals/plans/w4-pilot.yaml)),
-which was not run (the local-memory guard refuses `qwen3:8b` on this laptop now), and the
-held-out SREGym evaluation (W5). Retrieval's hybrid fusion ranked below dense alone on these
-queries: a finding to test on independent queries, not a tuning target (the paraphrases were
-written by the evaluator).
+which was not run (the local-memory guard refuses `qwen3:8b` on this laptop now). W5's
+held-out runs (section 14) used the full system, so they do not separate the components
+either. Retrieval's hybrid fusion ranked below dense alone on these queries: a finding to test
+on independent queries, not a tuning target (the paraphrases were written by the evaluator).
+
+## 14. The held-out SREGym evaluation (M6 W5)
+
+M5's SREGym runs were one development problem (section 9). W5 ran RECAP, frozen, on SREGym
+problems it was never run on, with a real model (`qwen3:8b` on the owner's VM) and a person at
+the terminal for approvals. The protocol, the session and the results in full are in
+[w5-protocol.md](w5-protocol.md#results); the decision is
+[ADR 0036](decisions/0036-a-blind-frozen-held-out-evaluation.md).
+
+- **The freeze.** One SHA-256 over every tracked file under the frozen roots (RECAP's code,
+  configs, prompts, runbooks, scenarios, the SREGym integration, the approval path, the run and
+  batch scripts) and one over the installed packages are recorded in the manifest
+  ([evals/frozen/w5-heldout-sregym.yaml](../evals/frozen/w5-heldout-sregym.yaml)), and
+  `scripts/w5_freeze.py check` compared them before every scored run. The model was pinned to
+  one weights file and the prompts to prompts-v4.7; memory started empty and no held-out run
+  wrote to it. Every record carries code `042e0db212d1` and configuration `34fab689410b24cf`.
+- **Blind scenario files.** The five problems were chosen from SREGym 1.1's problem names
+  alone, by a rule committed first (the hotel-reservation app, never used by RECAP, a fault in
+  what RECAP may write, a symptom RECAP can measure). During the runs their scenario files held
+  no answer (`family: unlabelled`, `expected: {}`). The answers were written afterwards from
+  SREGym's own definitions, for the three attempted problems only, and the batch was built
+  again with them; built before, it put the same runs in `insufficient_evidence` (2) and
+  `cancelled` (1).
+- **The outcomes**, one run per problem:
+
+| Scenario | SREGym problem | RECAP's outcome | SREGym's grader |
+|---|---|---|---|
+| `sregym-w5-1` | `duplicate_pvc_mounts_hotel_reservation` | `wrong_mechanism`: resource pressure claimed on frontend, the right service (52 min) | fail |
+| `sregym-w5-2` | `liveness_probe_too_aggressive_hotel_reservation` | `missed_crucial_tool`: the fault is on `aux-service`, outside the profile's allowlist, so no tool could observe it (35 min) | fail |
+| `sregym-w5-3` | `init_container_dependency_hang_hotel_reservation` | `cancelled` by the owner in its second round (28 min) | fail |
+| `sregym-w5-4`, `sregym-w5-5` | `readiness_probe_misconfiguration_hotel_reservation`, `sidecar_port_conflict_hotel_reservation` | not attempted: their files stay blind and their definitions unread | |
+
+  The evaluation stopped after three. CPU-only inference took 103 to 616 s per request (median
+  259 s over 32 requests); a specialist ran out of time in problem 1, and a request did not
+  answer within 900 s in problem 2. That is the protocol's stop condition (the same
+  infrastructure failure twice), and the owner then ended the evaluation.
+- **The action-set finding.** None of the three faults was within RECAP's two remediations:
+  each changes a Deployment's spec but not its image, so a rollback has no earlier image to
+  restore and a restart re-creates the same pods. Choosing by name alone could not tell. The
+  runs therefore measure diagnosis and safety, not repair: none proposed a fix, so no approval
+  was asked and nothing was written, and the verifier refused every unsupported claim.
+- **The batch.** [`2026-11-09-w5-heldout-sregym-qwen3-8b`](../evals/reports/batches/2026-11-09-w5-heldout-sregym-qwen3-8b/README.md):
+  mode `real_kubernetes`, target `sregym`, N = 3. SREGym's verdicts are in its records'
+  `benchmark_verdict` (its README's tables do not show them: section 7), and the grader's own
+  output is in the session record, [evals/frozen/w5-evidence/](../evals/frozen/w5-evidence/README.md).
+  The three runs are published exports that Mission Control opens read-only.
+
+What it cannot show: three runs are not a rate; with a person in the loop for approvals it is
+not comparable with SREGym's leaderboard; and since no attempted fault could be repaired by a
+rollback or a restart, it says nothing about repairing unseen faults.
+
+## 15. Backend measurements are not an AI evaluation (M6 W6)
+
+[performance-and-reliability.md](performance-and-reliability.md) reports M6 W6's measurements
+of RECAP's backend: a load test of the Docker Compose stack (Redis, the API, two workers,
+Prometheus) at 4, 16 and 40 incidents at once, the failure cases that tests inject (an API
+restart, a worker killed, Redis unavailable, a tool server failing, a cancellation during a
+write), and the attacks the security tests make. **It is not an evaluation of RECAP's AI.**
+Every incident in the load test is the same simulated scenario, decided by the scripted
+baseline with no model, so its numbers (throughput, queue waits, 429s, latency) describe the
+queue, the API and the workers on one laptop, never diagnosis or repair. None of it is a
+batch, and none of it is counted in section 8.
 

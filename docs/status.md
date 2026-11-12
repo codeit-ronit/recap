@@ -6,11 +6,67 @@ milestone of the zero-cost next phase (M0 to M6).
 
 **Cost so far: $0 out of pocket.** Since M2, real model requests have been sent, and every
 one was free: local inference with Ollama on this machine, Groq's Free plan, whose rate-limit
-header showed the free plan's limit on every response, and (M5) the same open-weight model
-self-hosted with Ollama on the owner's AWS VM. That VM, which also ran M5's clusters, is the
-only spending so far: about $5.40 of AWS usage before credits (2026-11-02 to 2026-11-07, as AWS
-showed it on 2026-11-07, before the VM session of the W6 acceptance run), all covered by the
-owner's AWS credits. No paid API was called.
+header showed the free plan's limit on every response, and (M5, M6) the same open-weight model
+self-hosted with Ollama on the owner's AWS VM. That VM, which also ran the real clusters, is the
+only spending so far, and the owner's AWS credits cover all of it. AWS's latest figure is $5.48
+of usage before credits from 2026-11-01 to 2026-11-07, read in M6 W0; 2026-11-07's last VM
+sessions (about $0.85, estimated) were not yet in it. Since then the stopped VM's disk has cost
+about $0.47 a day, and M6's held-out evaluation about $1.10 by RECAP's own cost meter (an
+estimate from the VM's state and AWS's prices, not a bill). No paid API was called.
+
+---
+
+## Component status
+
+What each part of RECAP is, and how far it is proven (moved here from the README in M6 W7).
+
+Status words: **implemented** (works and is tested, against the simulator; rows marked M5 also ran on real Kind clusters), **simulated** (stands in for something real), **adapter only** (an interface or optional path, not proven against the real thing), **not yet built**.
+
+| Component | Status | Where | Notes |
+|---|---|---|---|
+| Incident controller, lifecycle, checkpoints | implemented | [recap/harness/controller.py](../recap/harness/controller.py), [recap/core/lifecycle.py](../recap/core/lifecycle.py) | Checkpoint to SQLite after every transition; illegal moves raise |
+| Agent harness loop | implemented | [recap/harness/loop.py](../recap/harness/loop.py) | Observe → reason → act; provider-agnostic |
+| Budgets | implemented | [recap/harness/budget.py](../recap/harness/budget.py) | Steps, tool calls, estimated tokens, wall clock; calls reserved before sending |
+| MCP server and client | implemented | [recap/tools/mcp_server.py](../recap/tools/mcp_server.py), [mcp_client.py](../recap/tools/mcp_client.py) | Official SDK, stdio, one subprocess per run, ten tools |
+| Safety gateway, policy, exact approvals | implemented | [recap/tools/gateway.py](../recap/tools/gateway.py), [recap/safety/](../recap/safety/) | Rule ids on every decision; single-use, digest-bound approvals; on a real cluster (M5) only the target service's typed name approves, at the console or in the dashboard |
+| Runbook RAG and agent search | implemented | [recap/knowledge/](../recap/knowledge/), `IncidentController._maybe_retrieve_runbook` | BM25 with citations (the default), a lexical reranker, extra retrieval at proposal time only if needed; agents can search the runbooks themselves (`search_runbooks`, budgeted, its text treated as data); 7 synthetic docs, 42 chunks |
+| Episodic memory | implemented | [recap/memory/](../recap/memory/) | Partitions by origin (train, demo, live; evaluation runs read train only; replays write nothing); reuse only when live evidence confirms the same mechanism on the same service ([ADR 0023](decisions/0023-memory-partitions-by-origin-and-evidence-checked-reuse.md)); similar ≠ safe |
+| Context packer | implemented | [recap/context/packer.py](../recap/context/packer.py) | Bounded, ranked packs; the evidence a diagnosis cites and any contradicting evidence are packed first; tokens estimated at ~4 chars/token |
+| Rules router and parallel specialists | implemented | [recap/routing/](../recap/routing/), [configs/agents.yaml](../configs/agents.yaml) | `asyncio.gather`; measured overlap; each specialist sees only its own evidence and acts within its role contract ([ADR 0020](decisions/0020-independent-specialists-with-role-contracts.md)) |
+| Evidence verifier and merger | implemented | [recap/agents/verifier.py](../recap/agents/verifier.py), [merger.py](../recap/agents/merger.py) | Evidence-rule checks, not proof of causation; rules settle the agents' disagreements, never votes; leads point the next round at what is unexplained ([ADR 0021](decisions/0021-evidence-rules-settle-disagreements-never-votes.md)) |
+| Recovery oracle | implemented | [recap/verification/oracle.py](../recap/verification/oracle.py) | Reads `health_check` only; replaceable through `ControllerDeps.oracle_factory`; on a real cluster (M5) it reads with its own identity: rollout, readiness, its own HTTP probe or containers that stayed up |
+| Tracing and redaction | implemented | [recap/telemetry/](../recap/telemetry/) | JSONL, SQLite, live SSE stream; local only. Best-effort secret redaction of trace payloads, tool outputs and run errors (since M5 also Kubernetes ServiceAccount tokens and kubeconfig keys) |
+| Scripted decision provider (default) | implemented | [recap/providers/deterministic.py](../recap/providers/deterministic.py) | Playbooks and heuristics, **not an LLM**; $0 |
+| Local LLM provider (Ollama) | implemented | [recap/providers/ollama_provider.py](../recap/providers/ollama_provider.py), [protocol.py](../recap/providers/protocol.py) | `qwen3:8b`, native tool calls, per-request schemas; the server's own time and compute recorded; real runs on five simulated incidents (M2 to M4), failures included ([docs/status.md](status.md)); since M5 also served on the owner's AWS VM through an SSH tunnel (`ollama-vm`), for the real-cluster runs ([docs/m5-progress.md](m5-progress.md)) |
+| Free hosted LLM provider (Groq Free) | implemented | [recap/providers/openai_compatible.py](../recap/providers/openai_compatible.py), [quota.py](../recap/providers/quota.py) | `gpt-oss-120b`, strict JSON; fail-closed free-tier guard and tripwire; real runs in M2 and M3 |
+| Model recordings and offline replay | implemented | [recap/providers/transport.py](../recap/providers/transport.py), [recordings.py](../recap/providers/recordings.py), [fixtures/recordings/](../fixtures/recordings/) | CI replays two real `qwen3:8b` runs, one of them the owner-approved two-agent run; a manifest pins each file's SHA-256 and a replay is chosen by id, refused if altered or if the target is not simulated ([ADR 0028](decisions/0028-content-addressed-recordings-and-replay-by-manifest-id.md)); a replay stops where its recording stopped ([ADR 0026](decisions/0026-a-replay-stops-where-its-recording-stopped.md)) |
+| Evaluation runner and records | implemented | [evals/runner.py](../evals/runner.py), [evals/records.py](../evals/records.py), [evals/categorize.py](../evals/categorize.py) | Scripted baselines, ablations and red team; one `EvalRecord` per run with a named failure category; batches of one mode (scripted, replay, real model, real Kubernetes), never blended ([ADR 0029](decisions/0029-one-evaluation-record-per-run-and-modes-that-never-share-a-number.md)); tiny N |
+| API | implemented | [apps/api/](../apps/api/) | FastAPI; typed read-only views built from stored records only ([ADR 0027](decisions/0027-a-typed-read-only-api-over-the-run-records.md)); a per-run provider only from the owner's allowlist; no endpoint executes an action directly; since M5 `POST /environment/check` (a live target's preflight; nothing changes) and live approvals that need the service's exact name |
+| Dashboard (Mission Control) | implemented | [apps/dashboard/](../apps/dashboard/) | React + TypeScript (Vite), eleven screens on the typed API (M6 added the Guided Demo and Published Runs); types generated from the API's models; one-click paced replay of the golden run with a human approval; since M5 the active target with a reachability check, the typed-name approval on a live target, and the two clusters told apart in Evaluations |
+| Target system and its faults | simulated (the default) | [recap/environments/simulated/](../recap/environments/simulated/) | Seeded, deterministic shop; state in a per-run SQLite file. Real targets since M5: the Kubernetes rows below |
+| The "human" in evals and auto runs | simulated | [recap/safety/approvals.py](../recap/safety/approvals.py) (`AutoApprovalChannel`) | Refuses to run outside a simulated environment |
+| Compromised red-team planner | simulated | [recap/safety/redteam.py](../recap/safety/redteam.py) | Obeys injected instructions on purpose |
+| Kubernetes adapter and the Kind demo target | implemented (M5) | [recap/environments/kubernetes/](../recap/environments/kubernetes/), [infra/kind/](../infra/kind/README.md), [configs/targets/kind-demo/](../configs/targets/kind-demo/) | Typed `kubectl` operations, one least-privilege identity per role, a pinned cluster, one write path (dry run, write, read-back, audit); offline tests over a fake cluster; six live acceptance tests (W3, on the owner's Mac) and seven real-model runs on a real Kind cluster (on the AWS VM), 3 of them verified recoveries ([ADR 0032](decisions/0032-a-real-kubernetes-target-behind-the-same-interface.md)) |
+| SREGym adapter | implemented (M5) | [integrations/sregym/adapter.py](../integrations/sregym/adapter.py), [infra/sregym/](../infra/sregym/README.md) | The Kubernetes adapter in external-harness mode ([ADR 0031](decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md)); five development runs on one SREGym problem, not held out, with approvals by the owner: 1 verified recovery that SREGym's own grader passed. In M6 W5 a frozen, blind evaluation on held-out problems: 3 of 5 run, none solved, no benchmark score ([w5-protocol.md](w5-protocol.md#results)) |
+| The owner's VM and the self-hosted model | implemented (M5) | [infra/aws/ec2.sh](../infra/aws/ec2.sh), `ollama-vm` in [configs/providers.yaml](../configs/providers.yaml) | One AWS EC2 VM (m6a.2xlarge, CPU only) runs the clusters and `qwen3:8b`; RECAP stays on the Mac and reaches them through an SSH tunnel; an idle guard stops the VM after 45 unused minutes |
+| Anthropic Claude provider | adapter only | [recap/providers/anthropic_provider.py](../recap/providers/anthropic_provider.py) | **Paid; disabled** for this $0 project (needs `RECAP_ALLOW_PAID_LLM=1`); tested only with a fake client |
+| Hybrid retrieval (BM25 + embeddings) | implemented, opt-in | [recap/knowledge/ollama_embedder.py](../recap/knowledge/ollama_embedder.py), [vectors.py](../recap/knowledge/vectors.py) | `nomic-embed-text` on the local Ollama, stored runbook vectors, rank fusion; BM25 stays the default because hybrid found the right runbook less often on alert queries (7 vs 9 of 15) ([ADR 0022](decisions/0022-hybrid-retrieval-with-a-local-embedder-and-agent-search.md)) |
+| OpenTelemetry console bridge | adapter only | [recap/telemetry/otel.py](../recap/telemetry/otel.py) | Optional `otel` extra; console spans, no collector |
+| `LearnedRouter` | adapter only | [recap/routing/router.py](../recap/routing/router.py) | Interface stub; raises `NotImplementedError` |
+| Type checking and secret scan | implemented | `[tool.mypy]` in [pyproject.toml](../pyproject.toml), [scripts/secret_scan.py](../scripts/secret_scan.py) | mypy on its configured scope: the core interfaces, the M4 modules, M5's Kubernetes adapter and M6's workers and metrics (59 files); every tracked file and every blob in the git history scanned for keys; both in CI |
+| Model training or fine-tuning | not yet built | `TrainingPipeline` in [recap/core/interfaces.py](../recap/core/interfaces.py) | Explicit not-implemented placeholder |
+| Learned routing policy | not yet built | — | Planned contextual bandit |
+| Neural reranker | not yet built | `Reranker` interface in [recap/core/interfaces.py](../recap/core/interfaces.py) | V1 uses a lexical reranker |
+| Per-person approvals | not yet built | — | Since M1 approvals come from one authenticated operator token, not individual people; on a real cluster (M5) an approval proves a terminal or a token holder and a timing, not which person decided |
+| Durable workers (Redis job queue) | implemented, opt-in (M6) | [recap/workers/](../recap/workers/), [apps/worker/](../apps/worker/__main__.py) | `RECAP_EXECUTION_BACKEND=redis`: idempotent, bounded submission, atomic claims, heartbeats, cancellation, graceful shutdown; a dead worker's job is settled from the run's persisted evidence, and only a run that provably sent no write runs again (as a new run, with a fresh approval); tested with real worker processes killed at seven points (against an in-repo fake Redis), and against a real Redis 7.4 and in Docker Compose ([ADR 0034](decisions/0034-durable-workers-redis-coordinates-the-run-records-decide.md)) |
+| Docker / Compose packaging | implemented, verified locally (M6) | [infra/compose/](../infra/compose/README.md) | API, Mission Control, Redis, workers, optional Prometheus; localhost-only, non-root, read-only containers; built and run with real containers on Apple silicon (colima, linux/arm64): 34 end-to-end checks and the browser smoke test passed; load-tested with two workers in W6 ([performance-and-reliability.md](performance-and-reliability.md)); linux/amd64 not verified |
+| Published real-cluster runs | implemented (M6) | [evals/published.py](../evals/published.py), [evals/live/](../evals/live/README.md) | The exported Kind and SREGym runs open offline and read-only in Mission Control, each checked against pinned SHA-256s first ([ADR 0033](decisions/0033-published-real-cluster-runs-read-only-behind-the-same-views.md)) |
+| Guided demo | implemented (M6) | [apps/dashboard/src/view/demo.ts](../apps/dashboard/src/view/demo.ts) | Ten plain-language steps read from a replayed real run's own trace, labelled as a replay, stopping for a person's approval |
+| Prometheus metrics | implemented, opt-in (M6) | [apps/api/metrics.py](../apps/api/metrics.py), [apps/worker/metrics.py](../apps/worker/metrics.py) | `RECAP_METRICS=1`: the API's and each worker's counts and times, bounded labels only, scraped by Compose's Prometheus ([performance-and-reliability.md](performance-and-reliability.md#metrics)) |
+| Load test | implemented (M6) | [scripts/api_load_test.py](../scripts/api_load_test.py) | In process, or against a running deployment over HTTP at several loads (queue waits, 429s, per-route latency, container peaks) |
+| Crash-resume of in-flight runs | not yet built | [recap/harness/store.py](../recap/harness/store.py) | An interrupted run is not resumed; with the Redis backend (M6) it is closed from its persisted evidence and, when no write can have landed, run again as a new run |
+
+Other known limits: pattern-based injection detection is not production-grade (the protection is the gateway); one MCP subprocess per run adds about 0.4–0.5 s; SQLite files are trusted local state. On SREGym's cluster RBAC alone limits RECAP's writer (no admission policy there) and clocks go unchecked ([m5-report.md](m5-report.md#10-known-failures-and-limitations)).
 
 ---
 
@@ -1197,17 +1253,274 @@ adds:
 
 - A held-out set of SREGym problems, split by failure mechanism and committed before the first
   scored run ([benchmark-plan.md](benchmark-plan.md)), with RECAP frozen while they run.
+  (M6 W5 ran a held-out evaluation, though not this split: five problems chosen from their
+  names alone by a rule committed before the first scored run, with RECAP frozen and checked
+  before each run. It stopped after 3 of the 5, none solved; see M6 below.)
 - SREGym's writer is limited by RBAC only: unlike on the Kind demo, no admission policy checks
   the shape of its patches.
 - Clocks on SREGym's target go unchecked: without Prometheus there is no clock to compare
   with, so a skew between the Mac and the VM would go unseen.
 - Published runs cannot be opened in Mission Control from a fresh checkout: the API reads runs
   from its data folder, and the exports in `evals/live/` are files to read (an export loader is
-  future work).
+  future work). (Done in M6 W2: a fresh checkout opens the allowlisted real-cluster exports,
+  read-only, on the Published Runs page; see M6 below.)
 - Identity: the console proves a terminal and a timing, the dashboard a token holder and a
   timing; neither proves which person decided.
 - A small model on a CPU: `qwen3:8b` picked the wrong mechanism in two SREGym runs, and a
   request takes minutes. A GPU, or a larger hosted open-weight model on a free plan, would
   show how much the model itself limits the results.
 - Backend work tracked for after M5: Redis-backed incident workers, Docker Compose packaging
-  and larger load tests.
+  and larger load tests. (Done in M6: W3 built the Redis workers and the Compose stack and ran
+  them in real containers; W6 load-tested the stack with two workers. See M6 below.)
+
+---
+
+## M6: final productization, evaluation and backend reliability (2026-11-08 to 2026-11-12, W0 to W6; W7 and release 0.7.0 in progress)
+
+M6 makes RECAP easier to show and to check, measures what each of its parts contributes, runs a
+frozen held-out evaluation on SREGym, and hardens the backend. The log, workstream by
+workstream, is [m6-progress.md](m6-progress.md); the held-out evaluation is
+[w5-protocol.md](w5-protocol.md#results), and the backend measurements are
+[performance-and-reliability.md](performance-and-reliability.md). It ran on the owner's Mac,
+with Docker in a local colima VM for W3 and W6; only W5 used the owner's AWS VM and a language
+model.
+**Nothing here ran in production**, and the simulator stays the default target. The one
+real-model fix that ran in M6, a development pilot's rollback in W5 (not counted), was approved
+at the terminal; the three held-out runs proposed none. Scripted, replayed and real-model
+results are reported apart, as counts.
+
+### W0: baseline, evidence and cost (2026-11-08)
+
+- **Baseline:** `v0.6.0` = `7500f2a`: `python -m pytest` 2264 passed, 7 skipped; the dashboard's
+  627 tests. CI on the tag's push failed one test, which waited 90 s for a replayed run; it
+  passed in 15 local repeats. Its helper now stops at an error, reports the run's state and
+  waits 180 s. That is a diagnostic change, not a proven fix: nothing from M6 is pushed yet, so
+  no CI run has exercised it.
+- **Evidence and cost:** M5's real-cluster evidence is in git, and the owner's run stores
+  outside it were backed up. A read-only AWS audit found the VM stopped and its 150 GB disk
+  kept (about $0.47 a day); Cost Explorer showed $5.48 before credits from 2026-11-01 to
+  2026-11-07. The VM was kept for W5 rather than rebuilt.
+
+### W1: Mission Control and the guided demo (2026-11-08)
+
+- **Built (the dashboard only):** an Overview that says in one sentence what RECAP does, with
+  every earlier card under Technical details; navigation in three groups (shared links still
+  work); what each rule code checks and what its refusal means; and a **Guided Demo**
+  (`#/demo`). One Start button replays the pinned golden recording through the same API,
+  safety gateway and approval dialog as the Incident Lab, in ten steps read from the run's own
+  trace, labelled "Recorded real-model execution — replayed locally": no model is called and
+  nothing real changes.
+- **Measured:** `npm test` 669 passed (42 new). The browser smoke test passed 97 of 97 at 1440
+  and 390 px, with the guided demo approved (RESOLVED) and, after a restart, rejected
+  (BLOCKED). At the Guided pace the replay reached its approval in 105 s. Not measured: colour
+  contrast, and usability, which needs a person.
+
+### W2: published real-cluster runs, offline and read-only (2026-11-08)
+
+- **Built:** an allowlist ([evals/live/MANIFEST.json](../evals/live/MANIFEST.json)) that pins
+  every file's SHA-256 and size, and a loader ([evals/published.py](../evals/published.py)) that
+  shows a run only when its files match their pins, validate, agree with each other and hold
+  nothing shaped like a credential; a run that fails is refused whole. A fresh checkout, with no
+  AWS, cluster or model, opens the real-cluster runs on a **Published Runs** page and in every
+  run view, marked historical and read-only. Nothing can act on them, and SREGym's grader
+  verdict stays next to RECAP's oracle, never merged
+  ([ADR 0033](decisions/0033-published-real-cluster-runs-read-only-behind-the-same-views.md)).
+- **Measured:** 4 runs published (the three Kind runs and M5's SREGym run; W5 added three, 7 in
+  all); 32 new tests (altered, missing and linked files, path traversal, credentials, read-only
+  enforcement); the full suite 2297 passed, 7 skipped, 0 failed; the dashboard's 689 tests; the
+  browser smoke test on an empty data folder 77 of 77.
+
+### W3: durable workers and Docker Compose (2026-11-08)
+
+- **Built:** an optional Redis backend (`RECAP_EXECUTION_BACKEND=redis`): the API queues an
+  incident, and worker processes run it through the unchanged harness. The default stays
+  in-process, with no Redis or Docker. Submission is idempotent and bounded (a full queue
+  answers 429). When a worker dies, another settles its job from the run's own records, never
+  from Redis: a run that provably sent no write runs again with a fresh approval, and one whose
+  fix may have reached the target is never retried and ends `needs_reconciliation` for a
+  person. Docker Compose runs the API, Mission Control, Redis, the workers and an optional
+  Prometheus ([infra/compose/](../infra/compose/README.md),
+  [ADR 0034](decisions/0034-durable-workers-redis-coordinates-the-run-records-decide.md)).
+- **Measured:** seven crash windows, each tested by killing a real worker process with SIGKILL
+  at that point while a second one recovers: a write that may have reached the target was
+  never sent again, and every interrupted run's trace stayed gapless. Then with real containers
+  (colima, linux/arm64): a checklist over HTTP passed 34 of 34 (queued runs, exact approvals, a
+  worker restarted or killed while a run waited for a person, Redis restarted, the operator
+  token in none of 117 responses); the real-Redis tests 7 passed; the browser smoke test
+  against the containers 119 passed, 0 failed; the full suite 2376 passed, 7 skipped, 0 failed.
+- **Found and fixed with the real stack:** the API crashed on start in a read-only container
+  (the usage ledger's default path); `RunStore` shared one SQLite connection across threads
+  without a lock, an intermittent HTTP 500 that predates W3; the Guided Demo called a queued
+  replay "not a replay"; two image builds collided. A timing test failed in most runs because
+  each state change was stamped twice; it is stamped once now (2 of 20 repeats passed before,
+  30 of 30 after).
+- **Limits:** delivery is at least once, never exactly once; linux/amd64 is not verified; a
+  container's runs record `code_version: "unknown"`.
+
+### W4: what each component contributes (scripted policy, simulator; 2026-11-08)
+
+- **Built:** one-switch comparisons ([evals/compare.py](../evals/compare.py)), refused before
+  any run unless the two configurations differ in exactly the declared switch, and measured
+  pair by pair; component evaluations, each part on its own dataset
+  ([evals/components.py](../evals/components.py)); records that name what could explain a
+  difference (seed, versions, limits, routing rules, evidence per agent, context dropped,
+  unsafe actions); stored query vectors, so hybrid retrieval is measured with no model server
+  ([ADR 0035](decisions/0035-one-switch-comparisons-separate-component-datasets-nothing-pooled.md)).
+  One RECAP bug was fixed: an explicit empty memory read list fell back to the defaults.
+- **Measured** with the scripted policy, so the results describe RECAP's code paths, not a
+  language model's choices. Batch
+  [`20261108-w4-scripted`](../evals/reports/batches/20261108-w4-scripted/README.md), counts out
+  of 8 paired runs (6 development scenarios, and 2 held out from W4's choices that earlier
+  milestones developed RECAP against):
+
+| Comparison | Recovered, baseline → variant | What changed |
+|---|---|---|
+| single → parallel | 8 → 8 | −2.9 tool calls, −3,887 est. tokens per run |
+| single → adaptive | 8 → 8 | −2.9 tool calls per run (19 → 11 or 12 on the three incidents routed parallel from the first round) |
+| parallel → adaptive | 8 → 8 | −1.1 decisions, −574 est. tokens per run |
+| no RAG → RAG | 4 → 8 | the three development bad releases and the held-out forged-signals release recover only with runbooks |
+| BM25 → hybrid | 8 → 8 | −219 est. tokens per run |
+| no memory → memory | 8 → 8 | +1,521 est. tokens per run; no outcome changed |
+| tool budget 30 → 15 | 8 → 7 | the held-out forged-signals release stops at 15 tool calls |
+| context pack 3000 → 1500 | 8 → 8 | 23 context items dropped in 4 runs; −337 est. tokens |
+| safety gateway off → on | 0 → 0 of 1 (red team) | the unsafe write: executed → blocked |
+
+- With seeds 1, 2 and 3 instead of each scenario's own
+  ([`20261108-w4-scripted-seeds`](../evals/reports/batches/20261108-w4-scripted-seeds/README.md),
+  222 runs), no outcome changed in any of the 74 cases.
+- Components ([report](../evals/reports/components/20261108-w4-components/README.md)): no ranker
+  puts the mechanism's runbook first for a raw alert (0 of 17; in the top 4: BM25 9, dense 11,
+  hybrid 7); on 12 evaluator-written paraphrases dense ranks best (MRR 0.69; hybrid 0.60, BM25
+  0.54); the poisoned runbook reaches BM25's top 4 for 13 of 17 alerts but never displaces a
+  genuine remediation. Memory: 79 of 79 verdicts right, no unsafe reuse. Routing: parallel on
+  4 of 4 incidents whose cause sits behind the alert, 0 of 4 others. Safety: no false block.
+- No change to RECAP's decisions was justified: every development scenario already recovers
+  with the full system. The real-model pilot
+  ([evals/plans/w4-pilot.yaml](../evals/plans/w4-pilot.yaml)) was planned, not run: RECAP's
+  local-memory guard needs about 7.0 GiB free and the laptop had about 5.6 GB. Model requests:
+  27 to the local embedder, none to a language model.
+- **Tests:** the full suite 2443 passed, 14 skipped, 0 failed; the dashboard's 709 tests; the
+  browser smoke test 133 passed, 0 failed.
+
+### W5: the held-out SREGym evaluation (a real model on a real cluster; 2026-11-09)
+
+- **Built (the freeze):** five SREGym problems RECAP was never run on, chosen from the
+  registry's problem names alone (no definition, injected change or solution opened) by a rule
+  written down first: the hotel-reservation app, a fault in what RECAP may write, a symptom
+  RECAP can measure. Exactly five of SREGym 1.1's 30 hotel problems met it. Their scenario files
+  were blind (`family: unlabelled`, `expected: {}`) until the runs were over. The model is
+  pinned to M5's weights; [scripts/w5_freeze.py](../scripts/w5_freeze.py) checks one hash over
+  every tracked file under the frozen roots (everything that decides RECAP's behaviour) and one
+  over the installed packages before every scored run; a cost meter
+  ([scripts/aws_cost_meter.py](../scripts/aws_cost_meter.py)) starts no new step past 70% of a
+  $5 cap ([ADR 0036](decisions/0036-a-blind-frozen-held-out-evaluation.md),
+  [the manifest](../evals/frozen/w5-heldout-sregym.yaml)).
+- **Measured:** `qwen3:8b` on the owner's VM, prompts-v4.7, the owner at the terminal. A
+  development pilot (`misconfig_app_hotel_res`, not counted) resolved with a rollback approved
+  at the terminal, and SREGym's grader passed it. Then the held-out problems, in order:
+
+| Scenario | SREGym problem | RECAP | Category (with the answers) | SREGym's grader | Requests | Tokens in / out | Wall clock |
+|---|---|---|---|---|---|---|---|
+| `sregym-w5-1` | `duplicate_pvc_mounts_hotel_reservation` | `run-7bc5159b6d` FAILED: no supported root cause after two rounds | `wrong_mechanism`: resource pressure claimed on frontend, the right service | fail | 13 | 57,253 / 1,318 | 52 min |
+| `sregym-w5-2` | `liveness_probe_too_aggressive_hotel_reservation` | `run-db560f6568` FAILED: every hypothesis contradicted | `missed_crucial_tool`: the fault is on `aux-service`, outside the allowlist | fail | 10 | 45,255 / 759 | 35 min |
+| `sregym-w5-3` | `init_container_dependency_hang_hotel_reservation` | `run-62f9029f00` cancelled by the owner (Ctrl-C) in its second round | `cancelled` | fail | 9 | 33,593 / 1,014 | 28 min |
+| `sregym-w5-4`, `sregym-w5-5` | `readiness_probe_misconfiguration_hotel_reservation`, `sidecar_port_conflict_hotel_reservation` | not attempted | | | | | |
+
+- **None solved, and why.** None of the three faults could have been fixed by RECAP: each
+  changes a Deployment's spec but not its image, so a rollback finds no earlier image to
+  restore and a restart re-creates the same pods. Problem 2's fault also sits on a workload
+  outside the profile's allowlist, which RECAP cannot observe. Choosing by name alone could not
+  tell, a risk ADR 0036 named. These runs measure diagnosis and safety, not repair. New roadmap
+  item: a typed, approved change of one Deployment field.
+- **Why it stopped after three.** CPU-only inference took 103 to 616 s per request (median
+  259 s over the 32 requests), more when two specialists shared the server: a specialist ran
+  out of time in problem 1, and a request did not answer within 900 s in problem 2. That met
+  the stop condition "the model fails twice for the same infrastructure reason", and the owner
+  ended the evaluation. Problems 4 and 5 were never deployed, and their files stay blind.
+- **Safety and integrity.** No run proposed a fix, so no approval was asked and nothing was
+  written to the cluster; the verifier refused every unsupported claim. Every record carries
+  code `042e0db212d1`, configuration `34fab689410b24cf`, prompts-v4.7 and the pinned weights;
+  the freeze check passed before each problem; no memory episode was written.
+- **Published:** the batch
+  [`2026-11-09-w5-heldout-sregym-qwen3-8b`](../evals/reports/batches/2026-11-09-w5-heldout-sregym-qwen3-8b/README.md),
+  the three runs as published exports (Mission Control opens them read-only), and the session
+  record ([evals/frozen/w5-evidence/](../evals/frozen/w5-evidence/README.md)): the script as
+  run, the timeline, the gates, SREGym's grader outputs and the cost meter's readings.
+- **Cost:** about $1.10 by the cost meter (4.24 running hours, the setup and the pilot
+  included) against the $5 cap. The VM is stopped and SREGym's cluster deleted; the disk is
+  kept.
+- **Tests:** before the cloud, 805 focused contract and safety tests passed and the full suite
+  2465 passed, 14 skipped, 0 failed; after the runs, the full suite's 2494 tests, 0 failed.
+
+### W6: operational hardening (the backend, not the AI; 2026-11-12)
+
+- **Built:** four new metrics (model request duration, approval waits, busy workers, queue
+  wait); each worker serves its own runs' metrics, and Compose's Prometheus finds every worker
+  replica; every label value comes from a closed set (a test checks each exposition). The load
+  test ([scripts/api_load_test.py](../scripts/api_load_test.py)) now drives a running API over
+  HTTP.
+- **Measured** on the owner's laptop, with the simulator and the scripted baseline (no model):
+  the Compose stack (Redis, the API, two workers of two incidents each, queue capacity 20,
+  Prometheus) at 4, 16 and 40 incidents at once, three runs
+  ([report](../evals/reports/load/2026-11-12-compose-two-workers/README.md)). About 1.2 to 1.3
+  incidents a second at every load (the four worker slots' turnover); at 40, 24 accepted and 16
+  refused with 429 in all three runs; no 5xx at any load; every accepted incident RESOLVED with
+  its own approval. After run 1, Prometheus counted what the load test counted (44 incidents
+  resolved, 44 jobs, 16 answers in the 4xx class). These describe RECAP's backend on one
+  machine, not a capacity figure: a real model's request takes minutes on a CPU (W5).
+- **Two defects found and fixed.** (1) Every submission re-read all 17 scenario files with
+  PyYAML's pure-Python parser before its first `await` (57 ms in the container), so a burst of
+  40 answered after 2.3 s and stalled reads; the C safe loader cut that to 14 ms a submission
+  (0.56 s for the burst). (2) A second cancellation while a write was in flight cancelled the
+  write's own call, so its outcome was lost and the record said the fix "was not sent"; every
+  wait is shielded now (`recap/tools/gateway.py`, `tests/e2e/test_w6_faults.py`).
+- **Faults and attacks:** the 12 failure cases and 16 attacks the specification lists each map
+  to tests that inject them (Kubernetes failures on the fake cluster only). One gap was closed
+  with a test: reads stay open on loopback, and every write needs the operator token. Not
+  covered: a real cluster that stops answering, real Redis dropping connections mid-run (it
+  passed in W3), a partial network partition, and load with a model.
+- **Tests:** the full suite 2485 passed, 15 skipped, 0 failed. No AWS, no model, $0.
+
+### W7: final productization (in progress)
+
+W7, the final pass toward release 0.7.0, is in progress; nothing from it is recorded here yet.
+
+### What genuinely ran in M6
+
+- **Real LLM inference, self-hosted, in W5 only:** `qwen3:8b` with Ollama on the VM's CPU
+  (provider `ollama-vm`, pinned weights). The three held-out runs' records count 32 model
+  requests (the pilot's are not counted here). None was paid for.
+- **Real Kubernetes, not production, in W5 only:** SREGym 1.1's own Kind cluster on the VM.
+  One real write: the pilot's rollback, approved at the terminal and verified by RECAP's oracle
+  (not counted). The held-out runs wrote nothing.
+- **Everything else** ran on the simulator with no language model called: the scripted policy,
+  or replays of a recorded run (the guided demo). W4 sent 27 requests to the local embedder.
+- **Spending:** about $1.10 of AWS in W5 by the cost meter, plus the stopped VM's disk, all
+  covered by the owner's credits; $0 out of pocket.
+
+### What M6 does not claim
+
+- **No benchmark score.** Three held-out SREGym problems attempted, none solved, with a person
+  at the approval step (never reached): not comparable with SREGym's leaderboard, and three
+  runs are counts, not a rate.
+- **No repair of unseen faults.** The three faults were outside RECAP's two remediations, so W5
+  measured diagnosis and safety only.
+- **Nothing about language models from W4.** Its results come from the scripted policy on
+  simulated incidents, and its two held-out scenarios are held out from W4's choices only.
+- **No capacity figure.** W6 measured one laptop, one Docker VM and scripted incidents of about
+  3 s; a real model's latency would dominate a real run.
+- **Not exactly once.** A queued job can be attempted more than once; only a run that provably
+  sent nothing runs again.
+
+### Still open after M6 (as of W6)
+
+- RECAP can only roll back or restart: a typed, approved change of one Deployment field is the
+  roadmap item W5 found. Held-out problems 4 and 5 stay blind and unrun.
+- A small model on a CPU limits every real run (W5: a median of 259 s per request). A GPU, or a
+  larger hosted open-weight model on a free plan, would show how much the model itself limits
+  the results.
+- The W4 real-model pilot, and enough real-model runs for rates.
+- Still open from M5: SREGym's writer is limited by RBAC only, SREGym's clocks go unchecked, and
+  an approval proves a terminal or a token holder and a timing, not which person decided.
+- What W6 did not cover (above), and images for linux/amd64.
+- W0's CI change waits for a CI run.

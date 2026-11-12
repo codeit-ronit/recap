@@ -14,8 +14,9 @@ import type { RealClusterRow } from "../view/published";
 import { repoUrl } from "../view/system";
 
 /**
- * Published Runs: M5's real AI-driven incident recoveries on Kubernetes (Kind and SREGym),
- * published with the repository and readable on a fresh checkout, offline (GET /published).
+ * Published Runs: the real AI-driven incident runs on Kubernetes (Kind and SREGym) published with
+ * the repository, M5's and M6 W5's held-out SREGym runs, readable on a fresh checkout, offline
+ * (GET /published).
  * The server shows a run only after checking its files against evals/live/MANIFEST.json
  * (evals/published.py); each one opens in Trace Explorer, Evidence & Decisions and Safety &
  * Approvals, marked historical and read-only. Runs whose trace was not published (the
@@ -74,7 +75,7 @@ export function PublishedRunCard({ run }: { run: dto.RunSummary }) {
         </div>
         <div>
           <dt>Approval</dt>
-          <dd>{provenance.approvals.length ? provenance.approvals.join("; ") : "Not recorded"}</dd>
+          <dd>{provenance.approvals.length ? provenance.approvals.join("; ") : "None (no approval was decided in this run)"}</dd>
         </div>
         <div>
           <dt>Run</dt>
@@ -202,15 +203,15 @@ export function PublishedRunsView({ published }: { published: Loaded<dto.Publish
     <div className="pub">
       <PageHeader
         title="Published Runs"
-        description="Real AI-driven incident recoveries on Kubernetes, recorded in M5 and published with this repository. Open any of them here, offline: no cluster, no model and no cloud account are needed."
+        description="Real AI-driven incident runs on Kubernetes, recorded in M5 and M6 and published with this repository: recoveries, and runs that ended without one. Open any of them here, offline: no cluster, no model and no cloud account are needed."
       />
       <div className="historical-banner" role="note" aria-label="What a published run is">
         <Icon name="package" size={20} />
         <div className="historical-body">
           <div className="historical-label">{HISTORICAL_LABEL}</div>
           <p className="historical-text">
-            Each run here really happened: a self-hosted model investigated a real cluster through RECAP's read-only tools, a person approved the exact fix,
-            and RECAP's independent oracle checked the recovery. What you see is that run's record. Nothing runs now: no model is called, no cluster is
+            Each run here really happened: a self-hosted model investigated a real cluster through RECAP's read-only tools; when it proposed a fix, a person
+            approved or rejected that exact action, and RECAP's independent oracle checked the result. What you see is that run's record. Nothing runs now: no model is called, no cluster is
             touched, and its approvals are records of a past decision, never permissions.
           </p>
         </div>

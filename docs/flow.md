@@ -2,10 +2,12 @@
 
 This page follows one incident from the moment it starts to the moment it is remembered.
 For every step it says **what comes in**, **which code handles it**, **what comes out**, and
-**where that output goes next**. It describes the code as of milestone M5 (M2 brought
+**where that output goes next**. It describes the code as of milestone M6 (M2 brought
 real model providers at $0, M3 two independent specialists, M4 the typed API, the Mission
 Control dashboard and the evaluation records, and section 8 covers what M4 added after a run;
-M5 brought real Kubernetes targets, and section 9 follows one real run on SREGym's cluster).
+M5 brought real Kubernetes targets, and section 9 follows one real run on SREGym's cluster;
+M6 an optional Redis backend, in which worker processes run the same stages, and section 10
+shows where that path differs and where the metrics are counted).
 The decisions can come from the scripted policy (the default), a local model (Ollama), the
 same model on the owner's VM (M5), a free hosted model (Groq Free), or a replay of a recorded
 model run; stage 4b follows one model decision in detail. The numbers in the example
@@ -15,7 +17,8 @@ provider decisions, RESOLVED.
 
 Companion pages: [architecture.md](architecture.md) (the components in depth),
 [threat-model.md](threat-model.md) (who may do what), [status.md](status.md) (measured
-results), and [decisions/](decisions/README.md) (why it is built this way).
+results), [performance-and-reliability.md](performance-and-reliability.md) (the backend
+under load, M6), and [decisions/](decisions/README.md) (why it is built this way).
 
 ---
 
@@ -131,7 +134,8 @@ and streamed live to the dashboard.
 - **Code:** `Runtime.run_incident` ([recap/runtime.py](../recap/runtime.py)) builds the
   per-run `IncidentController` from long-lived dependencies (`ControllerDeps`).
 - **Output:** a run ID (`run-…`). The API returns it at once (202) and runs the incident as
-  a background task (`RunManager` in [apps/api/service.py](../apps/api/service.py)).
+  a background task (`RunManager` in [apps/api/service.py](../apps/api/service.py)). With
+  the Redis backend (M6) it queues the run for a worker instead (section 10).
 - **Next:** stage 1.
 
 ### Stage 1. Reset the target and open the incident (CREATED)
@@ -486,6 +490,7 @@ flowchart LR
 | Kubernetes adapter → cluster (M5) | typed operations from a closed list, each identity only the ones its role grants, to the pinned cluster only | a command string, a shell, model text as an argument, the administrator's credential, any other cluster | `kubectl.py`, `preflight.py` in [recap/environments/kubernetes/](../recap/environments/kubernetes/), the cluster's own RBAC (on the Kind demo also an admission policy) |
 | Environment → oracle → controller | a yes/no verdict and its signals for the run record and trace | the oracle's findings as hints for agents | `controller.py` |
 | Browser / HTTP client → API | reads; state-changing calls with the operator token from a loopback Host and a same-site Origin | anonymous writes, a client-chosen approver identity, foreign hosts (DNS rebinding) and origins | `apps/api/auth.py`, `apps/api/main.py` |
+| Redis → worker (M6, Redis backend) | a job: the scenario id and the fields the request set | anything the API would refuse (safety off, a paid provider, an unknown scenario, a malformed configuration): the worker checks every job again | `admission` in `apps/worker/__main__.py` (the API's `check_run_request` and local-model memory guard) |
 
 ---
 
@@ -510,7 +515,9 @@ flowchart LR
 | Evaluation reports (the scripted protocol) | `evals/reports/<id>/` and `evals/reports/latest/` | `GET /evals/results` | Evaluations |
 | Evaluation batches (one `EvalRecord` per run, one mode per batch) | published: `evals/reports/batches/<id>/`; local: `<data>/evals/batches/` | `GET /evals`, `GET /evals/{batch_id}` | Evaluations |
 | Committed recordings and their SHA-256 | `fixtures/recordings/` and `MANIFEST.json` | `GET /replays` (with an integrity check) | Incident Lab's replay panel |
-| A shareable copy of one run (trace, run record, model recording, README) | `evals/live/<name>/`, written by `scripts/export_run_trace.py RUN_ID evals/live/<name>`; it refuses to write secrets, key shapes, the login name or local paths | not served (committed to git) | not shown; the README is the readable account |
+| A shareable copy of one run (trace, run record, model recording, README) | `evals/live/<name>/`, written by `scripts/export_run_trace.py RUN_ID evals/live/<name>`; it refuses to write secrets, key shapes, the login name or local paths | since M6, served read-only once listed in `evals/live/MANIFEST.json` and checked (`GET /published`, then the run views) | Published Runs, then every run page, marked historical |
+| A job (Redis backend, M6): its status, attempts (each a run), worker and why it ended | Redis, for coordination only (never the incident's outcome) | `GET /jobs/{id}`, `GET /queue`, and `job` in `GET /runs/{id}` | the Incident Lab's notice: queued, interrupted, ran again as another run, needs reconciliation |
+| Operational metrics (off unless `RECAP_METRICS=1`) | the memory of the process that counts them; the queue's counts in Redis | `GET /metrics` on the API; each worker's own port (`RECAP_WORKER_METRICS_PORT`) | not shown (Prometheus reads them) |
 
 ---
 
@@ -565,6 +572,9 @@ Reproduce it:
 | API and dashboard | [apps/api/](../apps/api/) (routes in `main.py`, typed views in `views.py` and `dto.py`), [apps/dashboard/src/](../apps/dashboard/src/) (types generated into `dto.ts` by [scripts/gen_dashboard_types.py](../scripts/gen_dashboard_types.py)) |
 | Recordings manifest and replay by id | [recap/providers/recordings.py](../recap/providers/recordings.py), [fixtures/recordings/MANIFEST.json](../fixtures/recordings/MANIFEST.json), [scripts/recordings_manifest.py](../scripts/recordings_manifest.py) |
 | Evaluation records and failure categories | [evals/records.py](../evals/records.py), [evals/categorize.py](../evals/categorize.py), [scripts/eval_replay.py](../scripts/eval_replay.py), [scripts/live_eval.py](../scripts/live_eval.py) |
+| The Redis queue and workers (M6) | [recap/workers/](../recap/workers/) (`queue.py`, `worker.py`, `reconcile.py`), [apps/worker/__main__.py](../apps/worker/__main__.py) |
+| Metrics | [apps/api/metrics.py](../apps/api/metrics.py), [apps/worker/metrics.py](../apps/worker/metrics.py) (M6) |
+| Published runs (M6) | [evals/published.py](../evals/published.py), [evals/live/MANIFEST.json](../evals/live/MANIFEST.json) |
 
 ---
 
@@ -586,10 +596,16 @@ Nothing below changes a run; it reads what the stages above stored.
 - **Next:** the dashboard renders it; its TypeScript types are generated from the same
   models (`src/dto.ts`), so a renamed field breaks the build, not the screen.
 
+Since M6 the same views also serve a published real-cluster run when this server does not
+hold the id: read from its checked files in `evals/live/` (`evals/published.py`), with status
+`published`, and never written to a store, followed live or acted on
+([ADR 0033](decisions/0033-published-real-cluster-runs-read-only-behind-the-same-views.md)).
+
 **A replay of the golden run.**
 - **Input:** the operator clicks **Replay** in the Incident Lab:
   `POST /incidents/run {provider: "replay", replay_fixture: "qwen3-8b-unfamiliar-parallel",
-  replay_pace: 0.05}`.
+  replay_pace: 0.05}`. Since M6 the Guided Demo's **Start** sends the same request, at the
+  pace chosen there, and tells the run as ten steps read from its trace.
 - **Code:** stage 0's allowlist; `recordings.fixture_path` (SHA-256 check); the replay is
   refused unless the environment is the simulator; `ReplayTransport` answers each request
   from the recording and waits `replay_pace` of the original time (at most 15 s); stages 1 to
@@ -730,3 +746,70 @@ bash infra/aws/ec2.sh hold env RECAP_TARGET=sregym-hotel RECAP_DATA_DIR=$HOME/re
   --provider ollama-vm --approve ask --no-memory    # memory not read, as in this run
 bash infra/aws/ec2.sh ssh 'cd ~/recap && bash infra/sregym/sregym.sh grade misconfig_app_hotel_res'
 ```
+
+---
+
+## 10. With the Redis backend (M6): the same stages in a worker
+
+With `RECAP_EXECUTION_BACKEND=redis` (and `RECAP_REDIS_URL`), stages 1 to 10 run unchanged, in
+a worker process instead of the API
+([ADR 0034](decisions/0034-durable-workers-redis-coordinates-the-run-records-decide.md); the
+parts are in [architecture.md, section 15](architecture.md#15-m6-durable-execution-packaging-published-runs-metrics-and-evaluation)).
+Only these steps differ:
+
+| Step | In-process backend (the default) | Redis backend |
+|---|---|---|
+| Start (stage 0) | The request is checked, then `Runtime.run_incident` starts as a task in the API process: 202, `started`. | The same checks, then a job in Redis: 202, `queued`, with the job's id and queue position. The same `Idempotency-Key` with the same request returns the same run (`duplicate: true`); with another request it is refused (422). A full queue answers 429 with `Retry-After`; if Redis does not answer, 503, and nothing was queued. |
+| Who runs stages 1 to 10 | The API process. | A worker (`python -m apps.worker`) claims the job, checks it again exactly as the API checked the request, and calls the same `Runtime.run_incident` with the external approval channel. On a live target a worker runs one incident at a time. |
+| Following the run | The stored events, then live ones from the API's own stream hub. | The stored trace, read from SQLite as the worker writes it; a reconnect with `Last-Event-ID` resumes right after the last event received. While the run is unfinished, its status comes from its job, for example `queued`, `running`, or `interrupted` when its worker stopped. |
+| The approval (stage 7) | `POST /approvals/{id}` writes the decision to the approval store, and the waiting run wakes. | The same endpoint and the same store: the worker's run re-reads the store every 0.5 s while it waits, so a person still approves through the API, and an API restart while the run waits loses nothing. |
+| Cancel | `POST /runs/{id}/cancel` cancels the run's task; the controller ends it as FAILED ("run cancelled") and expires a pending request. | A queued job leaves the queue (`cancelled`: nothing ran); a running one is cancelled the same way at the worker's next heartbeat. |
+| A process dies | The API's runs stay at their last checkpoint (`external`); a pending request stays listed until it expires, and nothing can act on it. | Another worker settles the job (below). |
+
+**When a worker dies.** A worker refreshes a heartbeat key every 5 s, and the key lives 20 s
+(the defaults). Once it has expired, another worker (each one checks when it starts and at every
+third heartbeat) settles each job the dead one held, under a lock, from four records outside
+Redis: the run's checkpoint, its trace, the approval log and the target's own audit log
+([recap/workers/reconcile.py](../recap/workers/reconcile.py)).
+
+- **Nothing had started:** the same run id runs again.
+- **No write-ahead `mitigation.started`** (investigating, or waiting for a person): nothing was
+  sent. The run is closed as FAILED with an `Interruption`, its pending request expires, its
+  unused approvals are revoked, and the job runs again as a new run, which investigates afresh
+  and asks a person again.
+- **A write-ahead record and no recorded outcome:** only the target's audit log can say the
+  write was not applied (the simulator's can; a real cluster's cannot, so its answer is
+  "unknown"). Not applied, or refused by the target: as above. Applied or unknown, or a run
+  past its write: the run is closed the same way, and the job ends as `needs_reconciliation`,
+  never retried; a person checks the target.
+
+A job interrupted on every attempt fails after `RECAP_JOB_MAX_ATTEMPTS` (3). Seven points,
+from before the claim to the oracle's check, are each tested by killing a real worker process
+with SIGKILL there ([tests/integration/test_worker_crashes.py](../tests/integration/test_worker_crashes.py)). A
+worker stopped with SIGTERM gives its runs a grace period, then cancels them (a write already
+sent is awaited and recorded, stage 8); a worker that cannot refresh its heartbeat in time
+cancels its runs at once (fencing). Either way they are settled the same way.
+
+### Where the metrics are counted
+
+With `RECAP_METRICS=1`, `ApiMetrics` ([apps/api/metrics.py](../apps/api/metrics.py)) is one more
+trace sink of the process that runs the incident. It counts what the stages' events say; it
+never reads a record or changes a run.
+
+| Stage | Trace event | Metric |
+|---|---|---|
+| 0 | every HTTP request (a middleware, in the API only) | `recap_api_requests_total`, `recap_api_request_duration_seconds` |
+| 1; the end of the run | `state.transition` to CREATED, then to a final state | `recap_active_incidents`; `recap_incidents_finished_total`, `recap_incident_duration_seconds` |
+| 4, 6, 8 | `tool.result` of a read, `mitigation.executed` of a write; a `policy.decision` that denies | `recap_tool_calls_total` (ok, error, denied), `recap_tool_call_duration_seconds` |
+| 4b, 6 | `llm.call` | `recap_model_requests_total`, `recap_model_request_duration_seconds`, `recap_model_tokens_total` (as the server reported them) |
+| 6, 8 | a denial of the controller's fix, or a proposal the evidence gate stops; `mitigation.executed` | `recap_actions_total` (blocked; executed or refused) |
+| 7 | `approval.requested`, then `approval.decided` | `recap_approval_wait_seconds`, by decision; `recap_actions_total` (rejected, expired) |
+| 9 | `verification.recovery` | `recap_recovery_verifications_total` |
+
+In process, the API's `GET /metrics` serves all of them. With the Redis backend the run-event
+metrics are counted by the worker that runs the incident and served on its own port
+(`RECAP_WORKER_METRICS_PORT`, [apps/worker/metrics.py](../apps/worker/metrics.py)), so the API's
+stay at 0. The queue counts its jobs in Redis (`recap_jobs_total`), and each worker adds a new
+job's wait at its first claim (`recap_queue_wait_seconds`); the API reads them, with the queue's
+depth and capacity and the workers alive and busy, at each scrape. What these counted under load
+is in [performance-and-reliability.md](performance-and-reliability.md).
