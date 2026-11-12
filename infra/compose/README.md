@@ -77,7 +77,9 @@ the queue and its workers. More workers: `docker compose -f infra/compose/compos
 
 Metrics: set `RECAP_METRICS=1` in `infra/compose/.env`, then
 `docker compose -f infra/compose/compose.yaml --profile metrics up -d` and open
-http://127.0.0.1:9090.
+http://127.0.0.1:9090. Prometheus scrapes the API and every worker replica (each serves its own
+runs' metrics on port 9100 inside Compose's network, never published); what was measured with
+it under load: [docs/performance-and-reliability.md](../../docs/performance-and-reliability.md).
 
 ## Stopping and cleaning up
 

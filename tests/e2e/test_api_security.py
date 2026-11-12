@@ -389,3 +389,28 @@ def test_a_symlinked_token_file_is_refused(tmp_path: Path, monkeypatch: pytest.M
 
     with pytest.raises(RuntimeError, match="cannot be read safely"):
         OperatorAuth.from_environment(tmp_path)
+
+
+def test_reads_are_open_on_loopback_and_every_write_still_needs_the_token(
+    settings: Settings,
+) -> None:
+    """The threat model's stance: on a loopback host name the API's reads need no token, so the
+    dashboard can show runs, their evidence, the pending approvals and the published runs, while
+    every state-changing request without the operator token is refused (M6 W6: the W6 mapping
+    found only /health and /providers asserted readable)."""
+    from tests.unit.test_api_metrics import run_with_approval
+
+    runtime = Runtime(settings)
+    app = create_app(runtime)
+    with TestClient(app, headers=OPERATOR_HEADERS) as operator:
+        run_id = run_with_approval(operator, "bad-deployment")["record"]["run_id"]
+    open_request(runtime)  # a pending approval, as the dashboard lists it
+    with TestClient(app) as anonymous:  # no Authorization header at all
+        reads = ["/runs", f"/runs/{run_id}", f"/runs/{run_id}/timeline", f"/runs/{run_id}/evidence"]
+        for path in [*reads, "/approvals/pending", "/published", "/queue"]:
+            assert anonymous.get(path).status_code == 200, path
+        assert run_id in anonymous.get("/runs").text
+        pending = anonymous.get("/approvals/pending").json()
+        assert [request["proposal_id"] for request in pending] == ["prop-sec-001"]
+        for path, body in WRITE_ENDPOINTS:
+            assert anonymous.post(path, json=body).status_code == 401, path

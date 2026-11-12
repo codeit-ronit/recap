@@ -676,6 +676,46 @@ ran every scored problem at their own terminal. Everything in words:
 - **Commits:** `0395662` (results) and the commit that adds this section (the write-up).
 - **Next:** W6, operational hardening.
 
+## W6: operational hardening (2026-11-12)
+
+The owner asked to finish M6 doing only what is needed: no AWS, no model, no extra reviews. All
+of it ran on the owner's laptop; the report is
+[performance-and-reliability.md](performance-and-reliability.md).
+
+- **Metrics:** new `recap_model_request_duration_seconds`, `recap_approval_wait_seconds`,
+  `recap_workers_busy` and `recap_queue_wait_seconds` (one histogram every worker feeds in Redis
+  at its claims). Each worker now serves its own runs' metrics (`apps/worker/metrics.py`,
+  `RECAP_WORKER_METRICS_PORT`), since with the Redis backend the API runs none; Compose's
+  Prometheus finds every worker replica through DNS. The bounded-label test now also covers the
+  queue's and the new families.
+- **Load test:** `scripts/api_load_test.py --url` drives a running API over HTTP at several loads
+  (queue waits, 429s, per-route latency, `docker stats`, the machine). The Compose stack (Redis,
+  two workers of two incidents each, Prometheus) at 4, 16 and 40 at once, three runs: about 1.2
+  to 1.3 incidents a second (the four worker slots), 16 refused with 429 at 40 (capacity 20), no
+  5xx, every accepted incident RESOLVED; Prometheus counted the same totals.
+- **Found and fixed:** (1) every submission re-read all 17 scenario files with the pure-Python
+  YAML parser (57 ms in the container) before its first `await`, so a burst of 40 answered after
+  2.3 s and stalled reads; PyYAML's C safe loader cut it to 14 ms a submission (0.56 s for 40).
+  (2) A second cancellation while a write was in flight cancelled the write's own call, so its
+  outcome was lost and the record said the fix "was not sent"; every wait is shielded now
+  (`recap/tools/gateway.py`, `tests/e2e/test_w6_faults.py`).
+- **Faults and attacks:** two agents mapped the spec's 12 failure cases and 16 attacks to the tests
+  that inject them; all were already covered, and the matrices are in the report. One gap closed:
+  a test that reads stay open on loopback while every write needs the token.
+- **Not covered:** a real cluster that stops answering (it needs the VM), real Redis dropping
+  connections (`RECAP_TEST_REDIS_URL`; it passed in W3's final verification), a partial network
+  partition ([ADR 0034](decisions/0034-durable-workers-redis-coordinates-the-run-records-decide.md)'s
+  residual risk), load with a model.
+- **Resources:** colima's `recap` VM started for the measurements and stopped after; the
+  measurement stack's volumes deleted. No AWS, no model, $0.
+- **Checks:** focused: metrics, the queue, the workers (with the real worker processes' crash
+  windows), the load test, the gateway, controller paths, runtime faults, scenarios, golden
+  replays, the API contract and security tests; ruff, format and mypy on the changed modules.
+  The full Python suite once: 2485 passed, 15 skipped, 0 failed (the skips need a live Kind
+  cluster, a real Redis or the optional OTel extra); `mypy` on its configured scope and `ruff`
+  over the repository: clean.
+- **Next:** W7, final productization.
+
 ## Workstream status
 
 | Workstream | Status |
@@ -686,5 +726,5 @@ ran every scored problem at their own terminal. Everything in words:
 | W3 durable workers and Docker Compose | done: implemented, then verified with real containers and a real Redis (linux/arm64); the owner's review is pending |
 | W4 AI architecture evaluation | done: measured on the simulator with the scripted policy; the real-model pilot is planned, not run; the owner's review is pending |
 | W5 held-out SREGym evaluation | done: 3 of the 5 frozen problems run (a stop condition, then the owner's decision), none solved; results published |
-| W6 operational hardening | next |
-| W7 final productization | not started |
+| W6 operational hardening | done: metrics, load test, fault and attack coverage, two defects fixed |
+| W7 final productization | next |

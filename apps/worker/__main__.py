@@ -40,6 +40,8 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     # Imported here so --check stays fast (it runs every few seconds in a container).
+    from apps.api.metrics import ApiMetrics
+    from apps.worker.metrics import address_from_environment, serve
     from recap.core.errors import ConfigError
     from recap.runtime import Runtime
     from recap.workers.faults import FaultPlan
@@ -49,6 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = QueueConfig.from_environment()
         faults = FaultPlan.from_environment()
+        metrics_at = address_from_environment()
     except ConfigError as exc:
         print(f"worker: {exc}", file=sys.stderr)
         return 2
@@ -66,7 +69,15 @@ def main(argv: list[str] | None = None) -> int:
         faults=faults,
         admit=admission,
     )
-    asyncio.run(_serve(worker))
+    # Its own runs' metrics (RECAP_METRICS=1 and a port): the API sees none of them.
+    metrics = ApiMetrics.from_environment()
+    server = serve(metrics, *metrics_at) if metrics.enabled and metrics_at else None
+    try:
+        with metrics.watching(worker.runtime):
+            asyncio.run(_serve(worker))
+    finally:
+        if server is not None:
+            server.shutdown()
     return 0
 
 

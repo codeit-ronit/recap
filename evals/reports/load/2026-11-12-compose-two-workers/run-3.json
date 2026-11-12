@@ -1,0 +1,994 @@
+{
+  "ok": true,
+  "what": "HTTP load test against a running API: the SIMULATED environment and the scripted baseline (not a model), one machine's measurements of one setup, not a capacity figure",
+  "server": "http://127.0.0.1:8001",
+  "scenario": "bad-deployment",
+  "provider": "deterministic",
+  "machine": {
+    "platform": "macOS-26.3.1-arm64-arm-64bit",
+    "python": "3.11.15",
+    "cpus": 8,
+    "memory_gib": 16.0,
+    "docker": {
+      "cpus": 4,
+      "memory_gib": 3.8,
+      "server_version": "29.5.2",
+      "architecture": "aarch64",
+      "os": "Ubuntu 24.04.4 LTS"
+    }
+  },
+  "execution": {
+    "backend": "redis",
+    "queue_capacity": 20,
+    "workers": 2
+  },
+  "levels": [
+    {
+      "offered": 4,
+      "ok": true,
+      "accepted": 4,
+      "refused": {},
+      "states": {
+        "RESOLVED": 4
+      },
+      "wall_seconds": 3.181,
+      "throughput_runs_per_second": 1.258,
+      "run_seconds": {
+        "p50": 2.748,
+        "p95": 2.775,
+        "p99": 2.775,
+        "max": 2.775
+      },
+      "queue_wait_seconds": {
+        "p50": 0.006,
+        "p95": 0.015,
+        "p99": 0.015,
+        "max": 0.015
+      },
+      "client_seconds": {
+        "p50": 3.052,
+        "p95": 3.177,
+        "p99": 3.177,
+        "max": 3.177
+      },
+      "requests": {
+        "total": 198,
+        "errors_5xx": 0,
+        "latency_ms": {
+          "p50": 7.242,
+          "p95": 18.47,
+          "p99": 60.997,
+          "max": 61.234
+        },
+        "by_route": {
+          "GET /approvals/pending": {
+            "count": 81,
+            "p50": 4.204,
+            "p95": 10.117,
+            "p99": 15.178,
+            "max": 15.178
+          },
+          "GET /runs/{run_id}": {
+            "count": 109,
+            "p50": 9.115,
+            "p95": 18.47,
+            "p99": 21.428,
+            "max": 24.222
+          },
+          "POST /approvals/{proposal_id}": {
+            "count": 4,
+            "p50": 5.314,
+            "p95": 9.255,
+            "p99": 9.255,
+            "max": 9.255
+          },
+          "POST /incidents/run": {
+            "count": 4,
+            "p50": 59.916,
+            "p95": 61.234,
+            "p99": 61.234,
+            "max": 61.234
+          }
+        }
+      },
+      "containers": {
+        "recap-w6-prometheus-1": {
+          "cpu_percent": 0.0,
+          "memory_mib": 76.7
+        },
+        "recap-w6-api-1": {
+          "cpu_percent": 13.65,
+          "memory_mib": 74.0
+        },
+        "recap-w6-worker-1": {
+          "cpu_percent": 39.36,
+          "memory_mib": 177.9
+        },
+        "recap-w6-worker-2": {
+          "cpu_percent": 32.38,
+          "memory_mib": 177.9
+        },
+        "recap-w6-redis-1": {
+          "cpu_percent": 0.66,
+          "memory_mib": 13.5
+        }
+      },
+      "runs": [
+        {
+          "run_id": "run-bb8f98bc0c",
+          "state": "RESOLVED",
+          "seconds": 2.775,
+          "queue_seconds": 0.002,
+          "client_seconds": 3.064,
+          "approved_proposal": "prop-0083af760d",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-4042e44590",
+          "state": "RESOLVED",
+          "seconds": 2.748,
+          "queue_seconds": 0.006,
+          "client_seconds": 3.052,
+          "approved_proposal": "prop-66a4f5276c",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-0be57a750b",
+          "state": "RESOLVED",
+          "seconds": 2.758,
+          "queue_seconds": 0.015,
+          "client_seconds": 3.177,
+          "approved_proposal": "prop-028d22918c",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-2beeb570b3",
+          "state": "RESOLVED",
+          "seconds": 2.739,
+          "queue_seconds": 0.008,
+          "client_seconds": 3.049,
+          "approved_proposal": "prop-17622bb161",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        }
+      ]
+    },
+    {
+      "offered": 16,
+      "ok": true,
+      "accepted": 16,
+      "refused": {},
+      "states": {
+        "RESOLVED": 16
+      },
+      "wall_seconds": 12.099,
+      "throughput_runs_per_second": 1.322,
+      "run_seconds": {
+        "p50": 2.728,
+        "p95": 2.849,
+        "p99": 2.849,
+        "max": 2.849
+      },
+      "queue_wait_seconds": {
+        "p50": 2.979,
+        "p95": 8.982,
+        "p99": 8.982,
+        "max": 8.982
+      },
+      "client_seconds": {
+        "p50": 5.982,
+        "p95": 12.09,
+        "p99": 12.09,
+        "max": 12.09
+      },
+      "requests": {
+        "total": 1973,
+        "errors_5xx": 0,
+        "latency_ms": {
+          "p50": 4.295,
+          "p95": 16.511,
+          "p99": 65.439,
+          "max": 251.663
+        },
+        "by_route": {
+          "GET /approvals/pending": {
+            "count": 910,
+            "p50": 3.299,
+            "p95": 12.411,
+            "p99": 36.167,
+            "max": 125.515
+          },
+          "GET /runs/{run_id}": {
+            "count": 1031,
+            "p50": 5.199,
+            "p95": 15.829,
+            "p99": 33.7,
+            "max": 65.439
+          },
+          "POST /approvals/{proposal_id}": {
+            "count": 16,
+            "p50": 3.717,
+            "p95": 6.867,
+            "p99": 6.867,
+            "max": 6.867
+          },
+          "POST /incidents/run": {
+            "count": 16,
+            "p50": 244.667,
+            "p95": 251.663,
+            "p99": 251.663,
+            "max": 251.663
+          }
+        }
+      },
+      "containers": {
+        "recap-w6-prometheus-1": {
+          "cpu_percent": 0.24,
+          "memory_mib": 77.7
+        },
+        "recap-w6-api-1": {
+          "cpu_percent": 32.95,
+          "memory_mib": 75.3
+        },
+        "recap-w6-worker-1": {
+          "cpu_percent": 164.55,
+          "memory_mib": 180.7
+        },
+        "recap-w6-worker-2": {
+          "cpu_percent": 15.65,
+          "memory_mib": 180.6
+        },
+        "recap-w6-redis-1": {
+          "cpu_percent": 1.47,
+          "memory_mib": 13.7
+        }
+      },
+      "runs": [
+        {
+          "run_id": "run-27ae45f65c",
+          "state": "RESOLVED",
+          "seconds": 2.69,
+          "queue_seconds": 0.092,
+          "client_seconds": 2.939,
+          "approved_proposal": "prop-24d59a3141",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-221b1090dd",
+          "state": "RESOLVED",
+          "seconds": 2.599,
+          "queue_seconds": 0.08,
+          "client_seconds": 2.823,
+          "approved_proposal": "prop-8dcc7d84ce",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-58d1f32bce",
+          "state": "RESOLVED",
+          "seconds": 2.728,
+          "queue_seconds": 8.982,
+          "client_seconds": 12.09,
+          "approved_proposal": "prop-cc9565d63a",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-2fefa40f23",
+          "state": "RESOLVED",
+          "seconds": 2.653,
+          "queue_seconds": 2.823,
+          "client_seconds": 5.706,
+          "approved_proposal": "prop-311fcb6482",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-293dcd5f64",
+          "state": "RESOLVED",
+          "seconds": 2.602,
+          "queue_seconds": 0.066,
+          "client_seconds": 2.922,
+          "approved_proposal": "prop-04b4dd1729",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-38ce169100",
+          "state": "RESOLVED",
+          "seconds": 2.732,
+          "queue_seconds": 2.979,
+          "client_seconds": 5.982,
+          "approved_proposal": "prop-1b5e0fd13a",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-9d9547a770",
+          "state": "RESOLVED",
+          "seconds": 2.79,
+          "queue_seconds": 8.704,
+          "client_seconds": 11.833,
+          "approved_proposal": "prop-b3a1e3341c",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-34bcb218ed",
+          "state": "RESOLVED",
+          "seconds": 2.673,
+          "queue_seconds": 0.059,
+          "client_seconds": 2.967,
+          "approved_proposal": "prop-6b9fad774e",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-47d6194fde",
+          "state": "RESOLVED",
+          "seconds": 2.763,
+          "queue_seconds": 8.701,
+          "client_seconds": 11.826,
+          "approved_proposal": "prop-579cc58d75",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-9ae72fa027",
+          "state": "RESOLVED",
+          "seconds": 2.744,
+          "queue_seconds": 5.702,
+          "client_seconds": 8.778,
+          "approved_proposal": "prop-cacbd3752d",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-c74bbefeeb",
+          "state": "RESOLVED",
+          "seconds": 2.671,
+          "queue_seconds": 2.888,
+          "client_seconds": 5.821,
+          "approved_proposal": "prop-65ea0f8a9b",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-61c59d072f",
+          "state": "RESOLVED",
+          "seconds": 2.827,
+          "queue_seconds": 5.885,
+          "client_seconds": 9.008,
+          "approved_proposal": "prop-ecd937b402",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-bcb5b61859",
+          "state": "RESOLVED",
+          "seconds": 2.67,
+          "queue_seconds": 2.908,
+          "client_seconds": 5.865,
+          "approved_proposal": "prop-b6c6a1e1de",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-77380d66c5",
+          "state": "RESOLVED",
+          "seconds": 2.849,
+          "queue_seconds": 5.617,
+          "client_seconds": 8.781,
+          "approved_proposal": "prop-7a5813b954",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-43ac558b0b",
+          "state": "RESOLVED",
+          "seconds": 2.845,
+          "queue_seconds": 8.702,
+          "client_seconds": 11.831,
+          "approved_proposal": "prop-cd4f72f0ac",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-a52b49c9e1",
+          "state": "RESOLVED",
+          "seconds": 2.829,
+          "queue_seconds": 5.696,
+          "client_seconds": 8.774,
+          "approved_proposal": "prop-890035e3f4",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        }
+      ]
+    },
+    {
+      "offered": 40,
+      "ok": true,
+      "accepted": 24,
+      "refused": {
+        "429": 16
+      },
+      "states": {
+        "RESOLVED": 24
+      },
+      "wall_seconds": 20.061,
+      "throughput_runs_per_second": 1.196,
+      "run_seconds": {
+        "p50": 3.014,
+        "p95": 3.376,
+        "p99": 3.408,
+        "max": 3.408
+      },
+      "queue_wait_seconds": {
+        "p50": 6.211,
+        "p95": 16.566,
+        "p99": 16.568,
+        "max": 16.568
+      },
+      "client_seconds": {
+        "p50": 9.902,
+        "p95": 20.053,
+        "p99": 20.055,
+        "max": 20.055
+      },
+      "requests": {
+        "total": 3947,
+        "errors_5xx": 0,
+        "latency_ms": {
+          "p50": 5.92,
+          "p95": 71.064,
+          "p99": 473.532,
+          "max": 564.782
+        },
+        "by_route": {
+          "GET /approvals/pending": {
+            "count": 1856,
+            "p50": 4.872,
+            "p95": 64.485,
+            "p99": 158.656,
+            "max": 474.351
+          },
+          "GET /runs/{run_id}": {
+            "count": 2027,
+            "p50": 6.905,
+            "p95": 47.856,
+            "p99": 115.304,
+            "max": 397.349
+          },
+          "POST /approvals/{proposal_id}": {
+            "count": 24,
+            "p50": 4.882,
+            "p95": 24.71,
+            "p99": 83.992,
+            "max": 83.992
+          },
+          "POST /incidents/run": {
+            "count": 40,
+            "p50": 561.059,
+            "p95": 564.536,
+            "p99": 564.782,
+            "max": 564.782
+          }
+        }
+      },
+      "containers": {
+        "recap-w6-prometheus-1": {
+          "cpu_percent": 1.02,
+          "memory_mib": 77.8
+        },
+        "recap-w6-api-1": {
+          "cpu_percent": 51.17,
+          "memory_mib": 83.5
+        },
+        "recap-w6-worker-1": {
+          "cpu_percent": 187.92,
+          "memory_mib": 181.1
+        },
+        "recap-w6-worker-2": {
+          "cpu_percent": 173.53,
+          "memory_mib": 181.8
+        },
+        "recap-w6-redis-1": {
+          "cpu_percent": 3.73,
+          "memory_mib": 13.7
+        }
+      },
+      "runs": [
+        {
+          "run_id": "run-07fa386681",
+          "state": "RESOLVED",
+          "seconds": 2.801,
+          "queue_seconds": 0.0,
+          "client_seconds": 2.956,
+          "approved_proposal": "prop-b257859603",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-aab6feb6db",
+          "state": "RESOLVED",
+          "seconds": 2.668,
+          "queue_seconds": 0.002,
+          "client_seconds": 2.847,
+          "approved_proposal": "prop-67980d8b08",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-ed0c9929e3",
+          "state": "RESOLVED",
+          "seconds": 3.138,
+          "queue_seconds": 16.081,
+          "client_seconds": 19.713,
+          "approved_proposal": "prop-63468b9811",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-9de8abe490",
+          "state": "RESOLVED",
+          "seconds": 2.742,
+          "queue_seconds": 0.001,
+          "client_seconds": 2.938,
+          "approved_proposal": "prop-85c6030c08",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-ebff6fcc15",
+          "state": "RESOLVED",
+          "seconds": 2.833,
+          "queue_seconds": 0.001,
+          "client_seconds": 3.011,
+          "approved_proposal": "prop-78caf1f587",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-a5e2a9b07a",
+          "state": "RESOLVED",
+          "seconds": 2.742,
+          "queue_seconds": 3.199,
+          "client_seconds": 6.2,
+          "approved_proposal": "prop-ed74f2b126",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-36e39150c1",
+          "state": "RESOLVED",
+          "seconds": 3.101,
+          "queue_seconds": 6.211,
+          "client_seconds": 9.605,
+          "approved_proposal": "prop-0d42de5bc4",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-ef26388e1d",
+          "state": "RESOLVED",
+          "seconds": 2.885,
+          "queue_seconds": 3.012,
+          "client_seconds": 6.217,
+          "approved_proposal": "prop-39ce6e577e",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-1516434166",
+          "state": "RESOLVED",
+          "seconds": 3.106,
+          "queue_seconds": 9.949,
+          "client_seconds": 13.444,
+          "approved_proposal": "prop-5a4ecff99a",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-7505959c43",
+          "state": "RESOLVED",
+          "seconds": 3.038,
+          "queue_seconds": 12.831,
+          "client_seconds": 16.3,
+          "approved_proposal": "prop-f0691daf0f",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-3061074aa8",
+          "state": "RESOLVED",
+          "seconds": 3.048,
+          "queue_seconds": 9.507,
+          "client_seconds": 12.939,
+          "approved_proposal": "prop-ed186fdb9c",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-6ee0e655d2",
+          "state": "RESOLVED",
+          "seconds": 2.79,
+          "queue_seconds": 3.016,
+          "client_seconds": 6.135,
+          "approved_proposal": "prop-b8bef6a88d",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-ff9eccd856",
+          "state": "RESOLVED",
+          "seconds": 3.044,
+          "queue_seconds": 2.799,
+          "client_seconds": 6.072,
+          "approved_proposal": "prop-9183ec4802",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-0a4c08dc9f",
+          "state": "RESOLVED",
+          "seconds": 3.376,
+          "queue_seconds": 6.182,
+          "client_seconds": 9.902,
+          "approved_proposal": "prop-8abdf058b9",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-f674f34175",
+          "state": "RESOLVED",
+          "seconds": 3.108,
+          "queue_seconds": 16.076,
+          "client_seconds": 19.7,
+          "approved_proposal": "prop-277630ab10",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-275dcfd759",
+          "state": "RESOLVED",
+          "seconds": 2.89,
+          "queue_seconds": 6.119,
+          "client_seconds": 9.321,
+          "approved_proposal": "prop-97d8190696",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-07168f4067",
+          "state": "RESOLVED",
+          "seconds": 3.08,
+          "queue_seconds": 9.321,
+          "client_seconds": 12.774,
+          "approved_proposal": "prop-0a751cf376",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-bf46742dc9",
+          "state": "RESOLVED",
+          "seconds": 3.408,
+          "queue_seconds": 6.198,
+          "client_seconds": 9.858,
+          "approved_proposal": "prop-b9d01f1d39",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-d7552e970c",
+          "state": "RESOLVED",
+          "seconds": 2.879,
+          "queue_seconds": 9.939,
+          "client_seconds": 13.34,
+          "approved_proposal": "prop-64a298630b",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-5899c93095",
+          "state": "RESOLVED",
+          "seconds": 3.014,
+          "queue_seconds": 12.811,
+          "client_seconds": 16.35,
+          "approved_proposal": "prop-c8886840c4",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-0e8ed122f2",
+          "state": "RESOLVED",
+          "seconds": 3.006,
+          "queue_seconds": 13.263,
+          "client_seconds": 16.735,
+          "approved_proposal": "prop-65e8f5377a",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-341951bfe0",
+          "state": "RESOLVED",
+          "seconds": 2.909,
+          "queue_seconds": 13.352,
+          "client_seconds": 16.74,
+          "approved_proposal": "prop-343298a475",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": "run-d9427a9a48",
+          "state": "RESOLVED",
+          "seconds": 3.041,
+          "queue_seconds": 16.568,
+          "client_seconds": 20.053,
+          "approved_proposal": "prop-82a51505a1",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": null,
+          "state": null,
+          "seconds": null,
+          "queue_seconds": null,
+          "client_seconds": 0.563,
+          "approved_proposal": null,
+          "own_record": false,
+          "writes": 0,
+          "error": "POST /incidents/run answered 429: {\"detail\":\"the incident queue is full (20 of 20 jobs waiting)\"}",
+          "refused": 429
+        },
+        {
+          "run_id": null,
+          "state": null,
+          "seconds": null,
+          "queue_seconds": null,
+          "client_seconds": 0.565,
+          "approved_proposal": null,
+          "own_record": false,
+          "writes": 0,
+          "error": "POST /incidents/run answered 429: {\"detail\":\"the incident queue is full (20 of 20 jobs waiting)\"}",
+          "refused": 429
+        },
+        {
+          "run_id": "run-17ebef7fa3",
+          "state": "RESOLVED",
+          "seconds": 3.019,
+          "queue_seconds": 16.566,
+          "client_seconds": 20.055,
+          "approved_proposal": "prop-031f4a4589",
+          "own_record": true,
+          "writes": 1,
+          "error": null
+        },
+        {
+          "run_id": null,
+          "state": null,
+          "seconds": null,
+          "queue_seconds": null,
+          "client_seconds": 0.565,
+          "approved_proposal": null,
+          "own_record": false,
+          "writes": 0,
+          "error": "POST /incidents/run answered 429: {\"detail\":\"the incident queue is full (20 of 20 jobs waiting)\"}",
+          "refused": 429
+        },
+        {
+          "run_id": null,
+          "state": null,
+          "seconds": null,
+          "queue_seconds": null,
+          "client_seconds": 0.565,
+          "approved_proposal": null,
+          "own_record": false,
+          "writes": 0,
+          "error": "POST /incidents/run answered 429: {\"detail\":\"the incident queue is full (20 of 20 jobs waiting)\"}",
+          "refused": 429
+        },
+        {
+          "run_id": null,
+          "state": null,
+          "seconds": null,
+          "queue_seconds": null,
+          "client_seconds": 0.564,
+          "approved_proposal": null,
+          "own_record": false,
+          "writes": 0,
+          "error": "POST /incidents/run answered 429: {\"detail\":\"the incident queue is full (20 of 20 jobs waiting)\"}",
+          "refused": 429
+        },
+        {
+          "run_id": null,
+          "state": null,
+          "seconds": null,
+          "queue_seconds": null,
+          "client_seconds": 0.562,
+          "approved_proposal": null,
+          "own_record": false,
+          "writes": 0,
+          "error": "POST /incidents/run answered 429: {\"detail\":\"the incident queue is full (20 of 20 jobs waiting)\"}",
+          "refused": 429
+        },
+        {
+          "run_id": null,
+          "state": null,
+          "seconds": null,
+          "queue_seconds": null,
+          "client_seconds": 0.564,
+          "approved_proposal": null,
+          "own_record": false,
+          "writes": 0,
+          "error": "POST /incidents/run answered 429: {\"detail\":\"the incident queue is full (20 of 20 jobs waiting)\"}",
+          "refused": 429
+        },
+        {
+          "run_id": null,
+          "state": null,
+          "seconds": null,
+          "queue_seconds": null,
+          "client_seconds": 0.564,
+          "approved_proposal": null,
+          "own_record": false,
+          "writes": 0,
+          "error": "POST /incidents/run answered 429: {\"detail\":\"the incident queue is full (20 of 20 jobs waiting)\"}",
+          "refused": 429
+        },
+        {
+          "run_id": null,
+          "state": null,
+          "seconds": null,
+          "queue_seconds": null,
+          "client_seconds": 0.564,
+          "approved_proposal": null,
+          "own_record": false,
+          "writes": 0,
+          "error": "POST /incidents/run answered 429: {\"detail\":\"the incident queue is full (20 of 20 jobs waiting)\"}",
+          "refused": 429
+        },
+        {
+          "run_id": null,
+          "state": null,
+          "seconds": null,
+          "queue_seconds": null,
+          "client_seconds": 0.564,
+          "approved_proposal": null,
+          "own_record": false,
+          "writes": 0,
+          "error": "POST /incidents/run answered 429: {\"detail\":\"the incident queue is full (20 of 20 jobs waiting)\"}",
+          "refused": 429
+        },
+        {
+          "run_id": null,
+          "state": null,
+          "seconds": null,
+          "queue_seconds": null,
+          "client_seconds": 0.564,
+          "approved_proposal": null,
+          "own_record": false,
+          "writes": 0,
+          "error": "POST /incidents/run answered 429: {\"detail\":\"the incident queue is full (20 of 20 jobs waiting)\"}",
+          "refused": 429
+        },
+        {
+          "run_id": null,
+          "state": null,
+          "seconds": null,
+          "queue_seconds": null,
+          "client_seconds": 0.564,
+          "approved_proposal": null,
+          "own_record": false,
+          "writes": 0,
+          "error": "POST /incidents/run answered 429: {\"detail\":\"the incident queue is full (20 of 20 jobs waiting)\"}",
+          "refused": 429
+        },
+        {
+          "run_id": null,
+          "state": null,
+          "seconds": null,
+          "queue_seconds": null,
+          "client_seconds": 0.564,
+          "approved_proposal": null,
+          "own_record": false,
+          "writes": 0,
+          "error": "POST /incidents/run answered 429: {\"detail\":\"the incident queue is full (20 of 20 jobs waiting)\"}",
+          "refused": 429
+        },
+        {
+          "run_id": null,
+          "state": null,
+          "seconds": null,
+          "queue_seconds": null,
+          "client_seconds": 0.563,
+          "approved_proposal": null,
+          "own_record": false,
+          "writes": 0,
+          "error": "POST /incidents/run answered 429: {\"detail\":\"the incident queue is full (20 of 20 jobs waiting)\"}",
+          "refused": 429
+        },
+        {
+          "run_id": null,
+          "state": null,
+          "seconds": null,
+          "queue_seconds": null,
+          "client_seconds": 0.563,
+          "approved_proposal": null,
+          "own_record": false,
+          "writes": 0,
+          "error": "POST /incidents/run answered 429: {\"detail\":\"the incident queue is full (20 of 20 jobs waiting)\"}",
+          "refused": 429
+        },
+        {
+          "run_id": null,
+          "state": null,
+          "seconds": null,
+          "queue_seconds": null,
+          "client_seconds": 0.563,
+          "approved_proposal": null,
+          "own_record": false,
+          "writes": 0,
+          "error": "POST /incidents/run answered 429: {\"detail\":\"the incident queue is full (20 of 20 jobs waiting)\"}",
+          "refused": 429
+        }
+      ]
+    }
+  ],
+  "server_metrics": {
+    "api_requests": 6128,
+    "api_5xx": 0,
+    "active_incidents": 0,
+    "incidents_finished": {},
+    "actions": {},
+    "recovery_verified": {},
+    "tool_calls": 0,
+    "model_requests": 0
+  }
+}

@@ -247,9 +247,16 @@ def to_info(spec: ScenarioSpec) -> ScenarioInfo:
     )
 
 
+# PyYAML's C safe loader when it has libyaml: the same safe constructor, about ten times
+# faster. Every run request re-reads these files (M6 W6 measured 40 ms per request with the
+# pure-Python loader, enough to hold a burst of submissions back for seconds).
+SAFE_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+
 def _load_file(path: Path) -> ScenarioSpec:
     try:
-        spec = ScenarioSpec.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")))
+        data = yaml.load(path.read_text(encoding="utf-8"), Loader=SAFE_LOADER)
+        spec = ScenarioSpec.model_validate(data)
     except ValidationError as exc:
         raise ValueError(f"{path.name}: {exc}") from exc
     if spec.id != path.stem:

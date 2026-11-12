@@ -18,6 +18,8 @@ Keys (all under the configured prefix, "recap" by default):
     <p>:lock:<job>            string held while one process reconciles an interrupted job
     <p>:recent                list   the newest job ids, for the queue view
     <p>:stats                 hash   counters (submitted, completed, failed, requeued, ...)
+    <p>:queue_wait            hash   how long new jobs waited for their first claim: cumulative
+                                     bucket counts (le:<seconds>), count and sum_ms (M6 W6)
 
 Delivery is at least once: a job held by a worker that dies is reconciled by another worker
 (recap/workers/reconcile.py), which decides from the run's persisted evidence whether it may
@@ -42,6 +44,7 @@ import os
 import re
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from typing import Any, Literal
 
 from recap.core.errors import ConfigError
@@ -55,6 +58,15 @@ TERMINAL_JOB_STATUSES: frozenset[str] = frozenset(
 
 # What an Idempotency-Key may look like: it becomes part of a Redis key.
 IDEMPOTENCY_KEY = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+
+# The queue-wait histogram's buckets, in seconds: a wait is short while a worker is free, and
+# grows with the queue when every worker is busy (an incident can take minutes).
+WAIT_BUCKETS = (0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0, 900.0, 3600.0)
+
+
+def wait_field(bound: float) -> str:
+    """The <p>:queue_wait field that counts the waits up to `bound` seconds, e.g. "le:0.5"."""
+    return f"le:{bound:g}"
 
 
 @dataclass(frozen=True)
@@ -301,7 +313,34 @@ class JobQueue:
             {"status": "running", "worker": worker_id, "claimed_at": claimed},
         )
         job.attempt, job.status, job.worker, job.claimed_at = attempt, "running", worker_id, claimed
+        if attempt == 1:  # a retried job waited for other reasons (its interrupted attempt)
+            self._count_wait(job.submitted_at, claimed, r)
         return job
+
+    def _count_wait(self, submitted: str, claimed: str, r: Redis) -> None:
+        """Add one new job's wait to the shared histogram, so that the waits every worker saw
+        are one series (GET /metrics reads it back: queue_waits)."""
+        try:
+            waited = (
+                datetime.fromisoformat(claimed) - datetime.fromisoformat(submitted)
+            ).total_seconds()
+        except ValueError:  # an old job without a submission time
+            return
+        if waited < 0:
+            return
+        key = self._key("queue_wait")
+        commands: list[tuple[Any, ...]] = [
+            ("HINCRBY", key, wait_field(bound), 1) for bound in WAIT_BUCKETS if waited <= bound
+        ]
+        commands += [("HINCRBY", key, "count", 1), ("HINCRBY", key, "sum_ms", round(waited * 1000))]
+        r.pipeline(commands)
+
+    def queue_waits(self) -> tuple[list[int], int, float]:
+        """The queue-wait histogram: cumulative counts per WAIT_BUCKETS bound, the number of
+        waits and their sum in seconds."""
+        data = self.redis.hgetall(self._key("queue_wait"))
+        buckets = [int(data.get(wait_field(bound), 0)) for bound in WAIT_BUCKETS]
+        return buckets, int(data.get("count", 0)), int(data.get("sum_ms", 0)) / 1000
 
     def set_run(self, job: Job, run_id: str) -> None:
         """Name the run of this attempt (a retried job runs as a new run)."""
