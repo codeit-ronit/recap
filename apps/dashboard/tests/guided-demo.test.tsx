@@ -146,7 +146,7 @@ test("the start screen: the provenance label word for word, the recording, and t
   const html = start();
   const text = textOf(html);
   assert.equal(count(text, "Recorded real-model execution — replayed locally"), 1);
-  assert.match(text, /The AI decisions are the answers qwen3:8b \(served by ollama\) gave in a real run on 2026-10-25, played back in order: no model is called now\./);
+  assert.match(text, /The AI decisions are the answers qwen3:8b \(served by ollama\) gave in a real run on 2026-10-25, each request answered from the recording: no model is called now\./);
   assert.match(text, /Nothing real is changed\./);
   assert.match(text, /Unfamiliar incident, two specialists, owner-approved fix/);
   assert.match(text, /Recording intact/);

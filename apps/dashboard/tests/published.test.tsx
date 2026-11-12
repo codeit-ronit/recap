@@ -43,13 +43,21 @@ const hrefs = (html: string) => tags(html, "a").map((a) => a.attrs.href ?? "");
 test("the page says what a published run is, then the four runs you can open", () => {
   const html = page();
   const text = textOf(html);
-  assert.match(text, /Published Runs Real AI-driven incident recoveries on Kubernetes, recorded in M5/);
+  assert.match(text, /Published Runs Real AI-driven incident runs on Kubernetes, recorded in M5 and M6/);
   assert.match(text, /Recorded real Kubernetes execution — historical, read-only/);
   assert.match(text, /Nothing runs now: no model is called, no cluster is touched, and its approvals are records of a past decision, never permissions\./);
   assert.equal(count(html, 'class="pub-run"'), 4);
   assert.equal(count(text, "RECAP's oracle: recovery verified"), 4);
   assert.match(text, /Kind: backend's bad release found and rolled back \(M5's deliverable\)/);
   assert.match(text, /SREGym: geo's misconfigured release rolled back; SREGym's grader passed it/);
+});
+
+test("a run in which no approval was decided says so, never that a fact is missing", () => {
+  const [first] = VIEW.runs;
+  const run = { ...first, published: { ...first.published!, approvals: [] } };
+  const text = textOf(page({ ...VIEW, runs: [run] }));
+  assert.match(text, /Approval None \(no approval was decided in this run\)/);
+  assert.doesNotMatch(text, /Approval Not recorded/);
 });
 
 test("each run opens in Trace Explorer, Evidence, Safety and step by step, with its checked files", () => {

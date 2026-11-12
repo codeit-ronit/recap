@@ -9,7 +9,89 @@ version from v0.3.0 on.
 
 Up to 0.5.0 everything ran against a **simulated** environment. 0.6.0 (M5) adds real
 Kubernetes targets: a Kind demo cluster and SREGym's own cluster, on the owner's VM; the owner
-approved every real-model fix that ran there. Nothing here ran in production.
+approved every real-model fix that ran there. 0.7.0 (M6) makes it a finished product: durable
+workers, Docker packaging, measured AI and backend evaluations, and a held-out benchmark
+evaluation reported in full. Nothing here ran in production.
+
+## [0.7.0] — 2026-11-12 — M6: a finished product, durable workers, measured AI and backend, a held-out evaluation
+
+RECAP's final milestone. Mission Control's Guided Demo and the published real-cluster runs open
+offline on a fresh checkout; incidents can run in worker processes coordinated by Redis that
+survive crashes without ever re-sending an uncertain write, packaged with Docker Compose;
+one-switch comparisons and component evaluations measure what each part of the AI architecture
+contributes; a frozen, blind evaluation on SREGym problems RECAP had never seen is reported in
+full (3 of 5 run, none solved, and why); and the backend was measured under load, with every
+fault and attack the spec lists mapped to the tests that inject it. Counts, not rates. The log
+is [docs/m6-progress.md](docs/m6-progress.md); the report, [docs/m6-report.md](docs/m6-report.md).
+
+### Added
+
+- **Mission Control for a first-time visitor** (W1): a simpler Overview; the **Guided Demo**
+  (`#/demo`), ten plain-language steps read from a committed real `qwen3:8b` run, replayed
+  locally and labelled so, stopping for your approval, with an interview mode; navigation in
+  three groups; technical detail on demand.
+- **Published real-cluster runs** (W2, [ADR 0033](docs/decisions/0033-published-real-cluster-runs-read-only-behind-the-same-views.md)):
+  `GET /published` and the Published Runs page show the exported Kind and SREGym runs offline,
+  read-only, each checked against `evals/live/MANIFEST.json` (pinned SHA-256s, RECAP's schemas,
+  the files agreeing with each other and with the run's evaluation record).
+- **Durable workers** (W3, [ADR 0034](docs/decisions/0034-durable-workers-redis-coordinates-the-run-records-decide.md)):
+  `RECAP_EXECUTION_BACKEND=redis` queues incidents in Redis for `python -m apps.worker`:
+  idempotent, bounded submission (429 when full), atomic claims, heartbeats and fencing,
+  cancellation, graceful shutdown; a dead worker's job is settled from the run's persisted
+  evidence, and a fix that may have reached the target is never sent again. `GET /queue`,
+  `GET /jobs/{job_id}`.
+- **Docker Compose** (W3, `infra/compose/`): the API, Mission Control, Redis, workers and an
+  optional Prometheus; ports on 127.0.0.1 only, non-root, read-only containers; verified with
+  real containers on Apple silicon.
+- **AI architecture evaluation** (W4, [ADR 0035](docs/decisions/0035-one-switch-comparisons-separate-component-datasets-nothing-pooled.md)):
+  configurations compared in pairs that change one switch, with provenance and seeds
+  (`evals/compare.py`); retrieval, memory, routing, budgets, the verifier and safety each
+  measured on its own dataset (`evals/components.py`, `evals/datasets/`); comparisons on the
+  Evaluations page; `GET /evals/components`.
+- **A held-out SREGym evaluation** (W5, [ADR 0036](docs/decisions/0036-a-blind-frozen-held-out-evaluation.md)):
+  problems chosen from names alone by a rule written first, blind scenario files, a pinned
+  model-weights digest, a freeze checked before every scored run (`scripts/w5_freeze.py`), a
+  time-based AWS cost meter (`scripts/aws_cost_meter.py`); the results, the batch, the three
+  runs and the session record are published ([docs/w5-protocol.md](docs/w5-protocol.md#results)).
+- **Operational metrics and measurements** (W6): model request time, approval waits, worker
+  occupancy and queue wait; each worker serves its own runs' metrics, and Compose's Prometheus
+  scrapes every worker; `scripts/api_load_test.py --url` loads a running deployment at several
+  levels; [docs/performance-and-reliability.md](docs/performance-and-reliability.md) reports
+  the measurements and the fault and attack coverage.
+- **Documentation for a reader** (W7): the README rewritten around what has been demonstrated;
+  [docs/interview.md](docs/interview.md) (a 3 to 5 minute demonstration and a technical
+  walkthrough); [docs/m6-report.md](docs/m6-report.md); fresh screenshots.
+
+### Fixed
+
+- A second cancellation while a fix was being sent (a second click, or a worker fencing itself
+  at each missed heartbeat) cancelled the write's own call: its outcome was lost and the record
+  said the fix was not sent. Every wait is shielded now (W6).
+- Each submission re-read every scenario file with PyYAML's pure-Python loader before its first
+  `await`, holding the API's event loop: a burst of 40 submissions waited 2.3 s. The C safe
+  loader makes it 0.56 s (W6).
+- Found with real containers in W3: the usage ledger on a read-only filesystem, a race on the
+  run store's shared SQLite connection (an HTTP 500), queued replays shown as not replays, a
+  Compose build race, and a timing-dependent test.
+- Found by W4's review before its measurements: a comparison switch that let other settings
+  differ, a weights check that passed when it could not read the weights, batches from before
+  W4 scored with missing values read as zeros, and others ([docs/m6-progress.md](docs/m6-progress.md)).
+
+### Changed
+
+- The Published Runs page says what each published run is, recoveries and runs that ended
+  without one, and a run in which no approval was decided says so.
+- Version 0.7.0 in the package, the API and Mission Control.
+
+### Known limitations
+
+- The held-out evaluation ran 3 of its 5 frozen problems and solved none: each needed an edit
+  of a Deployment's spec that RECAP's two actions (rollback, restart) cannot make, and a
+  CPU-only model was too slow for two parallel specialists. Two problems stay unseen.
+- The load measurements come from one laptop's Docker VM with the scripted policy: not a
+  capacity figure, and a real model would dominate any real run.
+- One operator token: an approval proves a token holder or a terminal and a timing, not which
+  person decided. Container images are verified on linux/arm64 only.
 
 ## [0.6.0] — 2026-11-07 — M5: real Kubernetes incident recovery and SREGym
 

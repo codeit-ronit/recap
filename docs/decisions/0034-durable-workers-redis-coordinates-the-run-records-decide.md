@@ -88,7 +88,9 @@ instead.
   nothing is retried, and the cost is that some crashes end in `needs_reconciliation`.
 - Fencing relies on timing; the guarantees against duplicate writes do not (single-use
   approvals, capability nonces, the namespace lease on live targets).
-- Run-event metrics (tool calls, tokens) are counted per process; workers expose none yet.
+- Run-event metrics (tool calls, tokens) are counted per process. Update (M6 W6): each worker
+  now serves its own runs' metrics (`apps/worker/metrics.py`), and the queue wait and worker
+  occupancy are read from Redis by the API.
 - Redis without persistence (no append-only file) loses queued jobs on a restart, never runs.
 
 ## Alternatives considered

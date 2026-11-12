@@ -92,7 +92,7 @@ export const DEMO_STEPS: readonly DemoStepDef[] = [
     id: "context",
     title: "Runbooks and memory are searched",
     about: "RECAP looks up runbook sections relevant to the alert (retrieval) and similar past incidents in its experience memory.",
-    talk: "Point out what retrieval found, and whether memory knew a similar incident: this recording is a held-out incident, new to RECAP.",
+    talk: "Point out what retrieval found, and whether memory knew a similar incident: this recording is an unfamiliar incident, added in M3 (unfamiliar rather than held out: RECAP's log parsing was widened with it in view).",
   },
   {
     id: "strategy",
@@ -925,7 +925,7 @@ export function provenanceWords(fixture: Pick<FixtureView, "model" | "provider" 
   const model = fixture ? `${fixture.model}${fixture.provider ? ` (served by ${fixture.provider})` : ""}` : "a real model";
   const on = fixture ? recordedOn(fixture.recording_id) : "";
   return (
-    `The AI decisions are the answers ${model} gave in a real run${on ? ` on ${on}` : ""}, played back in order: no model is called now. ` +
+    `The AI decisions are the answers ${model} gave in a real run${on ? ` on ${on}` : ""}, each request answered from the recording: no model is called now. ` +
     "The tools, the safety checks, your approval, the fix and the recovery check all run now, against RECAP's simulated shop. Nothing real is changed."
   );
 }

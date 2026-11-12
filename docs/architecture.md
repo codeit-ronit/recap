@@ -17,12 +17,16 @@ infrastructure with a real one.
 > ([section 13](#13-the-read-side-typed-views-replays-and-evaluation-records-m4)); M5 real
 > Kubernetes targets behind the same interface: RECAP's own Kind demo cluster and SREGym's
 > cluster, both on the owner's VM, where the owner approved every real-model fix that ran
-> ([section 14](#14-real-kubernetes-targets-m5)).
+> ([section 14](#14-real-kubernetes-targets-m5)); M6 an optional Redis job queue with worker
+> processes, Docker Compose packaging, read-only published real-cluster runs, Prometheus
+> metrics from the API and from each worker, a guided demo, one-switch comparisons with
+> component evaluations, and a frozen held-out SREGym evaluation
+> ([section 15](#15-m6-durable-execution-packaging-published-runs-metrics-and-evaluation)).
 >
 > **Scope of V1.** RECAP V1 runs only against a **simulated** five-service shop. The default
 > decision provider is a **scripted deterministic policy, not an LLM**. The SREGym adapter was an
 > **interface stub** in V1; since M5 it is the Kubernetes adapter on SREGym's own cluster
-> ([ADR 0031](decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md)), with development runs only and no benchmark results. No model is trained. The evaluation N is tiny
+> ([ADR 0031](decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md)): M5's development runs, then M6 W5's frozen held-out evaluation, stopped after 3 of its 5 problems with none solved; neither is a benchmark score. No model is trained. The evaluation N is tiny
 > and synthetic. Token counts are **estimates** (about 4 characters per token), and external API
 > cost is **$0** in the default deterministic mode.
 
@@ -37,8 +41,9 @@ This document uses four status words:
 
 Related documents: the [threat model](threat-model.md) (attacks and defenses in depth), the
 [benchmark plan](benchmark-plan.md) (the planned real SREGym benchmark), the
-[M5 report](m5-report.md) (what ran on real clusters) and the
-[glossary](learning-notes.md#part-2--concepts-glossary) (terms used here).
+[M5 report](m5-report.md) (what ran on real clusters), the [M6 log](m6-progress.md) (what M6
+built and measured) and the [glossary](learning-notes.md#part-2--concepts-glossary) (terms used
+here).
 
 ## Contents
 
@@ -56,6 +61,8 @@ Related documents: the [threat model](threat-model.md) (attacks and defenses in 
 12. [Known limitations of this architecture](#12-known-limitations-of-this-architecture)
 13. [The read side: typed views, replays and evaluation records (M4)](#13-the-read-side-typed-views-replays-and-evaluation-records-m4)
 14. [Real Kubernetes targets (M5)](#14-real-kubernetes-targets-m5)
+15. [M6: durable execution, packaging, published runs, metrics and evaluation](#15-m6-durable-execution-packaging-published-runs-metrics-and-evaluation)
+16. [Repository layout](#16-repository-layout)
 
 ---
 
@@ -78,7 +85,7 @@ In one line: **untrusted data can suggest, trusted code decides, and an independ
 
 | Principle | What it means in V1 | Where to see it |
 |---|---|---|
-| **Modular monolith** | One Python package (`recap/`) in one main process, split into modules with sharp boundaries: `core`, `harness`, `tools`, `safety`, `environments`, `knowledge`, `memory`, `context`, `routing`, `agents`, `verification`, `providers`, `telemetry`. Modules call each other in-process. The only other process is the per-run MCP tool server (on a real cluster, since M5, also the `kubectl` calls the adapter starts without a shell: [section 14](#14-real-kubernetes-targets-m5)). There is no broker and no network service to run: one install, SQLite files, a laptop is enough. | [`recap/`](../recap) |
+| **Modular monolith** | One Python package (`recap/`) in one main process, split into modules with sharp boundaries: `core`, `harness`, `tools`, `safety`, `environments`, `knowledge`, `memory`, `context`, `routing`, `agents`, `verification`, `providers`, `telemetry`. Modules call each other in-process. The only other process is the per-run MCP tool server (on a real cluster, since M5, also the `kubectl` calls the adapter starts without a shell: [section 14](#14-real-kubernetes-targets-m5)). By default there is no broker and no network service to run: one install, SQLite files, a laptop is enough. Since M6 an optional Redis queue can hand runs to worker processes ([section 15](#15-m6-durable-execution-packaging-published-runs-metrics-and-evaluation)). | [`recap/`](../recap) |
 | **Typed contracts** | Everything that crosses a module boundary is a Pydantic model (a Python class whose fields are type-checked at runtime). The `Contract` base class rejects unknown fields (`extra="forbid"`), `Evidence` is frozen (cannot be edited after creation), and every trace event carries `schema_version = "recap.v1"`. What any infrastructure must return is a separate contract file. | [`recap/core/models.py`](../recap/core/models.py), [`recap/core/observations.py`](../recap/core/observations.py) |
 | **Plugin interfaces** | Twelve interfaces ("plugin sockets") define the swappable parts. Code depends on the interface, never on a concrete class. One **composition root**, `Runtime`, picks the concrete classes; a composition root is the single place where implementations are chosen and wired together. | [`recap/core/interfaces.py`](../recap/core/interfaces.py), [`recap/runtime.py`](../recap/runtime.py) |
 | **Trusted vs untrusted** | Trusted means RECAP's own code and its YAML config. Everything else is untrusted data: alert text, tool output, logs, runbooks, past episodes, what the MCP server says about its tools, and every decision a provider makes. Untrusted data may shape a *proposal*; only trusted code decides what *executes*. Every tool call passes one door, the `ToolGateway`. | [Section 8](#8-data-flow-and-trust-boundaries) |
@@ -180,7 +187,9 @@ How to read it:
 
 - **Entry points.** The CLI demo, the API and the evaluation runner all create a `Runtime` and call
   `run_incident(...)`. The dashboard only talks to the API, over HTTP and SSE (server-sent events: a
-  one-way live stream from server to browser).
+  one-way live stream from server to browser). With the Redis backend (M6) the API queues the run
+  and a worker process (`python -m apps.worker`) makes the same call
+  ([section 15](#15-m6-durable-execution-packaging-published-runs-metrics-and-evaluation)).
 - **Two arrows into the gateway.** Agents hold a read-only handle and can only reach read tools. Only
   the controller can send a write, and only after policy and approval.
 - **Two adapter instances, one world.** Instance B lives inside the MCP server and serves the tools.
@@ -212,6 +221,7 @@ How to read it:
 | `Consolidator` | [`recap/memory/consolidation.py`](../recap/memory/consolidation.py) | Turns a finished run into an episode (consolidator-v2: trajectory, judged claims, diagnosis basis, fix preconditions, model info; deterministic extraction); `success` only if the oracle verified recovery. |
 | `Tracer`, sinks, `Redactor` | [`recap/telemetry/`](../recap/telemetry) | Numbered, redacted events to SQLite, JSONL, a live stream and (optionally) OpenTelemetry console spans. |
 | API and dashboard | [`apps/api/main.py`](../apps/api/main.py), [`apps/dashboard/`](../apps/dashboard) | HTTP endpoints, background runs, SSE; the React UI shows only data from the API. |
+| Workers, `JobQueue`, reconciliation (M6, optional) | [`recap/workers/`](../recap/workers/), [`apps/worker/__main__.py`](../apps/worker/__main__.py) | With `RECAP_EXECUTION_BACKEND=redis`: run queued incidents through the same `Runtime.run_incident` in worker processes, and settle a dead worker's job from the run's persisted evidence ([section 15](#15-m6-durable-execution-packaging-published-runs-metrics-and-evaluation)). |
 
 The dashboard's Architecture page draws the same flow next to the live wiring from `GET /system`
 (which implementation is plugged into each interface right now):
@@ -619,11 +629,14 @@ keeps a second run off the namespace, even one in another process. The
 evaluation runner runs its cases one after another. A run started by another process (for example
 the CLI) is served by the API from its stored record and events: its status is `external` until the
 stored state is terminal, and its stream ends after the stored events, because live events exist
-only in the process that runs it.
+only in the process that runs it. With the Redis backend (M6) the API runs no incident itself:
+workers do, an unfinished run's status comes from its job (for example `queued`, `running` or
+`interrupted`), and its stream follows the trace the worker stores
+([section 15](#15-m6-durable-execution-packaging-published-runs-metrics-and-evaluation)).
 
 **Waiting for a human.** `ApprovalStore.wait_for_decision` waits on an in-process event and also
-re-reads the database every 0.5 s, so a decision written by the API (from a worker thread) wakes
-the run. The run's time budget is paused while it waits. If the wait times out or the run is
+re-reads the database every 0.5 s, so a decision the API writes wakes the run, whether the API
+wrote it from one of its threads or the run waits in a worker process (the Redis backend, M6). The run's time budget is paused while it waits. If the wait times out or the run is
 cancelled, the controller marks a still-pending request expired (`ApprovalStore.expire`), so it can
 never be approved later.
 
@@ -636,16 +649,16 @@ All interfaces live in [`recap/core/interfaces.py`](../recap/core/interfaces.py)
 
 | Interface | V1 implementation | File | Status | Planned upgrade |
 |---|---|---|---|---|
-| `TargetEnvironment` | `SimulatedEnvironment` (default). Since M5: `KubernetesEnvironment` (a real cluster: the Kind demo) and `SREGymEnvironment` (the same adapter on SREGym's own cluster, external-harness mode). `FakeEnvironment` (tests only). | [`recap/environments/simulated/engine.py`](../recap/environments/simulated/engine.py), [`recap/environments/kubernetes/`](../recap/environments/kubernetes/), [`integrations/sregym/adapter.py`](../integrations/sregym/adapter.py), [`tests/fakes.py`](../tests/fakes.py) | simulated; Kind and SREGym: implemented (M5) | Benchmark runs on held-out SREGym problems |
+| `TargetEnvironment` | `SimulatedEnvironment` (default). Since M5: `KubernetesEnvironment` (a real cluster: the Kind demo) and `SREGymEnvironment` (the same adapter on SREGym's own cluster, external-harness mode). `FakeEnvironment` (tests only). | [`recap/environments/simulated/engine.py`](../recap/environments/simulated/engine.py), [`recap/environments/kubernetes/`](../recap/environments/kubernetes/), [`integrations/sregym/adapter.py`](../integrations/sregym/adapter.py), [`tests/fakes.py`](../tests/fakes.py) | simulated; Kind and SREGym: implemented (M5) | A typed change of one Deployment field: the held-out SREGym problems of M6 W5 needed one, and neither a rollback nor a restart makes it (not yet built) |
 | `ToolTransport` | `McpToolClient`: real MCP over stdio to a subprocess at runtime, in-memory streams in tests | [`recap/tools/mcp_client.py`](../recap/tools/mcp_client.py) | implemented | Remote MCP servers over HTTP (not yet built) |
-| `LLMProvider` | `DeterministicProvider` (default; scripted, not an LLM). Since M2: `OllamaProvider` and `FreeHostedProvider` on the shared `HttpLLMProvider` loop (a local model, Groq's free plan, or a replay of a recording); since M5 also `ollama-vm`, the same `qwen3:8b` served on the owner's VM. `AnthropicProvider` (opt-in Claude adapter; your own API key and billing; tested only with a fake client). `PromptInjectedProvider` wraps either one for red-team runs. | [`recap/providers/deterministic.py`](../recap/providers/deterministic.py), [`recap/providers/http_llm.py`](../recap/providers/http_llm.py), [`recap/providers/anthropic_provider.py`](../recap/providers/anthropic_provider.py), [`recap/safety/redteam.py`](../recap/safety/redteam.py) | scripted policy, Ollama, Groq Free and replays: implemented; Claude: adapter only; red-team planner: simulated | A GPU, or a larger open-weight model, to measure how much the model itself limits the results (not yet built) |
+| `LLMProvider` | `DeterministicProvider` (default; scripted, not an LLM). Since M2: `OllamaProvider` and `FreeHostedProvider` on the shared `HttpLLMProvider` loop (a local model, Groq's free plan, or a replay of a recording); since M5 also `ollama-vm`, the same `qwen3:8b` served on the owner's VM (since M6 pinned to one weights file: an Ollama provider with `weights:` refuses any other). `AnthropicProvider` (opt-in Claude adapter; your own API key and billing; tested only with a fake client). `PromptInjectedProvider` wraps either one for red-team runs. | [`recap/providers/deterministic.py`](../recap/providers/deterministic.py), [`recap/providers/http_llm.py`](../recap/providers/http_llm.py), [`recap/providers/anthropic_provider.py`](../recap/providers/anthropic_provider.py), [`recap/safety/redteam.py`](../recap/safety/redteam.py) | scripted policy, Ollama, Groq Free and replays: implemented; Claude: adapter only; red-team planner: simulated | A GPU, or a larger open-weight model, to measure how much the model itself limits the results (not yet built) |
 | `RetrievalIndex` | `KnowledgeRetriever`: BM25 written from scratch; hybrid BM25 plus a dense ranking (`OllamaEmbedder`, `nomic-embed-text` on loopback; stored `VectorIndex`) fused by reciprocal rank fusion; agents search it through `search_runbooks` | [`recap/knowledge/retriever.py`](../recap/knowledge/retriever.py), [`recap/knowledge/bm25.py`](../recap/knowledge/bm25.py), [`recap/knowledge/embeddings.py`](../recap/knowledge/embeddings.py), [`recap/knowledge/ollama_embedder.py`](../recap/knowledge/ollama_embedder.py), [`recap/knowledge/vectors.py`](../recap/knowledge/vectors.py) | BM25: implemented (the default); hybrid: implemented, opt-in per run (needs Ollama and the stored vectors) | Neural reranking (see `Reranker`); a vector database for a large corpus |
 | `Reranker` | `LexicalReranker`: boosts chunks whose heading or title contains the query words. A heuristic, not a neural model. | [`recap/knowledge/retriever.py`](../recap/knowledge/retriever.py) | implemented | Neural reranker such as a cross-encoder (not yet built) |
 | `RouterPolicy` | `RulesRouter`: rules RT0 to RT7, first match wins. `LearnedRouter` is a stub that raises `NotImplementedError`. | [`recap/routing/router.py`](../recap/routing/router.py) | rules: implemented; learned: adapter only | Learned router, a contextual bandit (a model that learns which choice pays off in which situation) over the same signals (not yet built) |
 | `SafetyPolicy` | `PolicyEngine`: rules R1 to R10, R14, R11 and R12, in that order, over the allowlists of the configuration in use: the simulator's, or since M5 a target profile's (`policy-kind-v1`, `policy-sregym-hotel-v2`) (the gateway adds R13 and the per-agent tool allowlist) | [`recap/safety/policy.py`](../recap/safety/policy.py) | implemented | Kubernetes RBAC-aware policy, where RBAC is Kubernetes role-based access control (not yet built). Since M5 the cluster's own RBAC limits each of RECAP's identities, outside the policy engine ([section 14](#14-real-kubernetes-targets-m5)) |
 | `RecoveryOracle` | `EnvironmentHealthOracle` plus `recovery_result()`; each run's oracle is built by `ControllerDeps.oracle_factory` | [`recap/verification/oracle.py`](../recap/verification/oracle.py) | implemented (ground truth from the simulator or, since M5, from the cluster through the adapter's own oracle identity) | None for RECAP's own verdict: a benchmark's grader stays a separate verdict, never merged (SREGym's `run-oracle.py` since M5, [ADR 0031](decisions/0031-an-external-benchmark-harness-release-tags-and-pod-failure-onsets.md)) |
 | `Verifier` | `EvidenceVerifier`: merges the agents' claims; evidence rules for root-cause claims (V1 to V7) and for proposed fixes (VP1 to VP4), epoch-aware after a fix; typed disagreement records; not proof of causation | [`recap/agents/verifier.py`](../recap/agents/verifier.py) | implemented | Richer causal checks (not yet built) |
-| `TraceSink` | `JsonlTraceSink`, `SqliteTraceSink`, `BroadcastSink` (live stream); optional `OTelTraceSink` printing OpenTelemetry spans to the console | [`recap/telemetry/sinks.py`](../recap/telemetry/sinks.py), [`recap/telemetry/otel.py`](../recap/telemetry/otel.py) | implemented; OpenTelemetry bridge: adapter only (needs the `otel` extra) | OpenTelemetry collector over OTLP, the OpenTelemetry wire protocol (not yet built) |
+| `TraceSink` | `JsonlTraceSink`, `SqliteTraceSink`, `BroadcastSink` (live stream); optional `OTelTraceSink` printing OpenTelemetry spans to the console; with `RECAP_METRICS=1`, `ApiMetrics` counts events for Prometheus (M5; in each worker too since M6) | [`recap/telemetry/sinks.py`](../recap/telemetry/sinks.py), [`recap/telemetry/otel.py`](../recap/telemetry/otel.py), [`apps/api/metrics.py`](../apps/api/metrics.py) | implemented; OpenTelemetry bridge: adapter only (needs the `otel` extra) | OpenTelemetry collector over OTLP, the OpenTelemetry wire protocol (not yet built) |
 | `ApprovalChannel` | `AutoApprovalChannel` (refuses to exist outside a simulation), `ConsoleApprovalChannel` (terminal), `ExternalApprovalChannel` (dashboard through the API). On a live target (M5) only the target service's exact name approves: typed at the console, or sent as `confirm_target` to `POST /approvals/{id}`. | [`recap/safety/approvals.py`](../recap/safety/approvals.py) | console and API: implemented; auto-approver: simulated | Chat-ops approvals; per-person identity (not yet built: in V1 the approver is a free-text label; since M5 an approval proves a terminal or a token holder and a timing, not a person) |
 | `TrainingPipeline` | None. An abstract placeholder whose `train()` raises `NotImplementedError`. | [`recap/core/interfaces.py`](../recap/core/interfaces.py) | not yet built | Trajectory distillation or SFT (supervised fine-tuning) on recorded runs |
 
@@ -695,7 +708,7 @@ repository):
 ```python
 # my_infra/cluster_adapter.py  (example only)
 from recap.core.interfaces import TargetEnvironment
-from recap.core.models import EnvironmentInfo, ScenarioInfo
+from recap.core.models import EnvironmentInfo, ScenarioInfo, WriteEvidence
 from recap.core.observations import (
     ActionOutcome,
     AlertSignal,
@@ -750,6 +763,9 @@ class MyClusterEnvironment(TargetEnvironment):
     ) -> ActionOutcome: ...  # the only write: verify_capability(...) first, refuse safety-off
     async def health_check(self) -> HealthReport: ...  # ground truth for the oracle
     def end_run(self) -> None: ...  # optional (M5): free what the run held, such as a lease
+    def recorded_write(
+        self, approval_id: str, proposal_digest: str
+    ) -> WriteEvidence: ...  # optional (M6): your audit log's account of one write
 ```
 
 Rules for the translation:
@@ -998,6 +1014,8 @@ Untrusted inputs, and where each is checked:
 | **Provider decisions** (tool calls, hypotheses, mitigation drafts) | `DeterministicProvider`, the optional Claude adapter, or the red-team wrapper | Tool calls go through `ReadOnlyTools` and the policy. Hypotheses go through the verifier. For a draft, the policy takes the risk tier from the registry and ignores the draft's self-declared `risk_level`; the tool must be in the remediation catalog (R14), and the draft's params may not set the tool's target argument (R11/R12). Tool arguments are derived from the proposal by `mitigation_args`, and `check_proposal` requires cited evidence from this run and the diagnosed target. |
 | **Scenario overrides** (`run_overrides` in a scenario file) | `fixtures/scenarios` | Only `planner` and `strategy` are accepted, checked twice (`ScenarioSpec` validation and `SCENARIO_OVERRIDABLE` in the controller), and a field the caller set explicitly wins. A scenario can never switch off safety, approvals, memory isolation, the provider or the budget. |
 | **Approval decisions** | Terminal, API and dashboard, or the auto-approver (simulation only) | Accepted only through `ApprovalStore.decide`, which checks the digest and the expiry; approve only a pending request, reject a pending one or revoke an unused approval ("no" wins until the approval is used, right before the write is sent); compare-and-swap in one transaction; every attempt logged. Through the API the operator's bearer token is required and the approver recorded comes from it. On a live target (M5) only the target service's exact name approves: typed at the console, or sent as `confirm_target` to the API. The gateway re-reads the stored approval and consumes it before the call. |
+| **Jobs** (M6, Redis backend) | Redis | A worker checks each job again exactly as the API checks a request (`admission` in [`apps/worker/__main__.py`](../apps/worker/__main__.py)), so a job written to Redis some other way starts only what the API would start. Nothing read from Redis authorizes a write: a fix still needs an approval in the shared approval store. |
+| **Published runs** (M6) | `evals/live/` | Only the folders `evals/live/MANIFEST.json` names; every file's SHA-256 and size pinned, parsed as JSON only, validated by RECAP's own models, cross-checked, and refused whole on any failure or credential-shaped text ([`evals/published.py`](../evals/published.py)). Read-only: never written to a store, followed live or replayed. |
 
 The trusted side:
 
@@ -1051,6 +1069,10 @@ Everything is local files. The `data/` folder is git-ignored. `RECAP_DATA_DIR` m
 | `fixtures/recordings/*.jsonl` and `MANIFEST.json` | `scripts/recordings_manifest.py --update` (committed by hand) | Real model exchanges that CI and the dashboard replay; the manifest pins each file's SHA-256 and the run it reproduces (ADR 0028). |
 | `evals/reports/batches/<batch_id>/` | `--publish` of `scripts/evaluate.py`, `scripts/eval_replay.py`, `scripts/live_eval.py` | `batch.json` (one `EvalRecord` per run, one mode) and `README.md` (the digest for people) (ADR 0029). Local batches go to `<data>/evals/batches/`. |
 | `evals/reports/runs/<report_id>/` and `evals/reports/latest/` | Evaluation runner and `scripts/evaluate.py` | `results.json`, `results.csv` and `summary.md`. The script copies them to `evals/reports/latest/`, the only report kept in git ([`summary.md`](../evals/reports/latest/summary.md)), with `update_latest`, which refuses to replace it with an empty report. An evaluation started from the dashboard stays under `evals/reports/runs/`. |
+| Redis (only with `RECAP_EXECUTION_BACKEND=redis`, M6) | `JobQueue`: the API submits; workers claim, beat and finish | Jobs, the queue, each worker's processing list and heartbeat, idempotency keys (kept a day), counters and the queue-wait histogram. Coordination only: whether an incident was resolved is in the run records above (ADR 0034). |
+| `evals/live/MANIFEST.json` and `evals/live/<folder>/` | `scripts/export_run_trace.py`; pins renewed by `scripts/published_runs.py --update` (committed by hand) | The published real-cluster runs (M6): each one's record, trace, model recording and README; the manifest pins every file's SHA-256 and size (ADR 0033). |
+| `evals/reports/components/<id>/`, `evals/reports/load/<id>/` | `python -m evals.components --publish`; `scripts/api_load_test.py --out` (M6, committed by hand) | W4's component report; W6's load-test reports, with what Prometheus scraped. |
+| `evals/frozen/w5-heldout-sregym.yaml` | By hand, with `scripts/w5_freeze.py hash` | W5's frozen manifest: the problems and why each was chosen, the frozen settings, the two hashes, and the results (M6). |
 
 Notes:
 
@@ -1062,7 +1084,9 @@ Notes:
   touches `data/`.
 - Checkpoints make every run inspectable from the CLI, the API and the dashboard, and a crash leaves a
   recorded state behind. A run interrupted mid-way is **not** resumed from its checkpoint (not yet
-  built).
+  built). With the Redis backend (M6) a worker's interrupted run is closed from its persisted
+  evidence and, only when no write can have reached the target, run again as a new run
+  ([section 15](#15-m6-durable-execution-packaging-published-runs-metrics-and-evaluation)).
 - The SQLite files are trusted local state. Anyone who can write them could, for example, forge an
   approval. V1 assumes a single-user, local machine.
 
@@ -1103,6 +1127,13 @@ environment, so export them in your shell:
 M5 added two that are set for one process, not in `.env.example`: `RECAP_TARGET` (above), and
 `RECAP_ALLOW_HOSTED_MODEL_ON_LIVE_TARGET=1`, the owner's permission for a free hosted plan to see a
 live target's data (a paid model is refused on a live target whatever is set).
+
+M6 added the Redis backend's settings: `RECAP_EXECUTION_BACKEND=redis` and `RECAP_REDIS_URL`,
+then the queue's and the workers' limits, listed with their defaults in
+[infra/compose/.env.example](../infra/compose/.env.example). A worker reads the same
+configuration as the API. `RECAP_METRICS=1` (M5, in `.env.example`) turns metrics on;
+`RECAP_WORKER_METRICS_PORT` and `RECAP_WORKER_METRICS_HOST` give a worker its own metrics
+endpoint ([section 15](#15-m6-durable-execution-packaging-published-runs-metrics-and-evaluation)).
 
 These variables are read only in the controller process. The MCP subprocess receives its settings
 through `--env-config` instead ([section 5](#5-process-model)).
@@ -1177,7 +1208,10 @@ were produced from identical configuration and fixtures.
   own cluster, both Kind clusters on the owner's VM, not production), every real-model fix
   that ran approved by the owner ([section 14](#14-real-kubernetes-targets-m5)). SREGym's own
   grader passed one development run and failed another, whose fix RECAP's evidence check had
-  refused, so nothing had changed; no SREGym benchmark results exist.
+  refused, so nothing had changed. M6 W5's frozen, blind held-out evaluation ran 3 of its 5
+  problems: none was solved, no fix was proposed, and SREGym's grader failed all three. It is a
+  human-in-the-loop evaluation of three runs, not a benchmark score
+  ([w5-protocol.md](w5-protocol.md#results)).
 - **The default brain is scripted.** It understands the simulator's log conventions
   ([`signals.py`](../recap/core/signals.py)); real logs would need real parsers or an LLM provider.
   The Claude adapter is opt-in and has not been measured.
@@ -1202,7 +1236,10 @@ were produced from identical configuration and fixtures.
 - **One MCP subprocess per run** costs about 0.4 to 0.5 s of start-up.
 - **Token counts are estimates** (about 4 characters per token), and external API cost is $0 in
   deterministic mode.
-- **Checkpoints are not resumable.** A run interrupted mid-way is recorded but not resumed.
+- **Checkpoints are not resumable.** A run interrupted mid-way is recorded but not resumed. With
+  the Redis backend (M6) it is closed from its persisted evidence and, when no write can have
+  reached the target, run again as a new run that asks a person again; the in-process backend
+  and the CLI leave it at its last checkpoint.
 - **Nothing is trained.** `TrainingPipeline` and `LearnedRouter` only mark where learning would plug
   in.
 
@@ -1215,12 +1252,13 @@ typed, versioned shapes ([ADR 0027](decisions/0027-a-typed-read-only-api-over-th
 
 ```mermaid
 flowchart LR
-    ST["Stores: runs, events, evidence, approvals (recap.db); episodes (memory.db)"] --> RM["RunManager (apps/api/service.py)"]
+    ST["Stores: runs, events, evidence, approvals (recap.db); episodes (memory.db)"] --> RM["RunManager and RunReader (apps/api/service.py)"]
+    PUB["evals/live/MANIFEST.json: published runs, SHA-256 pinned (M6)"] -->|"evals/published.py"| RM
     RM --> VB["View builders (apps/api/views.py)"]
     VB --> DTO["Response models, schema recap-api-v1 (apps/api/dto.py)"]
-    DTO --> API["GET /system /providers /runs /runs/{id}/timeline /evidence /retrieval /usage /evals /replays"]
+    DTO --> API["GET /system /providers /runs /runs/{id}/timeline /evidence /retrieval /usage /evals /replays; since M6 /published /queue /jobs/{id} /evals/components"]
     DTO -.->|"scripts/gen_dashboard_types.py"| TS["apps/dashboard/src/dto.ts"]
-    API --> MC["Mission Control (React): nine screens"]
+    API --> MC["Mission Control (React): eleven screens since M6"]
     TS --> MC
     MAN["fixtures/recordings/MANIFEST.json (SHA-256)"] --> RP["GET /replays; POST /incidents/run with a replay_fixture"]
     RP --> RT["Runtime: the same controller, gateway, simulator and oracle"]
@@ -1237,6 +1275,11 @@ flowchart LR
 | Evaluation records | implemented | One mode per batch; success only with the oracle's verified recovery; a named failure category otherwise. |
 | Mission Control | implemented | Reads only the typed API; types generated from the response models; untrusted text escaped and labelled. |
 | Kubernetes evaluation mode | implemented (M5) | `real_kubernetes`: a real model's runs on a real cluster (the Kind demo, or SREGym's), each fix approved by a person, built from the stored runs by `scripts/live_eval.py --from-data`; never mixed with simulated results ([m5-integration-plan.md](m5-integration-plan.md)). A record names its target (`kind` or `sregym`), and a batch may hold a benchmark grader's own verdicts, recorded by hand and never merged with RECAP's ([section 14](#14-real-kubernetes-targets-m5)). |
+
+M6 added to the read side the published real-cluster runs behind the same views, the Guided
+Demo and Published Runs pages (M4 had nine screens), and the W4 comparisons and component
+evaluations on the Evaluations page
+([section 15](#15-m6-durable-execution-packaging-published-runs-metrics-and-evaluation)).
 
 ---
 
@@ -1408,6 +1451,12 @@ to end on a real cluster, not how often a model is right. The SREGym problem is 
 (RECAP was changed between its runs), and a person approved every fix, so nothing here is a
 benchmark result or comparable with SREGym's leaderboard.
 
+M6 W5 used the same adapter and profile, frozen: a development pilot on the same problem
+(RESOLVED after the owner approved a rollback; SREGym's grader passed it), then three held-out
+problems RECAP had never seen, none solved and none with a fix proposed
+([w5-protocol.md](w5-protocol.md#results),
+[section 15](#15-m6-durable-execution-packaging-published-runs-metrics-and-evaluation)).
+
 ### Tests
 
 - **Offline:** `tests/unit/test_kind_*.py` over the fake cluster,
@@ -1434,5 +1483,203 @@ benchmark result or comparable with SREGym's leaderboard.
 - Clocks on SREGym go unchecked: without Prometheus there is nothing to compare with, so a skew
   between the Mac and the VM would go unseen.
 - An approval proves a terminal or a token holder and a timing, not which person decided.
-- A run on a real cluster cannot be replayed; its recording is evidence only. Published runs are
-  files to read: Mission Control opens runs from its own data folder only.
+- A run on a real cluster cannot be replayed; its recording is evidence only. Since M6 the
+  published ones open in Mission Control, read-only, from their checked files
+  ([section 15](#15-m6-durable-execution-packaging-published-runs-metrics-and-evaluation)).
+
+---
+
+## 15. M6: durable execution, packaging, published runs, metrics and evaluation
+
+The incident path of sections 3 to 5 is the same in M6. Around it, M6 added an optional way to
+execute runs, a Docker Compose package, metrics from every process that runs incidents, a
+read-only source of real-cluster runs, a guided demo and two evaluations. The log of what was
+built and measured is [m6-progress.md](m6-progress.md); the backend's measurements, and the
+faults and attacks its tests inject, are in
+[performance-and-reliability.md](performance-and-reliability.md).
+
+### Durable execution: the Redis job queue and workers
+
+With `RECAP_EXECUTION_BACKEND=redis`, the API no longer runs incidents itself.
+`POST /incidents/run` checks the request as before, then queues a job, and worker processes
+(`python -m apps.worker`) claim jobs and run each through the same `Runtime.run_incident`, with
+the same configuration and data folder
+([ADR 0034](decisions/0034-durable-workers-redis-coordinates-the-run-records-decide.md)).
+Without that variable nothing changes: the in-process backend is the default, and RECAP needs
+neither Redis nor Docker.
+
+```mermaid
+flowchart LR
+    client["Dashboard or HTTP client, operator token"] -->|"POST /incidents/run"| api["API: the same request checks, then a job"]
+    api -->|"submit: idempotent, bounded"| redis[("Redis: queue, jobs, heartbeats, counters")]
+    worker["Worker processes: python -m apps.worker"] -->|"claim (BLMOVE), heartbeat"| redis
+    worker -->|"the API's checks again, then Runtime.run_incident"| run["Controller, gateway, MCP server, oracle: sections 3 to 5"]
+    run -->|"checkpoints, trace, approval requests"| data[("Shared data folder: recap.db, traces, sandbox")]
+    api -->|"reads runs, streams the stored trace, records a person's decision"| data
+```
+
+| Part | What it does | Code |
+|---|---|---|
+| Queue | Coordination only. Submission is idempotent (an `Idempotency-Key` names one job for a day) and bounded (429 with `Retry-After` past the capacity, 20 by default); a claim is atomic (`BLMOVE` into the worker's own list); a worker's heartbeat key expires after its TTL (20 s by default); every multi-key change is one `MULTI/EXEC`. A job's status says what happened to the job, never whether the incident was resolved. A small RESP client of RECAP's own: no new dependency. | [`queue.py`](../recap/workers/queue.py), [`resp.py`](../recap/workers/resp.py) |
+| Worker | Checks every job again exactly as the API checks a request, so a job written to Redis some other way runs only what the API would start. Runs up to `RECAP_WORKER_CONCURRENCY` incidents (one at a time on a live target) with the external approval channel, so a person approves through the API. A cancel the API marks takes effect at the next heartbeat. SIGTERM stops claiming and gives running incidents a grace period; a worker that cannot refresh its heartbeat in time cancels its own runs (fencing). | [`worker.py`](../recap/workers/worker.py), [`apps/worker/__main__.py`](../apps/worker/__main__.py) |
+| Reconciliation | Another worker settles a dead worker's jobs from four records outside Redis: the run's checkpoint, its trace (with the write-ahead `mitigation.started`), the approval log and the target's own audit log (`TargetEnvironment.recorded_write`, "unknown" unless the adapter can tell). A run that had started is closed as FAILED with an `Interruption`; its pending requests expire and its unused approvals are revoked. Only a run that provably sent no write runs again, as a new run that asks a person again; a write that may have landed ends as `needs_reconciliation`, never retried. | [`reconcile.py`](../recap/workers/reconcile.py) |
+| API | Run statuses `queued`, `interrupted` and `cancelled`; outcomes `interrupted` and `needs_reconciliation`; read-only `GET /queue` and `GET /jobs/{id}`. A worker's run streams from its stored trace, so `Last-Event-ID` resumes it and an API restart loses no event. | [`service.py`](../apps/api/service.py), [`main.py`](../apps/api/main.py) |
+
+Delivery is at least once, never exactly once. Each of the seven points where a worker can die
+(before its claim, after it, while investigating, while waiting for a person, right before the
+write, right after it, while verifying) is tested by killing a real worker process with SIGKILL
+([`test_worker_crashes.py`](../tests/integration/test_worker_crashes.py)).
+[flow.md, section 10](flow.md#10-with-the-redis-backend-m6-the-same-stages-in-a-worker) shows
+where an incident's path differs on this backend. Fencing relies on timing; what prevents a
+second write does not:
+single-use approvals, capability nonces and, on a live target, the namespace lease.
+
+### Docker Compose
+
+[infra/compose/](../infra/compose/README.md) packages the API, Mission Control (nginx, which
+proxies `/api` to the API), Redis, workers and, under the `metrics` profile, Prometheus. By
+default it runs the simulator with the scripted policy or a recording's replay: no cloud, no
+cluster, no model, no key. Published ports are bound to 127.0.0.1, Redis is not published, and
+every container runs as a non-root user with every capability dropped and a read-only root
+filesystem ([`test_compose_files.py`](../tests/unit/test_compose_files.py) checks the files
+offline). It was built and run with real containers on Apple silicon (linux/arm64), and W6's
+load test measured it there. linux/amd64 is not verified, and a container's runs record
+`code_version: "unknown"` (the image holds no git checkout).
+
+### Metrics
+
+Metrics are off unless `RECAP_METRICS=1`. `ApiMetrics` ([apps/api/metrics.py](../apps/api/metrics.py))
+is one more trace sink of the process that runs an incident: it counts what the run's events
+say, and never reads a record or changes a run. The API's `GET /metrics` serves its HTTP
+requests, the runs it executes itself and, with the Redis backend, the queue's numbers, read
+from Redis at each scrape (depth, capacity, queue wait, workers alive and busy, jobs by what
+happened to them). With that backend the runs execute in workers, so each worker serves its own
+runs' metrics on `RECAP_WORKER_METRICS_PORT` ([apps/worker/metrics.py](../apps/worker/metrics.py)),
+on 127.0.0.1 unless `RECAP_WORKER_METRICS_HOST` says otherwise. Compose's Prometheus finds every
+worker replica through Compose's DNS ([prometheus.yml](../infra/compose/prometheus.yml)). Every
+label value comes from a closed set: never an id, a prompt, model text, a path or a secret. The
+families, and what a load test of the Compose stack measured, are in
+[performance-and-reliability.md](performance-and-reliability.md);
+[flow.md](flow.md#where-the-metrics-are-counted) shows which event of a run feeds which metric.
+
+### Published real-cluster runs
+
+The API reads the real-cluster runs committed to `evals/live/` through one more read-only
+source ([ADR 0033](decisions/0033-published-real-cluster-runs-read-only-behind-the-same-views.md)).
+[`evals/live/MANIFEST.json`](../evals/live/MANIFEST.json) (schema `recap-published-runs-v1`)
+lists seven: three on the Kind demo, M5's SREGym run, and the three held-out runs of M6 W5.
+[`evals/published.py`](../evals/published.py) shows one only after its files match their pinned
+SHA-256s and sizes, validate as `RunRecord` and `TraceEvent`, agree with each other and with the
+run's evaluation record, and hold no credential-shaped text; a run that fails a check is refused
+whole and listed with the reason. `GET /published` lists them, and the run views fall back to a
+published run, with status `published`, when the server's own store does not know the id.
+Nothing can act on one: cancel answers 409, its approvals were never loaded into the approval
+store, and its recording is not a replay fixture. No cluster, model or cloud account is needed
+to open one.
+
+### The guided demo
+
+Mission Control's Guided Demo (`#/demo`, M6 W1) is a replay, not a new path. It starts the
+committed golden recording (`qwen3-8b-unfamiliar-parallel`) through `POST /incidents/run`, with
+provider `replay` and manual approval, on the simulator, through the same gateway and approval
+dialog as the Incident Lab. It tells the run as ten plain-language steps read from the run's own
+trace events, labelled as a recorded real-model execution replayed locally: no model is called.
+With the Redis backend a worker runs it like any other run.
+
+### The W4 evaluation framework
+
+[`evals/compare.py`](../evals/compare.py) compares two configurations that differ in exactly one
+switch: a pair that differs in anything else is refused before any run, the runs are paired by
+scenario and seed, and recorded provenance that differs beyond the switch is listed
+([ADR 0035](decisions/0035-one-switch-comparisons-separate-component-datasets-nothing-pooled.md)).
+Each evaluation record carries what could explain a difference: the seed, the router, verifier
+and policy versions, memory partitions, the effective budget and context limits, router rules
+per round, evidence per agent ([`evals/records.py`](../evals/records.py)).
+[`evals/components.py`](../evals/components.py) measures retrieval, memory, routing, budgets,
+the verifier and safety each on its own dataset ([evals/datasets/](../evals/datasets/README.md)),
+served at `GET /evals/components` and never merged into a success rate. These evaluations run
+on the simulator whatever `RECAP_TARGET` says, and the published W4 batches use the scripted
+policy: they describe RECAP's code paths, not a model's choices
+([evaluation.md, section 13](evaluation.md#13-component-evaluations-and-one-switch-comparisons-m6-w4)).
+
+### W5's frozen held-out evaluation
+
+Five SREGym problems were chosen from the benchmark registry's names alone, by a rule written
+down first, and their scenario files stayed blind (`family: unlabelled`, `expected: {}`) until
+the runs were over ([ADR 0036](decisions/0036-a-blind-frozen-held-out-evaluation.md)).
+[`scripts/w5_freeze.py`](../scripts/w5_freeze.py) hashes every tracked file under the frozen
+roots (RECAP's code and prompts, its configuration, the runbooks and their Kubernetes overlay,
+the SREGym scenarios and integration, the API, the run and batch scripts) and the installed
+packages; its `check` ran before every scored problem. The VM's model is pinned to one weights
+file: an Ollama provider with `weights:` in [`configs/providers.yaml`](../configs/providers.yaml)
+refuses a server whose model is another file
+([`ollama_provider.py`](../recap/providers/ollama_provider.py)). Held-out runs are never written
+to memory. The evaluation stopped after 3 of the 5 problems, none solved and none with a fix
+proposed, so nothing was written to the cluster ([w5-protocol.md](w5-protocol.md#results)). Its
+manifest, [`evals/frozen/w5-heldout-sregym.yaml`](../evals/frozen/w5-heldout-sregym.yaml), is now
+`completed`: the hashes are its record, and the test that compares them with the tree skips.
+
+### Limits
+
+- At-least-once delivery: a crash after a write may have reached the target ends in
+  `needs_reconciliation`, and a person checks the target.
+- The in-process backend and the CLI do not reconcile: a run whose process dies stays at its
+  last checkpoint.
+- Fencing relies on timing: a worker frozen past its heartbeat's TTL and then woken could write
+  a trace event that shares a sequence number with the events that closed its run; the closed
+  record itself cannot be overwritten (`RunStore.save`).
+- Compose is verified on linux/arm64 only. The load test measured one laptop, the simulator and
+  the scripted policy: not a capacity figure, and no model's latency.
+
+## 16. Repository layout
+
+```text
+.
+├── apps/
+│   ├── api/               FastAPI backend: runs, approvals, SSE stream, memory, knowledge, evals
+│   ├── worker/            python -m apps.worker: runs queued incidents (Redis backend, M6)
+│   └── dashboard/         React + TypeScript dashboard (Vite)
+├── configs/               environment adapter, agents, budgets, safety policy, providers (YAML);
+│                          targets/: the Kind demo and SREGym target profiles (M5, RECAP_TARGET)
+├── docs/                  architecture, learning notes, threat model, benchmark plan, M5 report
+│                          and log, decisions, screenshots
+├── evals/                 evaluation runner, train/test split, baselines, ablations, latest report;
+│                          reports/batches/: the published batches;
+│                          live/: exported real-model runs (trace, record, recording, README);
+│                          frozen/: W5's frozen manifest and session evidence; reports/load/: W6
+├── fixtures/
+│   ├── knowledge/         7 synthetic runbooks and guides (the RAG corpus)
+│   ├── knowledge-overlays/ Kubernetes runbooks for the real targets; a poisoned red-team runbook
+│   ├── scenarios/         17 incident scenarios: 6 demo, 3 train, 8 test (2 held-out M3 cases)
+│   ├── kind-scenarios/    4 Kind demo faults (M5)
+│   └── sregym-scenarios/  the M5 development problem and W5's five held-out problems
+├── infra/                 how RECAP runs; kind/: the Kind demo cluster; aws/: the owner's VM;
+│                          sregym/: SREGym on that VM (M5); compose/: Docker Compose (M6)
+├── integrations/sregym/   SREGym adapter (the Kubernetes adapter in external-harness mode);
+│                          the pre-M5 tool mapping
+├── recap/                 the Python package
+│   ├── core/              typed models, interfaces, lifecycle, config, signal conventions
+│   ├── harness/           controller, agent loop, budgets, run store
+│   ├── environments/      environment registry, the simulated shop and the Kubernetes adapter (M5)
+│   ├── tools/             MCP server and client, tool gateway, trusted tool registry
+│   ├── safety/            policy engine, approvals, injection flags, red-team planner
+│   ├── knowledge/         BM25 runbook retrieval (+ optional embeddings)
+│   ├── memory/            episodic experience memory
+│   ├── context/           evidence registry and context packer
+│   ├── routing/           routing signals, rules router, orchestrator
+│   ├── agents/            agent roles and the evidence verifier
+│   ├── verification/      recovery oracle
+│   ├── providers/         scripted policy (default), Ollama and Groq Free providers, replay, paid Claude adapter (off)
+│   ├── telemetry/         tracer, sinks, redaction, usage labels, optional OpenTelemetry
+│   ├── workers/           Redis job queue, workers, crash reconciliation (optional, M6)
+│   └── runtime.py         composition root: builds every part from configs
+├── scripts/               demo.py, evaluate.py, smoke_test.py, seed_demo.py, live_eval.py,
+│                          export_run_trace.py, published_runs.py, api_load_test.py, w5_freeze.py,
+│                          aws_cost_meter.py, export_contract_examples.py, bootstrap.sh
+├── tests/                 unit, integration, adversarial, e2e (live-cluster tests opt-in), fakes.py,
+│                          golden contract JSON
+├── .github/workflows/     CI
+├── .env.example           optional environment variables
+├── pyproject.toml         package metadata, dependencies, extras (dev, llm, embeddings, otel)
+└── LICENSE                MIT
+```

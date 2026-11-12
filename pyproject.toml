@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "recap"
-version = "0.6.0"
+version = "0.7.0"
 description = "RECAP — Experience-Learning Autonomous Reliability Agent (Prototype). Simulated by default; real Kubernetes targets since M5."
 readme = "README.md"
 requires-python = ">=3.11"

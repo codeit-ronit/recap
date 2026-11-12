@@ -716,6 +716,37 @@ of it ran on the owner's laptop; the report is
   over the repository: clean.
 - **Next:** W7, final productization.
 
+## W7: final productization (2026-11-12)
+
+The last workstream: the product a recruiter or interviewer meets first. The final summary and
+the spec's twenty checks are in [m6-report.md](m6-report.md).
+
+- **UX:** the browser smoke test, 133 of 133 checks, twice on 0.7.0, now including the seven
+  published runs (W5's three cards among them). Two copy fixes it surfaced: the Published Runs
+  page described every run as an approved recovery (it now says what each published run is, and a
+  run with no approval decided says so), and the Guided Demo said "played back in order" and
+  called its incident held out (it is answered from the recording by what each request asks,
+  and the incident is unfamiliar, not held out). Dashboard tests: 710.
+- **README:** rewritten around the five questions the spec asks (what RECAP does, the problem,
+  what is interesting in its AI design, how to try it, what has been demonstrated, with sample
+  sizes), 221 lines instead of 606; the component table moved to [status.md](status.md#component-status),
+  the terminal demos to [demo-walkthrough.md](demo-walkthrough.md), the repository layout to
+  [architecture.md](architecture.md#16-repository-layout). Fresh screenshots (23), including the
+  Guided Demo and Published Runs.
+- **Docs:** four agents on separate files brought the interview kit ([interview.md](interview.md),
+  new), the architecture, flow and threat model, the status and evaluation pages, and the
+  walkthrough and the API, dashboard and Compose READMEs up to date with M6, checking each claim
+  against the code, the tests or the evidence (819 links and 346 cited test ids resolved); the
+  follow-ups they found outside their files were fixed (`evals/live/README.md`, ADR 0034).
+- **Release candidate:** version 0.7.0 in the package, the API and Mission Control; the 0.7.0
+  section of [CHANGELOG.md](../CHANGELOG.md); the final report.
+- **Checks:** the full Python suite 2485 passed, 15 skipped; ruff, format and mypy clean; the
+  secret scan of the files and history clean; the recordings and published runs match their
+  pins; the API smoke test RESOLVED; the scripted V1 evaluation reproduced the committed report
+  exactly (its run's refresh of `evals/reports/latest/` was reverted); the guided demo from a
+  fresh checkout: see [m6-report.md](m6-report.md#final-verification), check 4.
+- **Next:** the owner pushes, tags v0.7.0 and publishes the release; M6 is then done.
+
 ## Workstream status
 
 | Workstream | Status |
@@ -727,4 +758,4 @@ of it ran on the owner's laptop; the report is
 | W4 AI architecture evaluation | done: measured on the simulator with the scripted policy; the real-model pilot is planned, not run; the owner's review is pending |
 | W5 held-out SREGym evaluation | done: 3 of the 5 frozen problems run (a stop condition, then the owner's decision), none solved; results published |
 | W6 operational hardening | done: metrics, load test, fault and attack coverage, two defects fixed |
-| W7 final productization | next |
+| W7 final productization | done: README, docs, interview kit, screenshots, UX fixes, version 0.7.0, the final verification ([m6-report.md](m6-report.md)); the push, tag and release are the owner's |
