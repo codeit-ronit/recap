@@ -29,6 +29,7 @@ from tests.helpers import OPERATOR_HEADERS
 SREGYM = "run-9d7f47104d"
 SREGYM_FOLDER = "2026-11-07-qwen3-8b-sregym-human-approved-prompts-v4.7"
 KIND = ("run-047aac6eb0", "run-f5b9e5bf45", "run-34a3580d2f")
+W5 = ("run-7bc5159b6d", "run-db560f6568", "run-62f9029f00")  # M6 W5: the held-out SREGym runs
 
 
 @pytest.fixture
@@ -52,7 +53,7 @@ def test_published_runs_are_listed_apart_from_this_servers_own_runs(client: Test
     assert body["schema_version"] == "recap-api-v1"
     assert body["manifest_schema"] == "recap-published-runs-v1"
     assert body["manifest_error"] is None and body["rejected"] == []
-    assert [run["run_id"] for run in body["runs"]] == [*KIND, SREGYM]
+    assert [run["run_id"] for run in body["runs"]] == [*KIND, SREGYM, *W5]
     for run in body["runs"]:
         assert run["status"] == "published"
         assert run["labels"][0] == PUBLISHED_LABEL
@@ -165,7 +166,7 @@ def test_a_tampered_artifact_is_never_served(
     app.state.reader = RunReader(app.state.manager, published_manifest=live / "MANIFEST.json")
 
     body = client.get("/published").json()
-    assert [run["run_id"] for run in body["runs"]] == list(KIND)
+    assert [run["run_id"] for run in body["runs"]] == [*KIND, *W5]
     assert body["rejected"] == [
         {
             "folder": SREGYM_FOLDER,

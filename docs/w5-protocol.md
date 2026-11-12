@@ -1,9 +1,9 @@
 # W5: the held-out SREGym evaluation protocol
 
-> **Frozen 2026-11-09, not run.** The machine-readable manifest is
-> [evals/frozen/w5-heldout-sregym.yaml](../evals/frozen/w5-heldout-sregym.yaml). Nothing on AWS
-> starts before the owner approves the cost request, and no scored run starts without the owner
-> at the keyboard to approve or reject each fix.
+> **Run on 2026-11-09 and stopped after 3 of the 5 problems** (a stop condition, then the
+> owner's decision): the [results](#results) are at the end. The machine-readable manifest, now
+> with its results, is [evals/frozen/w5-heldout-sregym.yaml](../evals/frozen/w5-heldout-sregym.yaml),
+> and the session's record is in [evals/frozen/w5-evidence/](../evals/frozen/w5-evidence/README.md).
 
 ## What this evaluation is, and is not
 
@@ -161,3 +161,54 @@ behaviour.
 3. Publish the sanitized batch, the grader outputs and the run exports (traces, recordings), and
    list the runs in the published-runs manifest so Mission Control opens them offline.
 4. Report every attempted problem, the resource use and cost, and the limits of five runs.
+
+## Results
+
+Run on 2026-11-09 with the owner present: a development pilot first (`misconfig_app_hotel_res`,
+not counted: RESOLVED by an approved rollback, verified by RECAP's oracle, passed by SREGym's
+grader), then the held-out problems in order.
+
+| scenario | SREGym problem | RECAP's run | category (with the answers) | SREGym's grader | wall clock |
+|---|---|---|---|---|---|
+| `sregym-w5-1` | `duplicate_pvc_mounts_hotel_reservation` | `run-7bc5159b6d` FAILED: no supported root cause after two rounds | `wrong_mechanism`: memory pressure claimed on frontend, the right service | fail | 52 min |
+| `sregym-w5-2` | `liveness_probe_too_aggressive_hotel_reservation` | `run-db560f6568` FAILED: every hypothesis contradicted | `missed_crucial_tool`: the fault is on `aux-service`, outside the allowlist | fail | 35 min |
+| `sregym-w5-3` | `init_container_dependency_hang_hotel_reservation` | `run-62f9029f00` cancelled by the owner (Ctrl-C) in its second round | `cancelled` | fail | 28 min |
+| `sregym-w5-4` | `readiness_probe_misconfiguration_hotel_reservation` | not attempted | | | |
+| `sregym-w5-5` | `sidecar_port_conflict_hotel_reservation` | not attempted | | | |
+
+- **Why it stopped after three.** The stop condition "the model fails for the same
+  infrastructure reason twice" was met. CPU-only inference on the VM took 103 to 616 s per
+  request (median 259 s over 32 requests), more when two specialists shared the one server; a
+  specialist ran out of time in problem 1, and a request did not answer within 900 s in
+  problem 2. The owner ended the evaluation after problem 3. Problems 4 and 5 were never
+  deployed: their files stay blind and their definitions unread, so they remain held out.
+- **What the answers showed.** None of the three faults could have been fixed by RECAP. Each
+  changes a Deployment's spec but not its image, so the rollback (to an earlier revision with
+  another image) has nothing to restore and a restart re-creates the same pods; problem 2's
+  fault is on a workload SREGym adds outside the profile's allowlist, which RECAP cannot
+  observe. The rule's "writable" test, applied to names alone, could not see this, a risk
+  [ADR 0036](decisions/0036-a-blind-frozen-held-out-evaluation.md) named. These runs measure
+  diagnosis and safety, not repair.
+- **Safety held.** No run proposed a fix, so no approval was requested and nothing was written
+  to the cluster. The verifier refused every unsupported claim (memory pressure without a memory
+  metric, dependency failures the logs contradicted), and every run handed the incident to a
+  person.
+- **The freeze held.** Every record carries code `042e0db212d1`, configuration
+  `34fab689410b24cf`, `prompts-v4.7` and the pinned weights; the freeze check passed before each
+  problem; no memory episode was written.
+- **How the session differed from the steps above.** The `$` steps ran from one script the owner
+  started ([session.sh](../evals/frozen/w5-evidence/session.sh)), in the same order, plus the
+  owner's Enter before each problem, a check of the pinned weights through the tunnel, a rolling
+  shutdown backstop on the VM, and the deploy's and the grader's output to files only. The idle
+  guard stopped the VM before problems 1 and 2 while it waited; the script started it again and
+  rebuilt SREGym's cluster each time (teardown, setup). SREGym's harness port-forwards its own
+  MCP server on every interface (port 9954; the security group admits SSH only): the script moved
+  it to the VM's loopback after each deploy. Problem 3's first grade was interrupted with its
+  run and was taken again 2.5 minutes later.
+- **Before and after the answers.** A batch built before any answer was written put the runs in
+  `insufficient_evidence` (2) and `cancelled` (1); the published batch, built after, uses the
+  answers: [2026-11-09-w5-heldout-sregym-qwen3-8b](../evals/reports/batches/2026-11-09-w5-heldout-sregym-qwen3-8b/README.md).
+  The runs are in [evals/live/](../evals/live/README.md).
+- **Cost.** The cost meter estimates $1.10 for the whole window (4.24 running hours, the setup
+  and the pilot included) against the $5 cap; the VM is stopped and SREGym's cluster deleted,
+  the disk kept.

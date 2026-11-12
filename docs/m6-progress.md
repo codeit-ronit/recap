@@ -640,6 +640,42 @@ more problem would cross it.
   Whether SREGym's harness deploys each one, and whether RECAP's alert fires, is part of the
   evaluation: a problem that does not deploy or never alerts is reported as such, not replaced.
 
+## W5 results: the held-out SREGym evaluation, stopped after 3 of 5 (2026-11-09)
+
+The owner approved Stage A (the setup and the development pilot), then asked to complete W5 and
+ran every scored problem at their own terminal. Everything in words:
+[w5-protocol.md](w5-protocol.md#results).
+
+- **Stage A (not counted):** the VM started (its idle guard stopped it once while the owner was
+  away; it was restarted on the owner's word), SREGym's cluster rebuilt after the restart, port
+  9954 moved to loopback; the development pilot `run-4ee61b5cb9` RESOLVED in 25 minutes (an
+  approved rollback of geo), passed by SREGym's grader.
+- **Stage B:** `sregym-w5-1` FAILED (`wrong_mechanism`, 52 min), `sregym-w5-2` FAILED
+  (`missed_crucial_tool`: its fault is on `aux-service`, outside the allowlist; 35 min),
+  `sregym-w5-3` cancelled by the owner in its second round (28 min); SREGym's grader: fail for
+  all three. No fix was proposed, so no approval was asked for and nothing was written.
+- **Stopped after three:** the model timed out twice for the same reason (CPU-only inference,
+  103 to 616 s per request, median 259 s), a stop condition of the protocol, then the owner's
+  decision; `sregym-w5-4` and `-5` never ran and stay blind.
+- **Finding:** none of the three faults was within RECAP's two remediations (each changes a
+  Deployment's spec, not its image), and one is outside the profile's allowlist; choosing by name
+  could not tell. New roadmap item: a typed, approved change of one Deployment field.
+- **Infrastructure:** SREGym's harness serves its MCP port 9954 on all of the VM's interfaces
+  (blocked by the security group; moved to loopback after each deploy); the threat model is
+  corrected.
+- **Integrity:** every record at code `042e0db212d1`, configuration `34fab689410b24cf`, the pinned
+  weights; no memory written; the answers added only after the runs, to the three attempted
+  problems only.
+- **Cost:** about $1.10 (the meter's estimate, 4.24 running hours); the VM stopped, SREGym's
+  cluster deleted, the disk kept.
+- **Published:** batch `2026-11-09-w5-heldout-sregym-qwen3-8b`, three runs in `evals/live/`, the
+  session record in `evals/frozen/w5-evidence/`, the manifest marked completed.
+- **Checks:** the W5, SREGym adapter and published-runs tests, updated for the answered problems
+  and the seven published runs; then the full Python suite, 2494 tests: 0 failed (the skipped
+  ones need a live Kind cluster, a real Redis or the optional OTel extra).
+- **Commits:** `0395662` (results) and the commit that adds this section (the write-up).
+- **Next:** W6, operational hardening.
+
 ## Workstream status
 
 | Workstream | Status |
@@ -649,5 +685,6 @@ more problem would cross it.
 | W2 published-run import | done: implemented and checked locally; the owner's review is pending |
 | W3 durable workers and Docker Compose | done: implemented, then verified with real containers and a real Redis (linux/arm64); the owner's review is pending |
 | W4 AI architecture evaluation | done: measured on the simulator with the scripted policy; the real-model pilot is planned, not run; the owner's review is pending |
-| W5 held-out SREGym evaluation | prepared and frozen; not run: the owner's approval of the AWS session is pending |
-| W6–W7 | not started: not authorized yet |
+| W5 held-out SREGym evaluation | done: 3 of the 5 frozen problems run (a stop condition, then the owner's decision), none solved; results published |
+| W6 operational hardening | next |
+| W7 final productization | not started |

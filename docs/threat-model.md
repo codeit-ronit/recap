@@ -130,7 +130,7 @@ in the dashboard.
 | No hosted model, replay, auto-approver or safety-off on a live target (M5) | `_check_provider_scope`, `_check_replay_scope` and `_check_safety_scope` in `recap/harness/controller.py` | implemented (a free hosted plan only with the owner's explicit setting; a paid model never) |
 | Cluster-side limits on the Kind demo: RBAC for RECAP's identities, an admission policy on writes (M5) | `infra/kind/manifests/10-recap-rbac.yaml`, `infra/kind/manifests/20-recap-admission-policy.yaml` | implemented |
 | Cluster-side limits on SREGym's cluster: RBAC only (M5) | `infra/sregym/recap-rbac.yaml` | in use, untested |
-| The owner's VM: SSH only, from the owner's IP; cluster and model ports on its loopback; an idle guard (M5) | `infra/aws/ec2.sh`, `infra/aws/idle-guard.sh` | in use, untested (shell scripts) |
+| The owner's VM: SSH only, from the owner's IP; cluster and model ports on its loopback, except SREGym's own MCP server, which its harness port-forwards on every interface (port 9954, found in M6 W5: the security group blocks it, and W5 moved it to loopback after each deploy); an idle guard (M5) | `infra/aws/ec2.sh`, `infra/aws/idle-guard.sh` | in use, untested (shell scripts) |
 | OpenTelemetry output | `recap/telemetry/otel.py` (console bridge, optional extra) | adapter only |
 | Per-user identity and roles, a policy that reads the cluster's RBAC itself, isolated MCP server, audit export | none | not yet built |
 

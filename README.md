@@ -378,7 +378,7 @@ Other known limits: pattern-based injection detection is not production-grade (t
 
 ## Evaluation results
 
-> **Small N, no statistical claims, not production.** The scripted, replay and real-model rows ran on the simulated shop. The real-Kubernetes rows ran on real Kind clusters on the owner's own machines (M5), and the SREGym row is one development problem, not a benchmark result.
+> **Small N, no statistical claims, not production.** The scripted, replay and real-model rows ran on the simulated shop. The real-Kubernetes rows ran on real Kind clusters on the owner's own machines (M5), and the SREGym row is one development problem, not a benchmark result; the held-out SREGym row (M6 W5) is three frozen, blind runs, none solved.
 
 Since M4 every evaluated run is one record with a named reason when it did not recover, and
 records come in batches of exactly one mode: what decided (a scripted policy, a recording, a
@@ -395,6 +395,7 @@ Success means the independent oracle verified the recovery. The published batche
 | Real model, free hosted | `gpt-oss-120b` on Groq's free plan (M3) | 1 | 2 | 1 insufficient_evidence, 1 quota_cap |
 | Real Kubernetes, Kind demo | `qwen3:8b` on the owner's VM (one run on the Mac), prompts-v4.7, approvals by the owner at the terminal or, for one run, in Mission Control (M5) | 1 | 7 | 3 success, 2 approval_rejected, 1 insufficient_evidence, 1 cancelled |
 | Real Kubernetes, SREGym | `qwen3:8b` on the owner's VM, prompts-v4.7, approvals at the owner's terminal (M5) | 1 | 5 | 1 success, 1 safety_blocked, 1 approval_rejected (expired), 2 wrong_mechanism; SREGym's own grader, recorded apart: 1 pass, 1 fail, 3 not graded |
+| Real Kubernetes, SREGym held-out (M6 W5) | `qwen3:8b` on the owner's VM, prompts-v4.7, everything frozen; the owner at the terminal, though no fix reached an approval | 1 | 3 | 1 wrong_mechanism, 1 missed_crucial_tool, 1 cancelled; SREGym's own grader, recorded apart: 3 fail |
 
 On the simulated incidents the real-model runs are one or two samples per incident and
 configuration, mostly approved by the simulation auto-approver; in those batches only the
@@ -458,6 +459,10 @@ Reproduce with `python scripts/evaluate.py` or the dashboard's **Run evaluation*
 > Still the scripted policy on simulated incidents: what each component does in RECAP's code, not what a model does with it.
 
 M6 W4 ran V1's six test scenarios plus two held-out ones under eleven configurations, compared in nine pairs that each change one switch (checked before the runs and again from their records), and measured retrieval, memory, routing, budgets, the verifier and safety each on their own ([docs/evaluation.md](docs/evaluation.md) section 13, [ADR 0035](docs/decisions/0035-one-switch-comparisons-separate-component-datasets-nothing-pooled.md)). Batches [`20261108-w4-scripted`](evals/reports/batches/20261108-w4-scripted/README.md) and [`20261108-w4-scripted-seeds`](evals/reports/batches/20261108-w4-scripted-seeds/README.md) (seeds 1 to 3: no outcome changed), component report [`20261108-w4-components`](evals/reports/components/20261108-w4-components/README.md). In short, as counts out of 8 paired runs: runbook retrieval is what turns a correct diagnosis into a recovery (`no_rag` 4 of 8 → 8 of 8: without a runbook the policy falls back to a restart, which cannot undo a bad release); adaptive routing kept every recovery and used 2.9 fewer tool calls per run than always-single; memory changed no outcome, cost about 1,500 estimated tokens per run, and judged all 79 remembered episodes correctly (no unsafe reuse); hybrid search changed no outcome; halving the tool budget cost the hardest held-out incident (7 of 8); halving the context budget dropped 23 context items in 4 runs and changed no outcome. On its own dataset, no ranker puts the right runbook first for any raw alert (0 of 17), and RECAP's remediation lookup finds it every time. The real-model pilot is planned ([evals/plans/w4-pilot.yaml](evals/plans/w4-pilot.yaml)), not run.
+
+### The W5 held-out SREGym evaluation (M6)
+
+RECAP ran, frozen and blind, on SREGym problems it had never seen: chosen from SREGym's problem names alone by a rule written down first, with no answer in their scenario files until the runs were over ([docs/w5-protocol.md](docs/w5-protocol.md#results), [ADR 0036](docs/decisions/0036-a-blind-frozen-held-out-evaluation.md)). It stopped after 3 of the 5 frozen problems: the model, on the VM's CPU, timed out in two of them (a stop condition of the protocol) and the owner ended the evaluation; the third was cancelled by the owner during its second round. None of the three was solved, by RECAP's oracle or by SREGym's grader, and none could have been with RECAP's actions: each fault changes a Deployment's spec without changing its image, which neither a rollback to an earlier image nor a restart can undo, and one sits on a workload outside RECAP's allowlist. RECAP proposed no fix in any run: its verifier refused every unsupported claim, and each run handed the incident to a person. Batch [`2026-11-09-w5-heldout-sregym-qwen3-8b`](evals/reports/batches/2026-11-09-w5-heldout-sregym-qwen3-8b/README.md); the three runs in [evals/live/](evals/live/README.md); about $1.10 of AWS credits.
 
 ## Safety model in brief
 
@@ -560,7 +565,7 @@ CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on every push and
 
 | Item | Why | Depends on | Priority |
 |---|---|---|---|
-| A held-out SREGym evaluation | M5's SREGym runs are one development problem, not held out, so there is no benchmark score yet ([docs/m5-report.md](docs/m5-report.md)) | SREGym problems RECAP was never run on, split by failure mechanism and committed before the first scored run ([docs/benchmark-plan.md](docs/benchmark-plan.md)); RECAP frozen while they run | High |
+| Remediations beyond a rollback and a restart | The held-out SREGym problems of M6 W5 all needed an edit of a Deployment's spec (storage, a probe, an init container), which neither of RECAP's two actions can make ([docs/w5-protocol.md](docs/w5-protocol.md#results)) | A typed, approved action that changes one field of one Deployment, with its own policy rules, dry run, read-back and oracle check; then the two held-out problems still unseen (`sregym-w5-4`, `-5`) | High |
 | SREGym's cluster guarded like the Kind demo | There RBAC alone limits RECAP's writer, and a clock skew between the Mac and the VM would go unseen | An admission policy on that cluster; a clock check without Prometheus | High |
 | Real LLM evaluation (local and free models) | Real models ran on 5 simulated incidents (M2 to M4), one or two samples each, and 12 times on real clusters (M5), failures included ([docs/status.md](docs/status.md), [docs/m5-progress.md](docs/m5-progress.md)); CI replays a real single-agent and a real two-agent run | Repeated runs per scenario for success rates; a GPU, or a larger free model, to measure how much the model itself limits the results | High |
 | A prompt version from the M4.5 failure analysis | Hand each round's own plan to the next, leads that name the evidence the rules need, claims across roles (the deferred fixes P4 to P6) | Re-recording the golden replay, with the owner's approval | Medium |
@@ -587,7 +592,7 @@ CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on every push and
 - [docs/demo-walkthrough.md](docs/demo-walkthrough.md): the live demo, click by click (the replay of the real two-agent run)
 - [docs/evaluation.md](docs/evaluation.md): evaluation modes, records, failure categories and the published batches
 - [docs/m5-integration-plan.md](docs/m5-integration-plan.md): the M5 plan for a Kind cluster, then SREGym, written before the work (the report and the log say what was built)
-- [docs/benchmark-plan.md](docs/benchmark-plan.md): the plan for a held-out SREGym benchmark (not run yet)
+- [docs/w5-protocol.md](docs/w5-protocol.md): the held-out SREGym evaluation of M6 W5, its frozen protocol and its results (3 of 5 problems run, none solved); [docs/benchmark-plan.md](docs/benchmark-plan.md) is the earlier, broader plan
 - [docs/provider-options.md](docs/provider-options.md): free LLM inference options (researched; Ollama and Groq Free in use since M2)
 - [CHANGELOG.md](CHANGELOG.md): what each version (milestone) changed; each version is a git tag and a GitHub release
 - [evals/live/](evals/live/README.md): exported real-model runs, including the human-approved runs of M2, M3 and M5 (three on the Kind cluster, one of them approved in Mission Control, and one on SREGym's)

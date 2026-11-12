@@ -56,7 +56,9 @@ person might edit between runs.
 ### Bad
 
 - Five problems chosen by name may include ones RECAP cannot fix with a rollback or a restart;
-  that is part of what is measured, and the report says which.
+  that is part of what is measured, and the report says which. Observed (2026-11-09): all three
+  problems the evaluation reached were of that kind, and one sat outside the profile's allowlist
+  ([w5-protocol.md](../w5-protocol.md#results)).
 - Categories that need the answer (wrong service, wrong mechanism) exist only after the post-hoc
   labelling; until then a failed run reads as unsolved.
 - The freeze also blocks harmless edits under the frozen roots for the evaluation's duration.

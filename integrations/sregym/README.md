@@ -1,11 +1,12 @@
 # SREGym adapter
 
-**Status: implemented in M5 (W5); development runs only, no benchmark results yet.** RECAP has
-run on one SREGym problem, `misconfig_app_hotel_res`, on SREGym's own cluster on the owner's VM,
-with the owner approving the fix at the terminal. Those runs shaped the adapter, so that
-problem is not held out ([docs/m5-progress.md](../../docs/m5-progress.md)). M6 W5 froze a
-held-out evaluation on five problems RECAP was never run on (`sregym-w5-1` to `-5`, blind
-scenario files), not run yet: [docs/w5-protocol.md](../../docs/w5-protocol.md).
+**Status: implemented in M5 (W5); one development problem and one held-out evaluation.** RECAP
+ran on `misconfig_app_hotel_res` on SREGym's own cluster on the owner's VM, with the owner
+approving the fix at the terminal; those runs shaped the adapter, so that problem is not held out
+([docs/m5-progress.md](../../docs/m5-progress.md)). M6 W5 then ran a frozen, blind evaluation on
+problems RECAP was never run on: 3 of the 5 frozen problems ran, none was solved, and none could
+have been with RECAP's rollback or restart; `sregym-w5-4` and `-5` were never attempted and stay
+blind ([docs/w5-protocol.md](../../docs/w5-protocol.md#results)).
 
 ## What it is
 
