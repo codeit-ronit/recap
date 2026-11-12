@@ -1,0 +1,305 @@
+{
+  "targets up, by job": {
+    "query": "sum by (job) (up)",
+    "result": [
+      [
+        {
+          "job": "recap-api"
+        },
+        "1"
+      ],
+      [
+        {
+          "job": "recap-workers"
+        },
+        "2"
+      ]
+    ]
+  },
+  "incidents finished, by state (workers)": {
+    "query": "sum by (state) (recap_incidents_finished_total)",
+    "result": [
+      [
+        {
+          "state": "BLOCKED"
+        },
+        "0"
+      ],
+      [
+        {
+          "state": "BUDGET_EXHAUSTED"
+        },
+        "0"
+      ],
+      [
+        {
+          "state": "FAILED"
+        },
+        "0"
+      ],
+      [
+        {
+          "state": "QUOTA_EXHAUSTED"
+        },
+        "0"
+      ],
+      [
+        {
+          "state": "RESOLVED"
+        },
+        "44"
+      ]
+    ]
+  },
+  "tool calls, by outcome": {
+    "query": "sum by (outcome) (recap_tool_calls_total)",
+    "result": [
+      [
+        {
+          "outcome": "ok"
+        },
+        "352"
+      ]
+    ]
+  },
+  "fixes, by outcome": {
+    "query": "sum by (outcome) (recap_actions_total)",
+    "result": [
+      [
+        {
+          "outcome": "blocked"
+        },
+        "0"
+      ],
+      [
+        {
+          "outcome": "executed"
+        },
+        "44"
+      ],
+      [
+        {
+          "outcome": "expired"
+        },
+        "0"
+      ],
+      [
+        {
+          "outcome": "refused"
+        },
+        "0"
+      ],
+      [
+        {
+          "outcome": "rejected"
+        },
+        "0"
+      ]
+    ]
+  },
+  "recovery verdicts": {
+    "query": "sum by (verified) (recap_recovery_verifications_total)",
+    "result": [
+      [
+        {
+          "verified": "false"
+        },
+        "0"
+      ],
+      [
+        {
+          "verified": "true"
+        },
+        "44"
+      ]
+    ]
+  },
+  "approval waits, by decision": {
+    "query": "sum by (decision) (recap_approval_wait_seconds_count)",
+    "result": [
+      [
+        {
+          "decision": "approved"
+        },
+        "44"
+      ]
+    ]
+  },
+  "approval wait p95 (s, from buckets)": {
+    "query": "histogram_quantile(0.95, sum by (le) (recap_approval_wait_seconds_bucket))",
+    "result": [
+      [
+        {},
+        "0.95"
+      ]
+    ]
+  },
+  "jobs, by event (queue)": {
+    "query": "sum by (event) (recap_jobs_total)",
+    "result": [
+      [
+        {
+          "event": "cancelled"
+        },
+        "0"
+      ],
+      [
+        {
+          "event": "completed"
+        },
+        "44"
+      ],
+      [
+        {
+          "event": "failed"
+        },
+        "0"
+      ],
+      [
+        {
+          "event": "needs_reconciliation"
+        },
+        "0"
+      ],
+      [
+        {
+          "event": "requeued"
+        },
+        "0"
+      ],
+      [
+        {
+          "event": "submitted"
+        },
+        "44"
+      ]
+    ]
+  },
+  "queue waits counted": {
+    "query": "recap_queue_wait_seconds_count",
+    "result": [
+      [
+        {
+          "job": "recap-api"
+        },
+        "44"
+      ]
+    ]
+  },
+  "queue wait mean (s)": {
+    "query": "recap_queue_wait_seconds_sum / recap_queue_wait_seconds_count",
+    "result": [
+      [
+        {
+          "job": "recap-api"
+        },
+        "5.4259545454545455"
+      ]
+    ]
+  },
+  "queue wait p50 (s, from buckets)": {
+    "query": "histogram_quantile(0.5, sum by (le) (recap_queue_wait_seconds_bucket))",
+    "result": [
+      [
+        {},
+        "5.625"
+      ]
+    ]
+  },
+  "queue wait p95 (s, from buckets)": {
+    "query": "histogram_quantile(0.95, sum by (le) (recap_queue_wait_seconds_bucket))",
+    "result": [
+      [
+        {},
+        "24.499999999999993"
+      ]
+    ]
+  },
+  "peak queue depth (15 min)": {
+    "query": "max_over_time(recap_queue_depth[15m])",
+    "result": [
+      [
+        {
+          "job": "recap-api"
+        },
+        "4"
+      ]
+    ]
+  },
+  "peak busy workers (15 min)": {
+    "query": "max_over_time(recap_workers_busy[15m])",
+    "result": [
+      [
+        {
+          "job": "recap-api"
+        },
+        "2"
+      ]
+    ]
+  },
+  "workers alive": {
+    "query": "recap_workers{alive=\"true\"}",
+    "result": [
+      [
+        {
+          "alive": "true",
+          "job": "recap-api"
+        },
+        "2"
+      ]
+    ]
+  },
+  "API requests, by status class": {
+    "query": "sum by (status_class) (recap_api_requests_total)",
+    "result": [
+      [
+        {
+          "status_class": "2xx"
+        },
+        "5506"
+      ],
+      [
+        {
+          "status_class": "4xx"
+        },
+        "16"
+      ]
+    ]
+  },
+  "API p95 latency (s, from buckets)": {
+    "query": "histogram_quantile(0.95, sum by (le) (recap_api_request_duration_seconds_bucket))",
+    "result": [
+      [
+        {},
+        "0.009774280575539565"
+      ]
+    ]
+  },
+  "tool call p95 (s, from buckets)": {
+    "query": "histogram_quantile(0.95, sum by (le) (recap_tool_call_duration_seconds_bucket))",
+    "result": [
+      [
+        {},
+        "0.3999999999999999"
+      ]
+    ]
+  },
+  "incident p95 (s, from buckets)": {
+    "query": "histogram_quantile(0.95, sum by (le) (recap_incident_duration_seconds_bucket))",
+    "result": [
+      [
+        {},
+        "4.8"
+      ]
+    ]
+  },
+  "model requests (scripted baseline: none expected)": {
+    "query": "sum(recap_model_requests_total) or vector(0)",
+    "result": [
+      [
+        {},
+        "0"
+      ]
+    ]
+  }
+}

@@ -11,7 +11,14 @@ import pytest
 from apps.api.main import create_app
 from recap.core.config import Settings
 from recap.runtime import Runtime
-from scripts.api_load_test import LoadTestRefused, load_test, main
+from scripts.api_load_test import (
+    LoadTestRefused,
+    TimedClient,
+    _mib,
+    level_report,
+    load_test,
+    main,
+)
 from tests.helpers import OPERATOR_TOKEN
 
 
@@ -90,3 +97,25 @@ def test_the_script_uses_the_simulator_whatever_the_shell_says_and_prints_its_re
     assert report["provider"] == "deterministic"
     assert report["server_metrics"]["incidents_finished"] == {"RESOLVED": 2}
     assert "SIMULATED" in report["what"]
+
+
+def test_a_level_counts_a_full_queue_as_backpressure_never_as_a_failure() -> None:
+    """--url mode (M6 W6): a submission the queue refuses with 429 is its backpressure working;
+    a 503 (Redis away) fails the level; docker's sizes read as MiB."""
+    good = {
+        "run_id": "run-1",
+        "state": "RESOLVED",
+        "seconds": 2.0,
+        "queue_seconds": 0.5,
+        "client_seconds": 2.5,
+        "own_record": True,
+        "error": None,
+    }
+    full = {**good, "run_id": None, "state": None, "refused": 429}
+    timed = TimedClient(client=None)  # type: ignore[arg-type]  (nothing is sent)
+    level = level_report(2, [good, full], timed, 4.0, None)
+    assert level["ok"] and level["accepted"] == 1 and level["refused"] == {"429": 1}
+    assert level["throughput_runs_per_second"] == 0.25
+    assert level["queue_wait_seconds"]["p50"] == 0.5
+    assert not level_report(2, [good, {**full, "refused": 503}], timed, 4.0, None)["ok"]
+    assert (_mib("1.5GiB"), _mib("512KiB"), _mib("12.5MiB"), _mib("??")) == (1536.0, 0.5, 12.5, 0)

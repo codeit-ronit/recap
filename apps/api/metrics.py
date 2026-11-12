@@ -14,15 +14,20 @@ dependency. Without it, GET /metrics answers 404 and nothing is counted or timed
                                          and outcome (ok, error, denied)
     recap_tool_call_duration_seconds     the time of each call that was sent
     recap_model_requests_total           model requests as runs trace them, by provider class
+    recap_model_request_duration_seconds their time as RECAP measured it, by provider class
     recap_model_tokens_total             tokens as the model server reported them, by
                                          provider class and direction (in, out)
     recap_actions_total                  fixes the controller decided on, by outcome
+    recap_approval_wait_seconds          from an approval request to its decision, by decision
     recap_recovery_verifications_total   the recovery oracle's verdicts, by verified
     recap_environment_info               the target every run acts on: kind, simulated
     recap_queue_up                       with RECAP_EXECUTION_BACKEND=redis (M6): 1 when the
                                          Redis job queue answered this scrape, else 0
     recap_queue_depth, _capacity         jobs waiting, and how many may wait
+    recap_queue_wait_seconds             how long new jobs waited for a worker (every worker's
+                                         claims, one histogram kept in Redis)
     recap_workers                        registered workers, by whether their heartbeat is current
+    recap_workers_busy                   live workers that hold a job now (worker occupancy)
     recap_jobs_total                     what happened to jobs, as the queue counts them across
                                          every API and worker process (submitted, completed, ...)
 
@@ -42,8 +47,10 @@ What the counts cover: this server process, from its start. Runs started by the 
 evaluation runner or another process are not in them, nor is a request for a host name the
 API does not serve (refused with 400 before anything else). With the Redis backend, runs
 execute in workers, so the run-event counts above stay at 0 here; the recap_queue_* /
-recap_workers / recap_jobs_total families are read from Redis at each scrape and cover every
-process. (Workers expose no metrics endpoint of their own yet.) The scripted baseline is not a
+recap_workers* / recap_jobs_total families are read from Redis at each scrape and cover every
+process. Each worker serves its own runs' families (the same names, without the HTTP ones) on
+its own port when RECAP_METRICS=1 and RECAP_WORKER_METRICS_PORT are set (apps/worker/metrics.py);
+Prometheus adds them up across workers. The scripted baseline is not a
 model and sends no model requests; a replay's model requests and tokens are those of the
 recorded run, answered offline from its recording (provider_class="replay"): no model is
 called.
@@ -75,7 +82,7 @@ from recap.core.models import (
 )
 from recap.runtime import ENVIRONMENT_ADAPTERS, Runtime
 from recap.telemetry.tracer import TraceCategory
-from recap.workers.queue import JobQueue
+from recap.workers.queue import WAIT_BUCKETS, JobQueue
 from recap.workers.resp import RedisError
 
 log = logging.getLogger(__name__)
@@ -89,6 +96,8 @@ FINAL_STATES = tuple(state.value for state in IncidentState if state in TERMINAL
 PROVIDER_CLASSES: tuple[str, ...] = get_args(ProviderOrigin)
 TOOL_OUTCOMES = ("ok", "error", "denied")
 ACTION_OUTCOMES = ("executed", "refused", "blocked", "rejected", "expired")
+# How an approval request ended (recap/harness/controller.py: approval.decided).
+APPROVAL_DECISIONS = ("approved", "rejected", "expired", "refused")
 # What the job queue counts (recap/workers/queue.py: its stats hash), a closed set.
 JOB_EVENTS = (
     "submitted",
@@ -102,6 +111,11 @@ JOB_EVENTS = (
 # cluster, with a person approving its fix, takes minutes).
 LATENCY_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0)
 INCIDENT_BUCKETS = (1.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0, 3600.0)
+# A model request: under a second from a hosted model, minutes from a CPU-only local one (M6 W5
+# measured 103 to 616 s on the owner's VM), at most the request timeout (900 s by default).
+MODEL_BUCKETS = (0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0, 900.0)
+# A person's approval: seconds at a terminal, up to the request's expiry (900 s by default).
+APPROVAL_BUCKETS = (1.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0, 900.0)
 
 
 # ======================================================================================
@@ -206,6 +220,13 @@ class Histogram(Family):
         series.total += value
         series.count += 1
 
+    def set_series(self, buckets: Sequence[int], total: float, count: int, **labels: str) -> None:
+        """A histogram observed elsewhere (the queue's, kept in Redis), copied as it is:
+        cumulative counts per bound, in the bounds' order, with the sum and the count."""
+        if len(buckets) != len(self.bounds):
+            raise ValueError(f"{self.name} has {len(self.bounds)} buckets, not {len(buckets)}")
+        self.series[self.key(labels)] = _Observed(list(buckets), total, count)
+
     def samples(self) -> Iterator[Sample]:
         for key, series in sorted(self.series.items(), key=lambda item: item[0]):
             pairs = self.pairs(key)
@@ -306,6 +327,7 @@ class ApiMetrics:
         self._lock = threading.Lock()
         self._tools: frozenset[str] = frozenset()  # RECAP's policy catalog (see watching)
         self._created: dict[str, datetime] = {}  # run id -> creation, until the run finishes
+        self._asked: dict[str, datetime] = {}  # run id -> its open approval request's time
         self.requests = Counter(
             "recap_api_requests_total",
             "HTTP requests answered, by method, route template (never the path) and status "
@@ -356,6 +378,13 @@ class ApiMetrics:
             "baseline is not a model and sends none.",
             ("provider_class",),
         )
+        self.model_seconds = Histogram(
+            "recap_model_request_duration_seconds",
+            "Time of each model request as RECAP measured it, from sending to the whole answer, "
+            "by provider class (replay: the recorded request's time, nothing was waited for).",
+            ("provider_class",),
+            MODEL_BUCKETS,
+        )
         self.model_tokens = Counter(
             "recap_model_tokens_total",
             "Model tokens as the model server reported them (never estimated), by provider "
@@ -369,6 +398,14 @@ class ApiMetrics:
             "blocked (RECAP's safety policy or evidence gate stopped it before anything was "
             "sent), rejected or expired (the person's approval).",
             ("outcome",),
+        )
+        self.approval_seconds = Histogram(
+            "recap_approval_wait_seconds",
+            "Time from a fix's approval request to its decision, by decision: approved, "
+            "rejected, expired (nobody answered in time), refused (the request could not be "
+            "made). The run's own budget clock is paused while it waits.",
+            ("decision",),
+            APPROVAL_BUCKETS,
         )
         self.recoveries = Counter(
             "recap_recovery_verifications_total",
@@ -399,6 +436,18 @@ class ApiMetrics:
             "are settled by another worker from the runs' persisted evidence).",
             ("alive",),
         )
+        self.workers_busy = Gauge(
+            "recap_workers_busy",
+            "Live workers that hold at least one job now (worker occupancy; compare with "
+            'recap_workers{alive="true"}).',
+        )
+        self.queue_wait = Histogram(
+            "recap_queue_wait_seconds",
+            "How long new jobs waited in the Redis queue for their first claim by a worker, as "
+            "every worker recorded it in Redis (a retried job's later waits are not counted).",
+            (),
+            WAIT_BUCKETS,
+        )
         self.jobs = Counter(
             "recap_jobs_total",
             "What happened to jobs, as the Redis queue counts them across every API and worker "
@@ -420,6 +469,7 @@ class ApiMetrics:
             TraceCategory.MITIGATION: self._write,
             TraceCategory.POLICY: self._policy,
             TraceCategory.VERIFY_EVIDENCE: self._evidence_gate,
+            TraceCategory.APPROVAL_REQUESTED: self._approval_asked,
             TraceCategory.APPROVAL_DECIDED: self._approval,
             TraceCategory.VERIFY_RECOVERY: self._recovery,
             TraceCategory.LLM_CALL: self._model_call,
@@ -465,38 +515,43 @@ class ApiMetrics:
             with self._lock:
                 handler(event)
 
-    def render(self, queue: JobQueue | None = None) -> str:
+    def render(self, queue: JobQueue | None = None, *, http: bool = True) -> str:
         """Every metric, in the Prometheus text format; with `queue` (the Redis backend), the
-        queue's, read from Redis now."""
-        snapshot = None
+        queue's, read from Redis now. A worker renders without the HTTP families (http=False):
+        it serves no API."""
+        snapshot = waits = None
         if queue is not None:
             try:
                 snapshot = queue.snapshot(recent=0)
+                waits = queue.queue_waits()
             except RedisError:
-                snapshot = None
+                snapshot = waits = None
         with self._lock:
             self.active.set(len(self._created))
-            families: list[Family] = [
-                self.requests,
-                self.request_seconds,
+            families: list[Family] = [self.requests, self.request_seconds] if http else []
+            families += [
                 self.active,
                 self.finished,
                 self.incident_seconds,
                 self.tool_calls,
                 self.tool_seconds,
                 self.model_requests,
+                self.model_seconds,
                 self.model_tokens,
                 self.actions,
+                self.approval_seconds,
                 self.recoveries,
                 self.environment,
             ]
             if queue is not None:
-                families += self._queue(snapshot)
+                families += self._queue(snapshot, waits)
             return render_text(families)
 
-    def _queue(self, snapshot: dict[str, Any] | None) -> list[Family]:
-        self.queue_up.set(1 if snapshot is not None else 0)
-        if snapshot is None:
+    def _queue(
+        self, snapshot: dict[str, Any] | None, waits: tuple[list[int], int, float] | None
+    ) -> list[Family]:
+        self.queue_up.set(1 if snapshot is not None and waits is not None else 0)
+        if snapshot is None or waits is None:
             return [self.queue_up]
         self.queue_depth.set(snapshot["depth"])
         self.queue_capacity.set(snapshot["capacity"])
@@ -504,10 +559,21 @@ class ApiMetrics:
         alive = sum(1 for worker in workers if worker["alive"])
         self.workers.set(alive, alive="true")
         self.workers.set(len(workers) - alive, alive="false")
+        self.workers_busy.set(sum(1 for worker in workers if worker["alive"] and worker["jobs"]))
+        buckets, count, total = waits
+        self.queue_wait.set_series(buckets, total, count)
         counters = snapshot["counters"]
         for event in JOB_EVENTS:  # a total read from Redis: set, not added to
             self.jobs.set_total(float(counters.get(event, 0)), event=event)
-        return [self.queue_up, self.queue_depth, self.queue_capacity, self.workers, self.jobs]
+        return [
+            self.queue_up,
+            self.queue_depth,
+            self.queue_capacity,
+            self.queue_wait,
+            self.workers,
+            self.workers_busy,
+            self.jobs,
+        ]
 
     # --- what run events say ----------------------------------------------------------------
 
@@ -529,6 +595,7 @@ class ApiMetrics:
             self._created[event.run_id] = event.ts
         elif isinstance(to, str) and to in FINAL_STATES:
             self.finished.inc(state=to)
+            self._asked.pop(event.run_id, None)  # a request the run left behind
             created = self._created.pop(event.run_id, None)
             if created is not None:
                 seconds = max(0.0, (event.ts - created).total_seconds())
@@ -564,9 +631,17 @@ class ApiMetrics:
         if isinstance(check, dict) and check.get("ok") is False and payload.get("enforced") is True:
             self.actions.inc(outcome="blocked")
 
+    def _approval_asked(self, event: TraceEvent) -> None:
+        """A run asks a person: one request at a time (the run waits for its decision)."""
+        self._asked[event.run_id] = event.ts
+
     def _approval(self, event: TraceEvent) -> None:
-        """A fix the person rejected, or whose approval request expired."""
+        """A decision: its wait, and a fix the person rejected or whose request expired."""
         decision = event.payload.get("decision")
+        asked = self._asked.pop(event.run_id, None)
+        if asked is not None:
+            seconds = max(0.0, (event.ts - asked).total_seconds())
+            self.approval_seconds.observe(seconds, decision=bounded(decision, APPROVAL_DECISIONS))
         if decision in ("rejected", "expired"):
             self.actions.inc(outcome=decision)
 
@@ -579,6 +654,9 @@ class ApiMetrics:
         payload = event.payload
         provider_class = bounded(payload.get("origin"), PROVIDER_CLASSES)
         self.model_requests.inc(provider_class=provider_class)
+        seconds = _seconds(event.duration_ms)
+        if seconds is not None:
+            self.model_seconds.observe(seconds, provider_class=provider_class)
         for direction, name in (("in", "input_tokens"), ("out", "output_tokens")):
             tokens = payload.get(name)
             # Only what the server reported: None means it reported nothing (never estimated).

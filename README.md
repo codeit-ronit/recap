@@ -589,6 +589,7 @@ CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on every push and
 - [docs/architecture.md](docs/architecture.md): the full architecture, data flow and trust boundaries
 - [docs/learning-notes.md](docs/learning-notes.md): the concepts behind RECAP, explained simply
 - [docs/threat-model.md](docs/threat-model.md): what can go wrong and what stops it
+- [docs/performance-and-reliability.md](docs/performance-and-reliability.md): the backend measured under load (Compose, Redis, two workers, Prometheus), and every fault and attack the tests inject (M6 W6)
 - [docs/demo-walkthrough.md](docs/demo-walkthrough.md): the live demo, click by click (the replay of the real two-agent run)
 - [docs/evaluation.md](docs/evaluation.md): evaluation modes, records, failure categories and the published batches
 - [docs/m5-integration-plan.md](docs/m5-integration-plan.md): the M5 plan for a Kind cluster, then SREGym, written before the work (the report and the log say what was built)

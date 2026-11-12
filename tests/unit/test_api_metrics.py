@@ -24,10 +24,14 @@ from starlette.routing import Route
 from apps.api.main import create_app
 from apps.api.metrics import (
     ACTION_OUTCOMES,
+    APPROVAL_BUCKETS,
+    APPROVAL_DECISIONS,
     FINAL_STATES,
     HTTP_METHODS,
     INCIDENT_BUCKETS,
+    JOB_EVENTS,
     LATENCY_BUCKETS,
+    MODEL_BUCKETS,
     OTHER,
     PROMETHEUS_TEXT,
     PROVIDER_CLASSES,
@@ -42,6 +46,7 @@ from recap.core.ids import utcnow
 from recap.core.models import TraceEvent
 from recap.runtime import Runtime
 from recap.telemetry.tracer import TraceCategory as C
+from recap.workers.queue import WAIT_BUCKETS
 from tests.e2e.test_api_contracts import GOLDEN, GOLDEN_SCENARIO
 from tests.helpers import OPERATOR_HEADERS, OPERATOR_TOKEN
 
@@ -153,8 +158,18 @@ def assert_bounded(text: str, app: FastAPI, settings: Settings) -> None:
         "verified": {"true", "false"},
         "kind": {"simulated", "kind", "sregym"},
         "simulated": {"true", "false"},
+        "decision": set(APPROVAL_DECISIONS),
+        "alive": {"true", "false"},
+        "event": set(JOB_EVENTS),
     }
-    bounds = {*LATENCY_BUCKETS, *INCIDENT_BUCKETS, math.inf}
+    bounds = {
+        *LATENCY_BUCKETS,
+        *INCIDENT_BUCKETS,
+        *MODEL_BUCKETS,
+        *APPROVAL_BUCKETS,
+        *WAIT_BUCKETS,
+        math.inf,
+    }
     for name, labels in parse(text):
         for label, text_value in labels:
             if label == "le":
@@ -580,6 +595,8 @@ def test_a_replayed_model_run_counts_its_recorded_requests_and_tokens_as_replay(
     requests = "recap_model_requests_total"
     assert value(samples, requests, provider_class="replay") == model["requests"] == 14
     assert total(samples, requests) == model["requests"]  # never counted as live inference
+    timed = "recap_model_request_duration_seconds_count"
+    assert value(samples, timed, provider_class="replay") == model["requests"]
     tokens = "recap_model_tokens_total"
     assert value(samples, tokens, provider_class="replay", direction="in") == model["input_tokens"]
     assert (
@@ -587,3 +604,107 @@ def test_a_replayed_model_run_counts_its_recorded_requests_and_tokens_as_replay(
     )
     assert value(samples, "recap_incidents_finished_total", state="RESOLVED") == 1
     assert_bounded(text, app, settings)
+
+
+# --- M6 W6: model and approval time, the queue's wait, occupancy, a worker's own endpoint -----
+
+
+def test_model_request_time_and_approval_waits_are_timed_with_bounded_labels() -> None:
+    """Each model request's time by provider class; each approval's wait from its request to
+    its decision, by decision. A decision without a request before it is not timed, and an
+    unknown decision counts as other."""
+    metrics = ApiMetrics(enabled=True)
+    asked = utcnow()
+    metrics.write(event(C.LLM_CALL, {"origin": "local_llm"}, duration_ms=2500.0))
+    metrics.write(event(C.APPROVAL_REQUESTED, {"proposal_id": "prop-0123456789"}, at=asked))
+    later = asked + timedelta(seconds=12)
+    metrics.write(event(C.APPROVAL_DECIDED, {"decision": "approved"}, at=later))
+    metrics.write(event(C.APPROVAL_DECIDED, {"decision": "approved"}, at=later))  # none asked
+    other = "run-abcdef0123"
+    metrics.write(event(C.APPROVAL_REQUESTED, {}, run_id=other, at=asked))
+    metrics.write(event(C.APPROVAL_DECIDED, {"decision": "maybe"}, run_id=other, at=later))
+
+    samples = parse(metrics.render())
+    model = "recap_model_request_duration_seconds"
+    assert value(samples, f"{model}_count", provider_class="local_llm") == 1
+    assert value(samples, f"{model}_sum", provider_class="local_llm") == 2.5
+    assert value(samples, f"{model}_bucket", provider_class="local_llm", le="2.5") == 1
+    assert value(samples, f"{model}_bucket", provider_class="local_llm", le="1") == 0
+    wait = "recap_approval_wait_seconds"
+    assert value(samples, f"{wait}_count", decision="approved") == 1
+    assert value(samples, f"{wait}_sum", decision="approved") == 12
+    assert value(samples, f"{wait}_count", decision=OTHER) == 1
+
+
+def test_the_queue_wait_and_worker_occupancy_are_read_from_redis(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A new job's wait until its first claim goes into one histogram kept in Redis (every
+    worker's claims in one series), and a live worker that holds a job counts as busy."""
+    from recap.workers.queue import JobQueue, QueueConfig
+    from tests.fake_redis import FakeRedisServer
+
+    monkeypatch.setenv("RECAP_METRICS", "1")
+    with FakeRedisServer.running() as server:
+        queue = JobQueue(QueueConfig(url=server.url))
+        queue.submit(run_id="run-1", scenario_id="bad-deployment", config={})
+        queue.submit(run_id="run-2", scenario_id="bad-deployment", config={})
+        queue.register("worker-a", {"pid": 1})
+        queue.register("worker-b", {"pid": 2})
+        assert queue.claim("worker-a", block_seconds=1) is not None
+        app = create_app(Runtime(settings), queue=queue)
+        with TestClient(app, headers=OPERATOR_HEADERS) as client:
+            text = client.get("/metrics").text
+
+    samples = parse(text)
+    assert value(samples, "recap_workers", alive="true") == 2
+    assert value(samples, "recap_workers_busy") == 1
+    assert value(samples, "recap_queue_depth") == 1
+    assert value(samples, "recap_queue_wait_seconds_count") == 1
+    assert value(samples, "recap_queue_wait_seconds_bucket", le="+Inf") == 1
+    waited = value(samples, "recap_queue_wait_seconds_sum")
+    assert waited is not None and 0 <= waited < 60
+    assert_bounded(text, app, settings)
+
+
+def test_a_worker_serves_its_own_runs_metrics_and_reads_its_port_strictly(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the Redis backend runs execute in workers, so each worker answers GET /metrics with
+    its runs' families, without the API's HTTP and queue families; any other path is 404. Its
+    port is read strictly, and it listens on loopback unless told otherwise."""
+    from urllib.error import HTTPError
+    from urllib.request import urlopen
+
+    from apps.worker.metrics import address_from_environment, serve
+    from recap.core.errors import ConfigError
+
+    metrics = ApiMetrics(enabled=True)
+    metrics.write(event(C.LLM_CALL, {"origin": "local_llm"}, duration_ms=1000.0))
+    server = serve(metrics, "127.0.0.1", 0)
+    try:
+        host, port = server.server_address[:2]
+        with urlopen(f"http://{host}:{port}/metrics", timeout=5) as answer:
+            assert answer.headers["Content-Type"] == PROMETHEUS_TEXT
+            text = answer.read().decode()
+        with pytest.raises(HTTPError) as missing:
+            urlopen(f"http://{host}:{port}/runs", timeout=5)
+        assert missing.value.code == 404
+    finally:
+        server.shutdown()
+    samples = parse(text)
+    assert value(samples, "recap_model_requests_total", provider_class="local_llm") == 1
+    assert "recap_api_requests_total" not in text and "recap_queue_depth" not in text
+    assert_bounded(text, create_app(Runtime(settings)), settings)
+
+    monkeypatch.delenv("RECAP_WORKER_METRICS_PORT", raising=False)
+    monkeypatch.delenv("RECAP_WORKER_METRICS_HOST", raising=False)
+    assert address_from_environment() is None
+    monkeypatch.setenv("RECAP_WORKER_METRICS_PORT", "9100")
+    assert address_from_environment() == ("127.0.0.1", 9100)
+    monkeypatch.setenv("RECAP_WORKER_METRICS_HOST", "0.0.0.0")
+    assert address_from_environment() == ("0.0.0.0", 9100)
+    for bad in ("x", "0", "70000"):
+        monkeypatch.setenv("RECAP_WORKER_METRICS_PORT", bad)
+        with pytest.raises(ConfigError):
+            address_from_environment()

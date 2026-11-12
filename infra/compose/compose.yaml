@@ -101,6 +101,11 @@ services:
       RECAP_WORKER_CONCURRENCY: ${RECAP_WORKER_CONCURRENCY:-2}
       RECAP_WORKER_GRACE_SECONDS: ${RECAP_WORKER_GRACE_SECONDS:-25}
       RECAP_WORKER_HEALTH_FILE: /tmp/recap-worker-health
+      # Its own runs' metrics, for Prometheus (the metrics profile): inside Compose's network
+      # only, never published (apps/worker/metrics.py). Off unless RECAP_METRICS=1.
+      RECAP_METRICS: ${RECAP_METRICS:-0}
+      RECAP_WORKER_METRICS_PORT: "9100"
+      RECAP_WORKER_METRICS_HOST: 0.0.0.0
     volumes:
       - recap-data:/data
     depends_on:

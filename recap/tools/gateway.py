@@ -320,19 +320,23 @@ class ToolGateway:
     async def _send_write(
         self, request: ToolRequest, decision: SafetyDecision, extra: dict[str, Any]
     ) -> tuple[ToolResult, asyncio.CancelledError | None]:
-        """Send one write and learn its outcome, even if the run is cancelled meanwhile.
+        """Send one write and learn its outcome, even if the run is cancelled meanwhile, once
+        or again (a second cancel, a worker fencing itself at each missed heartbeat).
 
         Cancelling this coroutine cannot call back a write that already reached the target,
         so the outcome is awaited anyway (the tool timeout bounds the wait) and returned with
-        the cancellation, which the caller re-raises after recording what happened.
+        the first cancellation, which the caller re-raises after recording what happened.
+        Every wait is shielded: a later cancellation must not cancel the send itself (M6 W6).
         """
         send = asyncio.ensure_future(self._run(request, decision, extra))
-        try:
-            result, _ = await asyncio.shield(send)
-            return result, None
-        except asyncio.CancelledError as cancelled:
-            result, _ = await send
-            return result, cancelled
+        cancelled: asyncio.CancelledError | None = None
+        while not send.done():
+            try:
+                await asyncio.shield(send)
+            except asyncio.CancelledError as again:
+                cancelled = cancelled or again
+        result, _ = send.result()  # a send that was itself cancelled raises here
+        return result, cancelled
 
     def _capability(
         self, tool: str, args: dict[str, Any], approval_id: str, proposal_digest: str
