@@ -209,6 +209,9 @@ grader), then the held-out problems in order.
   `insufficient_evidence` (2) and `cancelled` (1); the published batch, built after, uses the
   answers: [2026-11-09-w5-heldout-sregym-qwen3-8b](../evals/reports/batches/2026-11-09-w5-heldout-sregym-qwen3-8b/README.md).
   The runs are in [evals/live/](../evals/live/README.md).
-- **Cost.** The cost meter estimates $1.10 for the whole window (4.24 running hours, the setup
-  and the pilot included) against the $5 cap; the VM is stopped and SREGym's cluster deleted,
+- **Cost.** About $1.40 of VM time by AWS's own billing (compute $1.34 and the public address
+  $0.03 on 2026-11-09), the setup and the pilot included, against the $5 cap. The cost meter had
+  estimated $1.10 from 4.24 running hours: it missed a 1.8-hour session (the VM started for
+  problem 1 and stopped by its idle guard during the break) that began and ended between two of
+  its readings; the VM is stopped and SREGym's cluster deleted,
   the disk kept.

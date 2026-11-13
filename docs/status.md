@@ -11,8 +11,9 @@ self-hosted with Ollama on the owner's AWS VM. That VM, which also ran the real 
 only spending so far, and the owner's AWS credits cover all of it. AWS's latest figure is $5.48
 of usage before credits from 2026-11-01 to 2026-11-07, read in M6 W0; 2026-11-07's last VM
 sessions (about $0.85, estimated) were not yet in it. Since then the stopped VM's disk has cost
-about $0.47 a day, and M6's held-out evaluation about $1.10 by RECAP's own cost meter (an
-estimate from the VM's state and AWS's prices, not a bill). No paid API was called.
+about $0.47 a day, and M6's held-out evaluation about $1.40 of VM time by AWS's own billing
+(RECAP's cost meter, an estimate from the VM's state and AWS's prices, had said $1.10: it missed
+one session). In all, AWS recorded $10.54 of usage up to 2026-11-13. No paid API was called.
 
 ---
 
@@ -1446,8 +1447,9 @@ results are reported apart, as counts.
   the three runs as published exports (Mission Control opens them read-only), and the session
   record ([evals/frozen/w5-evidence/](../evals/frozen/w5-evidence/README.md)): the script as
   run, the timeline, the gates, SREGym's grader outputs and the cost meter's readings.
-- **Cost:** about $1.10 by the cost meter (4.24 running hours, the setup and the pilot
-  included) against the $5 cap. The VM is stopped and SREGym's cluster deleted; the disk is
+- **Cost:** about $1.40 of VM time by AWS's own billing, the setup and the pilot included,
+  against the $5 cap (the cost meter had estimated $1.10 from 4.24 running hours: it missed a
+  1.8-hour session). The VM is stopped and SREGym's cluster deleted; the disk is
   kept.
 - **Tests:** before the cloud, 805 focused contract and safety tests passed and the full suite
   2465 passed, 14 skipped, 0 failed; after the runs, the full suite's 2494 tests, 0 failed.
@@ -1495,7 +1497,8 @@ W7, the final pass toward release 0.7.0, is in progress; nothing from it is reco
   (not counted). The held-out runs wrote nothing.
 - **Everything else** ran on the simulator with no language model called: the scripted policy,
   or replays of a recorded run (the guided demo). W4 sent 27 requests to the local embedder.
-- **Spending:** about $1.10 of AWS in W5 by the cost meter, plus the stopped VM's disk, all
+- **Spending:** about $1.40 of AWS in W5 by AWS's own billing (the cost meter had estimated
+  $1.10), plus the stopped VM's disk, all
   covered by the owner's credits; $0 out of pocket.
 
 ### What M6 does not claim
