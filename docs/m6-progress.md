@@ -666,8 +666,10 @@ ran every scored problem at their own terminal. Everything in words:
 - **Integrity:** every record at code `042e0db212d1`, configuration `34fab689410b24cf`, the pinned
   weights; no memory written; the answers added only after the runs, to the three attempted
   problems only.
-- **Cost:** about $1.10 (the meter's estimate, 4.24 running hours); the VM stopped, SREGym's
-  cluster deleted, the disk kept.
+- **Cost:** about $1.40 of VM time by AWS's own billing (compute $1.34 and the public address
+  $0.03 on 2026-11-09, read on 2026-11-13); RECAP's cost meter had estimated $1.10, because it
+  missed a 1.8-hour session that started and stopped between two of its readings. The VM
+  stopped, SREGym's cluster deleted, the disk kept.
 - **Published:** batch `2026-11-09-w5-heldout-sregym-qwen3-8b`, three runs in `evals/live/`, the
   session record in `evals/frozen/w5-evidence/`, the manifest marked completed.
 - **Checks:** the W5, SREGym adapter and published-runs tests, updated for the answered problems

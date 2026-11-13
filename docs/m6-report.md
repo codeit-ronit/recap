@@ -70,8 +70,10 @@ The spec's twenty checks, run on 2026-11-12 on the release commit.
 
 - **Model requests:** $0. No paid API was called in any milestone.
 - **AWS** (the owner's credits, $0 out of pocket): $5.48 of usage recorded by AWS through
-  2026-11-07 plus about $0.85 estimated for that day's last sessions (M5); about $1.10 for W5's
-  VM time by RECAP's own cost meter; and the stopped VM's 150 GB disk, about $0.46 a day.
+  2026-11-07 plus about $0.85 estimated for that day's last sessions (M5); about $1.40 for W5's
+  VM time by AWS's own billing (RECAP's cost meter had estimated $1.10: it missed one session);
+  and the stopped VM's 150 GB disk, about $0.46 a day. In all, AWS recorded $10.54 of usage up
+  to 2026-11-13 (its figures lag about a day), every cent covered by the credits.
 - **The VM** (`i-09a55033889ca1466`, ap-south-1) is **stopped**; SREGym's cluster on it was deleted
   after W5. Keeping it costs the disk only; `bash infra/aws/ec2.sh down` deletes the VM, its disk
   and its security group (the owner's decision).
