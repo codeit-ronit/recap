@@ -195,7 +195,7 @@ browser smoke test (CI uses 24).
 - [docs/m5-report.md](docs/m5-report.md) and [docs/m6-report.md](docs/m6-report.md): the real-cluster milestone and the final one
 - [docs/learning-notes.md](docs/learning-notes.md): the concepts behind RECAP, explained simply
 - [docs/decisions/](docs/decisions/): the architecture decision records
-- [CHANGELOG.md](CHANGELOG.md): what each version changed
+- [CHANGELOG.md](CHANGELOG.md): what  each version changed
 - Module READMEs: [API](apps/api/README.md) · [dashboard](apps/dashboard/README.md) · [harness](recap/harness/README.md) · [environments](recap/environments/README.md) · [tools](recap/tools/README.md) · [safety](recap/safety/README.md) · [knowledge](recap/knowledge/README.md) · [memory](recap/memory/README.md) · [context](recap/context/README.md) · [routing](recap/routing/README.md) · [agents](recap/agents/README.md) · [verification](recap/verification/README.md) · [providers](recap/providers/README.md) · [telemetry](recap/telemetry/README.md) · [SREGym adapter](integrations/sregym/README.md) · [infra](infra/README.md)
 
 ## Tests and CI
